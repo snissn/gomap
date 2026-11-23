@@ -27,7 +27,7 @@ func (b *COWBudget) PutIdleReadScratch(value any, leases [2]*COWExternalLease) b
 		if l == nil {
 			continue
 		}
-		if l.budget != b || l.closed || l.charge <= header {
+		if l.embedded || l.budget != b || l.closed || l.charge <= header {
 			return false
 		}
 		charges[i] = l.charge - header

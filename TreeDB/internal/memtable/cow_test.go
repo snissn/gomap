@@ -191,7 +191,8 @@ func TestCOWFiniteReplacementHistoryAndResume(t *testing.T) {
 	old := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
 	accepted := 0
 	var last *COWRoot
-	for i := 0; i < 1000; i++ {
+	const maxReplacements = 2000
+	for i := 0; i < maxReplacements; i++ {
 		p, e := w.Prepare([]COWMutation{{Key: []byte("key"), Value: []byte("new")}}, COWPrepareOptions{})
 		if errors.Is(e, ErrCOWCapacity) {
 			break
@@ -205,7 +206,7 @@ func TestCOWFiniteReplacementHistoryAndResume(t *testing.T) {
 		}
 		last = p.Publish()
 	}
-	if accepted == 0 || accepted == 1000 {
+	if accepted == 0 || accepted == maxReplacements {
 		t.Fatalf("unbounded or unusable replacements: %d", accepted)
 	}
 	if got, _ := old.Get([]byte("key")); got.Value != "old" {
@@ -946,7 +947,8 @@ func TestCOWCursorGeometricStackWitness(t *testing.T) {
 		for i := 0; i < count; i++ {
 			m.Set(fmt.Sprintf("%08d", i), emptyValue)
 		}
-		root := &COWRoot{tree: m, generation: w.generation, refs: 1}
+		root := &COWRoot{tree: m, generation: w.generation}
+		root.refs.Store(1)
 		w.generation.retain()
 		beforeCharge := b.Stats().TotalBytes
 		runtime.GC()

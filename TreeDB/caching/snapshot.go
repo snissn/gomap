@@ -83,6 +83,14 @@ func getSnapshot() *Snapshot {
 	return snap
 }
 
+// newActiveCOWSnapshot initializes an active exported Snapshot handle directly
+// without acquiring iteratorMu twice on the unshared freshly allocated struct.
+func newActiveCOWSnapshot() *Snapshot {
+	snap := &Snapshot{}
+	snap.generation.Store(1)
+	return snap
+}
+
 func activateSnapshot(snap *Snapshot) *Snapshot {
 	if snap == nil {
 		return nil

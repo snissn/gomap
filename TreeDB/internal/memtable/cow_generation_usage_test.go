@@ -37,9 +37,7 @@ func TestCOWGenerationUsageIncludesNativeMetadataWithoutRetention(t *testing.T) 
 		HistoryBytes:       before.HistoryBytes + before.ExternalBytes,
 		MaxGenerationBytes: b.Limits().MaxGenerationBytes,
 	}
-	root.mu.Lock()
-	refs, tree, generation := root.refs, root.tree, root.generation
-	root.mu.Unlock()
+	refs, tree, generation := root.refs.Load(), root.tree, root.generation
 	b.mu.Lock()
 	generationRefs, activeWriters := generation.refs, generation.activeWriters
 	b.mu.Unlock()
@@ -52,9 +50,7 @@ func TestCOWGenerationUsageIncludesNativeMetadataWithoutRetention(t *testing.T) 
 	if after := b.Stats(); after != before {
 		t.Fatalf("observation changed accounting: before=%+v after=%+v", before, after)
 	}
-	root.mu.Lock()
-	rootChanged := root.refs != refs || root.tree != tree || root.generation != generation
-	root.mu.Unlock()
+	rootChanged := root.refs.Load() != refs || root.tree != tree || root.generation != generation
 	b.mu.Lock()
 	generationChanged := generation.refs != generationRefs || generation.activeWriters != activeWriters
 	b.mu.Unlock()

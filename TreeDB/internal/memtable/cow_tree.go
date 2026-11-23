@@ -3,6 +3,7 @@ package memtable
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 	"weak"
 
@@ -112,12 +113,14 @@ func NewCOWOrderedWriter(b *COWBudget) (*COWWriter, error) {
 // All fork/header storage is admitted before allocation and remains in the
 // original finite generation history until its last actual owner is released.
 func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
-	if root == nil {
+	if !root.RetainOwned() {
 		return nil, ErrCOWClosed
 	}
-	root.mu.Lock()
-	defer root.mu.Unlock()
-	if root.refs == 0 || root.tree == nil {
+	defer func() {
+		retired := root.Release()
+		retired.Drain()
+	}()
+	if root.tree == nil {
 		return nil, ErrCOWClosed
 	}
 	g := root.generation
@@ -231,7 +234,8 @@ func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*CO
 	g.ids = append(g.ids, id)
 	g.owners = append(g.owners, cowResourceOwner{release: release})
 	b.mu.Unlock()
-	r := &COWRoot{tree: w.private, generation: g, refs: 1}
+	r := &COWRoot{tree: w.private, generation: g}
+	r.refs.Store(1)
 	if w.ordered != nil {
 		r.ordered = w.ordered.immutableCopy()
 	}
@@ -636,8 +640,13 @@ func (r *COWProjectedGenerationRefusal) Unwrap() error { return ErrCOWCapacity }
 // NeedsProjectedGenerationRollover rechecks the old owner's exact prospective demand.
 // Caller holds this root's original edge throughout.
 func (r *COWRoot) NeedsProjectedGenerationRollover(refusal *COWProjectedGenerationRefusal) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !r.RetainOwned() {
+		return false
+	}
+	defer func() {
+		retired := r.Release()
+		retired.Drain()
+	}()
 	g := r.generation
 	if g == nil || g != refusal.generation.Value() {
 		return false
@@ -992,9 +1001,7 @@ func (p *COWPrepared) Publish() *COWRoot {
 	}
 	w.pending = nil
 	root := p.root
-	root.mu.Lock()
-	root.refs = 1
-	root.mu.Unlock()
+	root.refs.Store(1)
 	p.writer = nil
 	p.private = nil
 	p.ordered = nil
@@ -1181,14 +1188,16 @@ func (w *COWWriter) Close() COWRetirement {
 
 // COWRoot is one immutable read header. Retain/Release are source/cut ownership,
 // not public independently closable views. Release returns deferred IO work.
+// refs is managed atomically: RetainOwned uses a lock-free CAS (refusing <=0),
+// and non-final Release is a single atomic decrement. All fields other than refs
+// are immutable after Publish stores refs=1 until the final Release observes 0.
 type COWRoot struct {
-	mu         sync.Mutex
 	tree       *btree.Map[string, cowValue]
 	ordered    *cowOrderedTree
 	delta      []cowDeltaEntry
 	deltaAdded int
 	generation *cowGeneration
-	refs       int
+	refs       atomic.Int64
 }
 
 // AcquireCapturedSource claims one already admitted original source cohort AND
@@ -1198,16 +1207,18 @@ type COWRoot struct {
 // The caller attaches this receipt to the original source, shares that owner
 // across views, and closes it only after detaching its last root/resource edge.
 func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWNativeSourceReservation, error) {
-	if r == nil {
+	if !r.RetainOwned() {
 		return nil, ErrCOWClosed
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refs == 0 || r.tree == nil {
+	if r.tree == nil {
+		retired := r.Release()
+		retired.Drain()
 		return nil, ErrCOWClosed
 	}
 	cell := r.generation.nativeSource
 	if cell == nil {
+		retired := r.Release()
+		retired.Drain()
 		return nil, ErrCOWCapacity
 	}
 	b := r.generation.budget
@@ -1215,25 +1226,27 @@ func (r *COWRoot) AcquireCapturedSource(bytes uint64) (*COWNativeSourceReservati
 	err := cell.claimLocked(bytes)
 	b.mu.Unlock()
 	if err != nil {
+		retired := r.Release()
+		retired.Drain()
 		return nil, err
 	}
-	r.refs++ // belongs to this already admitted original source, even if Close follows
+	// The retained reference from RetainOwned belongs to this admitted source.
 	return cell, nil
 }
 
 func (r *COWRoot) Retain() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refs == 0 {
+	if !r.RetainOwned() {
 		return false
 	}
 	b := r.generation.budget
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
+	closed := b.closed
+	b.mu.Unlock()
+	if closed {
+		retired := r.Release()
+		retired.Drain()
 		return false
 	}
-	r.refs++
 	return true
 }
 
@@ -1246,13 +1259,15 @@ func (r *COWRoot) RetainOwned() bool {
 	if r == nil {
 		return false
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refs == 0 {
-		return false
+	for {
+		cur := r.refs.Load()
+		if cur <= 0 {
+			return false
+		}
+		if r.refs.CompareAndSwap(cur, cur+1) {
+			return true
+		}
 	}
-	r.refs++
-	return true
 }
 
 // COWGenerationUsage is a point-in-time observation, not a reservation or an
@@ -1263,34 +1278,33 @@ type COWGenerationUsage struct {
 }
 
 // GenerationUsage borrows the caller's original root edge without retaining it
-// or changing capacity. Keep the same root -> budget lock order as Retain.
+// or changing capacity.
 func (r *COWRoot) GenerationUsage() (COWGenerationUsage, error) {
-	if r == nil {
+	if !r.RetainOwned() {
 		return COWGenerationUsage{}, ErrCOWClosed
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refs == 0 {
-		return COWGenerationUsage{}, ErrCOWClosed
-	}
+	defer func() {
+		retired := r.Release()
+		retired.Drain()
+	}()
 	g := r.generation
 	b := g.budget
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
+		b.mu.Unlock()
 		return COWGenerationUsage{}, ErrCOWClosed
 	}
-	return COWGenerationUsage{HistoryBytes: g.generationHistoryLocked(), PendingBytes: g.pending, MaxGenerationBytes: b.limits.MaxGenerationBytes}, nil
+	usage := COWGenerationUsage{HistoryBytes: g.generationHistoryLocked(), PendingBytes: g.pending, MaxGenerationBytes: b.limits.MaxGenerationBytes}
+	b.mu.Unlock()
+	return usage, nil
 }
 
 func (r *COWRoot) Release() COWRetirement {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refs == 0 {
+	next := r.refs.Add(-1)
+	if next < 0 {
 		panic("COW root released twice")
 	}
-	r.refs--
-	if r.refs != 0 {
+	if next != 0 {
 		return COWRetirement{}
 	}
 	generation := r.generation
