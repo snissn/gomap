@@ -3,11 +3,13 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -429,5 +431,143 @@ func TestCOWFrozenRawChunksFinalizeAfterCursorClose(t *testing.T) {
 				t.Fatalf("merge workspace did not refund: before=%+v after=%+v", before, after)
 			}
 		})
+	}
+}
+
+func TestCOWFrozenFlushChunkCapScalingAndTightMaintenanceFallback(t *testing.T) {
+	defaultLimits := memtable.DefaultCOWLimits()
+	defaultMaint, err := memtable.NewCOWBudget(defaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer defaultMaint.Close()
+
+	entryBytes := uint64(unsafe.Sizeof(batch.Entry{}))
+	if got := cowFrozenFlushChunkCap(&DB{}, defaultMaint, 200000, false); got <= 1024 || got > cowFlushDefaultMaxChunkEntries || uint64(got)*entryBytes > defaultLimits.MaxInFlightBytes/4 {
+		t.Fatalf("default scaled chunkCap=%d (entryBytes=%d, maxInFlight=%d)", got, entryBytes, defaultLimits.MaxInFlightBytes)
+	}
+	if got := cowFrozenFlushChunkCap(&DB{}, defaultMaint, 2000, true); got != 2000 {
+		t.Fatalf("totalEntries=2000 syncFlush chunkCap=%d, want 2000", got)
+	}
+	if got := cowFrozenFlushChunkCap(&DB{}, defaultMaint, 0, false); got != 1 {
+		t.Fatalf("totalEntries=0 chunkCap=%d, want 1", got)
+	}
+	if got := cowFrozenFlushChunkCap(&DB{flushBackendMaxEntries: 1}, defaultMaint, 2000, false); got != 1 {
+		t.Fatalf("explicit override=1 chunkCap=%d, want 1", got)
+	}
+	if got := cowFrozenFlushChunkCap(&DB{flushBackendMaxEntries: 256}, defaultMaint, 2000, false); got != 256 {
+		t.Fatalf("explicit override=256 chunkCap=%d, want 256", got)
+	}
+
+	tightLimits := defaultLimits
+	tightLimits.MaxInFlightBytes = 32 * entryBytes
+	if tightLimits.MaxTotalBytes < tightLimits.MaxInFlightBytes {
+		tightLimits.MaxTotalBytes = tightLimits.MaxInFlightBytes
+	}
+	tightMaint, err := memtable.NewCOWBudget(tightLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tightMaint.Close()
+	if got := cowFrozenFlushChunkCap(&DB{}, tightMaint, 2000, false); got != 8 {
+		t.Fatalf("tight 25%% maintenance budget chunkCap=%d, want 8", got)
+	}
+
+	dir := t.TempDir()
+	disk, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(dir, "backend")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &cowFrozenRawBackend{cowAcceptedReportBackend: &cowAcceptedReportBackend{DB: disk}}
+	db, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		AllowUnsafe:              true,
+		MemtableMode:             "cow_btree",
+		FlushThreshold:           1 << 30,
+		MemtableShards:           2,
+		ValueLogPointerThreshold: 1 << 20,
+		ValueLogCompression:      uint8(vlogCompressionOff),
+	})
+	if err != nil {
+		t.Fatal(errors.Join(err, disk.Close()))
+	}
+	defer func() {
+		if !db.closing.Load() {
+			if closeErr := db.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		}
+	}()
+
+	writeRolledBatch := func(prefix string, count int) {
+		t.Helper()
+		b := db.NewBatch()
+		for i := 0; i < count; i++ {
+			k := []byte(fmt.Sprintf("%s-%05d", prefix, i))
+			v := []byte(fmt.Sprintf("val-%s-%05d", prefix, i))
+			if err := b.Set(k, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.rolloverCOWForFlush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const entriesCount = 2048
+	writeRolledBatch("scale", entriesCount)
+	db.flushMu.Lock()
+	err = db.flushCOWFrozen(true, nil)
+	db.flushMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.chunks) != 1 || len(backend.chunks[0].ops) != entriesCount || !backend.chunks[0].final {
+		t.Fatalf("scaled flush emitted %d chunks (first ops=%d, final=%v), want 1 chunk of %d", len(backend.chunks), len(backend.chunks[0].ops), backend.chunks[0].final, entriesCount)
+	}
+
+	backend.chunks = nil
+	writeRolledBatch("tight", entriesCount)
+	maintStats := db.cow.maintenance.Stats()
+	maintLimits := db.cow.maintenance.Limits()
+	leaseOverhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	allowBytes := uint64(1024) * entryBytes
+	if maintLimits.MaxInFlightBytes-maintStats.ReservedBytes <= allowBytes+leaseOverhead {
+		t.Fatalf("insufficient maintenance headroom for tight test: stats=%+v limits=%+v", maintStats, maintLimits)
+	}
+	filler, err := db.cow.maintenance.AcquireExternal(maintLimits.MaxInFlightBytes - maintStats.ReservedBytes - allowBytes - leaseOverhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.flushMu.Lock()
+	err = db.flushCOWFrozen(true, nil)
+	db.flushMu.Unlock()
+	filler.Close()
+	if err != nil {
+		t.Fatalf("tight maintenance flush failed instead of halving chunkCap: %v", err)
+	}
+	if len(backend.chunks) <= 1 {
+		t.Fatalf("tight maintenance flush emitted %d chunks, expected halving (>1 chunk)", len(backend.chunks))
+	}
+	totalOps := 0
+	for _, chunk := range backend.chunks {
+		totalOps += len(chunk.ops)
+	}
+	if totalOps != entriesCount || !backend.chunks[len(backend.chunks)-1].final {
+		t.Fatalf("tight maintenance flush totalOps=%d want=%d final=%v", totalOps, entriesCount, backend.chunks[len(backend.chunks)-1].final)
+	}
+	for _, idx := range []int{0, entriesCount / 2, entriesCount - 1} {
+		k := []byte(fmt.Sprintf("tight-%05d", idx))
+		want := fmt.Sprintf("val-tight-%05d", idx)
+		got, err := db.Get(k)
+		if err != nil || string(got) != want {
+			t.Fatalf("Get(%q)=(%q,%v), want %q", k, got, err, want)
+		}
 	}
 }
