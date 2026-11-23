@@ -409,7 +409,7 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 			t.Fatalf("dependency node field %s changed", name)
 		}
 	}
-	m := btree.NewMap[string, cowValue](32)
+	m := btree.NewMap[string, cowValue](cowBTreeDegree)
 	v := reflect.ValueOf(m).Elem()
 	if v.FieldByName("copyValues").Bool() || v.FieldByName("isoCopyValues").Bool() {
 		t.Fatal("immutable values unexpectedly invoke dependency copying")
@@ -420,8 +420,8 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 	for i := 0; i < 2048; i++ {
 		m.Delete(fmt.Sprintf("%08d", i))
 	}
-	pairLimit := cowAllocation(126 * uint64(unsafe.Sizeof(cowPairLayout{})))
-	childLimit := cowAllocation(128 * uint64(unsafe.Sizeof(uintptr(0))))
+	pairLimit := cowAllocation(uint64(2*cowBTreeMaxItems) * uint64(unsafe.Sizeof(cowPairLayout{})))
+	childLimit := cowAllocation(uint64(4*cowBTreeDegree) * uint64(unsafe.Sizeof(uintptr(0))))
 	var check func(reflect.Value)
 	check = func(p reflect.Value) {
 		if p.IsNil() {
@@ -451,22 +451,22 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 	for _, n := range []int{1, 31, 63, 64, 1024, 2046, 2047, 4096} {
 		for _, kind := range []string{"insert", "replace", "delete"} {
 			t.Run(fmt.Sprintf("%d/%s", n, kind), func(t *testing.T) {
-				m := btree.NewMap[string, cowValue](32)
+				m := btree.NewMap[string, cowValue](cowBTreeDegree)
 				oldValue := cowEncodeValue(COWMutation{Value: []byte("old")})
 				newValue := cowEncodeValue(COWMutation{Value: []byte("new")})
 				for i := 0; i < n; i++ {
 					m.Set(fmt.Sprintf("%08d", i), oldValue)
 				}
-				old := m.Copy()
+				old := m.Copy().SealOwned()
 				height := cowMaximumHeight(n + 1)
 				if m.Height() > height {
 					height = m.Height()
 				}
-				charge := cowNodeReserveFor(height, kind == "replace", kind == "delete", n+1) + 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})))
+				charge := cowNodeReserveFor(height, kind == "replace", kind == "delete", n+1) + cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})))
 				runtime.GC()
 				var a, z runtime.MemStats
 				runtime.ReadMemStats(&a)
-				private := m.Copy()
+				private := old.ForkImmutable()
 				switch kind {
 				case "insert":
 					private.Set("99999999", newValue)
@@ -475,7 +475,7 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 				case "delete":
 					private.Delete("00000000")
 				}
-				read := private.Copy()
+				read := private.SealOwned()
 				runtime.ReadMemStats(&z)
 				allocated := z.TotalAlloc - a.TotalAlloc
 				if allocated > charge {

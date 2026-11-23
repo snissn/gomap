@@ -82,10 +82,18 @@ func (c *cowCache) prepareCOWBasisInstallWithFrozen(frozen int) (*cowReadCut, er
 	if err != nil {
 		return nil, err
 	}
-	return &cowReadCut{refs: 1, cache: c, lease: lease,
-		shards: make([]cowTable, shards), frozen: make([]cowTable, 0, frozen),
-		sources: make([]memtable.Table, 0, shards+frozen),
-		domains: make([]rootDomainSnapshot, shards)}, nil
+	cut := &cowReadCut{refs: 1, cache: c, lease: lease}
+	if shards <= cowReadCutInlineShards && frozen == 0 {
+		cut.initStorage(shards, 0)
+		return cut, nil
+	}
+	cut.shards = make([]cowTable, shards)
+	if frozen > 0 {
+		cut.frozen = make([]cowTable, 0, frozen)
+	}
+	cut.sources = make([]memtable.Table, 0, shards+frozen)
+	cut.domains = make([]rootDomainSnapshot, shards)
+	return cut, nil
 }
 
 func (db *DB) installCOWBasis(basis *cowBackendBasis, generationPressure bool) (*cowReadCut, error) {

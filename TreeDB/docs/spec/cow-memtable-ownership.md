@@ -11,10 +11,11 @@ finite limits, refusal, recovery and lifetime obligations.
 
 ## Private preparation and immutable read headers
 
-`NewCOWWriter` owns a degree-32 tidwall/btree v1.8.1 private map and one source
-generation. `Prepare` first validates and reserves the complete allocation
-charge, then forks that private header, copies accepted keys/values into owned
-immutable strings and applies the batch. `Remove` physically deletes a key;
+`NewCOWWriter` owns a degree-32 (`cowBTreeDegree = 32`) `cowbtree` private map
+and one source generation. `Prepare` first validates and reserves the complete allocation
+charge, then forks that sealed private header via `ForkImmutable`, copies
+accepted keys/values into owned immutable strings, applies the batch, and seals
+the postimage in place via `SealOwned` (single map header per preparation). `Remove` physically deletes a key;
 a normal entry carrying `FlagTombstone` preserves a cached physical-key deletion
 marker and its revision. This is distinct from an MVCC logical tombstone, whose
 existing codec remains in ordinary value bytes. Pointer/revision/flags metadata
@@ -173,16 +174,20 @@ The audited methods are `Copy`, `copy`, `nodeSet`, `nodeSplit`, `Set`, `delete`,
   Delete additionally copies at most one sibling per level; merging can grow
   an array twice. The bound accounts for discarded root-construction buffers.
 - Height uses the greater of actual Height and the maximum at batch cardinality
-  `current length + operation count`: a degree-32 height-h tree needs at least
-  `2*32^(h-1)-1` records. No batch crosses an uncharged height boundary.
+  `current length + operation count`: a degree-32 (`cowBTreeDegree`) height-h
+  tree needs at least `2*32^(h-1)-1` records. No batch crosses an uncharged
+  height boundary.
 - Within one fork each original node copies only once, even for mixed operations.
-  Original node count is bounded by `length/31 + 1`; fresh split nodes are already
-  private. Per-operation growth remains charged. Insert-only batches also bound
-  all geometric array growth and split truncations by eight full capacities per
-  possible final node. Delete-only batches charge each original node plus four
-  array-growth capacities. These caps reduce overcharge without a node census.
-- Core reservations include both map headers, immutable root, candidate wrapper,
-  owned string allocation capacities, resource staging arrays, fixed generation
+  Original node count is bounded by `length/(cowBTreeDegree-1) + 1`; fresh split
+  nodes are already private. Per-operation growth remains charged. Insert-only
+  batches also bound all geometric array growth and split truncations by eight
+  full capacities per possible final node. Delete-only batches charge each
+  original node plus four array-growth capacities. These caps reduce overcharge
+  without a node census.
+- Core reservations include the forked map header (`ForkImmutable` + `SealOwned`),
+  immutable root, candidate wrapper (omitted when `PrepareInto` writes into
+  caller-owned pre-admitted staging), owned string allocation capacities,
+  resource staging arrays, fixed generation
   ID/callback arrays, writer/generation/budget wrappers and caller-supplied
   publication/lease allocations. No temporary entry array or payload clone is
   needed during preparation. Cursor reservations include wrapper, independently
