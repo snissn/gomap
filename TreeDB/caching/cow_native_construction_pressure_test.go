@@ -77,7 +77,7 @@ func TestCOWNativeConstructionPressureBorrowsExactCutOffLatch(t *testing.T) {
 			cache, backend := nativeBridgeFixture(t, false)
 			c := cache.cow
 			cut := c.cut
-			refs := cut.refs
+			refs := cut.refs.Load()
 			before := c.budget.Stats()
 			failure := errors.New("pressure inventory failure")
 			calls := 0
@@ -87,7 +87,7 @@ func TestCOWNativeConstructionPressureBorrowsExactCutOffLatch(t *testing.T) {
 				if !c.cutMu.TryLock() {
 					t.Fatal("participant observation under cut latch")
 				}
-				paired := snapshot == cut.basis.snapshot && cut.refs == refs+1
+				paired := snapshot == cut.basis.snapshot && cut.refs.Load() == refs+1
 				c.cutMu.Unlock()
 				if !paired {
 					t.Fatal("observation replaced basis or did not retain original cut")
@@ -108,7 +108,7 @@ func TestCOWNativeConstructionPressureBorrowsExactCutOffLatch(t *testing.T) {
 			if fail && !errors.Is(err, failure) || !fail && err != nil {
 				t.Fatalf("observer error=%v", err)
 			}
-			if calls != 1 || cut.refs != refs || cache.checkpointRuns.Load() != runs || c.nativePressureRemembered {
+			if calls != 1 || cut.refs.Load() != refs || cache.checkpointRuns.Load() != runs || c.nativePressureRemembered {
 				t.Fatal("low/error observation retained an edge, checkpointed, or remembered a drain")
 			}
 			after := c.budget.Stats()
@@ -174,7 +174,7 @@ func TestCOWNativeProducerWithoutPressureHookKeepsOriginalOwners(t *testing.T) {
 			c.cut.semanticRootSet = newTestSemanticState(nil) // No optional hook.
 			c.cutMu.Unlock()
 		}
-		cut, refs, runs := c.cut, c.cut.refs, cache.checkpointRuns.Load()
+		cut, refs, runs := c.cut, c.cut.refs.Load(), cache.checkpointRuns.Load()
 		before := c.budget.Stats()
 		for i := 0; i < 3; i++ {
 			if err := backend.PrepareNativeProducer(); err != nil {
@@ -183,7 +183,7 @@ func TestCOWNativeProducerWithoutPressureHookKeepsOriginalOwners(t *testing.T) {
 		}
 		after := c.budget.Stats()
 		before.PeakBytes, after.PeakBytes = 0, 0
-		if before != after || c.cut != cut || cut.refs != refs || cache.checkpointRuns.Load() != runs {
+		if before != after || c.cut != cut || cut.refs.Load() != refs || cache.checkpointRuns.Load() != runs {
 			t.Fatal("plain/nonparticipating producer added capture ownership or maintenance")
 		}
 	}

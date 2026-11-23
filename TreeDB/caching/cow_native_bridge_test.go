@@ -223,7 +223,7 @@ func TestCOWNativeAssignedFailureRetainsOriginalAssetWithoutRawNeighbors(t *test
 	}
 	defer capture.Close()
 	opening, basis := cache.cow.cut, cache.cow.cut.basis
-	beforeRefs, beforeBasis := opening.refs, basis.refs.Load()
+	beforeRefs, beforeBasis := opening.refs.Load(), basis.refs.Load()
 	beforePins := cache.valueLogIdentityPins.ActivePins()
 	lease, err := capture.AdmitNativeBytes(uint64(unsafe.Sizeof(nativeBridgeFailedAsset{})) + 16<<10)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestCOWNativeAssignedFailureRetainsOriginalAssetWithoutRawNeighbors(t *test
 	if plan.calls != 1 || plan.notifications != 1 || plan.file == nil || plan.destructions != 0 {
 		t.Fatal("lost original assigned partial file/ledger")
 	}
-	if opening.refs != beforeRefs || basis.refs.Load() != beforeBasis || cache.cow.cut != opening || cache.valueLogIdentityPins.ActivePins() != beforePins {
+	if opening.refs.Load() != beforeRefs || basis.refs.Load() != beforeBasis || cache.cow.cut != opening || cache.valueLogIdentityPins.ActivePins() != beforePins {
 		t.Fatal("assigned failure retained private raw neighbors, basis or live pins")
 	}
 	if err := capture.Close(); err != nil {

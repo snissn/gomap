@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
@@ -212,7 +213,7 @@ func cowCutDomainsCharge(shards, frozen int) (uint64, bool) {
 
 // Authority members are immutable after installation; only the separately
 // synchronized derived catalog and lazy snapshot-domain slots may initialize
-// after installation. refs is controlled by cutMu; dropping the last reference
+// after installation. refs is managed atomically; dropping the last reference
 // transfers bounded retirement to the caller.
 type cowReadCut struct {
 	visibleCommandLSN     uint64
@@ -222,7 +223,7 @@ type cowReadCut struct {
 	frozenSemanticRootSet backenddb.NativeSemanticState
 	semanticRootSet       backenddb.NativeSemanticState // immutable semantic/catalog projection installed with this same raw cut
 	catalogProjection     cowNativeCatalogProjection    // derived once from this exact cut; never semantic publication
-	refs                  int
+	refs                  atomic.Int64
 	shards                []cowTable
 	frozen                []cowTable // oldest to newest; every member precedes basis
 	frozenSet             *cowFrozenSet
@@ -341,6 +342,79 @@ func drainCOWTables(tables []cowTable) {
 	}
 }
 
+const (
+	cowReadGateShards = 16
+	cowReadGateMask   = cowReadGateShards - 1
+)
+
+type cowReadGateShard struct {
+	mu  sync.RWMutex
+	pad [64 - unsafe.Sizeof(sync.RWMutex{})]byte
+}
+
+type cowReadGate struct {
+	shards [cowReadGateShards]cowReadGateShard
+}
+
+func (g *cowReadGate) rLockStripe(stripe uint32) {
+	g.shards[stripe&cowReadGateMask].mu.RLock()
+}
+
+func (g *cowReadGate) rUnlockStripe(stripe uint32) {
+	g.shards[stripe&cowReadGateMask].mu.RUnlock()
+}
+
+func (g *cowReadGate) tryRLockStripe(stripe uint32) bool {
+	return g.shards[stripe&cowReadGateMask].mu.TryRLock()
+}
+
+func (g *cowReadGate) lockAll() {
+	for i := range g.shards {
+		g.shards[i].mu.Lock()
+	}
+}
+
+func (g *cowReadGate) unlockAll() {
+	for i := range g.shards {
+		g.shards[i].mu.Unlock()
+	}
+}
+
+func (g *cowReadGate) tryLockAll() bool {
+	for i := range g.shards {
+		if !g.shards[i].mu.TryLock() {
+			for j := i - 1; j >= 0; j-- {
+				g.shards[j].mu.Unlock()
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func cowReadStripe(key []byte) uint32 {
+	n := len(key)
+	if n == 0 {
+		return 0
+	}
+	if n == 8 {
+		x := binary.LittleEndian.Uint64(key)
+		x ^= x >> 33
+		x *= 0xff51afd7ed558ccd
+		x ^= x >> 33
+		return uint32(x) & cowReadGateMask
+	}
+	var h uint32 = 2166136261
+	for _, b := range key {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+	h ^= h >> 16
+	h *= 0x85ebca6b
+	h ^= h >> 13
+	return h & cowReadGateMask
+}
+
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
@@ -356,11 +430,12 @@ type cowCache struct {
 	txnOwner                                                                                       *transactionowner.Owner
 	journal                                                                                        *txnJournal
 	writerMu                                                                                       sync.Mutex
-	readMu                                                                                         sync.RWMutex
+	readGate                                                                                       cowReadGate
 	readClosed                                                                                     atomic.Bool
 	refreshRequired                                                                                atomic.Bool // maintenance changed the basis before refresh admission
 	cutMu                                                                                          sync.Mutex
 	cut                                                                                            *cowReadCut
+	liveCut                                                                                        atomic.Pointer[cowReadCut]
 	writers                                                                                        []*memtable.COWWriter
 	successors                                                                                     []cowRawSuccessor
 	budget                                                                                         *memtable.COWBudget
@@ -486,7 +561,8 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 	}
 	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards), pointStaging: newCOWPointStaging(shards)}
 	c.semanticCond.L = &c.semanticMu
-	cut := &cowReadCut{refs: 1, basis: admitted, lease: cutLease, cache: c}
+	cut := &cowReadCut{basis: admitted, lease: cutLease, cache: c}
+	cut.refs.Store(1)
 	cut.initShards(shards)
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
@@ -546,6 +622,7 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 	cut.buildDomains()
 	c.activeCuts.Store(1)
 	c.cut = cut
+	c.liveCut.Store(cut)
 	return c, nil
 }
 func cowBasisCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
@@ -667,23 +744,43 @@ func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 }
 
 func (c *cowCache) retainCut() *cowReadCut {
+	for {
+		cut := c.liveCut.Load()
+		if cut == nil {
+			return c.retainCutSlow()
+		}
+		for {
+			cur := cut.refs.Load()
+			if cur > 0 {
+				if cut.refs.CompareAndSwap(cur, cur+1) {
+					return cut
+				}
+				continue
+			}
+			if cur == 0 {
+				break // retired; reload liveCut
+			}
+			// cur < 0: ActivateNativeSemanticOwner holds cutMu
+			return c.retainCutSlow()
+		}
+	}
+}
+
+func (c *cowCache) retainCutSlow() *cowReadCut {
 	c.cutMu.Lock()
 	defer c.cutMu.Unlock()
 	if c.closed || c.cut == nil {
 		return nil
 	}
-	c.cut.refs++
+	c.cut.refs.Add(1)
 	return c.cut
 }
+
 func (c *cowCache) releaseCut(cut *cowReadCut) error {
 	if cut == nil {
 		return nil
 	}
-	c.cutMu.Lock()
-	cut.refs--
-	last := cut.refs == 0
-	c.cutMu.Unlock()
-	if last {
+	if cut.refs.Add(-1) == 0 {
 		return cut.drain()
 	}
 	return nil
@@ -763,10 +860,8 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	if needsSuccessors {
 		p.successors = make([]cowRawSuccessor, len(groups))
 	}
-	c.cutMu.Lock()
-	old.refs++
+	old.refs.Add(1)
 	p.opening = old
-	c.cutMu.Unlock()
 	for i := range groups {
 		if len(groups[i]) == 0 {
 			continue
@@ -801,7 +896,8 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			return p, memtable.ErrCOWCapacity
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, basis: old.basis, lease: lease, cache: c}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, basis: old.basis, lease: lease, cache: c}
+	next.refs.Store(1)
 	next.initShards(len(groups))
 	next.basis.retain()
 	retainCOWSemanticState(next)
@@ -988,6 +1084,10 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	c.publications.Add(1)
 	c.cutMu.Lock()
 	old := c.cut
+	if p.opening != old {
+		c.cutMu.Unlock()
+		panic("COW opening cut changed")
+	}
 	c.cut = p.next
 	if p.native != nil {
 		p.native.plan = nil
@@ -1001,13 +1101,9 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 		}
 	}
 	c.activeCuts.Add(1)
-	old.refs--
-	if p.opening != old {
-		panic("COW opening cut changed")
-	}
-	old.refs--
+	c.liveCut.Store(p.next)
 	p.opening = nil
-	last := old.refs == 0
+	last := old.refs.Add(-2) == 0
 	c.cutMu.Unlock()
 	p.consumed = true
 	if last {
@@ -1016,34 +1112,42 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	return nil, returnCustody, nil
 }
 func (c *cowCache) beginRead() bool {
-	c.readMu.RLock()
+	return c.beginReadStripe(0)
+}
+func (c *cowCache) endRead() {
+	c.endReadStripe(0)
+}
+func (c *cowCache) beginReadStripe(stripe uint32) bool {
+	c.readGate.rLockStripe(stripe)
 	if c.readClosed.Load() {
-		c.readMu.RUnlock()
+		c.readGate.rUnlockStripe(stripe)
 		return false
 	}
 	return true
 }
-func (c *cowCache) endRead()     { c.readMu.RUnlock() }
+func (c *cowCache) endReadStripe(stripe uint32) {
+	c.readGate.rUnlockStripe(stripe)
+}
 func (c *cowCache) close() error { return c.closeWithBudget(true) }
 
 // The DB shutdown path keeps the producer budget open through its final backend
 // checkpoint and physical disposal. Standalone cache close keeps its existing
 // terminal semantics.
 func (c *cowCache) closeWithBudget(closeBudget bool) error {
-	c.readMu.Lock()
-	if c.readClosed.Swap(true) {
-		c.readMu.Unlock()
+	c.readGate.lockAll()
+	already := c.readClosed.Swap(true)
+	c.readGate.unlockAll()
+	if already {
 		return nil
 	}
-	c.readMu.Unlock()
 	retired := c.closeRetired
 	c.writerMu.Lock()
 	c.cutMu.Lock()
 	c.closed = true
 	old := c.cut
 	c.cut = nil
-	old.refs--
-	last := old.refs == 0
+	c.liveCut.Store(nil)
+	last := old.refs.Add(-1) == 0
 	c.cutMu.Unlock()
 	// FIFO/index cleanup and admission release are finite but stay outside
 	// the publication latch; writer exclusion still prevents mutation.

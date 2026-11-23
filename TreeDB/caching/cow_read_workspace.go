@@ -1078,13 +1078,15 @@ func (r *cowViewResult) close() {
 // Copy borrowed bytes under the original read locks. The callback runs only
 // after both the snapshot read gate and the workspace lock have been released.
 func (s *Snapshot) cowViewCopy(key []byte, result *cowViewResult) (bool, error) {
-	if err := s.beginRead(); err != nil {
+	key = normalizeRawKVPointKey(key)
+	stripe := cowReadStripe(key)
+	if err := s.beginReadStripe(stripe); err != nil {
 		return false, err
 	}
-	defer s.endRead()
+	defer s.endReadStripe(stripe)
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	value, _, err := s.cowValueLocked(normalizeRawKVPointKey(key))
+	value, _, err := s.cowValueLocked(key)
 	if err == tree.ErrKeyNotFound {
 		if !result.reusable() {
 			result.close()

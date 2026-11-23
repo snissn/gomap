@@ -40,10 +40,11 @@ func (s *Snapshot) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, 
 // basis permits allocation-free cached lower bounds; disk records and physical
 // tombstone advancement retain the general merge on the same snapshot.
 func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, err error) {
-	if err = s.beginRead(); err != nil {
+	stripe := cowReadStripe(start)
+	if err = s.beginReadStripe(stripe); err != nil {
 		return nil, nil, false, err
 	}
-	defer s.endRead()
+	defer s.endReadStripe(stripe)
 	return s.cowSeekGEAdmitted(start, end)
 }
 

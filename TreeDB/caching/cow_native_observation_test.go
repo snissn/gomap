@@ -16,7 +16,7 @@ func TestCOWNativeProducerObservationDoesNotJoinPressureMutex(t *testing.T) {
 	s.observe = func(*backenddb.Snapshot) (backenddb.NativeSemanticProducerPressure, error) { return pressure, nil }
 	c.cutMu.Lock()
 	c.cut.semanticRootSet = s
-	cut, refs := c.cut, c.cut.refs
+	cut, refs := c.cut, c.cut.refs.Load()
 	c.cutMu.Unlock()
 	before, runs, next := c.budget.Stats(), cache.checkpointRuns.Load(), backend.CommandWALNextLSN()
 	type result struct {
@@ -47,7 +47,7 @@ func TestCOWNativeProducerObservationDoesNotJoinPressureMutex(t *testing.T) {
 	locked = false
 	after := c.budget.Stats()
 	before.PeakBytes, after.PeakBytes = 0, 0
-	if before != after || c.cut != cut || cut.refs != refs || cache.checkpointRuns.Load() != runs || backend.CommandWALNextLSN() != next || c.nativePressureRemembered {
+	if before != after || c.cut != cut || cut.refs.Load() != refs || cache.checkpointRuns.Load() != runs || backend.CommandWALNextLSN() != next || c.nativePressureRemembered {
 		t.Fatal("observation retained ownership, assigned work or ran maintenance")
 	}
 }

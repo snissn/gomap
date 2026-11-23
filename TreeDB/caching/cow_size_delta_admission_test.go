@@ -41,7 +41,7 @@ func TestCOWSizeDeltaOverflowCancelsBeforeCommandAppend(t *testing.T) {
 			// Corrupt only the host size scalar to reach the otherwise physically
 			// impossible signed boundary. The second shard must cancel the first
 			// shard's already concrete preparation and both successor promises.
-			opening, refs := c.cut, c.cut.refs
+			opening, refs := c.cut, c.cut.refs.Load()
 			opening.shards[1].size = math.MaxInt64
 			before, maintenance := c.budget.Stats(), c.maintenance.Stats()
 			nextLSN := backend.CommandWALNextLSN()
@@ -73,7 +73,7 @@ func TestCOWSizeDeltaOverflowCancelsBeforeCommandAppend(t *testing.T) {
 					t.Fatalf("overflow retained private credits: before=%+v after=%+v", want, got)
 				}
 			}
-			if c.cut != opening || opening.refs != refs {
+			if c.cut != opening || opening.refs.Load() != refs {
 				t.Fatal("overflow replaced or retained opening cut")
 			}
 			for _, group := range groups {

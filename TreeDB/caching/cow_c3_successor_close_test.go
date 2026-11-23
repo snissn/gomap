@@ -175,8 +175,12 @@ func TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose(t *testing.T) {
 				go func() { defer close(closeDone); closeErr = db.Close() }()
 				// With one admitted reader and no other storage writer, failed TryRLock
 				// proves actual Close queued its exclusive gate. Launch alone proves none.
-				for c.readMu.TryRLock() {
-					c.readMu.RUnlock()
+				readerStripe := uint32(0)
+				if !disk {
+					readerStripe = cowReadStripe([]byte("a"))
+				}
+				for c.readGate.tryRLockStripe(readerStripe) {
+					c.readGate.rUnlockStripe(readerStripe)
 					if time.Now().After(deadline) {
 						t.Fatal("actual Close did not queue its read gate")
 					}

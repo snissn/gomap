@@ -17,10 +17,12 @@ import (
 func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []byte, revision page.EntryRevision, err error) {
 	c := db.cow
 	c.captureCalls.Add(1) // Preserve the public point-read capture counter.
-	if !c.beginRead() {
+	key = normalizeRawKVPointKey(key)
+	stripe := cowReadStripe(key)
+	if !c.beginReadStripe(stripe) {
 		return dst, 0, backenddb.ErrClosed
 	}
-	defer c.endRead()
+	defer c.endReadStripe(stripe)
 	cut := c.retainCut()
 	if cut == nil {
 		return dst, 0, backenddb.ErrClosed
@@ -45,7 +47,6 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 			err = joinCOWCleanupError(err, c.releaseCut(spare))
 		}
 	}()
-	key = normalizeRawKVPointKey(key)
 	value, ptr, flags, revision, found := cut.lookupShardEntryWithRevision(db.shardIndex(key), key)
 	entry := node.LeafEntry{ValuePtr: ptr, Flags: flags, Revision: revision}
 	var fresh cowFreshReadOwner
@@ -70,9 +71,7 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 	if fresh.reader != nil {
 		// Admission consumes retained even on refusal. Keep one spare reference
 		// to THIS cut so refund/retry cannot recapture a later publication.
-		c.cutMu.Lock()
-		cut.refs++
-		c.cutMu.Unlock()
+		cut.refs.Add(1)
 		spare = cut
 	}
 	retained := cut

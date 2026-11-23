@@ -243,10 +243,8 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 	st.cut.consumed = false
 	st.prepared = true
 
-	c.cutMu.Lock()
-	old.refs++
+	old.refs.Add(1)
 	st.cut.opening = old
-	c.cutMu.Unlock()
 
 	if c.successors[shard].writer == nil {
 		if err := c.writers[shard].ReserveRawRolloverSource(); err != nil {
@@ -282,11 +280,11 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 		frozenCommandLSN:      old.frozenCommandLSN,
 		frozenSemanticRootSet: old.frozenSemanticRootSet,
 		semanticRootSet:       old.semanticRootSet,
-		refs:                  1,
 		basis:                 old.basis,
 		leaseStorage:          st.cutLeaseStorage,
 		cache:                 c,
 	}
+	next.refs.Store(1)
 	st.cutLeaseStorage = memtable.COWExternalLease{}
 	next.lease = &next.leaseStorage
 	next.initShards(shards)

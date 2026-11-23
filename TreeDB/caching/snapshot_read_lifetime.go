@@ -7,34 +7,40 @@ const snapshotReadClosedBit uint64 = 1 << 63
 // beginRead pins the snapshot's readable state against concurrent Close.
 // Callers must pair a nil result with endRead.
 func (s *Snapshot) beginRead() error {
-	if s == nil {
-		return backenddb.ErrClosed
-	}
-	for {
-		state := s.readState.Load()
-		if state&snapshotReadClosedBit != 0 {
-			return backenddb.ErrClosed
-		}
-		if s.readState.CompareAndSwap(state, state+1) {
-			if s.cowCache != nil && !s.cowCache.beginRead() {
-				if s.readState.Add(^uint64(0)) == snapshotReadClosedBit {
-					_ = s.finalizeCloseIfUnreferenced()
-				}
-				return backenddb.ErrClosed
-			}
-			return nil
-		}
-	}
+	return s.beginReadStripe(0)
 }
 
 func (s *Snapshot) endRead() {
+	s.endReadStripe(0)
+}
+
+func (s *Snapshot) beginReadStripe(stripe uint32) error {
+	if s == nil || s.closed.Load() {
+		return backenddb.ErrClosed
+	}
+	if s.readState.Add(1)&snapshotReadClosedBit != 0 {
+		if s.readState.Add(^uint64(0)) == snapshotReadClosedBit && !s.finalized.Load() {
+			_ = s.finalizeCloseIfUnreferenced()
+		}
+		return backenddb.ErrClosed
+	}
+	if s.cowCache != nil && !s.cowCache.beginReadStripe(stripe) {
+		if s.readState.Add(^uint64(0)) == snapshotReadClosedBit && !s.finalized.Load() {
+			_ = s.finalizeCloseIfUnreferenced()
+		}
+		return backenddb.ErrClosed
+	}
+	return nil
+}
+
+func (s *Snapshot) endReadStripe(stripe uint32) {
 	if s == nil {
 		return
 	}
 	if s.cowCache != nil {
-		s.cowCache.endRead()
+		s.cowCache.endReadStripe(stripe)
 	}
-	if s.readState.Add(^uint64(0)) == snapshotReadClosedBit {
+	if s.readState.Add(^uint64(0)) == snapshotReadClosedBit && !s.finalized.Load() {
 		_ = s.finalizeCloseIfUnreferenced()
 	}
 }

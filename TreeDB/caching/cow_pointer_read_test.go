@@ -323,10 +323,10 @@ func TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose(t *testing.T
 		// Get increments the existing snapshot operation count, then admits
 		// through the DB storage gate, before waiting on its read workspace.
 		if snapshot.readState.Load() != 0 {
-			if !db.cow.readMu.TryLock() {
+			if !db.cow.readGate.tryLockAll() {
 				break
 			}
-			db.cow.readMu.Unlock()
+			db.cow.readGate.unlockAll()
 		}
 		if time.Now().After(deadline) {
 			snapshot.cowReadMu.Unlock()
@@ -379,10 +379,10 @@ func TestCOWViewCallbacksOutsideReadLocksAndClosedEmptyRoutes(t *testing.T) {
 	defer s.Close()
 	before := db.cow.budget.Stats().ExternalBytes
 	err = s.GetManyView([][]byte{[]byte("empty"), []byte("missing"), []byte("value")}, func(i int, key, value []byte, found bool) error {
-		if !db.cow.readMu.TryLock() {
+		if !db.cow.readGate.tryLockAll() {
 			return errors.New("callback retained storage read gate")
 		}
-		db.cow.readMu.Unlock()
+		db.cow.readGate.unlockAll()
 		if !s.cowReadMu.TryLock() {
 			return errors.New("callback retained read workspace lock")
 		}

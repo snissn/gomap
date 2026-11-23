@@ -108,7 +108,7 @@ func TestCOWSemanticRolloverOwnsDistinctSuccessorAndPrivateError(t *testing.T) {
 				if err := c.close(); err != nil {
 					t.Fatal(err)
 				}
-				if c.activeCuts.Load() != 1 || opening.refs != 1 || db.semanticCleanupTerminal() {
+				if c.activeCuts.Load() != 1 || opening.refs.Load() != 1 || db.semanticCleanupTerminal() {
 					t.Fatal("opening cut withdrew before private cleanup")
 				}
 			}
