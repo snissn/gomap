@@ -29,14 +29,16 @@ type COWTraversal struct {
 	view                             *COWView
 	cursor                           btree.StringCursor[cowValue]
 	ordered                          cowOrderedTraversal
-	hasOrdered                       bool
+	delta                            cowDeltaTraversal
+	hasOrdered, hasDelta             bool
 	pending, valid, rawSelected      bool
+	equalTreeDelta, skipRawEqual     bool
 	runRaw, runOrdered               bool
 	op                               COWTraversalOperation
 	rawOp, orderedOp                 COWTraversalOperation
 	direction                        int
 	key                              string
-	rawKey, orderedKey               string
+	rawKey, orderedKey, skipRawKey   string
 	phase                            uint8
 	compareOffset                    int
 	rawRecord, orderedRecord, record COWRecord
@@ -93,6 +95,9 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 			panic("pre-admitted ordered cursor initialization refused")
 		}
 		c.hasOrdered = true
+	} else if len(r.delta) > 0 {
+		c.delta = cowDeltaTraversal{entries: r.delta}
+		c.hasDelta = true
 	}
 	return c, nil
 }
@@ -112,7 +117,7 @@ func (c *COWTraversal) Begin(op COWTraversalOperation, key string, work *COWTrav
 	if work == nil {
 		return btree.ErrWork
 	}
-	if c.hasOrdered {
+	if c.hasOrdered || c.hasDelta {
 		if c.pending {
 			return btree.ErrPending
 		}
@@ -121,13 +126,22 @@ func (c *COWTraversal) Begin(op COWTraversalOperation, key string, work *COWTrav
 		}
 		c.runRaw, c.runOrdered = true, true
 		c.rawOp, c.orderedOp, c.rawKey, c.orderedKey = op, op, key, key
+		c.skipRawEqual, c.skipRawKey = false, ""
 		if (op == btree.Next || op == btree.Prev) && c.valid {
 			direction := 1
 			if op == btree.Prev {
 				direction = -1
 			}
 			if c.direction == direction {
-				c.runRaw, c.runOrdered = c.rawSelected, !c.rawSelected
+				if c.hasDelta && c.equalTreeDelta {
+					c.runRaw, c.runOrdered = true, true
+				} else {
+					c.runRaw, c.runOrdered = c.rawSelected, !c.rawSelected
+				}
+			} else if c.hasDelta && c.equalTreeDelta {
+				// Both streams are positioned at the exact same key; step both
+				// in the new direction so neither stays on the current record.
+				c.runRaw, c.runOrdered = true, true
 			} else {
 				seek := btree.SeekGE
 				if direction < 0 {
@@ -137,6 +151,10 @@ func (c *COWTraversal) Begin(op COWTraversalOperation, key string, work *COWTrav
 					c.orderedOp, c.orderedKey = seek, c.record.Key
 				} else {
 					c.rawOp, c.rawKey = seek, c.record.Key
+					if c.hasDelta {
+						c.skipRawEqual = true
+						c.skipRawKey = c.record.Key
+					}
 				}
 			}
 		}
@@ -154,7 +172,7 @@ func (c *COWTraversal) Step(work *COWTraversalWork) (bool, error) {
 	if work == nil {
 		return false, btree.ErrWork
 	}
-	if c.hasOrdered {
+	if c.hasOrdered || c.hasDelta {
 		return c.stepMerged(work)
 	}
 	return c.cursor.Step(work)
@@ -165,7 +183,7 @@ func (c *COWTraversal) Record(work *COWTraversalWork) (COWRecord, bool, error) {
 	if c.view == nil || c.closing {
 		return COWRecord{}, false, ErrCOWClosed
 	}
-	if c.hasOrdered {
+	if c.hasOrdered || c.hasDelta {
 		if c.pending || !c.valid {
 			return COWRecord{}, false, nil
 		}
@@ -202,7 +220,7 @@ func (c *COWTraversal) CloseStep(work *COWTraversalWork) (bool, COWRetirement, e
 	if work == nil {
 		return false, COWRetirement{}, btree.ErrWork
 	}
-	if c.hasOrdered {
+	if c.hasOrdered || c.hasDelta {
 		return c.closeMerged(work)
 	}
 	if !c.closing {

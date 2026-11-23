@@ -224,7 +224,7 @@ func TestCOWOrdinaryOverwriteAutomaticallyRollsBoundedGenerations(t *testing.T) 
 	defer old.Close()
 	generations := 1
 	previous := db.cow.writers[0]
-	for i := 0; i < 160; i++ {
+	for i := 0; i < 320; i++ {
 		value[0] = byte(i)
 		if err := db.Set([]byte("key"), value); err != nil {
 			t.Fatalf("write %d: %v", i, err)
@@ -232,6 +232,9 @@ func TestCOWOrdinaryOverwriteAutomaticallyRollsBoundedGenerations(t *testing.T) 
 		if db.cow.writers[0] != previous {
 			generations++
 			previous = db.cow.writers[0]
+			if generations >= 3 {
+				break
+			}
 		}
 		// Give the independent flush coordinator time to retire unpinned prior
 		// generations. No checkpoint or synchronous backend flush is hidden in Set.

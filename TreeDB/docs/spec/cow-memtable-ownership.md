@@ -11,11 +11,21 @@ finite limits, refusal, recovery and lifetime obligations.
 
 ## Private preparation and immutable read headers
 
-`NewCOWWriter` owns a degree-32 (`cowBTreeDegree = 32`) `cowbtree` private map
-and one source generation. `Prepare` first validates and reserves the complete allocation
-charge, then forks that sealed private header via `ForkImmutable`, copies
-accepted keys/values into owned immutable strings, applies the batch, and seals
-the postimage in place via `SealOwned` (single map header per preparation). `Remove` physically deletes a key;
+`NewCOWWriter` owns a degree-32 (`cowBTreeDegree = 32`) `cowbtree` private map,
+a bounded immutable sorted front delta (`cowDeltaMaxEntries` entries on raw
+non-ordered writers), and one source generation. `Prepare` first validates and
+reserves the complete allocation charge. For single-op raw non-remove,
+resource-free updates while the front delta has capacity (or overwrites a key
+already in the front delta), `Prepare` shares the existing sealed `cowbtree`
+header and allocates only an exact-capacity immutable sorted delta slice and
+`COWRoot`, charging the rounded delta slice under `Nodes` and the `COWRoot`
+under `Wrappers`. When the front delta fills on a new key, or on any multi-key
+batch, physical `Remove`, resource-bearing preparation, or ordered writer,
+`Prepare` forks the sealed private header via `ForkImmutable`, flushes any
+buffered front-delta entries into it, copies accepted keys/values into owned
+immutable strings, applies the batch, seals the postimage in place via
+`SealOwned`, and resets the front delta to `nil` (single map header per flush
+preparation). `Remove` physically deletes a key;
 a normal entry carrying `FlagTombstone` preserves a cached physical-key deletion
 marker and its revision. This is distinct from an MVCC logical tombstone, whose
 existing codec remains in ordinary value bytes. Pointer/revision/flags metadata

@@ -32,7 +32,13 @@ func (c *COWTraversal) stepMerged(work *COWTraversalWork) (bool, error) {
 			c.phase = 3
 		case 3:
 			if c.runOrdered {
-				if err := c.ordered.Begin(c.orderedOp, c.orderedKey, work); err != nil {
+				var err error
+				if c.hasDelta {
+					err = c.delta.Begin(c.orderedOp, c.orderedKey, work)
+				} else {
+					err = c.ordered.Begin(c.orderedOp, c.orderedKey, work)
+				}
+				if err != nil {
 					if errors.Is(err, btree.ErrWork) {
 						return false, nil
 					}
@@ -42,7 +48,14 @@ func (c *COWTraversal) stepMerged(work *COWTraversalWork) (bool, error) {
 			c.phase = 4
 		case 4:
 			if c.runOrdered {
-				if done, err := c.ordered.Step(work); err != nil || !done {
+				var done bool
+				var err error
+				if c.hasDelta {
+					done, err = c.delta.Step(work)
+				} else {
+					done, err = c.ordered.Step(work)
+				}
+				if err != nil || !done {
 					return false, err
 				}
 			}
@@ -59,11 +72,50 @@ func (c *COWTraversal) stepMerged(work *COWTraversalWork) (bool, error) {
 			if raw {
 				c.rawRecord = v.record(key)
 			}
-			c.orderedRecord, _ = c.ordered.Current()
+			if c.hasDelta {
+				c.orderedRecord, _ = c.delta.Current()
+			} else {
+				c.orderedRecord, _ = c.ordered.Current()
+			}
 			c.compareOffset = 0
-			c.phase = 6
+			if c.skipRawEqual && raw {
+				c.phase = 7
+			} else {
+				c.skipRawEqual, c.skipRawKey = false, ""
+				c.phase = 6
+			}
+		case 7:
+			// On delta direction reversal, skip any shadowed raw tree key equal
+			// to the previously emitted delta key before merging.
+			a, b := c.rawRecord.Key, c.skipRawKey
+			equal := len(a) == len(b)
+			if equal {
+				for c.compareOffset < len(a) {
+					if !work.Reserve(0, 2) {
+						return false, nil
+					}
+					if a[c.compareOffset] != b[c.compareOffset] {
+						equal = false
+						break
+					}
+					c.compareOffset++
+				}
+			}
+			c.skipRawEqual, c.skipRawKey = false, ""
+			c.compareOffset = 0
+			if equal {
+				c.runRaw, c.runOrdered = true, false
+				c.rawOp, c.rawKey = c.op, ""
+				c.phase = 1
+			} else {
+				c.phase = 6
+			}
 		case 6:
-			raw, ordered := c.cursor.Ready(), c.ordered.Ready()
+			raw := c.cursor.Ready()
+			ordered := c.ordered.Ready()
+			if c.hasDelta {
+				ordered = c.delta.Ready()
+			}
 			cmp := 0
 			if raw && ordered {
 				a, b := c.rawRecord.Key, c.orderedRecord.Key
@@ -95,7 +147,13 @@ func (c *COWTraversal) stepMerged(work *COWTraversalWork) (bool, error) {
 			if reverse {
 				c.direction = -1
 			}
-			c.rawSelected = raw && (!ordered || (!reverse && cmp <= 0) || (reverse && cmp >= 0))
+			if c.hasDelta && raw && ordered && cmp == 0 {
+				c.equalTreeDelta = true
+				c.rawSelected = false
+			} else {
+				c.equalTreeDelta = false
+				c.rawSelected = raw && (!ordered || (!reverse && cmp <= 0) || (reverse && cmp >= 0))
+			}
 			c.valid = raw || ordered
 			c.record = COWRecord{}
 			if c.rawSelected {
@@ -116,7 +174,8 @@ func (c *COWTraversal) closeMerged(work *COWTraversalWork) (bool, COWRetirement,
 			return false, COWRetirement{}, nil
 		}
 		c.closing, c.valid, c.pending, c.phase, c.key = true, false, false, 1, ""
-		c.rawKey, c.orderedKey = "", ""
+		c.rawKey, c.orderedKey, c.skipRawKey = "", "", ""
+		c.equalTreeDelta, c.skipRawEqual = false, false
 		c.record, c.rawRecord, c.orderedRecord = COWRecord{}, COWRecord{}, COWRecord{}
 	}
 	for {
@@ -135,7 +194,13 @@ func (c *COWTraversal) closeMerged(work *COWTraversalWork) (bool, COWRetirement,
 			}
 			c.phase = 3
 		case 3:
-			if err := c.ordered.Begin(btree.Close, "", work); err != nil {
+			var err error
+			if c.hasDelta {
+				err = c.delta.Begin(btree.Close, "", work)
+			} else {
+				err = c.ordered.Begin(btree.Close, "", work)
+			}
+			if err != nil {
 				if errors.Is(err, btree.ErrWork) {
 					return false, COWRetirement{}, nil
 				}
@@ -143,7 +208,14 @@ func (c *COWTraversal) closeMerged(work *COWTraversalWork) (bool, COWRetirement,
 			}
 			c.phase = 4
 		case 4:
-			if done, err := c.ordered.Step(work); err != nil || !done {
+			var done bool
+			var err error
+			if c.hasDelta {
+				done, err = c.delta.Step(work)
+			} else {
+				done, err = c.ordered.Step(work)
+			}
+			if err != nil || !done {
 				return false, COWRetirement{}, err
 			}
 			c.phase = 5
@@ -155,6 +227,7 @@ func (c *COWTraversal) closeMerged(work *COWTraversalWork) (bool, COWRetirement,
 			c.view = nil
 			c.cursor = btree.StringCursor[cowValue]{}
 			c.ordered = cowOrderedTraversal{}
+			c.delta = cowDeltaTraversal{}
 			return true, retirement, nil
 		}
 	}

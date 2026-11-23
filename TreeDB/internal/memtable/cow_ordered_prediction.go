@@ -100,8 +100,10 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 
 // RawPointPredictionUpperBound provides an O(1) positive-only upper bound for a
 // single raw (non-ordered) inline/tombstone point mutation without probing the
-// B-tree. Any pointer, removal, ordered writer, or tight-budget frontier falls
-// through to exact Estimate in cowGenerationRollover.
+// B-tree. When the bounded front delta has room, it returns the compact delta
+// upper bound; when the front delta is full and a flush into the B-tree may
+// occur, it returns an O(1) conservative flush upper bound (falling through to
+// exact Estimate on overflow or tight-budget frontiers).
 func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -110,24 +112,49 @@ func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool
 		(e.Flags != node.FlagInline && e.Flags != node.FlagTombstone) {
 		return c, false
 	}
-	if w.private.Len() == int(^uint(0)>>1) {
+	logicalLen := w.private.Len() + w.deltaAdded
+	if logicalLen >= int(^uint(0)>>1) {
 		return c, false
-	}
-	maxEntries := w.maxEntries
-	if next := w.private.Len() + 1; next > maxEntries {
-		maxEntries = next
-	}
-	c.Height = cowMaximumHeight(w.private.Len() + 1)
-	if h := w.private.Height(); h > c.Height {
-		c.Height = h
 	}
 	valueSize, ok := cowValueSize(len(e.Value))
 	if !ok || !cowPredictionAdd(&c.Payload, cowAllocation(uint64(len(e.Key)))) ||
 		!cowPredictionAdd(&c.Payload, cowAllocation(uint64(valueSize))) {
 		return COWCharge{}, false
 	}
-	c.Nodes = cowNodeReserveFor(c.Height, false, false, maxEntries)
-	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	c.Height = cowMaximumHeight(logicalLen + 1)
+	if h := w.private.Height(); h > c.Height {
+		c.Height = h
+	}
+	if len(w.delta) < cowDeltaMaxEntries {
+		c.Nodes = cowDeltaCharge(len(w.delta) + 1)
+		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	} else {
+		// Delta is full: a new key flushes len(w.delta)+1 puts into w.private.
+		// Bound conservatively with O(1) per-fork cardinality/operation limits.
+		totalOps := uint64(len(w.delta) + 1)
+		maxEntries := w.maxEntries
+		if next := logicalLen + 1; next > maxEntries {
+			maxEntries = next
+		}
+		perOp := cowNodeReserveFor(c.Height, false, false, maxEntries)
+		var opBound uint64
+		if !cowPredictionProductAdd(&opBound, totalOps, perOp) {
+			return COWCharge{}, false
+		}
+		fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
+		oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
+		if pathNodes := totalOps * uint64(c.Height); oldNodes > pathNodes {
+			oldNodes = pathNodes
+		}
+		maxNodes := uint64((logicalLen+1)/cowBTreeMinItems + 1)
+		var cardBound uint64
+		if !cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) ||
+			!cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) {
+			return COWCharge{}, false
+		}
+		c.Nodes = min(opBound, cardBound)
+		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	}
 	var total uint64
 	for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers} {
 		if !cowPredictionAdd(&total, part) {

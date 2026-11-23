@@ -211,7 +211,7 @@ func TestCOWOrderedPrefixReuseKeepsRawTiePriority(t *testing.T) {
 	budget, rawWriter := cowTestWriter(t, DefaultCOWLimits())
 	mask := cowOrderedStorageMutation(t, "a\x00b", 64)
 	mask.MVCC, mask.Timestamp, mask.Flags = false, 0, node.FlagTombstone
-	rawRoot := cowTestPublish(t, rawWriter, []COWMutation{mask})
+	rawRoot := cowTestPublish(t, rawWriter, []COWMutation{mask, mask})
 	tree := cowOrderedStorageBuild(t, cowOrderedPrefixReuseEntries(t))
 	cursor := COWCursor{iter: rawRoot.tree.Iter(), ordered: tree.cursor()}
 	for _, ts := range []uint64{126, 64, 65, 64, math.MaxUint64, 64} {
