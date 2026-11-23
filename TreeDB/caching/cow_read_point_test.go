@@ -272,9 +272,10 @@ func TestCOWPublicPointReadQueuedClose(t *testing.T) {
 				}
 				read <- err
 			}()
+			pointStripe := cowReadStripe([]byte("point"))
 			deadline := time.Now().Add(5 * time.Second)
-			for db.cow.readMu.TryLock() {
-				db.cow.readMu.Unlock()
+			for db.cow.readGate.tryLockAll() {
+				db.cow.readGate.unlockAll()
 				if time.Now().After(deadline) {
 					t.Fatal("point did not enter cache read gate")
 				}
@@ -282,8 +283,8 @@ func TestCOWPublicPointReadQueuedClose(t *testing.T) {
 			}
 			closed := make(chan error, 1)
 			go func() { closed <- db.Close() }()
-			for db.cow.readMu.TryRLock() {
-				db.cow.readMu.RUnlock()
+			for db.cow.readGate.tryRLockStripe(pointStripe) {
+				db.cow.readGate.rUnlockStripe(pointStripe)
 				if time.Now().After(deadline) {
 					t.Fatal("Close did not queue behind point")
 				}
@@ -328,7 +329,7 @@ func cowAssertPointReadViewRefusal(t *testing.T, db *DB, key []byte) {
 		t.Run(api, func(t *testing.T) {
 			c := db.cow
 			c.cutMu.Lock()
-			cut, refs := c.cut, c.cut.refs
+			cut, refs := c.cut, c.cut.refs.Load()
 			c.cutMu.Unlock()
 			before := c.budget.Stats()
 			dst := []byte("keep")
@@ -343,7 +344,7 @@ func cowAssertPointReadViewRefusal(t *testing.T, db *DB, key []byte) {
 				t.Fatal("fallback refusal changed view ownership")
 			}
 			c.cutMu.Lock()
-			sameCut, afterRefs := c.cut == cut, cut.refs
+			sameCut, afterRefs := c.cut == cut, cut.refs.Load()
 			c.cutMu.Unlock()
 			after := c.budget.Stats()
 			after.PeakBytes = before.PeakBytes

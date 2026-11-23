@@ -31,9 +31,13 @@ func (db *DB) ActivateNativeSemanticOwner() error {
 	c.cutMu.Lock()
 	defer c.cutMu.Unlock()
 	cut := c.cut
-	if c.closed || cut == nil || cut.refs != 1 || cut.logicalSeq != cut.basis.logicalSeq || len(cut.frozen) != 0 || cut.semanticRootSet != nil {
+	if c.closed || cut == nil || cut.logicalSeq != cut.basis.logicalSeq || len(cut.frozen) != 0 || cut.semanticRootSet != nil {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
+	if !cut.refs.CompareAndSwap(1, -1) {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	defer cut.refs.Store(1)
 	basis, ok := cut.basis.snapshot.StateToken()
 	if !ok {
 		return backenddb.ErrClosed

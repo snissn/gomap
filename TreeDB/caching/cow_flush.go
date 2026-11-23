@@ -94,7 +94,8 @@ func (c *cowCache) prepareCOWBasisInstallWithOptions(frozen int, allocateFrozen 
 			return nil, err
 		}
 	}
-	cut := &cowReadCut{refs: 1, cache: c, lease: lease, frozenSet: frozenSet}
+	cut := &cowReadCut{cache: c, lease: lease, frozenSet: frozenSet}
+	cut.refs.Store(1)
 	cut.initShards(shards)
 	if frozenSet != nil {
 		cut.frozen = frozenSet.tables
@@ -378,8 +379,8 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 	c.cutMu.Lock()
 	c.cut = next
 	c.activeCuts.Add(1)
-	old.refs--
-	last := old.refs == 0
+	c.liveCut.Store(next)
+	last := old.refs.Add(-1) == 0
 	c.cutMu.Unlock()
 	if last {
 		return old, false, nil

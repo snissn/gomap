@@ -31,10 +31,14 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 	if len(starts) != len(ends) || len(starts) != len(results) || len(starts) > mvcckey.MaxReadBatch {
 		return errCOWReadBatchSize
 	}
-	if err := s.beginRead(); err != nil {
+	var stripe uint32
+	if len(starts) > 0 {
+		stripe = cowReadStripe(starts[0])
+	}
+	if err := s.beginReadStripe(stripe); err != nil {
 		return err
 	}
-	defer s.endRead()
+	defer s.endReadStripe(stripe)
 	if s.cowCut == nil {
 		return ErrCOWUnsupported
 	}

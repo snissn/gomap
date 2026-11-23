@@ -141,7 +141,7 @@ func TestCOWNativeCommandCallbackUnknownReceiptUnwind(t *testing.T) {
 				state := plan.state
 				intent := nativeTxnIntent(t, backend, true)
 				opening, basis := cache.cow.cut, cache.cow.cut.basis
-				refs, basisRefs := opening.refs, basis.refs.Load()
+				refs, basisRefs := opening.refs.Load(), basis.refs.Load()
 				fired, returned := false, false
 				restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 					if e.Point == point {
@@ -177,8 +177,8 @@ func TestCOWNativeCommandCallbackUnknownReceiptUnwind(t *testing.T) {
 					t.Fatal("native writer lease retained")
 				}
 				cache.cow.writerMu.Unlock()
-				if plan.calls != 1 || cache.cow.cut != opening || opening.refs != refs-1 || basis.refs.Load() != basisRefs {
-					t.Fatalf("native private aliases retained or publication changed: calls=%d refs=%d/%d basis=%d/%d", plan.calls, opening.refs, refs, basis.refs.Load(), basisRefs)
+				if plan.calls != 1 || cache.cow.cut != opening || opening.refs.Load() != refs-1 || basis.refs.Load() != basisRefs {
+					t.Fatalf("native private aliases retained or publication changed: calls=%d refs=%d/%d basis=%d/%d", plan.calls, opening.refs.Load(), refs, basis.refs.Load(), basisRefs)
 				}
 				if err := backend.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
 					t.Fatalf("later maintenance=%v", err)
@@ -215,7 +215,7 @@ func TestCOWNativeBeforeCutSwapUnwind(t *testing.T) {
 					state := plan.state
 					intent := nativeTxnIntent(t, backend, wal)
 					opening, basis := cache.cow.cut, cache.cow.cut.basis
-					refs, basisRefs := opening.refs, basis.refs.Load()
+					refs, basisRefs := opening.refs.Load(), basis.refs.Load()
 					fired, returned := false, false
 					var recovered any
 					restore := durabilitycut.Install(func(e durabilitycut.Event) error {
@@ -266,8 +266,8 @@ func TestCOWNativeBeforeCutSwapUnwind(t *testing.T) {
 						t.Fatal("native writer lease retained")
 					}
 					cache.cow.writerMu.Unlock()
-					if plan.calls != 1 || cache.cow.cut != opening || opening.refs != refs-1 || basis.refs.Load() != basisRefs {
-						t.Fatalf("native private aliases retained or publication changed: calls=%d refs=%d/%d basis=%d/%d", plan.calls, opening.refs, refs, basis.refs.Load(), basisRefs)
+					if plan.calls != 1 || cache.cow.cut != opening || opening.refs.Load() != refs-1 || basis.refs.Load() != basisRefs {
+						t.Fatalf("native private aliases retained or publication changed: calls=%d refs=%d/%d basis=%d/%d", plan.calls, opening.refs.Load(), refs, basis.refs.Load(), basisRefs)
 					}
 					if err := backend.CheckStorageMaintenanceReady(); wal && !errors.Is(err, backenddb.ErrRecoveryRequired) {
 						t.Fatalf("later maintenance=%v", err)
@@ -303,7 +303,7 @@ func TestCOWBeforeCutSwapUnwind(t *testing.T) {
 					t.Fatal(err)
 				}
 				opening, basis := cache.cow.cut, cache.cow.cut.basis
-				refs, basisRefs := opening.refs, basis.refs.Load()
+				refs, basisRefs := opening.refs.Load(), basis.refs.Load()
 				fired, returned := false, false
 				var prepared *cowBatchPreparation
 				var recovered any
@@ -373,8 +373,8 @@ func TestCOWBeforeCutSwapUnwind(t *testing.T) {
 				if prepared == nil || prepared.cut != nil || prepared.scratch != nil || prepared.mutation.Valid() || prepared.resources != nil {
 					t.Fatal("preparation owners retained")
 				}
-				if cache.cow.cut != opening || opening.refs != refs || basis.refs.Load() != basisRefs || b.cowState.prepared != nil {
-					t.Fatalf("private preparation retained: cut=%v refs=%d/%d basis=%d/%d prepared=%v", cache.cow.cut == opening, opening.refs, refs, basis.refs.Load(), basisRefs, b.cowState.prepared != nil)
+				if cache.cow.cut != opening || opening.refs.Load() != refs || basis.refs.Load() != basisRefs || b.cowState.prepared != nil {
+					t.Fatalf("private preparation retained: cut=%v refs=%d/%d basis=%d/%d prepared=%v", cache.cow.cut == opening, opening.refs.Load(), refs, basis.refs.Load(), basisRefs, b.cowState.prepared != nil)
 				}
 				if b.cowState.receipt.Assigned != wal || b.cowState.receipt.Uncertain != wal {
 					t.Fatalf("unexpected receipt: %+v", b.cowState.receipt)

@@ -122,9 +122,7 @@ func putSnapshot(snap *Snapshot) {
 	snap.publishedRoots = nil
 	snap.iteratorMu.Lock()
 	clear(snap.iterators)
-	snap.readState.Store(snapshotReadClosedBit)
 	snap.closed.Store(true)
-	snap.finalized.Store(false)
 	snap.iteratorMu.Unlock()
 	// Do not make the exported handle reusable. A stale alias must remain closed.
 }
@@ -859,11 +857,15 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	if s == nil {
 		return dst, tree.ErrKeyNotFound
 	}
-	if err := s.beginRead(); err != nil {
+	key = normalizeRawKVPointKey(key)
+	var stripe uint32
+	if s.cowCache != nil {
+		stripe = cowReadStripe(key)
+	}
+	if err := s.beginReadStripe(stripe); err != nil {
 		return dst, err
 	}
-	defer s.endRead()
-	key = normalizeRawKVPointKey(key)
+	defer s.endReadStripe(stripe)
 	if s.cowCut != nil {
 		out, _, err := s.cowGetVersionedAppendOpen(key, dst)
 		return out, err
@@ -986,11 +988,15 @@ func (s *Snapshot) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevisi
 	if s == nil {
 		return dst, page.LegacyEntryRevision, tree.ErrKeyNotFound
 	}
-	if err := s.beginRead(); err != nil {
+	key = normalizeRawKVPointKey(key)
+	var stripe uint32
+	if s.cowCache != nil {
+		stripe = cowReadStripe(key)
+	}
+	if err := s.beginReadStripe(stripe); err != nil {
 		return dst, page.LegacyEntryRevision, err
 	}
-	defer s.endRead()
-	key = normalizeRawKVPointKey(key)
+	defer s.endReadStripe(stripe)
 	if s.cowCut != nil {
 		return s.cowGetVersionedAppendOpen(key, dst)
 	}
@@ -1081,10 +1087,14 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	if err := s.beginRead(); err != nil {
+	var stripe uint32
+	if s != nil && s.cowCache != nil {
+		stripe = cowReadStripe(normalizeRawKVPointKey(key))
+	}
+	if err := s.beginReadStripe(stripe); err != nil {
 		return nil, err
 	}
-	defer s.endRead()
+	defer s.endReadStripe(stripe)
 	return s.getUnsafeOpen(key)
 }
 
@@ -1130,10 +1140,14 @@ func (s *Snapshot) getUnsafeOpen(key []byte) ([]byte, error) {
 // are valid only until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if s != nil && s.cowCache != nil {
-		if err := s.beginRead(); err != nil {
+		var stripe uint32
+		if len(keys) > 0 {
+			stripe = cowReadStripe(normalizeRawKVPointKey(keys[0]))
+		}
+		if err := s.beginReadStripe(stripe); err != nil {
 			return err
 		}
-		s.endRead()
+		s.endReadStripe(stripe)
 		if fn == nil {
 			return errors.New("caching snapshot: GetManyView nil callback")
 		}
@@ -1199,10 +1213,14 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
-	if err := s.beginRead(); err != nil {
+	var stripe uint32
+	if s != nil && s.cowCache != nil {
+		stripe = cowReadStripe(normalizeRawKVPointKey(key))
+	}
+	if err := s.beginReadStripe(stripe); err != nil {
 		return false, err
 	}
-	defer s.endRead()
+	defer s.endReadStripe(stripe)
 	return s.hasOpen(key)
 }
 

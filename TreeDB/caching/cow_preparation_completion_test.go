@@ -139,7 +139,8 @@ func TestCOWCutDetachesRawTablesBeforeGenerationCleanup(t *testing.T) {
 			}
 			cache := &cowCache{budget: budget}
 			cache.activeCuts.Store(1)
-			cut := &cowReadCut{refs: 1, cache: cache, lease: lease}
+			cut := &cowReadCut{cache: cache, lease: lease}
+			cut.refs.Store(1)
 			var originalTables []cowTable
 			calls := 0
 			if err := staged.AttachResources([]memtable.COWResourceID{{Kind: 1, ID: 9}}, func() {

@@ -100,7 +100,8 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, frozenSet: p.frozenSet}
+	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, cache: c, lease: p.cutLease, basis: old.basis, frozenSet: p.frozenSet}
+	next.refs.Store(1)
 	p.frozenSet = nil
 	next.initShards(n)
 	if next.frozenSet != nil {
@@ -156,8 +157,8 @@ func (p *cowRollover) install() {
 	old := c.cut
 	c.cut = p.next
 	c.activeCuts.Add(1)
-	old.refs--
-	if old.refs == 0 {
+	c.liveCut.Store(p.next)
+	if old.refs.Add(-1) == 0 {
 		p.old = old
 	}
 	c.cutMu.Unlock()

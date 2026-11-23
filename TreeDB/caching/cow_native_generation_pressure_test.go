@@ -12,7 +12,7 @@ func TestCOWNativeGenerationPressureObservationTracksBasis(t *testing.T) {
 	pressure := backenddb.NativeSemanticProducerPressure{GenerationUnderPressure: true}
 	s := &constructionPressureTestState{testSemanticState: newTestSemanticState(nil)}
 	cut := c.cut
-	refs := cut.refs
+	refs := cut.refs.Load()
 	basis, valid := cut.basis.snapshot.StateToken()
 	if !valid || basis == (backenddb.StateToken{}) {
 		t.Fatal("fixture needs a distinguishable actual physical basis")
@@ -20,7 +20,7 @@ func TestCOWNativeGenerationPressureObservationTracksBasis(t *testing.T) {
 	calls := 0
 	s.observe = func(snapshot *backenddb.Snapshot) (backenddb.NativeSemanticProducerPressure, error) {
 		calls++
-		if snapshot != cut.basis.snapshot || cut.refs != refs+1 {
+		if snapshot != cut.basis.snapshot || cut.refs.Load() != refs+1 {
 			t.Fatal("observer lost its original paired cut")
 		}
 		return pressure, nil
@@ -35,7 +35,7 @@ func TestCOWNativeGenerationPressureObservationTracksBasis(t *testing.T) {
 	}
 	after := c.budget.Stats()
 	before.PeakBytes, after.PeakBytes = 0, 0
-	if before != after || c.cut != cut || cut.refs != refs || cache.checkpointRuns.Load() != runs || backend.CommandWALNextLSN() != next || c.nativePressureRemembered {
+	if before != after || c.cut != cut || cut.refs.Load() != refs || cache.checkpointRuns.Load() != runs || backend.CommandWALNextLSN() != next || c.nativePressureRemembered {
 		t.Fatal("generation observation retained ownership, assigned work or ran maintenance")
 	}
 }

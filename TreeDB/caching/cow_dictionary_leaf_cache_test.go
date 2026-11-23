@@ -248,12 +248,12 @@ func TestCOWDictionaryLeafCapableAdmissionRefundsFreshBasis(t *testing.T) {
 		captures++
 		return provider.PrepareDictionaryReadDefinition(id, limits, maxResources, admit)
 	}}
-	refs, views := cut.refs, db.COWMemoryStats().Views
+	refs, views := cut.refs.Load(), db.COWMemoryStats().Views
 	got, err := db.GetAppend([]byte("a000"), []byte("prefix:"))
 	if err != nil || !bytes.Equal(got, append([]byte("prefix:"), want...)) {
 		t.Fatalf("capable dictionary same-cut capacity handoff: %q %v", got, err)
 	}
-	if refusals < 2 || captures != 1 || !unlockedRetry || basis.reader != nil || db.cow.cut != cut || cut.refs != refs || db.COWMemoryStats().Views != views {
-		t.Fatalf("fresh owner/refund/cut lifecycle: refusals=%d captures=%d unlocked=%t basis=%p refs=%d->%d", refusals, captures, unlockedRetry, basis.reader, refs, cut.refs)
+	if refusals < 2 || captures != 1 || !unlockedRetry || basis.reader != nil || db.cow.cut != cut || cut.refs.Load() != refs || db.COWMemoryStats().Views != views {
+		t.Fatalf("fresh owner/refund/cut lifecycle: refusals=%d captures=%d unlocked=%t basis=%p refs=%d->%d", refusals, captures, unlockedRetry, basis.reader, refs, cut.refs.Load())
 	}
 }
