@@ -250,8 +250,8 @@ cut, preserving fresh-owner refund outside the basis mutex.
 
 Successful owned point copy-out and cut-local traversal can return workspace
 metadata and optional point buffers through the original budget's idle scratch
-stack. It retains at most four
-entries and 128 KiB of charged payload. Snapshot, backend basis and all successor
+stack. It retains at most 16
+entries and 512 KiB of charged payload. Snapshot, backend basis and all successor
 page aliases are cleared first. Cut-local codecs, dictionary capabilities,
 input/output buffers and allocation chains are discarded and fully refunded
 before parking; they are never pooled. Parking consumes the original one or two

@@ -986,6 +986,9 @@ func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.Entr
 	defer s.cowReadMu.Unlock()
 	value, revision, err := s.cowValueLocked(key)
 	if err != nil {
+		if err == tree.ErrKeyNotFound && s.cowReader != nil {
+			s.cowReader.poolable = true
+		}
 		return dst, revision, err
 	}
 	out := append(dst, value...)
@@ -1002,9 +1005,16 @@ func (s *Snapshot) cowOwnedPointAppendOpen(key, dst []byte) ([]byte, page.EntryR
 	defer s.cowReadMu.Unlock()
 	entry, err := s.cowEntryLocked(key)
 	if err != nil {
+		if err == tree.ErrKeyNotFound && s.cowReader != nil {
+			s.cowReader.poolable = true
+		}
 		return dst, 0, err
 	}
-	return s.cowAppendPointEntryLocked(entry, dst)
+	out, revision, err := s.cowAppendPointEntryLocked(entry, dst)
+	if (err == nil || err == tree.ErrKeyNotFound) && s.cowReader != nil {
+		s.cowReader.poolable = true
+	}
+	return out, revision, err
 }
 
 func (s *Snapshot) cowAppendPointEntryLocked(entry node.LeafEntry, dst []byte) ([]byte, page.EntryRevision, error) {
@@ -1049,7 +1059,7 @@ func (s *Snapshot) cowValueFromEntryLocked(entry node.LeafEntry) ([]byte, page.E
 }
 
 // cowViewResult owns one callback's copy, independent of the cut's borrowed
-// read workspace. One invocation may reuse it for consecutive same-size hits.
+// read workspace. One invocation may reuse it across same-size hits and misses.
 type cowViewResult struct {
 	value []byte
 	lease *memtable.COWExternalLease
@@ -1076,7 +1086,9 @@ func (s *Snapshot) cowViewCopy(key []byte, result *cowViewResult) (bool, error) 
 	defer s.cowReadMu.Unlock()
 	value, _, err := s.cowValueLocked(normalizeRawKVPointKey(key))
 	if err == tree.ErrKeyNotFound {
-		result.close()
+		if !result.reusable() {
+			result.close()
+		}
 		return false, nil
 	}
 	if err != nil {

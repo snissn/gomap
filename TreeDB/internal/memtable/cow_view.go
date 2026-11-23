@@ -11,9 +11,9 @@ import (
 // COWView is an independently closable pin. Close races safely with Get/Seek
 // and cursor traversal. No published-header Copy or mutable traversal occurs.
 type COWView struct {
-	mu    sync.Mutex
-	root  *COWRoot
-	lease *cowViewReleaseLease
+	mu           sync.Mutex
+	root         *COWRoot
+	leaseStorage cowViewReleaseLease
 }
 
 func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
@@ -23,7 +23,7 @@ func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 		return nil, ErrCOWClosed
 	}
 	b := r.generation.budget
-	charge, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWView{})))+cowAllocation(uint64(unsafe.Sizeof(cowViewReleaseLease{}))), extraBytes)
+	charge, ok := cowAdd(cowAllocation(uint64(unsafe.Sizeof(COWView{}))), extraBytes)
 	if !ok {
 		r.mu.Unlock()
 		return nil, ErrCOWCapacity
@@ -42,11 +42,11 @@ func (r *COWRoot) Acquire(extraBytes uint64) (*COWView, error) {
 	b.stats.Views++
 	r.refs++
 	// Admission and the generation pin are complete. Allocate the admitted
-	// wrappers outside both locks; this reference keeps the root alive even if
+	// wrapper outside both locks; this reference keeps the root alive even if
 	// its previous owners or the budget close before allocation completes.
 	b.mu.Unlock()
 	r.mu.Unlock()
-	return &COWView{root: r, lease: &cowViewReleaseLease{budget: b, charge: charge}}, nil
+	return &COWView{root: r, leaseStorage: cowViewReleaseLease{budget: b, charge: charge}}, nil
 }
 
 func (v *COWView) Get(key []byte) (COWRecord, bool, error) {
@@ -69,12 +69,13 @@ func (v *COWView) ReleaseWithWork(w *iterator.OrdinalScanWork) (COWRetirement, b
 		return COWRetirement{}, false, nil
 	}
 	v.mu.Lock()
-	r, lease := v.root, v.lease
+	r := v.root
 	if r == nil {
 		v.mu.Unlock()
 		return COWRetirement{}, true, nil
 	}
-	v.root, v.lease = nil, nil
+	v.root = nil
+	lease := &v.leaseStorage
 	v.mu.Unlock()
 	v = nil
 	retirement := r.Release()
@@ -95,8 +96,38 @@ func (v *COWView) Release() COWRetirement {
 }
 
 func (v *COWView) Close() {
-	retirement, _, _ := v.ReleaseWithWork(nil)
+	v.mu.Lock()
+	r := v.root
+	if r == nil {
+		v.mu.Unlock()
+		return
+	}
+	v.root = nil
+	lease := &v.leaseStorage
+	v.mu.Unlock()
 	v = nil
+	retirement := r.Release()
+	r = nil
+	b := lease.budget
+	if retirement.generation == nil {
+		b.mu.Lock()
+		if !lease.closed {
+			lease.closed = true
+			charge := lease.charge
+			lease.charge = 0
+			b.stats.Views--
+			b.stats.TotalBytes -= charge
+			b.releaseControlLocked()
+		}
+		b.mu.Unlock()
+		b.releaseMaintenanceReservation()
+		return
+	}
+	b.mu.Lock()
+	b.stats.Views--
+	b.stats.DeferredBytes += lease.charge
+	b.mu.Unlock()
+	retirement.viewLease = lease
 	retirement.Drain()
 }
 
