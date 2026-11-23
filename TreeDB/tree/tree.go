@@ -559,9 +559,9 @@ func validateLeafLogNodeIntoWithState(dst *node.Node, data []byte, ptr page.LogR
 	node.InitFreshNodeView(dst, data)
 	if verifyChecksum {
 		if state.PageChecksumVerified && state.RecordChecksumVerified {
-			noteOuterLeafChecksumSkipped()
+			noteOuterLeafChecksumSkippedAt(ptr.ValuePtr())
 		} else {
-			noteOuterLeafChecksumVerified()
+			noteOuterLeafChecksumVerifiedAt(ptr.ValuePtr())
 			if !dst.VerifyChecksum() {
 				return false, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
 			}

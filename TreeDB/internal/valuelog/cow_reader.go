@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"runtime"
 	"sync"
@@ -31,6 +32,86 @@ type COWReadLimits struct {
 	MaxRecordBytes, MaxRawBytes, MaxValueBytes uint64
 }
 
+// cowMetadataDigest binds a COWRecordShape to the exact header+prefix bytes
+// validated during inspection using a pure-Go 128-bit multiply-mix hash.
+// Staying pure-Go avoids assembly/interface escape paths so stack-allocated
+// inspect buffers remain zero-allocation while beating SHA-256 on both small
+// and large grouped prefixes.
+type cowMetadataDigest struct {
+	lo, hi uint64
+	length uint32
+}
+
+const (
+	cowMetaSeed0  = 0xa0761d6478bd642f
+	cowMetaSeed1  = 0xe7037ed1a0b428db
+	cowMetaPrime0 = 0x8ebc6af09c88c6e3
+	cowMetaPrime1 = 0x589965cc75374cc3
+	cowMetaPrime2 = 0x1d8e4e27c47d124f
+)
+
+func cowMetaMixWord(s0, s1, m uint64) (uint64, uint64) {
+	hi, lo := bits.Mul64(s0^m, cowMetaPrime0)
+	return lo ^ s1, hi ^ m
+}
+
+func cowMetaFinalize(s0, s1, tail, total uint64) cowMetadataDigest {
+	s0, s1 = cowMetaMixWord(s0, s1, tail^(total<<56))
+	hi0, lo0 := bits.Mul64(s0^cowMetaPrime1, s1^cowMetaPrime2)
+	hi1, lo1 := bits.Mul64(lo0^total, hi0^cowMetaSeed0)
+	return cowMetadataDigest{
+		lo:     lo0 ^ hi1,
+		hi:     hi0 ^ lo1,
+		length: uint32(total),
+	}
+}
+
+func cowMetadataDigestSlice(b []byte) cowMetadataDigest {
+	s0, s1 := uint64(cowMetaSeed0), uint64(cowMetaSeed1)
+	total := uint64(len(b))
+	for len(b) >= 8 {
+		s0, s1 = cowMetaMixWord(s0, s1, binary.LittleEndian.Uint64(b[:8]))
+		b = b[8:]
+	}
+	var tail uint64
+	for i := 0; i < len(b); i++ {
+		tail |= uint64(b[i]) << (uint(i) * 8)
+	}
+	return cowMetaFinalize(s0, s1, tail, total)
+}
+
+func cowMetadataDigestParts(header, prefix []byte) cowMetadataDigest {
+	s0, s1 := uint64(cowMetaSeed0), uint64(cowMetaSeed1)
+	total := uint64(len(header) + len(prefix))
+	for len(header) >= 8 {
+		s0, s1 = cowMetaMixWord(s0, s1, binary.LittleEndian.Uint64(header[:8]))
+		header = header[8:]
+	}
+	var buf [8]byte
+	n := copy(buf[:], header)
+	if n > 0 && len(prefix) > 0 {
+		m := copy(buf[n:], prefix)
+		n += m
+		prefix = prefix[m:]
+		if n == 8 {
+			s0, s1 = cowMetaMixWord(s0, s1, binary.LittleEndian.Uint64(buf[:]))
+			n = 0
+		}
+	}
+	for len(prefix) >= 8 {
+		s0, s1 = cowMetaMixWord(s0, s1, binary.LittleEndian.Uint64(prefix[:8]))
+		prefix = prefix[8:]
+	}
+	if len(prefix) > 0 {
+		n += copy(buf[n:], prefix)
+	}
+	var tail uint64
+	for i := 0; i < n; i++ {
+		tail |= uint64(buf[i]) << (uint(i) * 8)
+	}
+	return cowMetaFinalize(s0, s1, tail, total)
+}
+
 // COWRecordShape binds admitted storage to one pointer and its exact record
 // metadata. RecordBytes includes the CRC and record header. DictID is the
 // encoded header ID; it is a decoder dependency only when Compressed is true.
@@ -43,7 +124,7 @@ type COWRecordShape struct {
 	ptr                               page.ValuePtr
 	limits                            COWReadLimits
 	frame                             FrameHeader
-	metadata                          [32]byte
+	metadata                          cowMetadataDigest
 	prefix, valueStart                uint32
 	valid                             bool
 	leaf                              bool
@@ -163,14 +244,11 @@ func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limi
 	if metadata != nil {
 		// Leaf inspection and full reads already own this exact contiguous
 		// window. Hash only the validated header/prefix, never trailing values.
-		s.metadata = sha256.Sum256(metadata[:HeaderSize+len(prefix)])
+		s.metadata = cowMetadataDigestSlice(metadata[:HeaderSize+len(prefix)])
 	} else {
 		// Ordinary inspection admits its header and prefix separately. Keep
 		// that envelope and hash without a second maximum-sized copy.
-		h := sha256.New()
-		_, _ = h.Write(header)
-		_, _ = h.Write(prefix)
-		h.Sum(s.metadata[:0])
+		s.metadata = cowMetadataDigestParts(header, prefix)
 	}
 	return s, nil
 }
@@ -212,20 +290,81 @@ func (f *File) InspectCOWLeafRecord(ptr page.ValuePtr, limits COWReadLimits) (CO
 	return f.inspectCOWRecord(ptr, cowLeafReadLimits(limits), true)
 }
 
+func (f *File) cowAllowsCompactLeafPayload() bool {
+	if f.compactLeafPayloadAllowedSet {
+		return f.compactLeafPayloadAllowed
+	}
+	name := f.Path
+	if name == "" && f.File != nil {
+		name = f.File.Name()
+	}
+	return allowsCompactLeafLogPayload(f.ID, name)
+}
+
+func (f *File) cowCheckReadSource(ptr page.ValuePtr, limits COWReadLimits, leaf bool) error {
+	if f.File == nil || ptr.Offset < 4 || ptr.Offset-4 > math.MaxInt64 || isLeafLogFileID(ptr.FileID) != leaf || (leaf && !f.cowAllowsCompactLeafPayload()) {
+		return ErrCOWReadUnsupported
+	}
+	maxInt := uint64(^uint(0) >> 1)
+	if limits.MaxRecordBytes == 0 || limits.MaxRawBytes == 0 || limits.MaxValueBytes == 0 ||
+		limits.MaxRecordBytes > maxInt || limits.MaxRawBytes > maxInt || limits.MaxValueBytes > maxInt {
+		return ErrCOWReadCapacity
+	}
+	return nil
+}
+
+func (f *File) cowLoadMappedData() ([]byte, int64) {
+	if runtime.GOOS == "windows" {
+		return nil, 0
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if data == nil && f.tryEnableSealedLazyMmap() {
+		data, _ = f.mmapData.Load().([]byte)
+	}
+	if data == nil {
+		return nil, 0
+	}
+	return data, f.verifiedFileSize.Load()
+}
+
+func (f *File) cowMappedSliceFromData(data []byte, verifiedSize int64, ptr page.ValuePtr, limits COWReadLimits, recordBytes uint64) []byte {
+	if data == nil || recordBytes < HeaderSize || recordBytes > limits.MaxRecordBytes ||
+		recordBytes-4 > math.MaxUint32 || ptr.Offset-4 > math.MaxInt64-recordBytes ||
+		!page.ValuePtrRecordLengthHintMatches(ptr, uint32(recordBytes-4)) {
+		return nil
+	}
+	start, end := int64(ptr.Offset-4), int64(ptr.Offset-4+recordBytes)
+	if start >= 0 && end <= int64(len(data)) {
+		if end <= verifiedSize {
+			return data[start:end:end]
+		}
+		if end <= f.verifiedFileSize.Load() {
+			return data[start:end:end]
+		}
+		return nil
+	}
+	// A writable mapping can reserve address space past the verified EOF.
+	if remapped, ok := f.ensureMmapRangeReadable(data, start, end); ok && end <= f.verifiedFileSize.Load() {
+		return remapped[start:end:end]
+	}
+	return nil
+}
+
 func (f *File) inspectCOWRecord(ptr page.ValuePtr, limits COWReadLimits, leaf bool) (COWRecordShape, error) {
 	if f == nil || f.ID != ptr.FileID {
 		return COWRecordShape{}, ErrCOWReadUnsupported
 	}
-	if err := cowCheckReadSource(f.File, ptr, limits, leaf); err != nil {
+	if err := f.cowCheckReadSource(ptr, limits, leaf); err != nil {
 		return COWRecordShape{}, err
 	}
 	// A full mapped record covers a selected raw value's prefix even when
 	// it sits beyond the fixed metadata window. The parser verifies the hint.
+	data, verifiedSize := f.cowLoadMappedData()
 	recordLen := page.ValuePtrRecordLength(ptr)
 	recordBytes := uint64(recordLen) + 4
 	if recordLen == 0 {
 		recordBytes = HeaderSize
-		if header := f.cowMappedRecordRange(ptr, limits, recordBytes); header != nil {
+		if header := f.cowMappedSliceFromData(data, verifiedSize, ptr, limits, recordBytes); header != nil {
 			n, err := cowCheckReadHeader(ptr, header, limits)
 			if err != nil {
 				f.mmapReadHits.Add(1)
@@ -236,7 +375,7 @@ func (f *File) inspectCOWRecord(ptr page.ValuePtr, limits COWReadLimits, leaf bo
 			recordBytes = 0
 		}
 	}
-	if input := f.cowMappedRecordRange(ptr, limits, recordBytes); input != nil {
+	if input := f.cowMappedSliceFromData(data, verifiedSize, ptr, limits, recordBytes); input != nil {
 		f.mmapReadHits.Add(1)
 		return inspectCOWMetadata(f.File, ptr, limits, input, leaf)
 	}

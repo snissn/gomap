@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -9,16 +10,7 @@ import (
 func TestOuterLeafReadStatsRecentEstimator(t *testing.T) {
 	savedSampleMod := outerLeafReadSampleMod
 	savedEstimator := outerLeafRecentReadEstimator
-	outerLeafLoadsTotal.Store(0)
-	outerLeafPointLoadsTotal.Store(0)
-	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafSamplesTotal.Store(0)
-	outerLeafRecent64HitsTotal.Store(0)
-	outerLeafRecent256HitsTotal.Store(0)
-	outerLeafRecent1KHitsTotal.Store(0)
-	outerLeafRecent4KHitsTotal.Store(0)
-	outerLeafChecksumVerifiedTotal.Store(0)
-	outerLeafChecksumSkippedTotal.Store(0)
+	resetOuterLeafReadStatsForTest()
 	outerLeafReadSampleMod = 1
 	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 	defer func() {
@@ -66,16 +58,7 @@ func TestOuterLeafReadStatsRecentEstimator(t *testing.T) {
 func TestOuterLeafReadStatsEstimatorKeyAvoidsHighOffsetCollision(t *testing.T) {
 	savedSampleMod := outerLeafReadSampleMod
 	savedEstimator := outerLeafRecentReadEstimator
-	outerLeafLoadsTotal.Store(0)
-	outerLeafPointLoadsTotal.Store(0)
-	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafSamplesTotal.Store(0)
-	outerLeafRecent64HitsTotal.Store(0)
-	outerLeafRecent256HitsTotal.Store(0)
-	outerLeafRecent1KHitsTotal.Store(0)
-	outerLeafRecent4KHitsTotal.Store(0)
-	outerLeafChecksumVerifiedTotal.Store(0)
-	outerLeafChecksumSkippedTotal.Store(0)
+	resetOuterLeafReadStatsForTest()
 	outerLeafReadSampleMod = 1
 	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 	defer func() {
@@ -102,4 +85,85 @@ func TestOuterLeafReadStatsEstimatorKeyAvoidsHighOffsetCollision(t *testing.T) {
 	if stats.Recent4KHitsTotal != 0 {
 		t.Fatalf("Recent4KHitsTotal=%d want 0", stats.Recent4KHitsTotal)
 	}
+}
+
+func TestOuterLeafRecentEstimatorExactEquivalenceAndBoundedMap(t *testing.T) {
+	type refRing struct {
+		buf  []uint64
+		next int
+		used int
+	}
+	contains := func(r *refRing, k uint64) bool {
+		for i := 0; i < r.used; i++ {
+			if r.buf[i] == k {
+				return true
+			}
+		}
+		return false
+	}
+	push := func(r *refRing, k uint64) {
+		r.buf[r.next] = k
+		r.next = (r.next + 1) % len(r.buf)
+		if r.used < len(r.buf) {
+			r.used++
+		}
+	}
+
+	r64 := &refRing{buf: make([]uint64, 64)}
+	r256 := &refRing{buf: make([]uint64, 256)}
+	r1K := &refRing{buf: make([]uint64, 1024)}
+	r4K := &refRing{buf: make([]uint64, 4096)}
+	est := newOuterLeafRecentReadEstimator()
+
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 12000; i++ {
+		var key uint64
+		switch i % 3 {
+		case 0:
+			key = uint64(rng.Intn(80))
+		case 1:
+			key = uint64(rng.Intn(1500))
+		default:
+			key = uint64(rng.Intn(9000))
+		}
+		w64 := contains(r64, key)
+		w256 := contains(r256, key)
+		w1K := contains(r1K, key)
+		w4K := contains(r4K, key)
+		push(r64, key)
+		push(r256, key)
+		push(r1K, key)
+		push(r4K, key)
+
+		g64, g256, g1K, g4K := est.observe(key)
+		if g64 != w64 || g256 != w256 || g1K != w1K || g4K != w4K {
+			t.Fatalf("step %d key=%d got=(%t,%t,%t,%t) want=(%t,%t,%t,%t)", i, key, g64, g256, g1K, g4K, w64, w256, w1K, w4K)
+		}
+		if len(est.lastSeen) > 4096 {
+			t.Fatalf("step %d lastSeen exceeded 4096: %d", i, len(est.lastSeen))
+		}
+	}
+}
+
+func BenchmarkOuterLeafNoteLoadParallel(b *testing.B) {
+	savedSampleMod := outerLeafReadSampleMod
+	savedEstimator := outerLeafRecentReadEstimator
+	resetOuterLeafReadStatsForTest()
+	outerLeafReadSampleMod = 64
+	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
+	defer func() {
+		outerLeafReadSampleMod = savedSampleMod
+		outerLeafRecentReadEstimator = savedEstimator
+	}()
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		var i uint64
+		for pb.Next() {
+			i++
+			ptr := page.ValuePtr{FileID: uint32((i & 7) + 1), Offset: (i & 8191) * 4096}
+			noteOuterLeafChecksumSkippedAt(ptr)
+			noteOuterLeafLoad(ptr, false)
+		}
+	})
 }
