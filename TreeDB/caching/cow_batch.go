@@ -57,6 +57,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 	if b.db.cow == nil {
 		return nil
 	}
+	if b.cowState != nil {
+		b.cowState.prepareAttempted = true
+	}
 	if b.db.cow.txnOwner != nil && !b.cowState.inPublication {
 		return ErrCOWUnsupported
 	}
@@ -312,6 +315,16 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 		return fmt.Errorf("COW publication was not prepared")
 	}
 	if err := validateCOWCanonicalEntries(payload, b.entries, lookup); err != nil {
+		return err
+	}
+	return b.finishCOWCanonicalPreparation()
+}
+
+func (b *Batch) finalizeCOWPublicationDirect(scan func(func(commitlog.RawKVOperation) error) error, lookup func(page.ValuePtr) (uint64, bool)) error {
+	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
+		return fmt.Errorf("COW publication was not prepared")
+	}
+	if err := validateCOWCanonicalOperationStream(scan, b.entries, lookup); err != nil {
 		return err
 	}
 	return b.finishCOWCanonicalPreparation()
@@ -696,6 +709,17 @@ func (b *Batch) finalizePrivateCOWPublication(syncWrite bool) (err error, inline
 			FinalizePrivateCOWInlinePoint(*transactionowner.Owner, batch.Entry, func() error, func(commitlog.RawKVOperation) error) error
 		}); ok {
 			return finalizer.FinalizePrivateCOWInlinePoint(owner, b.entries[0], b.PrepareExternalCommandWALPublication, b.finalizeCOWInlinePoint), true
+		}
+	}
+	if !syncWrite && b.db.disableJournal && !b.db.externalCommandWAL && b.cowState.native == nil {
+		if directFinalizer, ok := b.db.backend.(interface {
+			FinalizePrivateCOWPublicationDirect(*transactionowner.Owner, func() error, func(func(func(commitlog.RawKVOperation) error) error, func(page.ValuePtr) (uint64, bool)) error, func(func(batch.Entry) error) error, int) error
+		}); ok {
+			b.cowState.prepareAttempted = false
+			err = directFinalizer.FinalizePrivateCOWPublicationDirect(owner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublicationDirect, b.Replay, len(b.entries))
+			if b.cowState.prepareAttempted || !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				return err, false
+			}
 		}
 	}
 	finalizer, ok := b.db.backend.(interface {

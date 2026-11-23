@@ -175,3 +175,134 @@ func TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity(t *testing.T) 
 		t.Fatalf("temporary no-WAL dependency leaked: pins=%d baseline=%d", got, baselinePins)
 	}
 }
+
+func TestPrivateCOWPublicationDirectPointerInlineDelete(t *testing.T) {
+	dir := t.TempDir()
+	d, err := OpenForNativeSemanticOwner(Options{Dir: dir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := d.BindPrivateCOWOwner(owner); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	appender, err := newReplayInlineAppender(d, nil, nil)
+	if err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	defer appender.close()
+	d.SetValueLogAppender(appender)
+	defer d.SetValueLogAppender(nil)
+
+	ptrEntry := appendCommandWALPointerEntry(t, d, []byte("ptr-key"), bytes.Repeat([]byte("p"), 256))
+	ptrEntry.Value = nil
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("inline-key"), Value: []byte("inline-val"), Revision: 101},
+		ptrEntry,
+		{Type: batchpkg.OpDelete, Key: []byte("del-key"), Revision: 103},
+	}
+	baselinePins := d.valueLogIdentityPins.ActivePins()
+	called := false
+	err = d.FinalizePrivateCOWPublicationDirect(
+		owner,
+		func() error {
+			entries[1].Revision = 102
+			return nil
+		},
+		func(scan func(func(commitlog.RawKVOperation) error) error, lookup func(page.ValuePtr) (uint64, bool)) error {
+			called = true
+			if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+				t.Fatalf("WAL-off direct finalizer acquired journal pins: %d want %d", got, baselinePins)
+			}
+			var ops []commitlog.RawKVOperation
+			if err := scan(func(op commitlog.RawKVOperation) error {
+				ops = append(ops, op)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if len(ops) != 3 {
+				t.Fatalf("ops=%d want 3", len(ops))
+			}
+			if ops[0].Op != commitlog.RawKVOpSet || string(ops[0].Key) != "inline-key" || string(ops[0].Value) != "inline-val" || ops[0].Revision != 101 {
+				t.Fatalf("op[0]=%+v", ops[0])
+			}
+			rid, ok := lookup(entries[1].ValuePtr)
+			if ops[1].Op != commitlog.RawKVOpSetRID || string(ops[1].Key) != "ptr-key" || len(ops[1].Value) != 0 || ops[1].Revision != 102 || !ok || rid == 0 || ops[1].RID != rid {
+				t.Fatalf("op[1]=%+v rid=%d ok=%v", ops[1], rid, ok)
+			}
+			if ops[2].Op != commitlog.RawKVOpDelete || string(ops[2].Key) != "del-key" || len(ops[2].Value) != 0 || ops[2].Revision != 103 {
+				t.Fatalf("op[2]=%+v", ops[2])
+			}
+			return nil
+		},
+		func(emit func(batchpkg.Entry) error) error {
+			for i := range entries {
+				if err := emit(entries[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		len(entries),
+	)
+	if err != nil || !called {
+		_ = d.Close()
+		t.Fatalf("direct finalization err=%v called=%v", err, called)
+	}
+	if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		_ = d.Close()
+		t.Fatalf("direct finalization leaked pins: %d want %d", got, baselinePins)
+	}
+
+	// Empty scan returns nil without calling finalize.
+	if err := d.FinalizePrivateCOWPublicationDirect(owner, func() error { return nil }, func(func(func(commitlog.RawKVOperation) error) error, func(page.ValuePtr) (uint64, bool)) error {
+		t.Fatal("empty scan invoked finalize")
+		return nil
+	}, func(func(batchpkg.Entry) error) error { return nil }, 0); err != nil {
+		_ = d.Close()
+		t.Fatalf("empty scan err=%v", err)
+	}
+
+	// Wrong owner rejected before prepare.
+	if err := d.FinalizePrivateCOWPublicationDirect(transactionowner.New(), func() error {
+		t.Fatal("foreign owner reached prepare")
+		return nil
+	}, func(func(func(commitlog.RawKVOperation) error) error, func(page.ValuePtr) (uint64, bool)) error {
+		return nil
+	}, func(func(batchpkg.Entry) error) error { return nil }, 1); !errors.Is(err, ErrNativeSemanticUnsupported) {
+		_ = d.Close()
+		t.Fatalf("foreign owner err=%v", err)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.FinalizePrivateCOWPublicationDirect(owner, func() error {
+		t.Fatal("closed db reached prepare")
+		return nil
+	}, func(func(func(commitlog.RawKVOperation) error) error, func(page.ValuePtr) (uint64, bool)) error {
+		return nil
+	}, func(func(batchpkg.Entry) error) error { return nil }, 1); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed db err=%v", err)
+	}
+
+	// Read-only DB returns ErrReadOnly before prepare().
+	ro, err := Open(Options{Dir: dir, ReadOnly: true, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	roOwner := transactionowner.New()
+	ro.privateCOWOwner = roOwner
+	if err := ro.FinalizePrivateCOWPublicationDirect(roOwner, func() error {
+		t.Fatal("read-only db reached prepare")
+		return nil
+	}, func(func(func(commitlog.RawKVOperation) error) error, func(page.ValuePtr) (uint64, bool)) error {
+		return nil
+	}, func(func(batchpkg.Entry) error) error { return nil }, 1); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("read-only db err=%v, want ErrReadOnly", err)
+	}
+}
