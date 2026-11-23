@@ -14,6 +14,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const cowBatchMaxReuseHint = 8192
+
+func normalizeCOWBatchReuseHint(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n > cowBatchMaxReuseHint {
+		return cowBatchMaxReuseHint
+	}
+	return n
+}
+
 // cowBatchState exists only for explicitly admitted COW batches. Keeping its
 // ownership and prediction fields separate preserves ordinary batch allocations.
 type cowBatchState struct {
@@ -25,6 +37,7 @@ type cowBatchState struct {
 	txn                          *ConditionalTxn
 	lease                        *memtable.COWExternalLease
 	storageBytes                 uint64
+	lastHint                     int
 	err                          error
 	prepared                     *cowBatchPreparation
 	producer                     *cowFrameCapture
@@ -89,7 +102,14 @@ func (db *DB) newCOWBatch(hint int) *Batch {
 	if err != nil {
 		return &cowDeniedBatch
 	}
-	owner := &cowBatchOwner{batch: Batch{db: db, streamBypassOff: true}, state: cowBatchState{lease: lease, guardReserved: guardReserved}}
+	owner := &cowBatchOwner{
+		batch: Batch{db: db, streamBypassOff: true},
+		state: cowBatchState{
+			lease:         lease,
+			guardReserved: guardReserved,
+			lastHint:      normalizeCOWBatchReuseHint(hint),
+		},
+	}
 	b := &owner.batch
 	b.cowState = &owner.state
 	b.cowReserve(hint)
@@ -135,6 +155,25 @@ func (b *Batch) cowReserve(n int) {
 	b.entries = entries
 }
 
+// cowTryReserve attempts to admit and allocate at least n entries without
+// latching b.cowState.err on refusal. Callers use it for best-effort reuse
+// hints so tight budgets fall back cleanly to the minimum growth quantum.
+func (b *Batch) cowTryReserve(n int) bool {
+	if b.cowState.err != nil || b.closed || n <= cap(b.entries) {
+		return b.cowState.err == nil && !b.closed
+	}
+	if n < 0 || uint64(n) > ^uint64(0)/uint64(unsafe.Sizeof(batch.Entry{})) {
+		return false
+	}
+	if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(batch.Entry{})))); err != nil {
+		return false
+	}
+	entries := make([]batch.Entry, len(b.entries), n)
+	copy(entries, b.entries)
+	b.entries = entries
+	return true
+}
+
 func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 	if b.cowState.err != nil {
 		return b.cowState.err
@@ -143,16 +182,25 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		return ErrBatchClosed
 	}
 	if len(b.entries) == cap(b.entries) {
-		next := cap(b.entries) * 2
-		if next < 16 {
-			next = 16
-		}
-		if next <= cap(b.entries) {
-			return memtable.ErrCOWCapacity
-		}
-		b.cowReserve(next)
-		if b.cowState.err != nil {
-			return b.cowState.err
+		if cap(b.entries) == 0 && b.cowState.lastHint > 16 {
+			if !b.cowTryReserve(b.cowState.lastHint) {
+				b.cowReserve(16)
+				if b.cowState.err != nil {
+					return b.cowState.err
+				}
+			}
+		} else {
+			next := cap(b.entries) * 2
+			if next < 16 {
+				next = 16
+			}
+			if next <= cap(b.entries) {
+				return memtable.ErrCOWCapacity
+			}
+			b.cowReserve(next)
+			if b.cowState.err != nil {
+				return b.cowState.err
+			}
 		}
 	}
 	n := len(e.Key) + len(e.Value)
@@ -194,6 +242,18 @@ func (b *Batch) cowSetOps(ops []batch.Entry) error {
 			return ErrCOWUnsupported
 		}
 	}
+	if len(ops) > 0 {
+		need := len(b.entries) + len(ops)
+		if need < len(b.entries) {
+			return memtable.ErrCOWCapacity
+		}
+		if need > cap(b.entries) {
+			b.cowReserve(need)
+			if b.cowState.err != nil {
+				return b.cowState.err
+			}
+		}
+	}
 	for _, e := range ops {
 		e.Key = normalizeRawKVPointKey(e.Key)
 		if e.Type == batch.OpPut {
@@ -211,6 +271,9 @@ func (b *Batch) cowReset() {
 		return
 	}
 	b.releaseNativePublication()
+	if n := normalizeCOWBatchReuseHint(len(b.entries)); n > b.cowState.lastHint {
+		b.cowState.lastHint = n
+	}
 	b.entries = nil
 	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil

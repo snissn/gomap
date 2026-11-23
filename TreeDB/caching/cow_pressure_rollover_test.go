@@ -188,7 +188,8 @@ func newCOWPressureRolloverFixture(t *testing.T, mode string, wal bool, dirtySha
 		f.current += current.Total()
 		f.fresh += fresh.Total()
 	}
-	if b.cowPredictionCanSkipEstimate(f.groups) {
+	if db.cow.ordered && b.cowPredictionCanSkipEstimate(f.groups) {
+		db.cow.writerMu.Unlock()
 		t.Fatal("raw input used typed shortcut")
 	}
 	db.cow.writerMu.Unlock()
@@ -223,6 +224,12 @@ func newCOWPressureRolloverFixture(t *testing.T, mode string, wal bool, dirtySha
 	stats = db.COWMemoryStats()
 	if stats.ReservedBytes+f.headroom != limits.MaxInFlightBytes || stats.TotalBytes+f.current >= limits.MaxTotalBytes || stats.HistoryBytes+stats.ReservedBytes+stats.DeferredBytes+f.current >= limits.MaxRetiredBytes || stats.Sources+4 > limits.MaxSources || stats.Generations+4 > limits.MaxGenerations {
 		t.Fatalf("not isolated in-flight pressure: stats=%+v current=%d fresh=%d extra=%d H=%d", stats, f.current, f.fresh, f.extra, f.headroom)
+	}
+	db.cow.writerMu.Lock()
+	skippedUnderPressure := b.cowPredictionCanSkipEstimate(f.groups)
+	db.cow.writerMu.Unlock()
+	if skippedUnderPressure {
+		t.Fatal("in-flight pressure skipped exact prediction")
 	}
 	t.Logf("actual default-limit fixture: current=%d fresh=%d extra=%d H=%d stats=%+v", f.current, f.fresh, f.extra, f.headroom, stats)
 	return f

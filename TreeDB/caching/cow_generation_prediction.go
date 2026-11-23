@@ -79,7 +79,13 @@ func (b *Batch) cowPredictionCanSkipEstimateWithControl(groups [][]memtable.COWM
 			successors++
 		}
 		active = true
-		bound, valid := c.writers[i].OrderedPredictionUpperBound(group)
+		var bound memtable.COWCharge
+		var valid bool
+		if c.ordered {
+			bound, valid = c.writers[i].OrderedPredictionUpperBound(group)
+		} else {
+			bound, valid = c.writers[i].RawBatchPredictionUpperBound(group)
+		}
 		if !valid || bound.Total() > ^uint64(0)-total || bound.History() > max-c.generationBase {
 			return false
 		}

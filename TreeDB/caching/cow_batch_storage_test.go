@@ -245,3 +245,89 @@ func TestCOWHugeFiniteInputsRefuseBeforeAllocation(t *testing.T) {
 		t.Fatalf("overflow changed admission: before=%+v after=%+v", before, after)
 	}
 }
+
+func TestCOWBatchResetLastHintPreSizingAndTightBudgetFallback(t *testing.T) {
+	db := cowPointerFixture(t)
+	baseline := db.cow.budget.Stats()
+	b := db.NewBatchWithSize(100)
+	defer b.Close()
+
+	if err := b.Set([]byte("k0"), []byte("v0")); err != nil {
+		t.Fatal(err)
+	}
+	b.Reset()
+	if cap(b.entries) != 0 || b.cowState.storageBytes != 0 {
+		t.Fatalf("Reset retained backing: cap=%d storageBytes=%d", cap(b.entries), b.cowState.storageBytes)
+	}
+	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(b.entries); got != 100 {
+		t.Fatalf("post-Reset cap(entries)=%d, want 100 from constructor hint", got)
+	}
+
+	// Grow beyond initial hint and verify Reset remembers the larger count.
+	for i := 1; i < 200; i++ {
+		if err := b.Set([]byte{byte(i >> 8), byte(i)}, []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.Reset()
+	if err := b.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(b.entries); got != 200 {
+		t.Fatalf("post-Reset cap(entries)=%d, want 200 from prior batch len", got)
+	}
+	b.Reset()
+
+	// Tight-budget fallback: leave enough headroom for 16 entries + 256B copyArena,
+	// but NOT enough for 200 entries. First Set must fall back to 16 without
+	// latching b.cowState.err.
+	beforeTight := db.cow.budget.Stats()
+	leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	entry16Bytes := memtable.COWAllocationCharge(16 * uint64(unsafe.Sizeof(batch.Entry{})))
+	arena256Bytes := memtable.COWAllocationCharge(256)
+	entry200Bytes := memtable.COWAllocationCharge(200 * uint64(unsafe.Sizeof(batch.Entry{})))
+	headroom := entry16Bytes + arena256Bytes
+	if headroom >= entry200Bytes {
+		t.Fatalf("test headroom %d >= 200-entry charge %d", headroom, entry200Bytes)
+	}
+	avail := db.cow.budget.Limits().MaxInFlightBytes - beforeTight.ReservedBytes - leaseBytes
+	filler, err := db.cow.budget.AcquireExternal(avail - headroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Set([]byte("tight"), []byte("ok")); err != nil {
+		filler.Close()
+		t.Fatalf("tight-budget Set failed instead of falling back to 16: %v", err)
+	}
+	if b.cowState.err != nil {
+		filler.Close()
+		t.Fatalf("tight-budget fallback latched cowState.err=%v", b.cowState.err)
+	}
+	if got := cap(b.entries); got != 16 {
+		filler.Close()
+		t.Fatalf("tight-budget fallback cap(entries)=%d, want 16", got)
+	}
+	filler.Close()
+	b.Reset()
+
+	// Verify cowSetOps pre-reserves exact len(entries)+len(ops) without doubling.
+	ops := make([]batch.Entry, 50)
+	for i := range ops {
+		ops[i] = batch.Entry{Type: batch.OpPut, Key: []byte{byte(i)}, Value: []byte("v")}
+	}
+	if err := b.SetOps(ops); err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(b.entries); got != 50 {
+		t.Fatalf("SetOps cap(entries)=%d, want 50", got)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := db.cow.budget.Stats(); after.ExternalBytes != baseline.ExternalBytes || after.ExternalLeases != baseline.ExternalLeases {
+		t.Fatalf("external charge leaked: before=%+v after=%+v", baseline, after)
+	}
+}

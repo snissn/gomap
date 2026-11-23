@@ -2296,6 +2296,22 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 	return encodeRawKVBatchPayloadPlannedTo(nil, plan, scan)
 }
 
+// ValidateSingleRawKVOperation validates a single RawKVOperation against the
+// same payload-shape and length limits as a one-operation
+// PlanRawKVBatchPayloadScan without constructing a scanner closure.
+func ValidateSingleRawKVOperation(op RawKVOperation) error {
+	keyBytes, valueBytes, err := rawKVOperationPayloadLens(&op)
+	if err != nil {
+		return err
+	}
+	opHeaderSize := rawKVOperationHeaderSize(op.Revision != 0)
+	total := uint64(rawKVBatchHeaderSize) + uint64(opHeaderSize) + uint64(keyBytes) + uint64(valueBytes)
+	if total > maxCommandFrameUint32 || total > uint64(int(^uint(0)>>1)) {
+		return ErrRecordTooLarge
+	}
+	return nil
+}
+
 // PlanRawKVBatchPayloadScan validates a replayable operation source and returns
 // the exact RawKVBatch payload length needed to encode it.
 func PlanRawKVBatchPayloadScan(scan RawKVBatchOperationScanner) (RawKVBatchPayloadPlan, error) {
