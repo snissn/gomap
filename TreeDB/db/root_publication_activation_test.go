@@ -1137,10 +1137,11 @@ func TestOuterLeafOrdinaryAdditiveProducerInventory(t *testing.T) {
 					t.Fatal(err)
 				}
 				database.testScanCandidateExternalReferencesHook = nil
-				// Point replacement has an exact raw receipt. Delete and range
-				// maintenance do not, and must keep the final-root scan.
+				// Point replacement and point delete both produce exact raw
+				// leaf receipts. Range deletes do not, and must keep the
+				// final-root scan.
 				wantScans := 1
-				if mutationIndex == 0 {
+				if mutationIndex == 0 || mutationIndex == 1 {
 					wantScans = 0
 				}
 				if scans != wantScans {
