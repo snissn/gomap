@@ -313,7 +313,37 @@ func TestCOWBatchResetLastHintPreSizingAndTightBudgetFallback(t *testing.T) {
 	filler.Close()
 	b.Reset()
 
-	// Verify cowSetOps pre-reserves exact len(entries)+len(ops) without doubling.
+	// Tight-budget payload headroom regression: leave enough headroom for the
+	// 200-entry hint alone, but NOT enough for 200 entries + the 256B copyArena
+	// (while 16 entries + 256B copyArena fits). Best-effort admission must fall
+	// back to 16 so the entry + payload succeed together without ErrCOWCapacity.
+	beforePayloadTight := db.cow.budget.Stats()
+	availPayload := db.cow.budget.Limits().MaxInFlightBytes - beforePayloadTight.ReservedBytes - leaseBytes
+	payloadTightHeadroom := entry200Bytes
+	if payloadTightHeadroom < entry16Bytes+arena256Bytes || payloadTightHeadroom >= entry200Bytes+arena256Bytes {
+		t.Fatalf("invalid payload-tight headroom=%d entry16+arena=%d entry200+arena=%d", payloadTightHeadroom, entry16Bytes+arena256Bytes, entry200Bytes+arena256Bytes)
+	}
+	payloadFiller, err := db.cow.budget.AcquireExternal(availPayload - payloadTightHeadroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Set([]byte("tight-payload"), []byte("ok")); err != nil {
+		payloadFiller.Close()
+		t.Fatalf("payload-tight Set failed instead of falling back to 16: %v", err)
+	}
+	if b.cowState.err != nil {
+		payloadFiller.Close()
+		t.Fatalf("payload-tight fallback latched cowState.err=%v", b.cowState.err)
+	}
+	if got := cap(b.entries); got != 16 {
+		payloadFiller.Close()
+		t.Fatalf("payload-tight fallback cap(entries)=%d, want 16", got)
+	}
+	payloadFiller.Close()
+	b.Reset()
+
+	// Verify cowSetOps pre-reserves exact len(ops) on an empty batch when > 16,
+	// and preserves geometric growth across repeated small SetOps calls.
 	ops := make([]batch.Entry, 50)
 	for i := range ops {
 		ops[i] = batch.Entry{Type: batch.OpPut, Key: []byte{byte(i)}, Value: []byte("v")}
@@ -322,7 +352,17 @@ func TestCOWBatchResetLastHintPreSizingAndTightBudgetFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := cap(b.entries); got != 50 {
-		t.Fatalf("SetOps cap(entries)=%d, want 50", got)
+		t.Fatalf("SetOps(50) cap(entries)=%d, want 50", got)
+	}
+	small := make([]batch.Entry, 5)
+	for i := range small {
+		small[i] = batch.Entry{Type: batch.OpPut, Key: []byte{byte(100 + i)}, Value: []byte("v")}
+	}
+	if err := b.SetOps(small); err != nil {
+		t.Fatal(err)
+	}
+	if got := cap(b.entries); got != 100 {
+		t.Fatalf("repeated SetOps cap(entries)=%d, want geometric 100", got)
 	}
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
