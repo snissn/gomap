@@ -469,6 +469,10 @@ func TestCOWFrozenFlushChunkCapScalingAndTightMaintenanceFallback(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer tightMaint.Close()
+	tightBackend := &DB{flushBackendMaxEntries: 200000}
+	if got := cowFrozenFlushChunkCap(tightBackend, tightMaint, 200000, false); got != 8 {
+		t.Fatalf("tight 25%% maintenance budget explicit override chunkCap=%d, want 8", got)
+	}
 	if got := cowFrozenFlushChunkCap(&DB{}, tightMaint, 2000, false); got != 8 {
 		t.Fatalf("tight 25%% maintenance budget chunkCap=%d, want 8", got)
 	}
@@ -532,42 +536,64 @@ func TestCOWFrozenFlushChunkCapScalingAndTightMaintenanceFallback(t *testing.T) 
 		t.Fatalf("scaled flush emitted %d chunks (first ops=%d, final=%v), want 1 chunk of %d", len(backend.chunks), len(backend.chunks[0].ops), backend.chunks[0].final, entriesCount)
 	}
 
-	backend.chunks = nil
-	writeRolledBatch("tight", entriesCount)
-	maintStats := db.cow.maintenance.Stats()
-	maintLimits := db.cow.maintenance.Limits()
-	leaseOverhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	allowBytes := uint64(1024) * entryBytes
-	if maintLimits.MaxInFlightBytes-maintStats.ReservedBytes <= allowBytes+leaseOverhead {
-		t.Fatalf("insufficient maintenance headroom for tight test: stats=%+v limits=%+v", maintStats, maintLimits)
-	}
-	filler, err := db.cow.maintenance.AcquireExternal(maintLimits.MaxInFlightBytes - maintStats.ReservedBytes - allowBytes - leaseOverhead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.flushMu.Lock()
-	err = db.flushCOWFrozen(true, nil)
-	db.flushMu.Unlock()
-	filler.Close()
-	if err != nil {
-		t.Fatalf("tight maintenance flush failed instead of halving chunkCap: %v", err)
-	}
-	if len(backend.chunks) <= 1 {
-		t.Fatalf("tight maintenance flush emitted %d chunks, expected halving (>1 chunk)", len(backend.chunks))
-	}
-	totalOps := 0
-	for _, chunk := range backend.chunks {
-		totalOps += len(chunk.ops)
-	}
-	if totalOps != entriesCount || !backend.chunks[len(backend.chunks)-1].final {
-		t.Fatalf("tight maintenance flush totalOps=%d want=%d final=%v", totalOps, entriesCount, backend.chunks[len(backend.chunks)-1].final)
-	}
-	for _, idx := range []int{0, entriesCount / 2, entriesCount - 1} {
-		k := []byte(fmt.Sprintf("tight-%05d", idx))
-		want := fmt.Sprintf("val-tight-%05d", idx)
-		got, err := db.Get(k)
-		if err != nil || string(got) != want {
-			t.Fatalf("Get(%q)=(%q,%v), want %q", k, got, err, want)
+	for _, tc := range []struct {
+		name       string
+		prefix     string
+		allowBytes uint64
+	}{
+		{
+			name:       "tight_half_chunk_headroom",
+			prefix:     "tight",
+			allowBytes: uint64(1024) * entryBytes,
+		},
+		{
+			// Leave just enough headroom for basis admissions plus a halved chunk,
+			// but not enough for a 1024-entry chunk buffer + basis admissions.
+			name:   "chunk_resize_after_basis_admissions",
+			prefix: "nostarve",
+			allowBytes: memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.StableResourceCaptureLease{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(checkpointCommandWALPublish{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{}))) +
+				memtable.COWAllocationCharge(uint64(1024)*entryBytes) + 1024,
+		},
+	} {
+		backend.chunks = nil
+		writeRolledBatch(tc.prefix, entriesCount)
+		maintStats := db.cow.maintenance.Stats()
+		maintLimits := db.cow.maintenance.Limits()
+		leaseOverhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+		if maintLimits.MaxInFlightBytes-maintStats.ReservedBytes <= tc.allowBytes+leaseOverhead {
+			t.Fatalf("%s: insufficient maintenance headroom: stats=%+v limits=%+v", tc.name, maintStats, maintLimits)
+		}
+		filler, err := db.cow.maintenance.AcquireExternal(maintLimits.MaxInFlightBytes - maintStats.ReservedBytes - tc.allowBytes - leaseOverhead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.flushMu.Lock()
+		err = db.flushCOWFrozen(true, nil)
+		db.flushMu.Unlock()
+		filler.Close()
+		if err != nil {
+			t.Fatalf("%s: flush failed instead of halving chunkCap after basis admissions: %v", tc.name, err)
+		}
+		if len(backend.chunks) <= 1 {
+			t.Fatalf("%s: flush emitted %d chunks, expected halving (>1 chunk)", tc.name, len(backend.chunks))
+		}
+		totalOps := 0
+		for _, chunk := range backend.chunks {
+			totalOps += len(chunk.ops)
+		}
+		if totalOps != entriesCount || !backend.chunks[len(backend.chunks)-1].final {
+			t.Fatalf("%s: totalOps=%d want=%d final=%v", tc.name, totalOps, entriesCount, backend.chunks[len(backend.chunks)-1].final)
+		}
+		for _, idx := range []int{0, entriesCount / 2, entriesCount - 1} {
+			k := []byte(fmt.Sprintf("%s-%05d", tc.prefix, idx))
+			want := fmt.Sprintf("val-%s-%05d", tc.prefix, idx)
+			got, err := db.Get(k)
+			if err != nil || string(got) != want {
+				t.Fatalf("%s: Get(%q)=(%q,%v), want %q", tc.name, k, got, err, want)
+			}
 		}
 	}
 }

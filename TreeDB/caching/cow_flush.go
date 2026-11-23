@@ -494,6 +494,10 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 	return db.flushCOWFrozenCut(syncFlush, publish, c.retainCut())
 }
 
+// cowFlushDefaultMaxChunkEntries is the fallback chunk cap when
+// db.flushBackendMaxEntries <= 0. Open() supplies normalized profile limits
+// (16,384 relaxed / 32,768 durable) and explicit overrides remain
+// authoritative; all are bounded by 25% of maintenance MaxInFlightBytes.
 const cowFlushDefaultMaxChunkEntries = 65536
 
 func cowFrozenFlushChunkCap(db *DB, maintenance *memtable.COWBudget, totalEntries int, syncFlush bool) int {
@@ -556,10 +560,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
-	maxCap := cowFrozenFlushChunkCap(db, c.maintenance, cowFlushDefaultMaxChunkEntries, syncFlush)
-	if db != nil && db.flushBackendMaxEntries > maxCap {
-		maxCap = db.flushBackendMaxEntries
-	}
+	maxCap := cowFrozenFlushChunkCap(db, c.maintenance, int(^uint(0)>>1), syncFlush)
 	totalEntries := 0
 	for _, source := range cut.frozen {
 		if sourceLen := source.Len(); sourceLen > 0 {
@@ -657,20 +658,6 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if err = backend.DrainRetiredIndexGenerations(h.guard); err != nil {
 		return err
 	}
-	for {
-		charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
-		err = lease.Resize(charge)
-		if err == nil || !errors.Is(err, memtable.ErrCOWCapacity) || chunkCap <= 1 {
-			break
-		}
-		chunkCap /= 2
-		if chunkCap < 1 {
-			chunkCap = 1
-		}
-	}
-	if err != nil {
-		return cowGenerationAdmissionError(generationPressure, err)
-	}
 	merge, err := openCOWFrozenMerge(c.budget, cut.frozen)
 	if err != nil {
 		return err
@@ -747,6 +734,20 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 	if cut.frozenSemanticRootSet == nil && operation != nil {
 		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
+	}
+	for {
+		charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
+		err = lease.Resize(charge)
+		if err == nil || !errors.Is(err, memtable.ErrCOWCapacity) || chunkCap <= 1 {
+			break
+		}
+		chunkCap /= 2
+		if chunkCap < 1 {
+			chunkCap = 1
+		}
+	}
+	if err != nil {
+		return errors.Join(cowGenerationAdmissionError(generationPressure, err), group.Close())
 	}
 	err = writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry, last bool) error {
 		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground)
