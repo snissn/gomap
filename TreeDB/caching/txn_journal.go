@@ -90,9 +90,11 @@ func (c *cowCache) updateTxnStats() {
 	c.journalPoints.Store(uint64(points))
 	c.journalRanges.Store(uint64(ranges))
 	s := c.journal.BarrierStats()
-	c.journalBarrierActive.Store(s.Active)
-	c.journalBarrierEffects.Store(s.EffectCapacity)
-	c.journalBarrierBytes.Store(s.ByteCapacity)
-	c.journalBarrierReplacement.Store(s.LogicalReplacement)
-	c.journalBarrierConflicts.Store(s.Conflicts)
+	if s.Active || s.EffectCapacity != 0 || s.ByteCapacity != 0 || s.LogicalReplacement != 0 || s.Conflicts != 0 || c.journalBarrierActive.Load() {
+		c.journalBarrierActive.Store(s.Active)
+		c.journalBarrierEffects.Store(s.EffectCapacity)
+		c.journalBarrierBytes.Store(s.ByteCapacity)
+		c.journalBarrierReplacement.Store(s.LogicalReplacement)
+		c.journalBarrierConflicts.Store(s.Conflicts)
+	}
 }
