@@ -92,7 +92,8 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, shards: make([]cowTable, n), frozen: make([]cowTable, len(old.frozen), len(old.frozen)+count)}
+	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis}
+	next.initStorageCap(n, len(old.frozen), len(old.frozen)+count)
 	next.basis.retain()
 	p.semantic = nil // next adopts the returned active successor exactly once
 	if next.frozenSemanticRootSet != nil {
@@ -198,6 +199,10 @@ func (p *cowRollover) drain() error {
 			cache.releasePrivateSemanticState(next)
 			next.lease, next.cache = nil, nil
 			next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
+			clear(next.inlineShards[:])
+			clear(next.inlineFrozen[:])
+			clear(next.inlineSources[:])
+			clear(next.inlineDomains[:])
 			next = nil
 		}
 		// The cache still owns the actual parked successors. Only Next's

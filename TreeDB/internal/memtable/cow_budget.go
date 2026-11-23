@@ -175,13 +175,36 @@ func COWAllocationCharge(n uint64) uint64 { return cowAllocation(n) }
 // It owns no callback or physical resource; Close follows the caller's cleanup.
 // Keep the returned pointer; do not copy the lease struct after acquisition.
 type COWExternalLease struct {
-	budget *COWBudget
-	charge uint64
-	closed bool // guarded by budget.mu, including concurrent Close calls
+	budget   *COWBudget
+	charge   uint64
+	closed   bool // guarded by budget.mu, including concurrent Close calls
+	embedded bool // true when stored inside an already-charged caller wrapper
 }
 
 func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	return b.acquireExternal(bytes, false)
+}
+
+// AcquireExternalValue admits caller-owned bytes BEFORE allocation and returns
+// an embedded lease by value, avoiding a separate heap allocation when stored
+// directly inside an already-charged caller struct (e.g. cowReadCut). The caller
+// must move the returned value to its single final address before any Close or
+// concurrent access and must never copy it afterward. Embedded leases cannot be
+// resized, split, shrunk, or transferred into idle read scratch.
+func (b *COWBudget) AcquireExternalValue(bytes uint64) (COWExternalLease, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return COWExternalLease{}, ErrCOWClosed
+	}
+	if b.stats.ExternalLeases == int(^uint(0)>>1) || !b.inFlightFitsLocked(bytes) ||
+		!b.retirementFitsLocked(bytes) || !b.addLocked(bytes) {
+		return COWExternalLease{}, ErrCOWCapacity
+	}
+	b.stats.ReservedBytes += bytes
+	b.stats.ExternalBytes += bytes
+	b.stats.ExternalLeases++
+	return COWExternalLease{budget: b, charge: bytes, embedded: true}, nil
 }
 
 // ExternalAllocationFitsWith reports whether a new lease can coexist with the
@@ -242,8 +265,11 @@ func (b *COWBudget) AcquireRetention(bytes uint64) (retainedalloc.Lease, error) 
 // Resize admits producer growth before allocation. Shrink is always permitted,
 // including after budget Close, and follows actual storage cleanup.
 func (l *COWExternalLease) Resize(bytes uint64) error {
-	if l == nil {
+	if l == nil || l.budget == nil {
 		return ErrCOWClosed
+	}
+	if l.embedded {
+		return ErrCOWCapacity
 	}
 	target, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
 	if !ok {
@@ -282,7 +308,7 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 // Close is idempotent and may race another Close. The owning caller releases
 // all charged buffers/wrappers/resources before closing this allocation lease.
 func (l *COWExternalLease) Close() {
-	if l == nil {
+	if l == nil || l.budget == nil {
 		return
 	}
 	b := l.budget

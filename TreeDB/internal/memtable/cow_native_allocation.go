@@ -10,8 +10,11 @@ import "unsafe"
 // rather than a new independently rounded allocation. Like Resize's shrink,
 // this needs no admission and remains valid after budget Close.
 func (l *COWExternalLease) ShrinkNativeBytes(bytes, retainedBytes uint64) error {
-	if l == nil {
+	if l == nil || l.budget == nil {
 		return ErrCOWClosed
+	}
+	if l.embedded {
+		return ErrCOWCapacity
 	}
 	floor, ok := cowAdd(retainedBytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
 	if !ok {
@@ -46,8 +49,11 @@ func (l *COWExternalLease) ShrinkNativeBytes(bytes, retainedBytes uint64) error 
 // an insufficient promise is a terminal original-ledger failure, not permission
 // to acquire replacement capacity or replay accepted materialization.
 func (l *COWExternalLease) SplitNativeBytes(bytes, retainedBytes uint64) (*COWExternalLease, error) {
-	if l == nil {
+	if l == nil || l.budget == nil {
 		return nil, ErrCOWClosed
+	}
+	if l.embedded {
+		return nil, ErrCOWCapacity
 	}
 	header := cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{})))
 	child, ok := cowAdd(COWAllocationCharge(bytes), header)

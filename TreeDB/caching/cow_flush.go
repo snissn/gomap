@@ -83,8 +83,8 @@ func (c *cowCache) prepareCOWBasisInstallWithFrozen(frozen int) (*cowReadCut, er
 		return nil, err
 	}
 	cut := &cowReadCut{refs: 1, cache: c, lease: lease}
-	if shards <= cowReadCutInlineShards && frozen == 0 {
-		cut.initStorage(shards, 0)
+	if shards <= cowReadCutInlineShards && frozen <= cowReadCutInlineFrozen {
+		cut.initStorageCap(shards, 0, frozen)
 		return cut, nil
 	}
 	cut.shards = make([]cowTable, shards)
@@ -175,6 +175,10 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 	refund := next.lease
 	next.lease, next.cache, next.basis = nil, nil, nil
 	next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
+	clear(next.inlineShards[:])
+	clear(next.inlineFrozen[:])
+	clear(next.inlineSources[:])
+	clear(next.inlineDomains[:])
 	return refund
 }
 

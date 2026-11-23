@@ -75,7 +75,13 @@ memtable preparation: grouped mutations, file-ID and scratch arrays, initial
 cache/fixed-vector/backend-basis wrappers, and persistent cut wrappers. Sum
 `COWAllocationCharge` applied once to each raw wrapper/backing capacity, then
 acquire before allocating that storage. C1 reserves its own lease wrapper before
-allocating it. The lease has no callback or resource tracker. Release the owned
+allocating it. When a caller embeds `COWExternalLease` directly inside an
+already-charged struct (such as `cowReadCut.leaseStorage`),
+`budget.AcquireExternalValue(bytes)` admits `bytes` before allocation and
+returns an embedded lease by value without an extra heap lease allocation; the
+caller moves it once to its final address before any `Close` or concurrent
+access, and embedded leases cannot be resized, split, shrunk, or placed in idle
+read scratch. The lease has no callback or resource tracker. Release the owned
 storage/resources first, then call its idempotent, concurrently safe `Close`.
 Persistent cuts may keep this small lease until final cut drain; cancelled cuts
 keep it until their outside-lock cleanup finishes. Do not charge the same caller

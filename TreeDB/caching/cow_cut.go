@@ -107,7 +107,10 @@ func (b *cowBackendBasis) release() error {
 	return priorErr
 }
 
-const cowReadCutInlineShards = 4
+const (
+	cowReadCutInlineShards = 4
+	cowReadCutInlineFrozen = 4
+)
 
 // Authority members are immutable after installation; only the separately
 // synchronized derived catalog slot may initialize once. refs is controlled by
@@ -127,23 +130,33 @@ type cowReadCut struct {
 	sources               []memtable.Table
 	domains               []rootDomainSnapshot
 	lease                 *memtable.COWExternalLease
+	leaseStorage          memtable.COWExternalLease
 	cache                 *cowCache
 	inlineShards          [cowReadCutInlineShards]cowTable
-	inlineSources         [cowReadCutInlineShards]memtable.Table
+	inlineFrozen          [cowReadCutInlineFrozen]cowTable
+	inlineSources         [cowReadCutInlineShards + cowReadCutInlineFrozen]memtable.Table
 	inlineDomains         [cowReadCutInlineShards]rootDomainSnapshot
 }
 
 func (c *cowReadCut) initStorage(shards, frozen int) {
-	if shards <= cowReadCutInlineShards && frozen == 0 {
+	c.initStorageCap(shards, frozen, frozen)
+}
+
+func (c *cowReadCut) initStorageCap(shards, frozenLen, frozenCap int) {
+	if shards <= cowReadCutInlineShards && frozenCap <= cowReadCutInlineFrozen {
 		c.shards = c.inlineShards[:shards:shards]
-		c.frozen = nil
-		c.sources = c.inlineSources[:0:shards]
+		if frozenCap > 0 {
+			c.frozen = c.inlineFrozen[:frozenLen:frozenCap]
+		} else {
+			c.frozen = nil
+		}
+		c.sources = c.inlineSources[: 0 : shards+frozenCap]
 		c.domains = c.inlineDomains[:shards:shards]
 		return
 	}
 	c.shards = make([]cowTable, shards)
-	if frozen > 0 {
-		c.frozen = make([]cowTable, frozen)
+	if frozenCap > 0 {
+		c.frozen = make([]cowTable, frozenLen, frozenCap)
 	}
 }
 
@@ -156,12 +169,19 @@ func (c *cowReadCut) drain() error {
 	drainCOWTables(shards)
 	drainCOWTables(frozen)
 	clear(c.inlineShards[:])
+	clear(c.inlineFrozen[:])
 	clear(c.inlineSources[:])
 	clear(c.inlineDomains[:])
 	basis := c.basis
 	c.basis = nil
 	err := basis.release()
 	lease := c.lease
+	var embeddedLease memtable.COWExternalLease
+	if lease == &c.leaseStorage {
+		embeddedLease = c.leaseStorage
+		c.leaseStorage = memtable.COWExternalLease{}
+		lease = &embeddedLease
+	}
 	c.lease = nil
 	c.releaseSemanticState()
 	lease.Close()
@@ -405,7 +425,7 @@ func cowSnapshotRetentionCharge(sizes backenddb.SnapshotAllocationSizes) uint64 
 }
 func cowCutCharge(shards, frozen int) uint64 {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{})))
-	if shards <= cowReadCutInlineShards && frozen == 0 {
+	if shards <= cowReadCutInlineShards && frozen <= cowReadCutInlineFrozen {
 		return bytes
 	}
 	bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowTable{}))) +
@@ -476,7 +496,7 @@ func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 	if err != nil {
 		return nil, joinCOWCleanupError(err, db.cow.releaseCut(cut))
 	}
-	snap := getSnapshot()
+	snap := newActiveCOWSnapshot()
 	snap.db = db
 	snap.cowCache = db.cow
 	snap.cowCut = cut
@@ -488,7 +508,7 @@ func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 	snap.backendFallback = backendSnapshotLookup{db: db, snapshot: snap.backend, rootID: snap.backendRootID}
 	snap.rootPointShards = cut.domains
 	snap.rootIterator = rootDomainSnapshot{immutables: cut.sources}
-	return activateSnapshot(snap), nil
+	return snap, nil
 }
 
 func (c *cowCache) retainCut() *cowReadCut {
@@ -632,7 +652,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	retainCOWSemanticState(next)
 	copy(next.frozen, old.frozen)
 	for i := range next.frozen {
-		if !next.frozen[i].root.Retain() {
+		if !next.frozen[i].root.RetainOwned() {
 			panic("lost owned COW frozen root")
 		}
 	}
@@ -649,7 +669,7 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			// Duplicates already telescope through each private replacement.
 			delta, _ := p.prepared[i].LogicalSizeDelta()
 			next.shards[i].size += delta
-		} else if !next.shards[i].root.Retain() {
+		} else if !next.shards[i].root.RetainOwned() {
 			panic("lost owned COW root")
 		}
 	}
@@ -722,6 +742,7 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 		drainCOWTables(next.shards)
 		drainCOWTables(next.frozen)
 		clear(next.inlineShards[:])
+		clear(next.inlineFrozen[:])
 		clear(next.inlineSources[:])
 		clear(next.inlineDomains[:])
 		c.releasePrivateSemanticState(next)

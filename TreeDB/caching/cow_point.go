@@ -29,6 +29,7 @@ type cowPointStaging struct {
 	shardCnts         []int
 	predictionGroups  [][]memtable.COWMutation
 	cut               cowPreparedCut
+	cutLeaseStorage   memtable.COWExternalLease
 	preparedStorage   memtable.COWPrepared
 	mutation          txnMutationOwner
 	db                *DB
@@ -105,6 +106,7 @@ func (st *cowPointStaging) clearLocked(shard int) {
 	st.cut.opening = nil
 	st.cut.native = nil
 	st.cut.lease = nil
+	st.cutLeaseStorage = memtable.COWExternalLease{}
 	st.cut.consumed = false
 	st.preparedStorage = memtable.COWPrepared{}
 	st.mutation = txnMutationOwner{}
@@ -126,12 +128,12 @@ func (st *cowPointStaging) clearAll() {
 }
 
 type cowPointCancelled struct {
-	cache     *cowCache
-	next      *cowReadCut
-	opening   *cowReadCut
-	retired   memtable.COWRetirement
-	successor cowRawSuccessor
-	lease     *memtable.COWExternalLease
+	cache        *cowCache
+	next         *cowReadCut
+	opening      *cowReadCut
+	retired      memtable.COWRetirement
+	successor    cowRawSuccessor
+	leaseStorage memtable.COWExternalLease
 }
 
 func (d cowPointCancelled) drain() error {
@@ -144,10 +146,15 @@ func (d cowPointCancelled) drain() error {
 		drainCOWTables(next.shards)
 		drainCOWTables(next.frozen)
 		clear(next.inlineShards[:])
+		clear(next.inlineFrozen[:])
 		clear(next.inlineSources[:])
 		clear(next.inlineDomains[:])
 		d.cache.releasePrivateSemanticState(next)
 		basis := next.basis
+		if next.lease == &next.leaseStorage {
+			d.leaseStorage = next.leaseStorage
+			next.leaseStorage = memtable.COWExternalLease{}
+		}
 		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
 		next.cache, next.lease = nil, nil
 		cleanupErr = basis.release()
@@ -160,11 +167,7 @@ func (d cowPointCancelled) drain() error {
 		d.opening = nil
 	}
 	d.cache = nil
-	if d.lease != nil {
-		lease := d.lease
-		d.lease = nil
-		lease.Close()
-	}
+	d.leaseStorage.Close()
 	return cleanupErr
 }
 
@@ -180,12 +183,12 @@ func (st *cowPointStaging) cancelAndDetachLocked(shard int) cowPointCancelled {
 		st.cut.cancel()
 	}
 	detached := cowPointCancelled{
-		cache:     st.cut.cache,
-		next:      st.cut.next,
-		opening:   st.cut.opening,
-		retired:   st.cut.retired[shard],
-		successor: st.cut.successors[shard],
-		lease:     st.cut.lease,
+		cache:        st.cut.cache,
+		next:         st.cut.next,
+		opening:      st.cut.opening,
+		retired:      st.cut.retired[shard],
+		successor:    st.cut.successors[shard],
+		leaseStorage: st.cutLeaseStorage,
 	}
 	st.clearLocked(shard)
 	return detached
@@ -227,12 +230,12 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 	c.prepareCalls.Add(1)
 	old := c.cut
 	shards := len(c.writers)
-	lease, err := c.budget.AcquireExternal(cowCutCharge(shards, len(old.frozen)))
+	leaseVal, err := c.budget.AcquireExternalValue(cowCutCharge(shards, len(old.frozen)))
 	if err != nil {
 		return err
 	}
 	st.cut.cache = c
-	st.cut.lease = lease
+	st.cutLeaseStorage = leaseVal
 	st.cut.consumed = false
 	st.prepared = true
 
@@ -277,16 +280,18 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 		semanticRootSet:       old.semanticRootSet,
 		refs:                  1,
 		basis:                 old.basis,
-		lease:                 lease,
+		leaseStorage:          st.cutLeaseStorage,
 		cache:                 c,
 	}
+	st.cutLeaseStorage = memtable.COWExternalLease{}
+	next.lease = &next.leaseStorage
 	next.initStorage(shards, len(old.frozen))
 	next.basis.retain()
 	retainCOWSemanticState(next)
 	if len(old.frozen) > 0 {
 		copy(next.frozen, old.frozen)
 		for i := range next.frozen {
-			if !next.frozen[i].root.Retain() {
+			if !next.frozen[i].root.RetainOwned() {
 				panic("lost owned COW frozen root")
 			}
 		}
@@ -301,7 +306,7 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 			next.shards[i].history += charge
 			next.shards[i].root = staged.Root()
 			next.shards[i].size += delta
-		} else if !next.shards[i].root.Retain() {
+		} else if !next.shards[i].root.RetainOwned() {
 			panic("lost owned COW root")
 		}
 	}
@@ -343,8 +348,7 @@ func (st *cowPointStaging) canSkipPointRolloverLocked(db *DB, shard int, entry b
 	if c.cut.shards[shard].Len() > 0 && (used > trigger || bound.History() > trigger-used) {
 		return false
 	}
-	control := cowCutCharge(len(c.writers), len(c.cut.frozen)) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	control := cowCutCharge(len(c.writers), len(c.cut.frozen))
 	if bound.Total() > ^uint64(0)-control {
 		return false
 	}
@@ -444,15 +448,30 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 		entry.Value = value
 	}
 
-	leaseWaitStart := time.Now()
+	var leaseWaitStart time.Time
+	hasWaitStart := false
 	pressureJoined := false
 	pressureRolloverUsed := false
 	st := c.pointStaging
+	firstAttempt := true
 	for {
-		c.writerMu.Lock()
+		if firstAttempt {
+			firstAttempt = false
+			if !c.writerMu.TryLock() {
+				leaseWaitStart = time.Now()
+				hasWaitStart = true
+				c.writerMu.Lock()
+			}
+		} else {
+			c.writerMu.Lock()
+		}
 		st.bindLocked(db, shard, entry)
 		if st.canSkipPointRolloverLocked(db, shard, entry) {
 			break
+		}
+		if !hasWaitStart {
+			leaseWaitStart = time.Now()
+			hasWaitStart = true
 		}
 		rollover, pressure, pressureRollover, rollErr := st.owner.batch.cowGenerationRollover(!pressureRolloverUsed)
 		if pressureRollover {
@@ -503,7 +522,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 	}
 
 	holdBegan := time.Now()
-	c.commitWaitNs.Add(uint64(holdBegan.Sub(leaseWaitStart)))
+	if hasWaitStart {
+		c.commitWaitNs.Add(uint64(holdBegan.Sub(leaseWaitStart)))
+	}
 	locksHeld := true
 	canCancel := true
 	defer func() {
