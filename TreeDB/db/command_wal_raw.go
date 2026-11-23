@@ -1621,6 +1621,59 @@ func (db *DB) FinalizePrivateCOWPublication(owner *transactionowner.Owner, prepa
 	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, nil, false)
 }
 
+// FinalizePrivateCOWPublicationDirect lends the private WAL-off owner the
+// planned canonical operation stream and producer RID lookup under the same
+// teardown lock as FinalizePrivateCOWPublication, skipping throwaway wire
+// payload encoding when no command-WAL frame is written.
+func (db *DB) FinalizePrivateCOWPublicationDirect(
+	owner *transactionowner.Owner,
+	prepare func() error,
+	finalize func(scan func(func(commitlog.RawKVOperation) error) error, lookup func(page.ValuePtr) (uint64, bool)) error,
+	scanEntries func(func(batchpkg.Entry) error) error,
+	opHint int,
+) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner || db.durability != DurabilityWALOffRelaxed ||
+		prepare == nil || finalize == nil || scanEntries == nil {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	tracked, err := db.beginSemanticBackendOperation(owner, false)
+	if err != nil {
+		return err
+	}
+	defer db.endSemanticBackendOperation(tracked)
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	var ridCache *rawKVCommandWALRIDCache
+	defer func() {
+		if ridCache != nil {
+			ridCache.release()
+		}
+	}()
+	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint, false, true)
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
+	if err != nil {
+		return err
+	}
+	if plan.Count == 0 {
+		return nil
+	}
+	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint, false, false)
+	var lookup func(page.ValuePtr) (uint64, bool)
+	if ridCache != nil {
+		lookup = ridCache.lookup
+	}
+	return finalize(writeScan, lookup)
+}
+
 // FinalizePrivateCOWInlinePoint lends the private WAL-off owner one canonical
 // point operation under the same teardown lock as its batch finalization.
 // Placement and revision assignment precede this call. The finalizer checks

@@ -34,6 +34,7 @@ type cowBatchState struct {
 	guardReserved                bool
 	shardAssignmentsReady        bool
 	privatePoint                 bool
+	prepareAttempted             bool
 }
 
 // One admitted allocation owns the public batch and its COW-only state. Both

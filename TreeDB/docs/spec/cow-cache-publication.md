@@ -541,8 +541,11 @@ backend applies the raw payload size and operation checks, and the cache
 compares the key, operation, inline value and assigned revision with the
 prepared entry before completing canonical preparation. The synchronous
 public call borrows inputs through completion, and preparation owns all bytes
-retained in the generation and conflict history. Batches, qualified entries
-and explicit sync use ordinary canonical encoding.
+retained in the generation and conflict history. Unsynced private raw batches
+in `no_wal_fast` use an equivalent direct canonical operation validator over
+the planned operation stream and producer RID lookup without allocating an
+encoded WAL payload; WAL-on, external command-WAL, native composite, and
+explicit sync writes use ordinary canonical encoding.
 
 Registered producer visibility and independently owned live file/dictionary
 pins precede cut publication. Explicit NoWAL sync releases command, writer and
