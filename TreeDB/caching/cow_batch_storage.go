@@ -38,6 +38,8 @@ type cowBatchState struct {
 	lease                        *memtable.COWExternalLease
 	storageBytes                 uint64
 	lastHint                     int
+	copyArenaHint                int
+	copiedBytes                  int
 	err                          error
 	prepared                     *cowBatchPreparation
 	producer                     *cowFrameCapture
@@ -113,6 +115,38 @@ func (db *DB) newCOWBatch(hint int) *Batch {
 	b := &owner.batch
 	b.cowState = &owner.state
 	b.cowReserve(hint)
+	return b
+}
+
+func (db *DB) newCOWBatchAdaptive() *Batch {
+	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
+	charge := cowBatchBaseBytes(guardReserved)
+	lease, err := db.cow.budget.AcquireExternal(charge)
+	if err != nil {
+		return &cowDeniedBatch
+	}
+	entryHint := normalizeCOWBatchReuseHint(db.batchEntriesCapHint(batchDefaultEntriesCap))
+	copyHint := 0
+	if db.batchCopyBytesHint.Load() > 0 {
+		copyHint = db.batchCopyArenaInitCap(entryHint)
+	}
+	owner := &cowBatchOwner{
+		batch: Batch{db: db, streamBypassOff: true},
+		state: cowBatchState{
+			lease:         lease,
+			guardReserved: guardReserved,
+			lastHint:      entryHint,
+			copyArenaHint: copyHint,
+		},
+	}
+	b := &owner.batch
+	b.cowState = &owner.state
+	// Keep cold-start constructor behavior eager at batchDefaultEntriesCap so
+	// callers and tests expecting partial-admission failure on initial NewBatch()
+	// keep their contract; larger learned hints defer to combined lazy admission.
+	if entryHint <= batchDefaultEntriesCap {
+		b.cowReserve(batchDefaultEntriesCap)
+	}
 	return b
 }
 
@@ -223,13 +257,17 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		return memtable.ErrCOWCapacity
 	}
 	if len(b.entries) == cap(b.entries) {
-		if cap(b.entries) == 0 && b.cowState.lastHint > 16 {
+		if cap(b.entries) == 0 && (b.cowState.lastHint > batchDefaultEntriesCap || b.cowState.copyArenaHint > 256) {
+			targetEntries := max(batchDefaultEntriesCap, b.cowState.lastHint)
 			arenaCap := 0
 			if owned && cap(b.copyArena)-len(b.copyArena) < n {
 				arenaCap = cowNextCopyArenaCap(cap(b.copyArena), n)
+				if b.cowState.copyArenaHint > arenaCap {
+					arenaCap = b.cowState.copyArenaHint
+				}
 			}
-			if !b.cowTryReserveWithCopyArena(b.cowState.lastHint, arenaCap) {
-				b.cowReserve(16)
+			if !b.cowTryReserveWithCopyArena(targetEntries, arenaCap) {
+				b.cowReserve(batchDefaultEntriesCap)
 				if b.cowState.err != nil {
 					return b.cowState.err
 				}
@@ -253,6 +291,7 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		if err != nil {
 			return err
 		}
+		b.cowState.copiedBytes += n
 		copy(buf, e.Key)
 		e.Key = normalizeRawKVPointKey(buf[:len(e.Key):len(e.Key)])
 		if e.Type == batch.OpPut {
@@ -329,6 +368,13 @@ func (b *Batch) cowReset() {
 	if n := normalizeCOWBatchReuseHint(len(b.entries)); n > b.cowState.lastHint {
 		b.cowState.lastHint = n
 	}
+	if copied := b.cowState.copiedBytes; copied > b.cowState.copyArenaHint {
+		if copied > batchCopyArenaInitMax {
+			copied = batchCopyArenaInitMax
+		}
+		b.cowState.copyArenaHint = copied
+	}
+	b.cowState.copiedBytes = 0
 	b.entries = nil
 	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil
@@ -434,10 +480,12 @@ func (b *Batch) cowCopyStorage(n int) ([]byte, error) {
 	}
 	if cap(b.copyArena)-len(b.copyArena) < n {
 		capacity := cowNextCopyArenaCap(cap(b.copyArena), n)
-		if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
-			return nil, err
+		if !(cap(b.copyArena) == 0 && b.cowState.copyArenaHint > capacity && b.cowTryReserveWithCopyArena(0, b.cowState.copyArenaHint)) {
+			if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
+				return nil, err
+			}
+			b.copyArena = make([]byte, 0, capacity)
 		}
-		b.copyArena = make([]byte, 0, capacity)
 	}
 	start := len(b.copyArena)
 	b.copyArena = b.copyArena[:start+n]
