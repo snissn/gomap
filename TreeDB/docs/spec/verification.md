@@ -91,10 +91,13 @@ the retained record and requires the original file error after its close.
 
 - `TestNativeOrdinaryProjectedGenerationPressure` uses the canonical
   100,000-document BSON fixture at both 1,000- and 16,000-document batch sizes with
-  the stock standalone COW limits. It checks generation refusal below the advisory
-  watermark, one sequence/LSN/COW publication per acknowledged batch, exact
-  returned IDs, held-read values, separately checked checkpoint, original Close,
-  full live and reopen payload census, and empty original budget and pins.
+  the stock standalone COW limits. Under the non-delete node bound, 1,000-document
+  batches fit inside the single 64 MiB generation without a below-watermark
+  projected refusal, while 16,000-document batches trigger generation refusal below
+  the advisory watermark and automatic rollover; both verify one
+  sequence/LSN/COW publication per acknowledged batch, exact returned IDs,
+  held-read values, separately checked checkpoint, original Close, full live
+  and reopen payload census, and empty original budget and pins.
   `TestNativeOrdinaryProjectedGenerationControls` checks that oversized requests
   and the validated, gateway and explicit transaction paths reject before
   assignment, joins original refunds, proves a stale receipt skips physical

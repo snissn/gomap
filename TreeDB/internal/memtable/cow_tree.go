@@ -283,6 +283,145 @@ func cowMaximumHeight(n int) int {
 	return h
 }
 
+// cowNonDeleteNodeBound returns a proven worst-case B-tree node+slice charge for
+// non-delete batches flushing totalOps entries into w.private (initially
+// holding oldLen keys, reaching at most logicalAfter keys and height levels).
+func cowNonDeleteNodeBound(oldLen, logicalAfter, totalOps uint64, height, maxEntries int, allReplace bool) (uint64, bool) {
+	if totalOps == 0 {
+		return 0, true
+	}
+	if height < 1 {
+		height = 1
+	}
+	maxItemsLimit := uint64(cowBTreeMaxItems)
+	if maxEntries > 0 {
+		// Doubling a private node's capacity can reach 2*maxEntries (clamped at 63).
+		if doubled := uint64(maxEntries) * 2; doubled < maxItemsLimit {
+			maxItemsLimit = doubled
+		}
+	}
+	leafHeader := cowAllocation(uint64(unsafe.Sizeof(cowNodeLayout{})))
+	intHeader := cowAllocation(uint64(unsafe.Sizeof(cowInternalNodeLayout{})))
+	maxItems := cowAllocation(maxItemsLimit * uint64(unsafe.Sizeof(cowPairLayout{})))
+	var maxCh uint64
+	if height > 1 {
+		maxCh = cowAllocation(uint64(2*cowBTreeDegree) * uint64(unsafe.Sizeof(uintptr(0))))
+	}
+
+	var oldLeaves uint64
+	if oldLen > 0 {
+		oldLeaves = oldLen/cowBTreeMinItems + 1
+	}
+	tLeaf := min(oldLeaves, totalOps)
+
+	var tInt uint64
+	if height > 1 && oldLen > 0 {
+		oldInts := oldLeaves/cowBTreeMinItems + uint64(height)
+		tInt = oldInts
+		var pathInts uint64
+		if cowPredictionProductAdd(&pathInts, totalOps, uint64(height-1)) && pathInts < tInt {
+			tInt = pathInts
+		}
+	}
+
+	if allReplace {
+		var leafCopyCharge, intCopyCharge uint64
+		if !cowPredictionProductAdd(&leafCopyCharge, tLeaf, leafHeader+maxItems) ||
+			!cowPredictionProductAdd(&intCopyCharge, tInt, intHeader+maxItems+maxCh) {
+			return 0, false
+		}
+		var total uint64
+		if !cowPredictionAdd(&total, leafCopyCharge) || !cowPredictionAdd(&total, intCopyCharge) {
+			return 0, false
+		}
+		return total, true
+	}
+
+	// Excess items above min=31 across all initial leaves: sum(max(0,|L|-31)) <=
+	// (oldLen/63)*32 + ceil(((oldLen%63)*32)/63). Each split consumes 32 excess
+	// items while each insertion adds at most 1.
+	initLeafExcess := (oldLen/cowBTreeMaxItems)*32 + ((oldLen%cowBTreeMaxItems)*32+62)/63
+	sLeaf := min(totalOps, (initLeafExcess+totalOps)/32+1)
+
+	var leafHdrCount, leafHeaders uint64
+	if !cowPredictionAdd(&leafHdrCount, tLeaf) ||
+		!cowPredictionAdd(&leafHdrCount, sLeaf) ||
+		!cowPredictionAdd(&leafHdrCount, 1) ||
+		!cowPredictionProductAdd(&leafHeaders, leafHdrCount, leafHeader) {
+		return 0, false
+	}
+
+	// Either at most (totalOps + cFull) leaf slice allocations occur (1 per op,
+	// plus 1 growItems after splitting a full shared leaf), or each copied/new
+	// leaf doubles at most <= 3*maxItems and each split side grows <= 2*maxItems each.
+	cFull := min(oldLen/cowBTreeMaxItems, totalOps)
+	var perOpLeafSlices, opLeafBytes uint64
+	if !cowPredictionAdd(&perOpLeafSlices, totalOps) ||
+		!cowPredictionAdd(&perOpLeafSlices, cFull) ||
+		!cowPredictionProductAdd(&opLeafBytes, perOpLeafSlices, maxItems) {
+		return 0, false
+	}
+	leafSlices := opLeafBytes
+	var growthLeafBytes, splitLeafBytes uint64
+	if cowPredictionProductAdd(&growthLeafBytes, tLeaf+1, 3*maxItems) &&
+		cowPredictionProductAdd(&splitLeafBytes, sLeaf, 4*maxItems) &&
+		cowPredictionAdd(&growthLeafBytes, splitLeafBytes) &&
+		growthLeafBytes < leafSlices {
+		leafSlices = growthLeafBytes
+	}
+
+	var total uint64
+	if !cowPredictionAdd(&total, leafHeaders) || !cowPredictionAdd(&total, leafSlices) {
+		return 0, false
+	}
+	if height <= 1 {
+		return total, true
+	}
+
+	sInt := (oldLeaves+sLeaf)/cowBTreeMinItems + uint64(height)
+	var maxCascadeSplits uint64
+	if cowPredictionProductAdd(&maxCascadeSplits, totalOps, uint64(height)) && maxCascadeSplits < sInt {
+		sInt = maxCascadeSplits
+	}
+
+	var intHdrCount, intHeaders uint64
+	if !cowPredictionAdd(&intHdrCount, tInt) ||
+		!cowPredictionAdd(&intHdrCount, sInt) ||
+		!cowPredictionAdd(&intHdrCount, uint64(height)) ||
+		!cowPredictionProductAdd(&intHeaders, intHdrCount, intHeader) {
+		return 0, false
+	}
+
+	var intCopyCount, intCopies uint64
+	if !cowPredictionAdd(&intCopyCount, tInt) ||
+		!cowPredictionAdd(&intCopyCount, uint64(height)) ||
+		!cowPredictionProductAdd(&intCopies, intCopyCount, maxItems+maxCh) {
+		return 0, false
+	}
+
+	var splitTotal, perSplitGrow uint64
+	if !cowPredictionAdd(&splitTotal, sLeaf) ||
+		!cowPredictionAdd(&splitTotal, sInt) ||
+		!cowPredictionProductAdd(&perSplitGrow, splitTotal, maxItems+maxCh) {
+		return 0, false
+	}
+	intGrows := perSplitGrow
+	var amortBase, amortSplits uint64
+	if cowPredictionProductAdd(&amortBase, intCopyCount, 3*(maxItems+maxCh)) &&
+		cowPredictionProductAdd(&amortSplits, sInt, 4*maxItems+2*maxCh) &&
+		cowPredictionAdd(&amortBase, amortSplits) &&
+		amortBase < intGrows {
+		intGrows = amortBase
+	}
+
+	if !cowPredictionAdd(&total, intHeaders) ||
+		!cowPredictionAdd(&total, intCopies) ||
+		!cowPredictionAdd(&total, intGrows) {
+		return 0, false
+	}
+	return total, true
+}
+
 // Bound tidwall v1.8.1 Set/Delete allocation paths. Copies use existing capacity;
 // growth occurs only at cap<=max, at most doubles, then allocator rounding.
 // Splits share arrays; retries touch private nodes. Delete copies at most one
@@ -353,18 +492,11 @@ func (w *COWWriter) l1AllowsMerge(nextL1Count int) bool {
 	if !cowPredictionProductAdd(&opBound, totalOps, perOp) {
 		return false
 	}
-	fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
-	oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-	if pathNodes := totalOps * uint64(h); oldNodes > pathNodes {
-		oldNodes = pathNodes
+	bound := opBound
+	if nonDel, ok := cowNonDeleteNodeBound(uint64(w.private.Len()), uint64(logicalAfter), totalOps, h, maxEntries, false); ok && nonDel < bound {
+		bound = nonDel
 	}
-	maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
-	var cardBound uint64
-	if !cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) ||
-		!cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) {
-		return false
-	}
-	return min(opBound, cardBound) <= budgetCap
+	return bound <= budgetCap
 }
 
 func (w *COWWriter) canUseL0(entries []COWMutation, opts COWPrepareOptions) (int, bool, bool) {
@@ -549,17 +681,9 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 		if w.private.Len() == 0 && len(w.delta) == 0 && w.l1 == nil {
 			skipRawBatchProbes = true
 		} else if len(entries) >= 32 && w.generation != nil && w.generation.budget != nil {
-			maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
-			oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-			if pathNodes := uint64(totalOpsEstimate) * uint64(c.Height); oldNodes > pathNodes {
-				oldNodes = pathNodes
-			}
 			limits := w.generation.budget.limits
 			budgetCap := min(limits.MaxInFlightBytes, limits.MaxGenerationBytes) / 4
-			var cardBound uint64
-			if cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) &&
-				cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) &&
-				cardBound <= budgetCap {
+			if bound, ok := cowNonDeleteNodeBound(uint64(w.private.Len()), uint64(logicalAfter), uint64(totalOpsEstimate), c.Height, maxEntries, false); ok && bound <= budgetCap {
 				skipRawBatchProbes = true
 			}
 		}
@@ -633,21 +757,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	// without physical deletes nodes never disappear. This cardinality bound
 	// avoids charging every operation as an independent full-height fork.
 	if totalOps > 0 && !deletes {
-		maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
-		oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-		pathNodes := uint64(totalOps) * uint64(c.Height)
-		if oldNodes > pathNodes {
-			oldNodes = pathNodes
-		}
-		full := fullCapacity
-		bound := oldNodes * full
-		if !allReplace {
-			// Geometric capacity growth plus split truncation is charged to
-			// the surviving/new node; eight full capacities cover the two
-			// arrays, rounding, both split sides and discarded root buffers.
-			bound += 8 * maxNodes * full
-		}
-		if bound < c.Nodes {
+		if bound, ok := cowNonDeleteNodeBound(uint64(w.private.Len()), uint64(logicalAfter), uint64(totalOps), c.Height, maxEntries, allReplace); ok && bound < c.Nodes {
 			c.Nodes = bound
 		}
 	}

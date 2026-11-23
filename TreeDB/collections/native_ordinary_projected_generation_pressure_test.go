@@ -193,8 +193,14 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		acknowledged += count
 	}
 	final := owner.Stats()
-	if acknowledged == rows && (stat(final, rollovers) <= stat(initial, rollovers) || underWatermarkRefusals == 0) {
-		t.Error("no automatic physical rollover from a projected refusal below the advisory watermark")
+	if acknowledged == rows {
+		// Under the tight non-delete node bound, 1,000-row batches demand well
+		// below limit/4 (16 MiB) and fit in a single 64 MiB generation without
+		// a below-watermark projected refusal, whereas 16,000-row batches trigger
+		// a projected refusal below the advisory watermark and auto-rollover.
+		if batchSize >= 16000 && (stat(final, rollovers) <= stat(initial, rollovers) || underWatermarkRefusals == 0) {
+			t.Error("no automatic physical rollover from a projected refusal below the advisory watermark")
+		}
 	}
 	if stat(final, checkpointCalls) != stat(initial, checkpointCalls) {
 		t.Error("load invoked the public checkpoint")
