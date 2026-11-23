@@ -543,6 +543,27 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			}
 		}
 	}
+	skipRawBatchProbes := false
+	if w.ordered == nil && len(entries) > 1 && !deletes {
+		totalOpsEstimate := bufLen + len(entries)
+		if w.private.Len() == 0 && len(w.delta) == 0 && w.l1 == nil {
+			skipRawBatchProbes = true
+		} else if len(entries) >= 32 && w.generation != nil && w.generation.budget != nil {
+			maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
+			oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
+			if pathNodes := uint64(totalOpsEstimate) * uint64(c.Height); oldNodes > pathNodes {
+				oldNodes = pathNodes
+			}
+			limits := w.generation.budget.limits
+			budgetCap := min(limits.MaxInFlightBytes, limits.MaxGenerationBytes) / 4
+			var cardBound uint64
+			if cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) &&
+				cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) &&
+				cardBound <= budgetCap {
+				skipRawBatchProbes = true
+			}
+		}
+	}
 	for index, e := range entries {
 		if !e.Remove && e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
 			return c, fmt.Errorf("COW entry has pointer and tombstone flags")
@@ -560,7 +581,14 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			}
 			continue
 		}
-		exists := cowHasKey(w.private, e.Key) || cowDeltaHasKey(w.delta, e.Key) || w.l1.hasKey(e.Key)
+		var exists bool
+		if !skipRawBatchProbes {
+			inTree := false
+			if w.private.Len() != 0 && (!w.hasPrivateMax || cowKeyCompare(w.privateMaxKey, e.Key) >= 0) {
+				inTree = cowHasKey(w.private, e.Key)
+			}
+			exists = inTree || cowDeltaHasKey(w.delta, e.Key) || w.l1.hasKey(e.Key)
+		}
 		if !exists || e.Remove {
 			allReplace = false
 		}
@@ -963,14 +991,8 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 				}
 				continue
 			}
-			ownedKey, _, exists := cowLookupGE(p.private, e.Key)
-			exists = exists && cowKeyCompare(ownedKey, e.Key) == 0
-			// Reuse an owned immutable key on replacement; new payloads copy once.
-			if !exists {
-				ownedKey = string(e.Key)
-			}
 			value := cowEncodeValue(e)
-			previous, _ := p.private.Set(ownedKey, value)
+			previous, _ := btree.SetBytes(p.private, e.Key, value)
 			logicalDelta.replace(len(e.Key), value, previous)
 		}
 		p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow

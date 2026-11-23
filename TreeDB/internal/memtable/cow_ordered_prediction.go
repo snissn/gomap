@@ -107,6 +107,10 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.rawPointPredictionUpperBoundLocked(e)
+}
+
+func (w *COWWriter) rawPointPredictionUpperBoundLocked(e COWMutation) (COWCharge, bool) {
 	var c COWCharge
 	if w.closed || w.pending != nil || w.ordered != nil || e.Remove ||
 		(e.Flags != node.FlagInline && e.Flags != node.FlagTombstone) {
@@ -177,6 +181,86 @@ func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool
 	}
 	var total uint64
 	for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers} {
+		if !cowPredictionAdd(&total, part) {
+			return COWCharge{}, false
+		}
+	}
+	return c, true
+}
+
+// RawBatchPredictionUpperBound provides an O(N) positive-only upper bound for a
+// raw (non-ordered) inline/tombstone batch without probing the B-tree. Includes
+// buffered front layers (L1+L0) and COWPrepared temporary storage because batch
+// preparation uses Prepare rather than PrepareInto.
+func (w *COWWriter) RawBatchPredictionUpperBound(entries []COWMutation) (COWCharge, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var c COWCharge
+	if w.closed || w.pending != nil || w.ordered != nil || len(entries) == 0 {
+		return c, false
+	}
+	preparedTemp := cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
+	if len(entries) == 1 {
+		c, ok := w.rawPointPredictionUpperBoundLocked(entries[0])
+		if !ok {
+			return COWCharge{}, false
+		}
+		c.Temporary = preparedTemp
+		var total uint64
+		for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary} {
+			if !cowPredictionAdd(&total, part) {
+				return COWCharge{}, false
+			}
+		}
+		return c, true
+	}
+	n := len(entries)
+	logicalLen := w.private.Len() + w.deltaAdded
+	maxInt := int(^uint(0) >> 1)
+	if n > maxInt-logicalLen {
+		return COWCharge{}, false
+	}
+	for _, e := range entries {
+		if e.Remove || (e.Flags != node.FlagInline && e.Flags != node.FlagTombstone) {
+			return COWCharge{}, false
+		}
+		valueSize, ok := cowValueSize(len(e.Value))
+		if !ok || !cowPredictionAdd(&c.Payload, cowAllocation(uint64(len(e.Key)))) ||
+			!cowPredictionAdd(&c.Payload, cowAllocation(uint64(valueSize))) {
+			return COWCharge{}, false
+		}
+	}
+	logicalAfter := logicalLen + n
+	c.Height = cowMaximumHeight(logicalAfter)
+	if h := w.private.Height(); h > c.Height {
+		c.Height = h
+	}
+	totalOps := uint64(w.l1Count()+len(w.delta)) + uint64(n)
+	maxEntries := w.maxEntries
+	if logicalAfter > maxEntries {
+		maxEntries = logicalAfter
+	}
+	perOp := cowNodeReserveFor(c.Height, false, false, maxEntries)
+	var opBound uint64
+	if !cowPredictionProductAdd(&opBound, totalOps, perOp) {
+		return COWCharge{}, false
+	}
+	fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
+	oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
+	if pathNodes := totalOps * uint64(c.Height); oldNodes > pathNodes {
+		oldNodes = pathNodes
+	}
+	maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
+	var cardBound uint64
+	if !cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) ||
+		!cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) {
+		return COWCharge{}, false
+	}
+	c.Nodes = min(opBound, cardBound)
+	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	c.Temporary = preparedTemp
+	var total uint64
+	for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary} {
 		if !cowPredictionAdd(&total, part) {
 			return COWCharge{}, false
 		}

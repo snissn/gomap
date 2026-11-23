@@ -1026,3 +1026,113 @@ func verifyRootMatchesMap(t *testing.T, root *COWRoot, expected map[string]strin
 		t.Fatalf("Reverse Cursor mismatch: got %d want %d", len(rev), len(keys))
 	}
 }
+
+func TestCOWRawBatchPredictionUpperBoundAndSinglePassSetBytes(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	var root *COWRoot
+	defer func() {
+		if root != nil {
+			cowTestRelease(root)
+		}
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	expected := map[string]string{}
+	checkBatch := func(label string, batch []COWMutation) {
+		t.Helper()
+		est, err := writer.Estimate(batch, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("%s Estimate: %v", label, err)
+		}
+		bound, ok := writer.RawBatchPredictionUpperBound(batch)
+		if !ok {
+			t.Fatalf("%s RawBatchPredictionUpperBound returned false", label)
+		}
+		if bound.History() < est.History() || bound.Total() < est.Total() {
+			t.Fatalf("%s bound %+v < Estimate %+v", label, bound, est)
+		}
+		prep, err := writer.Prepare(batch, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("%s Prepare: %v", label, err)
+		}
+		if prep.Charge().Total() > est.Total() {
+			t.Fatalf("%s Prepare charge %+v > Estimate %+v", label, prep.Charge(), est)
+		}
+		delta, valid := prep.LogicalSizeDelta()
+		if !valid {
+			t.Fatalf("%s invalid LogicalSizeDelta", label)
+		}
+		prev := mapLogicalSize(expected)
+		for _, m := range batch {
+			if m.Flags&node.FlagTombstone != 0 {
+				expected[string(m.Key)] = ""
+			} else {
+				expected[string(m.Key)] = string(m.Value)
+			}
+		}
+		if want := mapLogicalSize(expected) - prev; delta != want {
+			t.Fatalf("%s LogicalSizeDelta=%d want %d", label, delta, want)
+		}
+		next := prep.Publish()
+		if root != nil {
+			cowTestRelease(root)
+		}
+		root = next
+		if root.Len() != len(expected) {
+			t.Fatalf("%s Len=%d want %d", label, root.Len(), len(expected))
+		}
+	}
+
+	// 1. Empty tree, large multi-key batch (hits skipRawBatchProbes).
+	var batch1 []COWMutation
+	for i := 0; i < 200; i++ {
+		batch1 = append(batch1, COWMutation{
+			Key:   []byte(fmt.Sprintf("k%05d", i)),
+			Value: []byte(fmt.Sprintf("v1-%05d", i)),
+			Flags: node.FlagInline,
+		})
+	}
+	checkBatch("empty-tree-large", batch1)
+
+	// 2. Single-key batch into L0 and across L0->L1.
+	for i := 0; i < cowDeltaL0MaxEntries+4; i++ {
+		checkBatch(fmt.Sprintf("single-%d", i), []COWMutation{{
+			Key:   []byte(fmt.Sprintf("s%05d", i)),
+			Value: []byte("sv"),
+			Flags: node.FlagInline,
+		}})
+	}
+
+	// 3. Large replace+insert+tombstone batch while BOTH L1 and L0 are populated.
+	var batch2 []COWMutation
+	for i := 0; i < 150; i++ {
+		if i%5 == 0 {
+			batch2 = append(batch2, COWMutation{
+				Key:   []byte(fmt.Sprintf("k%05d", i)),
+				Flags: node.FlagTombstone,
+			})
+		} else {
+			batch2 = append(batch2, COWMutation{
+				Key:   []byte(fmt.Sprintf("k%05d", i*2)),
+				Value: []byte(fmt.Sprintf("v2-%05d", i)),
+				Flags: node.FlagInline,
+			})
+		}
+	}
+	checkBatch("populated-l0-l1-mixed", batch2)
+
+	// 4. Negative checks: empty, Remove, FlagPointer must return ok=false.
+	if _, ok := writer.RawBatchPredictionUpperBound(nil); ok {
+		t.Fatal("empty batch should return ok=false")
+	}
+	if _, ok := writer.RawBatchPredictionUpperBound([]COWMutation{{Key: []byte("k00000"), Remove: true}}); ok {
+		t.Fatal("Remove should return ok=false")
+	}
+	if _, ok := writer.RawBatchPredictionUpperBound([]COWMutation{{Key: []byte("k00000"), Flags: node.FlagPointer}}); ok {
+		t.Fatal("FlagPointer should return ok=false")
+	}
+}
