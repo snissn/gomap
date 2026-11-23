@@ -135,18 +135,18 @@ func (v *COWView) Close() {
 // it. Record returns immutable strings, avoiding per-entry defensive copies.
 // One cursor serializes Next/Seek/Record/Close; independent cursors read together.
 type COWCursor struct {
-	mu                                      sync.Mutex
-	view                                    *COWView
-	iter                                    btree.MapIter[string, cowValue]
-	ordered                                 cowOrderedCursor
-	delta                                   []cowDeltaEntry
-	deltaIdx                                int
-	record                                  COWRecord
-	rawValid, orderedValid, rawSelected     bool
-	deltaValid, deltaSelected               bool
-	equalTreeDelta                          bool
-	start, end                              string
-	bounded, lowerBounded, valid, reverse   bool
+	mu                                    sync.Mutex
+	view                                  *COWView
+	iter                                  btree.MapIter[string, cowValue]
+	ordered                               cowOrderedCursor
+	delta                                 []cowDeltaEntry
+	deltaIdx                              int
+	record                                COWRecord
+	rawValid, orderedValid, rawSelected   bool
+	deltaValid, deltaSelected             bool
+	equalTreeDelta                        bool
+	start, end                            string
+	bounded, lowerBounded, valid, reverse bool
 }
 
 func (r *COWRoot) Cursor(start, end []byte) (*COWCursor, error) {

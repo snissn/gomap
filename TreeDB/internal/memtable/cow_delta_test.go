@@ -293,6 +293,127 @@ func TestCOWDeltaTraversalWorkLimitedAndReversal(t *testing.T) {
 	}
 }
 
+func TestCOWDeltaTraversalPendingCloseAndBoundaryRecovery(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	defer func() {
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	// 1. Delta-only root: unpositioned COWNext lands on first delta record;
+	// Prev before start -> Next recovers; Next past end -> Prev recovers.
+	r1 := cowTestPublish(t, writer, []COWMutation{{Key: []byte("b-only"), Value: []byte("v1"), Flags: node.FlagInline}})
+	defer cowTestRelease(r1)
+	if r1.tree.Len() != 0 || len(r1.delta) != 1 {
+		t.Fatalf("expected delta-only root, got tree=%d delta=%d", r1.tree.Len(), len(r1.delta))
+	}
+
+	stepToDone := func(tr *COWTraversal, op COWTraversalOperation, key string) (COWRecord, bool) {
+		t.Helper()
+		w := &COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}
+		if err := tr.Begin(op, key, w); err != nil {
+			t.Fatalf("Begin(%d, %q): %v", op, key, err)
+		}
+		done, err := tr.Step(w)
+		if err != nil || !done {
+			t.Fatalf("Step(%d, %q): done=%v err=%v", op, key, done, err)
+		}
+		rec, ok, err := tr.Record(w)
+		if err != nil {
+			t.Fatalf("Record(%d, %q): %v", op, key, err)
+		}
+		return rec, ok
+	}
+	closeAll := func(tr *COWTraversal) {
+		t.Helper()
+		w := &COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}
+		done, ret, err := tr.CloseStep(w)
+		if err != nil || !done {
+			t.Fatalf("CloseStep: done=%v err=%v", done, err)
+		}
+		ret.Drain()
+	}
+
+	tr, err := r1.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal: %v", err)
+	}
+	// Unpositioned Prev stays empty, matching StringCursor.
+	if rec, ok := stepToDone(tr, COWPrev, ""); ok {
+		t.Fatalf("unpositioned Prev returned %+v", rec)
+	}
+	// Unpositioned Next lands on first delta entry.
+	if rec, ok := stepToDone(tr, COWNext, ""); !ok || rec.Key != "b-only" || rec.Value != "v1" {
+		t.Fatalf("unpositioned Next got (%+v, %v), want b-only=v1", rec, ok)
+	}
+	// Next past end -> exhausted, then Prev recovers Last.
+	if _, ok := stepToDone(tr, COWNext, ""); ok {
+		t.Fatal("expected EOF after single entry")
+	}
+	if rec, ok := stepToDone(tr, COWPrev, ""); !ok || rec.Key != "b-only" {
+		t.Fatalf("Prev after EOF got (%+v, %v), want b-only", rec, ok)
+	}
+	// Prev before start -> exhausted, then Next recovers First.
+	if _, ok := stepToDone(tr, COWPrev, ""); ok {
+		t.Fatal("expected BOF before single entry")
+	}
+	if rec, ok := stepToDone(tr, COWNext, ""); !ok || rec.Key != "b-only" {
+		t.Fatalf("Next after BOF got (%+v, %v), want b-only", rec, ok)
+	}
+	closeAll(tr)
+
+	// 2. Populated base tree + leading delta entry: unpositioned Next sees leading delta.
+	r2 := cowTestPublish(t, writer, []COWMutation{
+		{Key: []byte("m1"), Value: []byte("vm1"), Flags: node.FlagInline},
+		{Key: []byte("m2"), Value: []byte("vm2"), Flags: node.FlagInline},
+	})
+	defer cowTestRelease(r2)
+	longKey := strings.Repeat("a", 4096)
+	r3 := cowTestPublish(t, writer, []COWMutation{{Key: []byte(longKey), Value: []byte("va"), Flags: node.FlagInline}})
+	defer cowTestRelease(r3)
+
+	tr2, err := r3.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal r3: %v", err)
+	}
+	if rec, ok := stepToDone(tr2, COWNext, ""); !ok || rec.Key != longKey || rec.Value != "va" {
+		t.Fatalf("unpositioned Next with leading delta got (%q=%q, %v)", rec.Key, rec.Value, ok)
+	}
+	closeAll(tr2)
+
+	// 3. Pause a delta-backed SeekGE mid-comparison (delta.pending == true),
+	// then call CloseStep and confirm clean cancellation with zero leaks.
+	tr3, err := r3.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal r3 pause: %v", err)
+	}
+	if err := tr3.Begin(COWSeekGE, strings.Repeat("a", 4095)+"b", &COWTraversalWork{RecordLimit: 16, ByteLimit: 4096}); err != nil {
+		t.Fatalf("Begin SeekGE: %v", err)
+	}
+	// Run with a small byte budget so delta.Step pauses mid-key comparison.
+	paused := false
+	for range 32 {
+		done, err := tr3.Step(&COWTraversalWork{RecordLimit: 4, ByteLimit: 512})
+		if err != nil {
+			t.Fatalf("Step before pause: %v", err)
+		}
+		if tr3.delta.pending {
+			paused = true
+			break
+		}
+		if done {
+			break
+		}
+	}
+	if !paused {
+		t.Fatal("expected delta traversal to pause mid-SeekGE")
+	}
+	closeAll(tr3)
+}
+
 func TestCOWDeltaRandomizedModel(t *testing.T) {
 	budget, writer := cowTestWriter(t, DefaultCOWLimits())
 	defer func() {

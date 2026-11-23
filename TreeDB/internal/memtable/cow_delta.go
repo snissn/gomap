@@ -168,6 +168,9 @@ type cowDeltaTraversal struct {
 	entries   []cowDeltaEntry
 	idx       int
 	ready     bool
+	started   bool
+	atstart   bool
+	atend     bool
 	pending   bool
 	op        btree.Operation
 	key       string
@@ -178,7 +181,7 @@ type cowDeltaTraversal struct {
 }
 
 func (d *cowDeltaTraversal) Begin(op btree.Operation, key string, work *COWTraversalWork) error {
-	if d.pending {
+	if d.pending && op != btree.Close {
 		return btree.ErrPending
 	}
 	if !work.Reserve(1, uint64(unsafe.Sizeof(*d))) {
@@ -190,7 +193,9 @@ func (d *cowDeltaTraversal) Begin(op btree.Operation, key string, work *COWTrave
 	d.cmpActive = false
 	d.cmpOffset = 0
 	switch op {
-	case btree.First, btree.Last, btree.Next, btree.Prev, btree.Close:
+	case btree.Close:
+		d.ready = false
+	case btree.First, btree.Last, btree.Next, btree.Prev:
 	case btree.SeekGE, btree.SeekLE:
 		d.lo = 0
 		d.hi = len(d.entries)
@@ -218,12 +223,16 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 		if !work.Reserve(1, uint64(unsafe.Sizeof(cowDeltaEntry{}))) {
 			return false, nil
 		}
+		d.started = true
+		d.atstart = false
 		if len(d.entries) == 0 {
 			d.idx = 0
 			d.ready = false
+			d.atend = true
 		} else {
 			d.idx = 0
 			d.ready = true
+			d.atend = false
 		}
 		d.pending, d.key = false, ""
 		return true, nil
@@ -231,12 +240,16 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 		if !work.Reserve(1, uint64(unsafe.Sizeof(cowDeltaEntry{}))) {
 			return false, nil
 		}
+		d.started = true
+		d.atend = false
 		if len(d.entries) == 0 {
 			d.idx = -1
 			d.ready = false
+			d.atstart = true
 		} else {
 			d.idx = len(d.entries) - 1
 			d.ready = true
+			d.atstart = false
 		}
 		d.pending, d.key = false, ""
 		return true, nil
@@ -244,11 +257,27 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 		if !work.Reserve(1, uint64(unsafe.Sizeof(cowDeltaEntry{}))) {
 			return false, nil
 		}
-		if d.ready && d.idx+1 < len(d.entries) {
+		if !d.ready {
+			if !d.started || d.atstart {
+				d.started = true
+				d.atstart = false
+				if len(d.entries) == 0 {
+					d.idx = 0
+					d.ready = false
+					d.atend = true
+				} else {
+					d.idx = 0
+					d.ready = true
+					d.atend = false
+				}
+			}
+		} else if d.idx+1 < len(d.entries) {
 			d.idx++
 		} else {
 			d.idx = len(d.entries)
 			d.ready = false
+			d.atstart = false
+			d.atend = true
 		}
 		d.pending, d.key = false, ""
 		return true, nil
@@ -256,11 +285,27 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 		if !work.Reserve(1, uint64(unsafe.Sizeof(cowDeltaEntry{}))) {
 			return false, nil
 		}
-		if d.ready && d.idx > 0 {
+		if !d.ready {
+			if d.atend {
+				d.started = true
+				d.atend = false
+				if len(d.entries) == 0 {
+					d.idx = -1
+					d.ready = false
+					d.atstart = true
+				} else {
+					d.idx = len(d.entries) - 1
+					d.ready = true
+					d.atstart = false
+				}
+			}
+		} else if d.idx > 0 {
 			d.idx--
 		} else {
 			d.idx = -1
 			d.ready = false
+			d.atstart = true
+			d.atend = false
 		}
 		d.pending, d.key = false, ""
 		return true, nil
@@ -313,12 +358,17 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 				}
 			}
 		}
+		d.started = true
 		if d.op == btree.SeekGE {
 			d.idx = d.lo
 			d.ready = d.idx < len(d.entries)
+			d.atstart = false
+			d.atend = !d.ready
 		} else {
 			d.idx = d.lo - 1
 			d.ready = d.idx >= 0 && d.idx < len(d.entries)
+			d.atstart = !d.ready
+			d.atend = false
 		}
 		d.pending, d.key = false, ""
 		return true, nil
@@ -328,10 +378,10 @@ func (d *cowDeltaTraversal) Step(work *COWTraversalWork) (bool, error) {
 	}
 }
 
-func (d *cowDeltaTraversal) Ready() bool { return d.ready }
+func (d *cowDeltaTraversal) Ready() bool { return d.ready && !d.pending }
 
 func (d *cowDeltaTraversal) Current() (COWRecord, bool) {
-	if !d.ready || d.idx < 0 || d.idx >= len(d.entries) {
+	if !d.Ready() || d.idx < 0 || d.idx >= len(d.entries) {
 		return COWRecord{}, false
 	}
 	e := d.entries[d.idx]
