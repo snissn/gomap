@@ -182,6 +182,14 @@ type leafPageReadCacheBucket struct {
 	clockHand          uint32
 }
 
+const leafPageReadCacheHitStripes = 16
+
+type leafPageReadCacheHitStripe struct {
+	pageChecksumVerifiedHits   atomic.Uint64
+	pageChecksumUnverifiedHits atomic.Uint64
+	_                          [48]byte // pad to 64-byte cache line
+}
+
 type leafPageReadCache struct {
 	slots   []leafPageReadCacheSlot
 	buckets []leafPageReadCacheBucket
@@ -193,6 +201,8 @@ type leafPageReadCache struct {
 	// maintenance/compaction so stale leaf-log pages are not served while value-log
 	// rewrite/GC and leaf-generation pack/GC mutate underlying storage.
 	disabled atomic.Bool
+
+	hitStripes [leafPageReadCacheHitStripes]leafPageReadCacheHitStripe
 
 	hits      atomic.Uint64
 	misses    atomic.Uint64
@@ -218,8 +228,6 @@ type leafPageReadCache struct {
 
 	recordChecksumVerifiedStores atomic.Uint64
 	pageChecksumVerifiedMarks    atomic.Uint64
-	pageChecksumVerifiedHits     atomic.Uint64
-	pageChecksumUnverifiedHits   atomic.Uint64
 	pageChecksumMarkMisses       atomic.Uint64
 	pageChecksumMarkUnsafeSkips  atomic.Uint64
 }
@@ -352,7 +360,7 @@ func (c *leafPageReadCache) shouldAdmitWriteStoreAdaptive() bool {
 	if attempt <= capacity {
 		return true
 	}
-	hits := c.pageChecksumVerifiedHits.Load() + c.pageChecksumUnverifiedHits.Load()
+	hits := c.totalHits()
 	misses := c.misses.Load()
 	reads := hits + misses
 	if reads >= leafPageReadCacheWriteAdmissionMinReadCount && hits > 0 {
@@ -784,7 +792,7 @@ func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 		data := cloneLeafPageReadCacheData(slot.data)
 		slot.recent.Store(true)
 		slot.mu.RUnlock()
-		c.recordHitState(state)
+		c.recordHitState(keyFP, state)
 		return data, true
 	}
 	c.misses.Add(1)
@@ -848,13 +856,13 @@ func (c *leafPageReadCache) getToWithCOWPolicy(ptr page.LeafLogPtr, dst []byte, 
 			copy(out, slot.data)
 			slot.recent.Store(true)
 			slot.mu.RUnlock()
-			c.recordHitState(state)
+			c.recordHitState(keyFP, state)
 			return out, true, state, true
 		}
 		data := cloneLeafPageReadCacheData(slot.data)
 		slot.recent.Store(true)
 		slot.mu.RUnlock()
-		c.recordHitState(state)
+		c.recordHitState(keyFP, state)
 		return data, false, state, true
 	}
 	c.misses.Add(1)
@@ -985,17 +993,18 @@ func (c *leafPageReadCache) getViewLockedWithState(ptr page.LeafLogPtr) ([]byte,
 		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
 		data := slot.data
 		slot.recent.Store(true)
-		c.recordHitState(state)
+		c.recordHitState(keyFP, state)
 		return data, slot, state, true
 	}
 	return nil, nil, leafPageReadCacheState{}, false
 }
 
-func (c *leafPageReadCache) recordHitState(state leafPageReadCacheState) {
+func (c *leafPageReadCache) recordHitState(keyFP uint64, state leafPageReadCacheState) {
+	stripe := &c.hitStripes[keyFP&(leafPageReadCacheHitStripes-1)]
 	if state.PageChecksumVerified {
-		c.pageChecksumVerifiedHits.Add(1)
+		stripe.pageChecksumVerifiedHits.Add(1)
 	} else {
-		c.pageChecksumUnverifiedHits.Add(1)
+		stripe.pageChecksumUnverifiedHits.Add(1)
 	}
 }
 
@@ -1031,13 +1040,25 @@ func (c *leafPageReadCache) markPageChecksumVerified(ptr page.LeafLogPtr) bool {
 	return false
 }
 
+func (c *leafPageReadCache) hitCounts() (verifiedHits, unverifiedHits uint64) {
+	for i := range c.hitStripes {
+		verifiedHits += c.hitStripes[i].pageChecksumVerifiedHits.Load()
+		unverifiedHits += c.hitStripes[i].pageChecksumUnverifiedHits.Load()
+	}
+	return verifiedHits, unverifiedHits
+}
+
+func (c *leafPageReadCache) totalHits() uint64 {
+	verifiedHits, unverifiedHits := c.hitCounts()
+	return verifiedHits + unverifiedHits
+}
+
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 	if c == nil || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return leafPageReadCacheStats{}
 	}
 	entries := c.entries.Load()
-	verifiedHits := c.pageChecksumVerifiedHits.Load()
-	unverifiedHits := c.pageChecksumUnverifiedHits.Load()
+	verifiedHits, unverifiedHits := c.hitCounts()
 	return leafPageReadCacheStats{
 		Hits:                            verifiedHits + unverifiedHits,
 		Misses:                          c.misses.Load(),

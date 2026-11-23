@@ -56,14 +56,7 @@ func (r *readOnlyLeafRefReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 func TestIterator_LeafRefFallbackCountsAsIteratorLoad(t *testing.T) {
 	savedSampleMod := outerLeafReadSampleMod
 	savedEstimator := outerLeafRecentReadEstimator
-	outerLeafLoadsTotal.Store(0)
-	outerLeafPointLoadsTotal.Store(0)
-	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafSamplesTotal.Store(0)
-	outerLeafRecent64HitsTotal.Store(0)
-	outerLeafRecent256HitsTotal.Store(0)
-	outerLeafRecent1KHitsTotal.Store(0)
-	outerLeafRecent4KHitsTotal.Store(0)
+	resetOuterLeafReadStatsForTest()
 	outerLeafReadSampleMod = 1
 	outerLeafRecentReadEstimator = newOuterLeafRecentReadEstimator()
 	defer func() {

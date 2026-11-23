@@ -176,9 +176,9 @@ func TestCOWRecordMetadataDigestExactWindow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := sha256.Sum256(record[:HeaderSize+prefixBytes])
+			want := cowMetadataDigestSlice(record[:HeaderSize+prefixBytes])
 			if shape.metadata != want {
-				t.Fatalf("metadata=%x want=%x", shape.metadata, want)
+				t.Fatalf("metadata=%+v want=%+v", shape.metadata, want)
 			}
 			if got := cowTestRead(t, f, ptr, shape, nil); string(got) != "value" {
 				t.Fatalf("read=%q", got)
@@ -195,8 +195,8 @@ func TestCOWRecordMetadataDigestExactWindow(t *testing.T) {
 	if _, err := f.ReadAt(metadata, int64(ptr.Offset-4)); err != nil {
 		t.Fatal(err)
 	}
-	if want := sha256.Sum256(metadata); shape.metadata != want {
-		t.Fatalf("leaf metadata=%x want=%x", shape.metadata, want)
+	if want := cowMetadataDigestSlice(metadata); shape.metadata != want {
+		t.Fatalf("leaf metadata=%+v want=%+v", shape.metadata, want)
 	}
 }
 
@@ -234,8 +234,8 @@ func TestCOWLeafMetadataWindowAndTrailingMutations(t *testing.T) {
 				t.Fatal(err)
 			}
 			prefixBytes := FrameHeaderSize + k*8 + (k+1)*4
-			if want := sha256.Sum256(record[:HeaderSize+prefixBytes]); shape.metadata != want {
-				t.Fatalf("leaf metadata=%x want=%x", shape.metadata, want)
+			if want := cowMetadataDigestSlice(record[:HeaderSize+prefixBytes]); shape.metadata != want {
+				t.Fatalf("leaf metadata=%+v want=%+v", shape.metadata, want)
 			}
 			if k == 1 && len(record) >= HeaderSize+FrameHeaderSize+MaxFrameK*8+(MaxFrameK+1)*4 {
 				t.Fatal("short-frame fixture does not put trailing bytes in inspection window")
@@ -1264,5 +1264,35 @@ func TestCOWAppendRecordOwnedOutput(t *testing.T) {
 				t.Fatalf("capacity error changed dst: %q %v", got, err)
 			}
 		})
+	}
+}
+
+func TestCOWMetadataDigestEquivalenceAndTamper(t *testing.T) {
+	// Verify split header+prefix digest matches contiguous slice digest across
+	// every alignment boundary and detects single-bit flips in either part.
+	for headerLen := 0; headerLen <= 32; headerLen++ {
+		for prefixLen := 0; prefixLen <= 40; prefixLen++ {
+			full := make([]byte, headerLen+prefixLen)
+			for i := range full {
+				full[i] = byte(i*31 + headerLen*7 + prefixLen*13)
+			}
+			gotSlice := cowMetadataDigestSlice(full)
+			gotParts := cowMetadataDigestParts(full[:headerLen], full[headerLen:])
+			if gotSlice != gotParts {
+				t.Fatalf("header=%d prefix=%d: slice=%+v parts=%+v", headerLen, prefixLen, gotSlice, gotParts)
+			}
+			if len(full) > 0 {
+				tampered := append([]byte(nil), full...)
+				tampered[0] ^= 1
+				if cowMetadataDigestSlice(tampered) == gotSlice {
+					t.Fatalf("header=%d prefix=%d: bit flip at byte 0 collided", headerLen, prefixLen)
+				}
+				tampered[0] ^= 1
+				tampered[len(tampered)-1] ^= 0x80
+				if cowMetadataDigestSlice(tampered) == gotSlice {
+					t.Fatalf("header=%d prefix=%d: bit flip at last byte collided", headerLen, prefixLen)
+				}
+			}
+		}
 	}
 }
