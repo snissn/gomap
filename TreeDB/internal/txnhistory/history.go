@@ -43,14 +43,17 @@ type mutation struct {
 	chunkEnd     int
 	releaseBytes uint64
 	lease        Lease
+	indexSlot    int32 // -1 when not indexed or superseded
 	// Short singleton keys belong to their original FIFO slot. The slot is
 	// not reused until its record and any matching latest-index alias retire.
 	inlineKey [32]byte
 }
 type latest struct {
-	namespace Namespace
-	key       string
-	seq       uint64
+	namespace  Namespace
+	key        string
+	seq        uint64
+	home       uint32
+	recordSlot int32
 }
 
 // Prepared is a by-value capability for one serialized preaccept reservation.
@@ -124,8 +127,7 @@ func (j *History) clearPending(closeLease bool) {
 		lease.Close()
 	}
 }
-func (j *History) slot(key string) int { return j.slotIn(Namespace{}, key) }
-func (j *History) slotIn(namespace Namespace, key string) int {
+func (j *History) hashKey(namespace Namespace, key string) uint64 {
 	hash := maphash.String(j.seed, key)
 	if namespace != (Namespace{}) {
 		var identity [25]byte
@@ -135,38 +137,44 @@ func (j *History) slotIn(namespace Namespace, key string) int {
 		binary.LittleEndian.PutUint64(identity[17:25], namespace.Interpretation)
 		hash ^= maphash.Bytes(j.seed, identity[:])
 	}
-	i := int(hash & uint64(len(j.index)-1))
+	return hash
+}
+func (j *History) slot(key string) int { return j.slotIn(Namespace{}, key) }
+func (j *History) slotIn(namespace Namespace, key string) int {
+	mask := uint32(len(j.index) - 1)
+	i := int(uint32(j.hashKey(namespace, key)) & mask)
 	for j.index[i].seq != 0 && (j.index[i].key != key || j.index[i].namespace != namespace) {
-		i = (i + 1) & (len(j.index) - 1)
+		i = (i + 1) & int(mask)
 	}
 	return i
 }
-func (j *History) remove(namespace Namespace, key string, seq uint64) {
-	i := j.slotIn(namespace, key)
-	if j.index[i].seq != seq {
-		return
-	}
-	j.index[i] = latest{}
+func (j *History) removeSlot(slot int) {
+	mask := uint32(len(j.index) - 1)
+	hole := slot
 	j.points--
-	for k := (i + 1) & (len(j.index) - 1); j.index[k].seq != 0; k = (k + 1) & (len(j.index) - 1) {
-		e := j.index[k]
-		j.index[k] = latest{}
-		j.index[j.slotIn(e.namespace, e.key)] = e
+	for k := (hole + 1) & int(mask); j.index[k].seq != 0; k = (k + 1) & int(mask) {
+		h := j.index[k].home
+		if (uint32(hole)-h)&mask < (uint32(k)-h)&mask {
+			j.index[hole] = j.index[k]
+			j.records[j.index[hole].recordSlot].indexSlot = int32(hole)
+			hole = k
+		}
 	}
+	j.index[hole] = latest{}
 }
 func (j *History) Evict() {
 	e := j.records[j.head]
 	if e.seq > j.floor {
 		j.floor = e.seq
 	}
-	if !e.rangeEffect && !e.barrier {
-		j.remove(e.namespace, e.key, e.seq)
+	if !e.rangeEffect && !e.barrier && e.indexSlot >= 0 {
+		j.removeSlot(int(e.indexSlot))
 	}
 	if e.rangeEffect {
 		j.ranges--
 	}
 	j.records[j.head] = mutation{}
-	j.head = (j.head + 1) % len(j.records)
+	j.head = (j.head + 1) & (len(j.records) - 1)
 	j.count--
 	// The final slot survives every earlier fragment of this command. Its
 	// original key arena/lease is released only after index and ring aliases clear.
@@ -272,6 +280,24 @@ func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRan
 	}
 	if j.nextToken == ^uint64(0) {
 		return Prepared{}, errors.New("treedb: transaction history preparation identity exhausted")
+	}
+	if len(entries) == 1 && len(ranges) == 0 && !barrier && len(native) == 0 && entries[0].Type != batch.OpDeleteRange {
+		key := entries[0].Key
+		keyBytes := uint64(len(key))
+		if keyBytes <= uint64(len(mutation{}.inlineKey)) && keyBytes <= j.maxBytes/2 {
+			if charge := uint64(unsafe.Sizeof(effect{})) + keyBytes + 256; charge <= j.maxBytes {
+				j.pending = preparation{effects: j.staging[:1], bytes: charge, inline: true}
+				copy(j.pending.inlineKey[:], key)
+				var owned string
+				if len(key) != 0 {
+					owned = unsafe.String(&j.pending.inlineKey[0], len(key))
+				}
+				j.staging[0] = effect{key: owned}
+				j.nextToken++
+				j.pending.token = j.nextToken
+				return Prepared{history: j, token: j.nextToken}, nil
+			}
+		}
 	}
 	for _, e := range native {
 		if e.Kind < PointEffect || e.Kind > BarrierEffect {
@@ -410,6 +436,51 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	if p.history != j || !p.Valid() {
 		return false
 	}
+	if j.pending.inline {
+		bytes := j.pending.bytes
+		for j.count > 0 && (j.count+1 > len(j.records) || j.bytes > j.maxBytes-bytes) {
+			j.Evict()
+		}
+		recordMask := len(j.records) - 1
+		slot := (j.head + j.count) & recordMask
+		record := &j.records[slot]
+		keyLen := len(j.staging[0].key)
+		*record = mutation{
+			seq:          seq,
+			chunkEnd:     slot,
+			releaseBytes: bytes,
+			indexSlot:    -1,
+		}
+		var key string
+		if keyLen != 0 {
+			copy(record.inlineKey[:keyLen], j.pending.inlineKey[:keyLen])
+			key = unsafe.String(&record.inlineKey[0], keyLen)
+			record.key = key
+		}
+		j.count++
+		j.bytes += bytes
+		indexMask := uint32(len(j.index) - 1)
+		home := uint32(maphash.String(j.seed, key)) & indexMask
+		i := int(home)
+		for j.index[i].seq != 0 && (j.index[i].key != key || j.index[i].namespace != (Namespace{})) {
+			i = (i + 1) & int(indexMask)
+		}
+		if j.index[i].seq != 0 {
+			j.records[j.index[i].recordSlot].indexSlot = -1
+		} else {
+			j.points++
+		}
+		j.index[i] = latest{
+			key:        key,
+			seq:        seq,
+			home:       home,
+			recordSlot: int32(slot),
+		}
+		record.indexSlot = int32(i)
+		j.staging[0] = effect{}
+		j.pending = preparation{}
+		return true
+	}
 	// Preparation owns all new backing before final validation, but cannot
 	// expire another transaction or discard accepted evidence. Only an accepted
 	// installation retires old records. Callers keep writer exclusion here and
@@ -417,19 +488,14 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	for j.count > 0 && (j.count+len(j.pending.effects) > len(j.records) || j.bytes > j.maxBytes-j.pending.bytes) {
 		j.Evict()
 	}
-	end := (j.head + j.count + len(j.pending.effects) - 1) % len(j.records)
+	recordMask := len(j.records) - 1
+	indexMask := uint32(len(j.index) - 1)
+	end := (j.head + j.count + len(j.pending.effects) - 1) & recordMask
 	j.bytes += j.pending.bytes
 	for _, e := range j.pending.effects {
-		slot := (j.head + j.count) % len(j.records)
+		slot := (j.head + j.count) & recordMask
 		record := &j.records[slot]
-		*record = mutation{effect: e, seq: seq, chunkEnd: end}
-		if j.pending.inline {
-			copy(record.inlineKey[:], e.key)
-			if len(e.key) != 0 {
-				e.key = unsafe.String(&record.inlineKey[0], len(e.key))
-			}
-			record.key = e.key
-		}
+		*record = mutation{effect: e, seq: seq, chunkEnd: end, indexSlot: -1}
 		j.count++
 		if e.barrier {
 			if e.namespace == (Namespace{}) {
@@ -448,11 +514,24 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 			j.ranges++
 			j.rangeSeq = seq
 		} else {
-			i := j.slotIn(e.namespace, e.key)
-			if j.index[i].seq == 0 {
+			home := uint32(j.hashKey(e.namespace, e.key)) & indexMask
+			i := int(home)
+			for j.index[i].seq != 0 && (j.index[i].key != e.key || j.index[i].namespace != e.namespace) {
+				i = (i + 1) & int(indexMask)
+			}
+			if j.index[i].seq != 0 {
+				j.records[j.index[i].recordSlot].indexSlot = -1
+			} else {
 				j.points++
 			}
-			j.index[i] = latest{namespace: e.namespace, key: e.key, seq: seq}
+			j.index[i] = latest{
+				namespace:  e.namespace,
+				key:        e.key,
+				seq:        seq,
+				home:       home,
+				recordSlot: int32(slot),
+			}
+			record.indexSlot = int32(i)
 		}
 	}
 	j.records[end].releaseBytes = j.pending.bytes
@@ -488,10 +567,11 @@ func (j *History) BarrierStats() BarrierStats {
 // firstNewer searches logical FIFO order even when physical storage wraps.
 // Old retained effects are irrelevant to validation of a newer opening view.
 func (j *History) firstNewer(start uint64) int {
+	mask := len(j.records) - 1
 	lo, hi := 0, j.count
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if j.records[(j.head+mid)%len(j.records)].seq <= start {
+		if j.records[(j.head+mid)&mask].seq <= start {
 			lo = mid + 1
 		} else {
 			hi = mid
@@ -505,11 +585,12 @@ func (j *History) firstNewer(start uint64) int {
 // Prepare places sorted points before native ranges, so both boundaries can be
 // found without inspecting a large unrelated point chunk entry by entry.
 func (j *History) chunkBounds(begin int) (pointsEnd, end int) {
-	endSlot := j.records[(j.head+begin)%len(j.records)].chunkEnd
+	mask := len(j.records) - 1
+	endSlot := j.records[(j.head+begin)&mask].chunkEnd
 	lo, hi := begin+1, j.count
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if j.records[(j.head+mid)%len(j.records)].chunkEnd == endSlot {
+		if j.records[(j.head+mid)&mask].chunkEnd == endSlot {
 			lo = mid + 1
 		} else {
 			hi = mid
@@ -519,7 +600,7 @@ func (j *History) chunkBounds(begin int) (pointsEnd, end int) {
 	lo, hi = begin, end
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		e := &j.records[(j.head+mid)%len(j.records)]
+		e := &j.records[(j.head+mid)&mask]
 		if !e.rangeEffect && !e.barrier {
 			lo = mid + 1
 		} else {
@@ -548,10 +629,11 @@ func (j *History) pointCoveredByRange(start uint64, namespace Namespace, key []b
 	if j.rangeSeq <= start {
 		return false
 	}
+	mask := len(j.records) - 1
 	for k := j.firstNewer(start); k < j.count; {
 		pointsEnd, end := j.chunkBounds(k)
 		for r := pointsEnd; r < end; r++ {
-			e := &j.records[(j.head+r)%len(j.records)]
+			e := &j.records[(j.head+r)&mask]
 			if e.namespace == namespace && (e.barrier || e.rangeEffect && string(key) >= e.key && (!e.endBounded || string(key) < e.end)) {
 				return true
 			}
@@ -573,12 +655,13 @@ func (j *History) RangeChangedIn(start uint64, namespace Namespace, lo, hi []byt
 	if batch.IsDeleteRangeNoop(lo, hi) {
 		return false
 	}
+	mask := len(j.records) - 1
 	for k := j.firstNewer(start); k < j.count; {
 		pointsEnd, end := j.chunkBounds(k)
 		lower, upper := k, pointsEnd
 		for lower < upper {
 			mid := lower + (upper-lower)/2
-			e := &j.records[(j.head+mid)%len(j.records)]
+			e := &j.records[(j.head+mid)&mask]
 			c := compareNamespace(e.namespace, namespace)
 			if c < 0 || c == 0 && e.key < string(lo) {
 				lower = mid + 1
@@ -587,13 +670,13 @@ func (j *History) RangeChangedIn(start uint64, namespace Namespace, lo, hi []byt
 			}
 		}
 		if lower < pointsEnd {
-			e := &j.records[(j.head+lower)%len(j.records)]
+			e := &j.records[(j.head+lower)&mask]
 			if e.namespace == namespace && (hi == nil || e.key < string(hi)) {
 				return true
 			}
 		}
 		for r := pointsEnd; r < end; r++ {
-			e := &j.records[(j.head+r)%len(j.records)]
+			e := &j.records[(j.head+r)&mask]
 			if e.namespace == namespace && (e.barrier || e.rangeEffect && (hi == nil || e.key < string(hi)) && (!e.endBounded || string(lo) < e.end)) {
 				return true
 			}
