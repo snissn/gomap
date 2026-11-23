@@ -140,22 +140,26 @@ func (d cowPointCancelled) drain() error {
 	var cleanupErr error
 	if next := d.next; next != nil {
 		d.next = nil
+		shards, frozen, frozenSet := next.shards, next.frozen, next.frozenSet
+		next.shards, next.frozen, next.frozenSet = nil, nil, nil
 		clear(next.sources)
 		clear(next.domains)
 		next.sources, next.domains = nil, nil
-		drainCOWTables(next.shards)
-		drainCOWTables(next.frozen)
+		next.domainsCache.Store(nil)
+		drainCOWTables(shards)
+		if frozenSet != nil {
+			frozenSet.release()
+		} else {
+			drainCOWTables(frozen)
+		}
 		clear(next.inlineShards[:])
-		clear(next.inlineFrozen[:])
-		clear(next.inlineSources[:])
-		clear(next.inlineDomains[:])
 		d.cache.releasePrivateSemanticState(next)
 		basis := next.basis
 		if next.lease == &next.leaseStorage {
 			d.leaseStorage = next.leaseStorage
 			next.leaseStorage = memtable.COWExternalLease{}
 		}
-		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
+		next.basis = nil
 		next.cache, next.lease = nil, nil
 		cleanupErr = basis.release()
 		basis = nil
@@ -230,7 +234,7 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 	c.prepareCalls.Add(1)
 	old := c.cut
 	shards := len(c.writers)
-	leaseVal, err := c.budget.AcquireExternalValue(cowCutCharge(shards, len(old.frozen)))
+	leaseVal, err := c.budget.AcquireExternalValue(cowWriteCutCharge(shards))
 	if err != nil {
 		return err
 	}
@@ -285,10 +289,15 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 	}
 	st.cutLeaseStorage = memtable.COWExternalLease{}
 	next.lease = &next.leaseStorage
-	next.initStorage(shards, len(old.frozen))
+	next.initShards(shards)
 	next.basis.retain()
 	retainCOWSemanticState(next)
-	if len(old.frozen) > 0 {
+	if old.frozenSet != nil {
+		next.frozenSet = old.frozenSet
+		next.frozenSet.retain()
+		next.frozen = old.frozen
+	} else if len(old.frozen) > 0 {
+		next.frozen = make([]cowTable, len(old.frozen))
 		copy(next.frozen, old.frozen)
 		for i := range next.frozen {
 			if !next.frozen[i].root.RetainOwned() {
@@ -310,7 +319,6 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 			panic("lost owned COW root")
 		}
 	}
-	next.buildDomains()
 	st.cut.next = next
 	return durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, db.dir)
 }
@@ -348,7 +356,7 @@ func (st *cowPointStaging) canSkipPointRolloverLocked(db *DB, shard int, entry b
 	if c.cut.shards[shard].Len() > 0 && (used > trigger || bound.History() > trigger-used) {
 		return false
 	}
-	control := cowCutCharge(len(c.writers), len(c.cut.frozen))
+	control := cowWriteCutCharge(len(c.writers))
 	if bound.Total() > ^uint64(0)-control {
 		return false
 	}

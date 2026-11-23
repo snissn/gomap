@@ -46,7 +46,7 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 		}
 	}()
 	key = normalizeRawKVPointKey(key)
-	value, ptr, flags, revision, found := cut.domains[db.shardIndex(key)].getEntryWithRevision(key)
+	value, ptr, flags, revision, found := cut.lookupShardEntryWithRevision(db.shardIndex(key), key)
 	entry := node.LeafEntry{ValuePtr: ptr, Flags: flags, Revision: revision}
 	var fresh cowFreshReadOwner
 	if found {

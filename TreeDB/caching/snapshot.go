@@ -35,6 +35,7 @@ import (
 // pointer and treat further use as invalid.
 type Snapshot struct {
 	cowCut          *cowReadCut
+	cowDomains      *cowCutDomains
 	cowCache        *cowCache
 	cowPin          *memtable.COWView
 	cowReader       *cowReadWorkspace
@@ -107,6 +108,7 @@ func putSnapshot(snap *Snapshot) {
 		return
 	}
 	snap.cowCut = nil
+	snap.cowDomains = nil
 	snap.cowPin = nil
 	snap.db = nil
 	snap.view = nil
@@ -425,6 +427,12 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		if s.cowReader != nil {
 			s.cowReader.releaseSnapshotScratch()
 			s.cowReader = nil
+		}
+		s.rootPointShards = nil
+		s.rootIterator = rootDomainSnapshot{}
+		if d := s.cowDomains; d != nil {
+			s.cowDomains = nil
+			s.cowCut.releaseDomains(d)
 		}
 		s.cowPin.Close()
 		err = s.db.cow.releaseCut(s.cowCut)

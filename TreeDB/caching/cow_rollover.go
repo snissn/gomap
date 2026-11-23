@@ -15,6 +15,7 @@ import (
 type cowRollover struct {
 	cache     *cowCache
 	next      *cowReadCut
+	frozenSet *cowFrozenSet
 	writers   []*memtable.COWWriter
 	roots     []*memtable.COWRoot
 	resources []*cowGenerationResources
@@ -61,9 +62,16 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		return nil, err
 	}
 	p := &cowRollover{cache: c, scratch: lease, writers: make([]*memtable.COWWriter, n), roots: make([]*memtable.COWRoot, n), resources: make([]*cowGenerationResources, n), retired: make([]memtable.COWRetirement, n)}
-	p.cutLease, err = c.maintenance.AcquireExternal(cowCutCharge(n, len(old.frozen)+count))
+	totalFrozen := len(old.frozen) + count
+	p.cutLease, err = c.maintenance.AcquireExternal(cowCutCharge(n, totalFrozen))
 	if err != nil {
 		return p, err
+	}
+	if totalFrozen > 0 {
+		p.frozenSet, err = admitCOWFrozenSet(c.maintenance, len(old.frozen), totalFrozen)
+		if err != nil {
+			return p, err
+		}
 	}
 	// These exact empty writers/roots were constructed before first dirty
 	// acceptance. They remain cache-owned on every refusal and retry.
@@ -92,8 +100,12 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			}
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis}
-	next.initStorageCap(n, len(old.frozen), len(old.frozen)+count)
+	next := &cowReadCut{visibleCommandLSN: endpoint.CanonicalLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.logicalSeq, frozenCommandLSN: endpoint.CanonicalLSN, frozenSemanticRootSet: old.semanticRootSet, semanticRootSet: p.semantic, refs: 1, cache: c, lease: p.cutLease, basis: old.basis, frozenSet: p.frozenSet}
+	p.frozenSet = nil
+	next.initShards(n)
+	if next.frozenSet != nil {
+		next.frozen = next.frozenSet.tables
+	}
 	next.basis.retain()
 	p.semantic = nil // next adopts the returned active successor exactly once
 	if next.frozenSemanticRootSet != nil {
@@ -121,6 +133,9 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			panic("lost parked COW successor root")
 		}
 		next.shards[i] = cowTable{shard: i, root: p.roots[i], resources: p.resources[i], history: c.generationBase}
+	}
+	if next.frozenSet != nil {
+		next.frozenSet.tables = next.frozen
 	}
 	next.buildDomains()
 	p.next = next
@@ -183,27 +198,30 @@ func (p *cowRollover) drain() error {
 			// A completely prepared but unpublished successor owns all its raw
 			// and semantic edges. Do not release the new roots a second time below.
 			clear(p.roots)
-			for i := range next.shards {
-				r := next.shards[i].root.Release()
-				next.shards[i] = cowTable{}
-				r.Drain()
+			shards, frozen, frozenSet := next.shards, next.frozen, next.frozenSet
+			next.shards, next.frozen, next.frozenSet = nil, nil, nil
+			clear(next.sources)
+			clear(next.domains)
+			next.sources, next.domains = nil, nil
+			next.domainsCache.Store(nil)
+			drainCOWTables(shards)
+			if frozenSet != nil {
+				frozenSet.release()
+			} else {
+				drainCOWTables(frozen)
 			}
-			for i := range next.frozen {
-				r := next.frozen[i].root.Release()
-				next.frozen[i] = cowTable{}
-				r.Drain()
-			}
+			clear(next.inlineShards[:])
 			basis := next.basis
 			next.basis = nil
 			cleanupErr = basis.release()
 			cache.releasePrivateSemanticState(next)
 			next.lease, next.cache = nil, nil
-			next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
-			clear(next.inlineShards[:])
-			clear(next.inlineFrozen[:])
-			clear(next.inlineSources[:])
-			clear(next.inlineDomains[:])
 			next = nil
+		}
+		if p.frozenSet != nil {
+			frozenSet := p.frozenSet
+			p.frozenSet = nil
+			frozenSet.release()
 		}
 		// The cache still owns the actual parked successors. Only Next's
 		// separately retained edges above were private to this attempt.

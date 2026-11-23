@@ -107,14 +107,113 @@ func (b *cowBackendBasis) release() error {
 	return priorErr
 }
 
-const (
-	cowReadCutInlineShards = 4
-	cowReadCutInlineFrozen = 4
-)
+const cowReadCutInlineShards = 4
+
+// cowFrozenSet holds an immutable slice of frozen cowTable sources shared by
+// reference across successor cuts until rollover or flush replaces the frozen
+// frontier. It owns its own embedded maintenance lease so ordinary write cuts
+// neither copy frozen slices nor re-retain frozen roots.
+type cowFrozenSet struct {
+	refs         atomic.Int64
+	tables       []cowTable
+	leaseStorage memtable.COWExternalLease
+}
+
+func cowFrozenSetCharge(capacity int) uint64 {
+	if capacity <= 0 {
+		return 0
+	}
+	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFrozenSet{}))) +
+		memtable.COWAllocationCharge(uint64(capacity)*uint64(unsafe.Sizeof(cowTable{})))
+}
+
+func admitCOWFrozenSet(budget *memtable.COWBudget, length, capacity int) (*cowFrozenSet, error) {
+	if capacity <= 0 {
+		return nil, nil
+	}
+	lease, err := budget.AcquireExternalValue(cowFrozenSetCharge(capacity))
+	if err != nil {
+		return nil, err
+	}
+	f := &cowFrozenSet{
+		tables:       make([]cowTable, length, capacity),
+		leaseStorage: lease,
+	}
+	f.refs.Store(1)
+	return f, nil
+}
+
+func (f *cowFrozenSet) retain() {
+	if f != nil {
+		f.refs.Add(1)
+	}
+}
+
+func (f *cowFrozenSet) release() {
+	if f == nil || f.refs.Add(-1) != 0 {
+		return
+	}
+	tables := f.tables
+	f.tables = nil
+	drainCOWTables(tables)
+	lease := f.leaseStorage
+	f.leaseStorage = memtable.COWExternalLease{}
+	lease.Close()
+}
+
+// cowCutDomains holds lazily built snapshot point/iterator projections shared
+// across concurrent snapshots pinned to the same compact write cut.
+type cowCutDomains struct {
+	refs    atomic.Int64
+	sources []memtable.Table
+	domains []rootDomainSnapshot
+}
+
+func (d *cowCutDomains) tryRetain() bool {
+	for {
+		cur := d.refs.Load()
+		if cur <= 0 {
+			return false
+		}
+		if d.refs.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func cowCutDomainsCharge(shards, frozen int) (uint64, bool) {
+	if shards < 0 || frozen < 0 {
+		return 0, false
+	}
+	totalSources := uint64(shards) + uint64(frozen)
+	if totalSources < uint64(shards) {
+		return 0, false
+	}
+	tableSize := uint64(unsafe.Sizeof(memtable.Table(nil)))
+	if tableSize != 0 && totalSources > math.MaxUint64/tableSize {
+		return 0, false
+	}
+	domainSize := uint64(unsafe.Sizeof(rootDomainSnapshot{}))
+	if domainSize != 0 && uint64(shards) > math.MaxUint64/domainSize {
+		return 0, false
+	}
+	c1 := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowCutDomains{})))
+	c2 := memtable.COWAllocationCharge(totalSources * tableSize)
+	c3 := memtable.COWAllocationCharge(uint64(shards) * domainSize)
+	if c2 > math.MaxUint64-c1 {
+		return 0, false
+	}
+	sum := c1 + c2
+	if c3 > math.MaxUint64-sum {
+		return 0, false
+	}
+	return sum + c3, true
+}
 
 // Authority members are immutable after installation; only the separately
-// synchronized derived catalog slot may initialize once. refs is controlled by
-// cutMu; dropping the last reference transfers bounded retirement to the caller.
+// synchronized derived catalog and lazy snapshot-domain slots may initialize
+// after installation. refs is controlled by cutMu; dropping the last reference
+// transfers bounded retirement to the caller.
 type cowReadCut struct {
 	visibleCommandLSN     uint64
 	logicalSeq            uint64
@@ -126,52 +225,92 @@ type cowReadCut struct {
 	refs                  int
 	shards                []cowTable
 	frozen                []cowTable // oldest to newest; every member precedes basis
+	frozenSet             *cowFrozenSet
 	basis                 *cowBackendBasis
 	sources               []memtable.Table
 	domains               []rootDomainSnapshot
+	domainsMu             sync.Mutex
+	domainsCache          atomic.Pointer[cowCutDomains]
 	lease                 *memtable.COWExternalLease
 	leaseStorage          memtable.COWExternalLease
 	cache                 *cowCache
 	inlineShards          [cowReadCutInlineShards]cowTable
-	inlineFrozen          [cowReadCutInlineFrozen]cowTable
-	inlineSources         [cowReadCutInlineShards + cowReadCutInlineFrozen]memtable.Table
-	inlineDomains         [cowReadCutInlineShards]rootDomainSnapshot
 }
 
-func (c *cowReadCut) initStorage(shards, frozen int) {
-	c.initStorageCap(shards, frozen, frozen)
-}
-
-func (c *cowReadCut) initStorageCap(shards, frozenLen, frozenCap int) {
-	if shards <= cowReadCutInlineShards && frozenCap <= cowReadCutInlineFrozen {
+func (c *cowReadCut) initShards(shards int) {
+	if shards <= cowReadCutInlineShards {
 		c.shards = c.inlineShards[:shards:shards]
-		if frozenCap > 0 {
-			c.frozen = c.inlineFrozen[:frozenLen:frozenCap]
-		} else {
-			c.frozen = nil
-		}
-		c.sources = c.inlineSources[: 0 : shards+frozenCap]
-		c.domains = c.inlineDomains[:shards:shards]
 		return
 	}
 	c.shards = make([]cowTable, shards)
-	if frozenCap > 0 {
-		c.frozen = make([]cowTable, frozenLen, frozenCap)
+}
+
+func (c *cowReadCut) lookupShardEntryWithRevision(shard int, key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if val, ptr, flags, rev, found := c.shards[shard].GetEntryWithRevision(key); found {
+		return val, ptr, flags, rev, true
 	}
+	for i := len(c.frozen) - 1; i >= 0; i-- {
+		if c.frozen[i].shard == shard {
+			if val, ptr, flags, rev, found := c.frozen[i].GetEntryWithRevision(key); found {
+				return val, ptr, flags, rev, true
+			}
+		}
+	}
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+}
+
+func (c *cowReadCut) retainOrBuildDomains() *cowCutDomains {
+	if d := c.domainsCache.Load(); d != nil && d.tryRetain() {
+		return d
+	}
+	c.domainsMu.Lock()
+	if d := c.domainsCache.Load(); d != nil && d.tryRetain() {
+		c.domainsMu.Unlock()
+		return d
+	}
+	sources := make([]memtable.Table, 0, len(c.frozen)+len(c.shards))
+	domains := make([]rootDomainSnapshot, len(c.shards))
+	for shard := range c.shards {
+		start := len(sources)
+		for i := range c.frozen {
+			if c.frozen[i].shard == shard {
+				sources = append(sources, &c.frozen[i])
+			}
+		}
+		sources = append(sources, &c.shards[shard])
+		domains[shard] = rootDomainSnapshot{immutables: sources[start:len(sources):len(sources)]}
+	}
+	d := &cowCutDomains{sources: sources, domains: domains}
+	d.refs.Store(1)
+	c.domainsCache.Store(d)
+	c.domainsMu.Unlock()
+	return d
+}
+
+func (c *cowReadCut) releaseDomains(d *cowCutDomains) {
+	if d == nil || d.refs.Add(-1) != 0 {
+		return
+	}
+	c.domainsCache.CompareAndSwap(d, nil)
+	clear(d.sources)
+	clear(d.domains)
+	d.sources, d.domains = nil, nil
 }
 
 func (c *cowReadCut) drain() error {
-	shards, frozen := c.shards, c.frozen
-	c.shards, c.frozen = nil, nil
+	shards, frozen, frozenSet := c.shards, c.frozen, c.frozenSet
+	c.shards, c.frozen, c.frozenSet = nil, nil, nil
 	clear(c.sources)
 	clear(c.domains)
 	c.sources, c.domains = nil, nil
+	c.domainsCache.Store(nil)
 	drainCOWTables(shards)
-	drainCOWTables(frozen)
+	if frozenSet != nil {
+		frozenSet.release()
+	} else {
+		drainCOWTables(frozen)
+	}
 	clear(c.inlineShards[:])
-	clear(c.inlineFrozen[:])
-	clear(c.inlineSources[:])
-	clear(c.inlineDomains[:])
 	basis := c.basis
 	c.basis = nil
 	err := basis.release()
@@ -348,7 +487,7 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards), pointStaging: newCOWPointStaging(shards)}
 	c.semanticCond.L = &c.semanticMu
 	cut := &cowReadCut{refs: 1, basis: admitted, lease: cutLease, cache: c}
-	cut.initStorage(shards, 0)
+	cut.initShards(shards)
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
 		w, e := c.newWriter(false)
@@ -423,18 +562,18 @@ func cowSnapshotRetentionCharge(sizes backenddb.SnapshotAllocationSizes) uint64 
 		uint64(sizes.ValueLog.FileCount)*memtable.COWAllocationCharge(sizes.ValueLog.FileWrapper) +
 		memtable.COWAllocationCharge(sizes.ValueLog.PathEnvelope)
 }
-func cowCutCharge(shards, frozen int) uint64 {
+func cowWriteCutCharge(shards int) uint64 {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{})))
-	if shards <= cowReadCutInlineShards && frozen <= cowReadCutInlineFrozen {
-		return bytes
-	}
-	bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowTable{}))) +
-		memtable.COWAllocationCharge(uint64(shards+frozen)*uint64(unsafe.Sizeof(memtable.Table(nil)))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(rootDomainSnapshot{})))
-	if frozen > 0 {
-		bytes += memtable.COWAllocationCharge(uint64(frozen) * uint64(unsafe.Sizeof(cowTable{})))
+	if shards > cowReadCutInlineShards {
+		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(cowTable{})))
 	}
 	return bytes
+}
+
+func cowCutCharge(shards, frozen int) uint64 {
+	return cowWriteCutCharge(shards) +
+		memtable.COWAllocationCharge(uint64(shards+frozen)*uint64(unsafe.Sizeof(memtable.Table(nil)))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(rootDomainSnapshot{})))
 }
 
 // buildDomains prepares existing lookup/merge adapters before publication.
@@ -492,7 +631,16 @@ func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
 func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 	// Admission and allocation are outside cutMu. The temporary cut reference
 	// prevents a concurrent publication from retiring the chosen anchor.
-	pin, err := cut.shards[0].root.Acquire(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Snapshot{}))))
+	extra := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Snapshot{})))
+	lazyDomains := cut.domains == nil
+	if lazyDomains {
+		domBytes, ok := cowCutDomainsCharge(len(cut.shards), len(cut.frozen))
+		if !ok || domBytes > math.MaxUint64-extra {
+			return nil, joinCOWCleanupError(memtable.ErrCOWCapacity, db.cow.releaseCut(cut))
+		}
+		extra += domBytes
+	}
+	pin, err := cut.shards[0].root.Acquire(extra)
 	if err != nil {
 		return nil, joinCOWCleanupError(err, db.cow.releaseCut(cut))
 	}
@@ -506,8 +654,15 @@ func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 		snap.backendRootID = state.RootPageID
 	}
 	snap.backendFallback = backendSnapshotLookup{db: db, snapshot: snap.backend, rootID: snap.backendRootID}
-	snap.rootPointShards = cut.domains
-	snap.rootIterator = rootDomainSnapshot{immutables: cut.sources}
+	if lazyDomains {
+		d := cut.retainOrBuildDomains()
+		snap.cowDomains = d
+		snap.rootPointShards = d.domains
+		snap.rootIterator = rootDomainSnapshot{immutables: d.sources}
+	} else {
+		snap.rootPointShards = cut.domains
+		snap.rootIterator = rootDomainSnapshot{immutables: cut.sources}
+	}
 	return snap, nil
 }
 
@@ -557,7 +712,7 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 
 // cowPreparedCutCharge matches the original publication cut and private vectors.
 func cowPreparedCutCharge(shards, frozen int, needsSuccessors bool) uint64 {
-	bytes := cowCutCharge(shards, frozen) +
+	bytes := cowWriteCutCharge(shards) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{})))
 	if shards > cowReadCutInlineShards {
 		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
@@ -647,13 +802,20 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 		}
 	}
 	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, basis: old.basis, lease: lease, cache: c}
-	next.initStorage(len(groups), len(old.frozen))
+	next.initShards(len(groups))
 	next.basis.retain()
 	retainCOWSemanticState(next)
-	copy(next.frozen, old.frozen)
-	for i := range next.frozen {
-		if !next.frozen[i].root.RetainOwned() {
-			panic("lost owned COW frozen root")
+	if old.frozenSet != nil {
+		next.frozenSet = old.frozenSet
+		next.frozenSet.retain()
+		next.frozen = old.frozen
+	} else if len(old.frozen) > 0 {
+		next.frozen = make([]cowTable, len(old.frozen))
+		copy(next.frozen, old.frozen)
+		for i := range next.frozen {
+			if !next.frozen[i].root.RetainOwned() {
+				panic("lost owned COW frozen root")
+			}
 		}
 	}
 	for i := range groups {
@@ -673,7 +835,6 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			panic("lost owned COW root")
 		}
 	}
-	next.buildDomains()
 	if native != nil {
 		// Opening cut still retains the old edge, so this cannot run cleanup.
 		if next.semanticRootSet != nil {
@@ -736,18 +897,22 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 	next, c := p.next, p.cache
 	p.next, p.cache, p.native = nil, nil, nil
 	if next != nil {
+		shards, frozen, frozenSet := next.shards, next.frozen, next.frozenSet
+		next.shards, next.frozen, next.frozenSet = nil, nil, nil
 		clear(next.sources)
 		clear(next.domains)
 		next.sources, next.domains = nil, nil
-		drainCOWTables(next.shards)
-		drainCOWTables(next.frozen)
+		next.domainsCache.Store(nil)
+		drainCOWTables(shards)
+		if frozenSet != nil {
+			frozenSet.release()
+		} else {
+			drainCOWTables(frozen)
+		}
 		clear(next.inlineShards[:])
-		clear(next.inlineFrozen[:])
-		clear(next.inlineSources[:])
-		clear(next.inlineDomains[:])
 		c.releasePrivateSemanticState(next)
 		basis := next.basis
-		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
+		next.basis = nil
 		next.cache, next.lease = nil, nil
 		cleanupErr = basis.release()
 		basis = nil // original failed basis, if any, remains in its own custody

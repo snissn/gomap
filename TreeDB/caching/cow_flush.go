@@ -77,19 +77,27 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 }
 
 func (c *cowCache) prepareCOWBasisInstallWithFrozen(frozen int) (*cowReadCut, error) {
+	return c.prepareCOWBasisInstallWithOptions(frozen, frozen > 0)
+}
+
+func (c *cowCache) prepareCOWBasisInstallWithOptions(frozen int, allocateFrozen bool) (*cowReadCut, error) {
 	shards := len(c.writers)
 	lease, err := c.maintenance.AcquireExternal(cowBasisInstallCharge(shards, frozen))
 	if err != nil {
 		return nil, err
 	}
-	cut := &cowReadCut{refs: 1, cache: c, lease: lease}
-	if shards <= cowReadCutInlineShards && frozen <= cowReadCutInlineFrozen {
-		cut.initStorageCap(shards, 0, frozen)
-		return cut, nil
+	var frozenSet *cowFrozenSet
+	if allocateFrozen && frozen > 0 {
+		frozenSet, err = admitCOWFrozenSet(c.maintenance, 0, frozen)
+		if err != nil {
+			lease.Close()
+			return nil, err
+		}
 	}
-	cut.shards = make([]cowTable, shards)
-	if frozen > 0 {
-		cut.frozen = make([]cowTable, 0, frozen)
+	cut := &cowReadCut{refs: 1, cache: c, lease: lease, frozenSet: frozenSet}
+	cut.initShards(shards)
+	if frozenSet != nil {
+		cut.frozen = frozenSet.tables
 	}
 	cut.sources = make([]memtable.Table, 0, shards+frozen)
 	cut.domains = make([]rootDomainSnapshot, shards)
@@ -108,15 +116,20 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, generationPressure bool) (
 		return nil, backenddb.ErrClosed
 	}
 	frozen := len(c.cut.frozen)
+	allocateFrozen := frozen > 0 && (c.cut.frozenSet == nil || cap(c.cut.frozen) != frozen)
 	c.cutMu.Unlock()
-	return db.installCOWBasisWithLeafPack(basis, backenddb.LeafGenerationPackTransition{}, frozen, generationPressure)
+	return db.installCOWBasisWithLeafPackOptions(basis, backenddb.LeafGenerationPackTransition{}, frozen, allocateFrozen, generationPressure)
 }
 
 func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, transition backenddb.LeafGenerationPackTransition, frozen int, generationPressure bool) (*cowReadCut, error) {
+	return db.installCOWBasisWithLeafPackOptions(basis, transition, frozen, frozen > 0, generationPressure)
+}
+
+func (db *DB) installCOWBasisWithLeafPackOptions(basis *cowBackendBasis, transition backenddb.LeafGenerationPackTransition, frozen int, allocateFrozen, generationPressure bool) (*cowReadCut, error) {
 	c := db.cow
-	next, err := c.prepareCOWBasisInstallWithFrozen(frozen)
+	next, err := c.prepareCOWBasisInstallWithOptions(frozen, allocateFrozen)
 	if err != nil {
-		if generationPressure && err == memtable.ErrCOWCapacity && c.canRetryCOWBasisSuccessor(basis, frozen) {
+		if generationPressure && err == memtable.ErrCOWCapacity && c.canRetryCOWBasisSuccessor(basis, frozen, allocateFrozen) {
 			// The caller can mark this pre-swap refusal retryable after
 			// it has successfully released the captured private basis.
 			err = &cowGenerationSnapshotAllocationRefusal{error: err, basisRefresh: true}
@@ -148,7 +161,7 @@ func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, transition bac
 	return old, err
 }
 
-func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis, frozen int) bool {
+func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis, frozen int, allocateFrozen bool) bool {
 	// The shared flush fence keeps the live backend basis installed until this
 	// refresh swaps it. Neither it nor the private candidate can be refunded
 	// to make room for their successor vector.
@@ -161,7 +174,14 @@ func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis, frozen int)
 	// Each cut holds its original basis lease while installed. A current cut
 	// itself can also occupy this same partition after an earlier handoff.
 	bytes := cowBasisInstallCharge(len(c.writers), frozen)
-	return c.maintenance.ExternalAllocationFitsWith(bytes, old.basis.lease, basis.lease, old.lease)
+	if allocateFrozen && frozen > 0 {
+		bytes += cowFrozenSetCharge(frozen)
+	}
+	var oldFrozenLease *memtable.COWExternalLease
+	if old.frozenSet != nil {
+		oldFrozenLease = &old.frozenSet.leaseStorage
+	}
+	return c.maintenance.ExternalAllocationFitsWith(bytes, old.basis.lease, basis.lease, old.lease, oldFrozenLease)
 }
 
 // A failed private successor owns no published raw-root edges. End its semantic
@@ -172,13 +192,13 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 		return nil
 	}
 	c.releasePrivateSemanticState(next)
+	frozenSet := next.frozenSet
 	refund := next.lease
-	next.lease, next.cache, next.basis = nil, nil, nil
+	next.lease, next.cache, next.basis, next.frozenSet = nil, nil, nil, nil
 	next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil
+	next.domainsCache.Store(nil)
 	clear(next.inlineShards[:])
-	clear(next.inlineFrozen[:])
-	clear(next.inlineSources[:])
-	clear(next.inlineDomains[:])
+	frozenSet.release()
 	return refund
 }
 
@@ -189,6 +209,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covered, next *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, bool, error) {
 	c := db.cow
 	var leaves *cowMaintenanceLeafScope
+	var unusedFrozen *cowFrozenSet
 	c.writerMu.Lock()
 	if covered == nil && c.cut != nil && (c.cut.semanticRootSet != nil || c.cut.frozenSemanticRootSet != nil) {
 		// Only semantic refresh can read dictionary leaves. Inspect eligibility
@@ -205,6 +226,11 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 		defer c.retireCOWMaintenanceLeaves(&leaves)
 		c.writerMu.Lock()
 	}
+	defer func() {
+		if unusedFrozen != nil {
+			unusedFrozen.release()
+		}
+	}()
 	defer c.writerMu.Unlock()
 	old := c.cut
 	if old == nil {
@@ -222,7 +248,9 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 			}
 		}
 	}
-	if next == nil || basis == nil || basis.snapshot == nil || len(old.frozen)-n > cap(next.frozen) || len(old.shards) != len(next.shards) {
+	remaining := len(old.frozen) - n
+	shareFrozen := covered == nil && remaining > 0 && old.frozenSet != nil && cap(old.frozen) == remaining
+	if next == nil || basis == nil || basis.snapshot == nil || (!shareFrozen && remaining > cap(next.frozen)) || len(old.shards) != len(next.shards) {
 		return nil, false, backenddb.ErrRootPublicationBasisMismatch
 	}
 	if !transition.IsZero() {
@@ -318,18 +346,32 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 		next.semanticRootSet = old.semanticRootSet
 		retainCOWSemanticState(next)
 	}
-	next.frozen = next.frozen[:len(old.frozen)-n]
 	basis.retain()
 	copy(next.shards, old.shards)
-	copy(next.frozen, old.frozen[n:])
 	for i := range next.shards {
 		if !next.shards[i].root.Retain() {
 			panic("lost COW handoff mutable")
 		}
 	}
-	for i := range next.frozen {
-		if !next.frozen[i].root.Retain() {
-			panic("lost COW handoff frozen")
+	if shareFrozen {
+		unusedFrozen = next.frozenSet
+		next.frozenSet = old.frozenSet
+		next.frozenSet.retain()
+		next.frozen = old.frozen
+	} else if remaining == 0 {
+		unusedFrozen = next.frozenSet
+		next.frozenSet = nil
+		next.frozen = nil
+	} else {
+		next.frozen = next.frozen[:remaining]
+		copy(next.frozen, old.frozen[n:])
+		for i := range next.frozen {
+			if !next.frozen[i].root.Retain() {
+				panic("lost COW handoff frozen")
+			}
+		}
+		if next.frozenSet != nil {
+			next.frozenSet.tables = next.frozen
 		}
 	}
 	next.buildDomains()
