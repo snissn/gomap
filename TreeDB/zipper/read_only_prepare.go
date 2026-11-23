@@ -1146,7 +1146,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	if opts.CollectOldPointerRefs && z.outerLeavesInValueLog && !z.primaryDirectory && rootID != 0 && b != nil && !b.HasDeleteRanges() {
 		eligible := true
 		for _, op := range b.SortedEntries() {
-			if op.Type != batch.OpPut {
+			if op.Type != batch.OpPut && op.Type != batch.OpDelete {
 				eligible = false
 				break
 			}

@@ -3476,7 +3476,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	coalesced := entries
 	var extraRetired []uint64
-	coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics, scratch)
+	coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics, scratch, cfg.rawLeaves)
 	if err != nil {
 		return page.ChildRef{}, nil, err
 	}
@@ -3652,7 +3652,7 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	}
 }
 
-func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenanceBudget, metrics *adaptive.Metrics, scratch *mergeScratch) ([]internalEntry, []uint64, error) {
+func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenanceBudget, metrics *adaptive.Metrics, scratch *mergeScratch, rawLeaves *rawLeafEvidence) ([]internalEntry, []uint64, error) {
 	if len(entries) < 2 {
 		return entries, nil, nil
 	}
@@ -3697,6 +3697,11 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if ok && n.Count() == 0 {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
+			}
+			if rawLeaves != nil {
+				if err := rawLeaves.remove(e.child); err != nil {
+					return nil, nil, err
+				}
 			}
 			if fromPager {
 				retired = append(retired, e.child.Page)
@@ -4169,6 +4174,12 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 				return nil, nil, err
 			}
 			if ok {
+				if rawLeaves != nil {
+					if err := rawLeaves.mergeReplace(leftID, rightID, mergedID); err != nil {
+						releaseLeafScratch()
+						return nil, nil, err
+					}
+				}
 				if leftFromPager && leftID.Kind == page.ChildRefPage {
 					retired = append(retired, leftID.Page)
 				}
@@ -4193,6 +4204,12 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			return nil, nil, err
 		}
 		if ok && len(rightStart) > 0 {
+			if rawLeaves != nil {
+				if err := rawLeaves.rebalanceReplace(leftID, rightID, leftNewID, rightNewID); err != nil {
+					releaseLeafScratch()
+					return nil, nil, err
+				}
+			}
 			if leftFromPager && leftID.Kind == page.ChildRefPage {
 				retired = append(retired, leftID.Page)
 			}

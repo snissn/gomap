@@ -576,18 +576,19 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}
 	// Collect the reducer's final leaf edges while its prepared spans and
 	// outputs are still owned. Append receipts include abandoned intermediate
-	// records and cannot prove reachability. Maintenance point operations are
-	// accepted by this engine, but only pure puts support this exact receipt.
+	// records and cannot prove reachability. The span-native reducer replaces
+	// each prepared leaf span with its worker output + splits without leaf
+	// coalescing, so both point puts and point deletes yield an exact receipt.
 	var raw rawLeafEvidence
 	if opts.CollectOldPointerRefs && z.outerLeavesInValueLog && !z.primaryDirectory && rootID != 0 {
-		purePuts := true
+		pointOnly := true
 		for _, op := range ops {
-			if op.Type != batch.OpPut {
-				purePuts = false
+			if op.Type != batch.OpPut && op.Type != batch.OpDelete {
+				pointOnly = false
 				break
 			}
 		}
-		if purePuts {
+		if pointOnly {
 			for i, span := range prepared.LeafSpans {
 				out := outputs.output(i)
 				if err := raw.replacement(span.Ref, out.ref, out.splits); err != nil {
