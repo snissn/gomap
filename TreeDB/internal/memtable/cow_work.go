@@ -26,7 +26,7 @@ func COWOrderedMutationWork(keyBytes, valueBytes, generationBytes uint64) uint64
 		return saturated
 	}
 	height := cowMaximumHeight(int(maximum))
-	full := 2*btreeDefaultDegree - 1
+	full := cowBTreeMaxItems
 	primaryPair := uint64(unsafe.Sizeof(cowOrderedPairLayout{}))
 	historyPair := uint64(unsafe.Sizeof(cowOrderedVersionPairLayout{}))
 	fresh := cowOrderedNodeReserve(height, false, false, full, primaryPair)
@@ -50,7 +50,7 @@ func COWOrderedMutationWork(keyBytes, valueBytes, generationBytes uint64) uint64
 // COWOrderedCommandWork bounds shared root/fork/prepared headers once per
 // aggregate, independent of its row count.
 func COWOrderedCommandWork() uint64 {
-	return 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
+	return cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
 		cowAllocation(uint64(unsafe.Sizeof(COWRoot{}))) + 2*cowOrderedForkCharge() +
 		cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
 }

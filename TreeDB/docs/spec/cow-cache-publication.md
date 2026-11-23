@@ -539,13 +539,20 @@ for writes with value-log pointers. For a one-shot public unsynced `Set` or
 private owner uses a typed canonical operation under its teardown guard. The
 backend applies the raw payload size and operation checks, and the cache
 compares the key, operation, inline value and assigned revision with the
-prepared entry before completing canonical preparation. The synchronous
-public call borrows inputs through completion, and preparation owns all bytes
-retained in the generation and conflict history. Unsynced private raw batches
-in `no_wal_fast` use an equivalent direct canonical operation validator over
-the planned operation stream and producer RID lookup without allocating an
-encoded WAL payload; WAL-on, external command-WAL, native composite, and
-explicit sync writes use ordinary canonical encoding.
+prepared entry before completing canonical preparation. The synchronous public call borrows inputs through completion, and preparation
+owns all bytes retained in the generation and conflict history. For unsynced
+private WAL-off inline point `Set`/`Delete` operations (below the value-log
+pointer threshold), `WritePrivateCOWInlinePoint` reuses a single writer-owned
+`cowPointStaging` owner (charged once under `cowCache`'s startup lease, cleared
+of all caller/cut aliases before releasing `writerMu`, and discarded on cache
+close) together with `PrepareInto` and inline `[4]` backing arrays on
+`cowReadCut`/`cowPreparedCut` when `shards <= 4 && frozen == 0`. Large values
+above the pointer threshold fall back cleanly to `NewPrivateCOWPointBatch`
+before acquiring `writerMu`. Unsynced private raw batches in `no_wal_fast` use
+an equivalent direct canonical operation validator over the planned operation
+stream and producer RID lookup without allocating an encoded WAL payload;
+WAL-on, external command-WAL, native composite, and explicit sync writes use
+ordinary canonical encoding.
 
 Registered producer visibility and independently owned live file/dictionary
 pins precede cut publication. Explicit NoWAL sync releases command, writer and
@@ -1066,9 +1073,11 @@ charges the new leaf and its backing.
 Internal nodes contain their child slice header in the same allocation; leaves
 keep the smaller header. Admission charges the rounded containing allocation,
 and owned cleanup clears its embedded child reference before refunding it.
-Raw, logical and history trees retain degree 32; lower-fanout experiments did not
-justify their additional allocation objects and mixed batch performance. No new
-pool, arena, publication owner or retention lifetime is introduced.
+Raw, logical and history COW trees retain `cowBTreeDegree = 32` (reconfirmed
+against degree 8 and 16 on the full 16-test `unified-bench` suite, where lower
+fanout regressed batch writes and scans), while pairing `ForkImmutable` +
+`SealOwned` single-header preparation with `PrepareInto` and `cowPointStaging`.
+No new pool, arena, publication owner or retention lifetime is introduced.
 
 ### Public captured WAL epochs
 

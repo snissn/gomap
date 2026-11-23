@@ -107,6 +107,8 @@ func (b *cowBackendBasis) release() error {
 	return priorErr
 }
 
+const cowReadCutInlineShards = 4
+
 // Authority members are immutable after installation; only the separately
 // synchronized derived catalog slot may initialize once. refs is controlled by
 // cutMu; dropping the last reference transfers bounded retirement to the caller.
@@ -126,6 +128,23 @@ type cowReadCut struct {
 	domains               []rootDomainSnapshot
 	lease                 *memtable.COWExternalLease
 	cache                 *cowCache
+	inlineShards          [cowReadCutInlineShards]cowTable
+	inlineSources         [cowReadCutInlineShards]memtable.Table
+	inlineDomains         [cowReadCutInlineShards]rootDomainSnapshot
+}
+
+func (c *cowReadCut) initStorage(shards, frozen int) {
+	if shards <= cowReadCutInlineShards && frozen == 0 {
+		c.shards = c.inlineShards[:shards:shards]
+		c.frozen = nil
+		c.sources = c.inlineSources[:0:shards]
+		c.domains = c.inlineDomains[:shards:shards]
+		return
+	}
+	c.shards = make([]cowTable, shards)
+	if frozen > 0 {
+		c.frozen = make([]cowTable, frozen)
+	}
 }
 
 func (c *cowReadCut) drain() error {
@@ -136,6 +155,9 @@ func (c *cowReadCut) drain() error {
 	c.sources, c.domains = nil, nil
 	drainCOWTables(shards)
 	drainCOWTables(frozen)
+	clear(c.inlineShards[:])
+	clear(c.inlineSources[:])
+	clear(c.inlineDomains[:])
 	basis := c.basis
 	c.basis = nil
 	err := basis.release()
@@ -210,6 +232,7 @@ type cowCache struct {
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
 	flushWake                                                                                      chan struct{}
+	pointStaging                                                                                   *cowPointStaging
 }
 
 // Backend wrapper capture uses a separate lease: a basis can outlive every
@@ -260,6 +283,7 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memShard{})))
 	cacheBytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
+	cacheBytes += cowPointStagingCharge(shards)
 	cacheLease, err := budget.AcquireExternal(cacheBytes)
 	if err != nil {
 		budget.Close()
@@ -301,9 +325,10 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
 		}
 		return nil, joinCOWCleanupError(err, cleanupErr)
 	}
-	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
+	c := &cowCache{ordered: ordered, budget: budget, maintenance: maintenance, writers: make([]*memtable.COWWriter, shards), successors: make([]cowRawSuccessor, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards), pointStaging: newCOWPointStaging(shards)}
 	c.semanticCond.L = &c.semanticMu
-	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: admitted, lease: cutLease, cache: c}
+	cut := &cowReadCut{refs: 1, basis: admitted, lease: cutLease, cache: c}
+	cut.initStorage(shards, 0)
 	for i := range c.writers {
 		beforeHistory := budget.Stats().HistoryBytes
 		w, e := c.newWriter(false)
@@ -379,11 +404,17 @@ func cowSnapshotRetentionCharge(sizes backenddb.SnapshotAllocationSizes) uint64 
 		memtable.COWAllocationCharge(sizes.ValueLog.PathEnvelope)
 }
 func cowCutCharge(shards, frozen int) uint64 {
-	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowTable{}))) +
-		memtable.COWAllocationCharge(uint64(frozen)*uint64(unsafe.Sizeof(cowTable{}))) +
+	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{})))
+	if shards <= cowReadCutInlineShards && frozen == 0 {
+		return bytes
+	}
+	bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowTable{}))) +
 		memtable.COWAllocationCharge(uint64(shards+frozen)*uint64(unsafe.Sizeof(memtable.Table(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(rootDomainSnapshot{})))
+	if frozen > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(frozen) * uint64(unsafe.Sizeof(cowTable{})))
+	}
+	return bytes
 }
 
 // buildDomains prepares existing lookup/merge adapters before publication.
@@ -487,15 +518,17 @@ func (c *cowCache) releaseCut(cut *cowReadCut) error {
 // are retained while changed roots remain private until publish. There is no
 // tree copy, allocation or callback in the installation latch.
 type cowPreparedCut struct {
-	cache      *cowCache
-	next       *cowReadCut
-	opening    *cowReadCut
-	native     *cowNativeOwner
-	prepared   []*memtable.COWPrepared
-	successors []cowRawSuccessor // private first-dirty provisions until whole-cut install
-	consumed   bool
-	retired    []memtable.COWRetirement
-	lease      *memtable.COWExternalLease
+	cache          *cowCache
+	next           *cowReadCut
+	opening        *cowReadCut
+	native         *cowNativeOwner
+	prepared       []*memtable.COWPrepared
+	successors     []cowRawSuccessor // private first-dirty provisions until whole-cut install
+	consumed       bool
+	retired        []memtable.COWRetirement
+	lease          *memtable.COWExternalLease
+	inlinePrepared [cowReadCutInlineShards]*memtable.COWPrepared
+	inlineRetired  [cowReadCutInlineShards]memtable.COWRetirement
 }
 
 func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions) (*cowPreparedCut, error) {
@@ -505,9 +538,11 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 // cowPreparedCutCharge matches the original publication cut and private vectors.
 func cowPreparedCutCharge(shards, frozen int, needsSuccessors bool) uint64 {
 	bytes := cowCutCharge(shards, frozen) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{})))
+	if shards > cowReadCutInlineShards {
+		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWPrepared)(nil)))) +
+			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
+	}
 	if needsSuccessors {
 		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(cowRawSuccessor{})))
 	}
@@ -542,7 +577,14 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 	if err != nil {
 		return nil, err
 	}
-	p := &cowPreparedCut{cache: c, prepared: make([]*memtable.COWPrepared, len(groups)), retired: make([]memtable.COWRetirement, len(groups)), lease: lease}
+	p := &cowPreparedCut{cache: c, lease: lease}
+	if len(groups) <= cowReadCutInlineShards {
+		p.prepared = p.inlinePrepared[:len(groups):len(groups)]
+		p.retired = p.inlineRetired[:len(groups):len(groups)]
+	} else {
+		p.prepared = make([]*memtable.COWPrepared, len(groups))
+		p.retired = make([]memtable.COWRetirement, len(groups))
+	}
 	if needsSuccessors {
 		p.successors = make([]cowRawSuccessor, len(groups))
 	}
@@ -584,7 +626,8 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			return p, memtable.ErrCOWCapacity
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, shards: make([]cowTable, len(groups)), frozen: make([]cowTable, len(old.frozen)), basis: old.basis, lease: lease, cache: c}
+	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, refs: 1, basis: old.basis, lease: lease, cache: c}
+	next.initStorage(len(groups), len(old.frozen))
 	next.basis.retain()
 	retainCOWSemanticState(next)
 	copy(next.frozen, old.frozen)
@@ -678,6 +721,9 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 		next.sources, next.domains = nil, nil
 		drainCOWTables(next.shards)
 		drainCOWTables(next.frozen)
+		clear(next.inlineShards[:])
+		clear(next.inlineSources[:])
+		clear(next.inlineDomains[:])
 		c.releasePrivateSemanticState(next)
 		basis := next.basis
 		next.basis, next.shards, next.frozen, next.sources, next.domains = nil, nil, nil, nil, nil
@@ -687,6 +733,7 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 	}
 	next = nil
 	p.prepared = nil
+	clear(p.inlinePrepared[:])
 	for i := range p.successors {
 		p.successors[i].drain()
 	}
@@ -695,6 +742,7 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 		p.retired[i].Drain()
 	}
 	p.retired = nil
+	clear(p.inlineRetired[:])
 	opening := p.opening
 	p.opening = nil
 	cleanupErr = joinCOWCleanupError(cleanupErr, c.releaseCut(opening))
@@ -865,6 +913,10 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	c.semanticMu.Unlock()
 	if refund != nil {
 		c.closePhysicalReader()
+		if c.pointStaging != nil {
+			c.pointStaging.clearAll()
+			c.pointStaging = nil
+		}
 	}
 	refund.Close()
 	return err

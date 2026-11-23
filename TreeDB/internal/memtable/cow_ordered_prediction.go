@@ -59,7 +59,7 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 	if !ascending && !descending {
 		return COWCharge{}, false
 	}
-	full := 2*btreeDefaultDegree - 1
+	full := cowBTreeMaxItems
 	rawHeight := max(cowMaximumHeight(w.private.Len()+n), w.private.Height())
 	primaryHeight := cowMaximumHeight(t.keys.Len() + n)
 	historyHeight := cowMaximumHeight(t.maxHistory + n)
@@ -75,7 +75,7 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 	if w.private.Len() != 0 && !cowPredictionProductAdd(&c.Nodes, uint64(n), cowNodeReserveFor(rawHeight, false, true, full)) {
 		return COWCharge{}, false
 	}
-	c.Wrappers = 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{}))) + 2*cowOrderedForkCharge()
+	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{}))) + 2*cowOrderedForkCharge()
 	perMutation := cowAllocation(uint64(unsafe.Sizeof(cowOrderedHistory{}))) +
 		2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[uint64, *cowOrderedValue]{}))) +
 		2*cowAllocation(uint64(unsafe.Sizeof(cowOrderedValue{})))
@@ -91,6 +91,45 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 	// can overflow before exposing this positive bound to the host.
 	var total uint64
 	for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary} {
+		if !cowPredictionAdd(&total, part) {
+			return COWCharge{}, false
+		}
+	}
+	return c, true
+}
+
+// RawPointPredictionUpperBound provides an O(1) positive-only upper bound for a
+// single raw (non-ordered) inline/tombstone point mutation without probing the
+// B-tree. Any pointer, removal, ordered writer, or tight-budget frontier falls
+// through to exact Estimate in cowGenerationRollover.
+func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var c COWCharge
+	if w.closed || w.pending != nil || w.ordered != nil || e.Remove ||
+		(e.Flags != node.FlagInline && e.Flags != node.FlagTombstone) {
+		return c, false
+	}
+	if w.private.Len() == int(^uint(0)>>1) {
+		return c, false
+	}
+	maxEntries := w.maxEntries
+	if next := w.private.Len() + 1; next > maxEntries {
+		maxEntries = next
+	}
+	c.Height = cowMaximumHeight(w.private.Len() + 1)
+	if h := w.private.Height(); h > c.Height {
+		c.Height = h
+	}
+	valueSize, ok := cowValueSize(len(e.Value))
+	if !ok || !cowPredictionAdd(&c.Payload, cowAllocation(uint64(len(e.Key)))) ||
+		!cowPredictionAdd(&c.Payload, cowAllocation(uint64(valueSize))) {
+		return COWCharge{}, false
+	}
+	c.Nodes = cowNodeReserveFor(c.Height, false, false, maxEntries)
+	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	var total uint64
+	for _, part := range [...]uint64{c.Nodes, c.Payload, c.Wrappers} {
 		if !cowPredictionAdd(&total, part) {
 			return COWCharge{}, false
 		}

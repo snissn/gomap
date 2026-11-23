@@ -53,7 +53,7 @@ type cowOrderedVersionPairLayout struct {
 }
 
 func newCOWOrderedTree() *cowOrderedTree {
-	return &cowOrderedTree{keys: btree.NewMap[string, *cowOrderedHistory](btreeDefaultDegree)}
+	return &cowOrderedTree{keys: btree.NewMap[string, *cowOrderedHistory](cowBTreeDegree)}
 }
 
 func cowOrderedForkCharge() uint64 {
@@ -571,7 +571,7 @@ func (h *cowOrderedHistory) setPrevious(ts uint64, value cowOrderedValue) (cowVa
 			h.latest = value
 			return previous, true
 		}
-		h.versions = btree.NewMap[uint64, *cowOrderedValue](btreeDefaultDegree)
+		h.versions = btree.NewMap[uint64, *cowOrderedValue](cowBTreeDegree)
 		first, incoming := cowOrderedDescriptor(h.latest), cowOrderedDescriptor(value)
 		if ts > h.maximum {
 			h.versions.Load(h.maximum, first)
@@ -751,7 +751,7 @@ func cowOrderedNodeReserve(height int, replacement, remove bool, maxEntries int,
 	if height < 1 {
 		height = 1
 	}
-	items := 2*btreeDefaultDegree - 1
+	items := cowBTreeMaxItems
 	if maxEntries < items {
 		items = maxEntries
 	}
@@ -759,7 +759,7 @@ func cowOrderedNodeReserve(height int, replacement, remove bool, maxEntries int,
 		items = 1
 	}
 	pairs := cowAllocation(uint64(2*items) * pairBytes)
-	children := cowAllocation(uint64(4*btreeDefaultDegree) * uint64(unsafe.Sizeof(uintptr(0))))
+	children := cowAllocation(uint64(4*cowBTreeDegree) * uint64(unsafe.Sizeof(uintptr(0))))
 	header := cowAllocation(uint64(unsafe.Sizeof(cowInternalNodeLayout{})))
 	if height == 1 {
 		children = 0
@@ -927,14 +927,14 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 			var reserve uint64
 			if allReplace {
 				reserve = uint64(operations) * cowOrderedNodeReserve(height, true, false, maximum, historyPair)
-				bound := uint64(oldCount/31+1) * full
+				bound := uint64(oldCount/cowBTreeMinItems+1) * full
 				if bound < reserve {
 					reserve = bound
 				}
 			} else if allRemove {
-				reserve = 5 * uint64(oldCount/31+1) * full
+				reserve = 5 * uint64(oldCount/cowBTreeMinItems+1) * full
 			} else if !removes {
-				oldNodes := uint64(oldCount/31 + 1)
+				oldNodes := uint64(oldCount/cowBTreeMinItems + 1)
 				if oldCount <= 1 {
 					oldNodes = 0
 				}
@@ -942,7 +942,7 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 				if oldNodes > pathNodes {
 					oldNodes = pathNodes
 				}
-				reserve = (oldNodes + 8*uint64(maximum/31+1)) * full
+				reserve = (oldNodes + 8*uint64(maximum/cowBTreeMinItems+1)) * full
 				if grouped {
 					// Independently bound each mutation as the original raw COW
 					// estimator does, then take the tighter valid envelope. The
@@ -972,16 +972,16 @@ func (t *cowOrderedTree) estimate(entries []COWMutation) (COWCharge, error) {
 	// original COW cardinality/growth envelope rather than charging one full
 	// root descent for every independent logical key.
 	fullPrimary := cowOrderedNodeReserve(2, true, false, maxKeys, primaryPair) / 2
-	bound := uint64(t.keys.Len()/31+1)*fullPrimary + primaryGrowth
+	bound := uint64(t.keys.Len()/cowBTreeMinItems+1)*fullPrimary + primaryGrowth
 	if !anyRemove {
-		oldNodes := uint64(t.keys.Len()/31 + 1)
+		oldNodes := uint64(t.keys.Len()/cowBTreeMinItems + 1)
 		pathNodes := uint64(len(entries)) * uint64(c.Height)
 		if oldNodes > pathNodes {
 			oldNodes = pathNodes
 		}
 		bound = oldNodes * fullPrimary
 		if !allPrimaryReplace {
-			bound += 8 * uint64(maxKeys/31+1) * fullPrimary
+			bound += 8 * uint64(maxKeys/cowBTreeMinItems+1) * fullPrimary
 		}
 	}
 	// c.Nodes also contains numeric histories: cap only the primary component.
