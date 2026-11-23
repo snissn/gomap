@@ -1134,7 +1134,11 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 			if err != nil {
 				return err
 			}
-			if err := fn(i, normalizeRawKVPointKey(key), result.value, found); err != nil {
+			var val []byte
+			if found {
+				val = result.value
+			}
+			if err := fn(i, normalizeRawKVPointKey(key), val, found); err != nil {
 				return err
 			}
 			if !result.reusable() {

@@ -111,10 +111,10 @@ func TestCOWIdleReadScratchBoundAndConcurrentClose(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < cowIdleReadMaxSlots+1; i++ {
 		v, l := idleReadTestAllocation(t, b)
 		ok := b.PutIdleReadScratch(v, l)
-		if ok != (i < 4) {
+		if ok != (i < cowIdleReadMaxSlots) {
 			t.Fatalf("slot %d admitted=%t", i, ok)
 		}
 		if !ok {
@@ -254,16 +254,18 @@ func TestCOWIdleReadScratchByteCeiling(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for i := 0; i < 3; i++ {
+	const entryBytes = 64 << 10
+	maxEntries := cowIdleReadMaxBytes / entryBytes
+	for i := 0; i < maxEntries+1; i++ {
 		var leases [2]*COWExternalLease
 		for j := range leases {
-			leases[j], e = b.AcquireExternal(32 << 10)
+			leases[j], e = b.AcquireExternal(entryBytes / 2)
 			if e != nil {
 				t.Fatal(e)
 			}
 		}
-		admitted := b.PutIdleReadScratch(new([64 << 10]byte), leases)
-		if admitted != (i < 2) {
+		admitted := b.PutIdleReadScratch(new([entryBytes]byte), leases)
+		if admitted != (i < maxEntries) {
 			t.Fatalf("64KiB payload%d admitted=%t", i, admitted)
 		}
 		if !admitted {
@@ -272,12 +274,102 @@ func TestCOWIdleReadScratchByteCeiling(t *testing.T) {
 			}
 		}
 	}
-	if got := b.Stats(); got.ReservedBytes != 128<<10 || got.ExternalLeases != 0 {
+	if got := b.Stats(); got.ReservedBytes != cowIdleReadMaxBytes || got.ExternalLeases != 0 {
 		t.Fatalf("byte ceiling retention: %+v", got)
 	}
 	b.Close()
 	if b.Stats().TotalBytes != 0 {
 		t.Fatal("byte-ceiling close did not drain")
+	}
+}
+
+func TestCOWIdleReadScratchEightWorkerReuse(t *testing.T) {
+	b, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := b.Stats()
+	const workers = 8
+	if workers > cowIdleReadMaxSlots {
+		t.Fatalf("workers=%d exceeds cowIdleReadMaxSlots=%d", workers, cowIdleReadMaxSlots)
+	}
+
+	// Pre-populate 8 distinct scratch entries via PutIdleReadScratch.
+	seed := make([]any, workers)
+	for i := range workers {
+		v, leases := idleReadTestAllocation(t, b)
+		seed[i] = v
+		if !b.PutIdleReadScratch(v, leases) {
+			for _, l := range leases {
+				l.Close()
+			}
+			t.Fatalf("seed slot %d refused", i)
+		}
+	}
+
+	// 8 concurrent workers simultaneously hold and return entries without ever missing the pool.
+	start := make(chan struct{})
+	barrier := make(chan struct{}, workers)
+	release := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			v, leases := b.TakeIdleReadScratch()
+			if v == nil {
+				barrier <- struct{}{}
+				errs <- errors.New("expected idle scratch hit for 8-worker pool")
+				return
+			}
+			barrier <- struct{}{}
+			<-release
+			if !b.PutIdleReadScratch(v, leases) {
+				for _, l := range leases {
+					l.Close()
+				}
+				errs <- errors.New("put back into 8-worker pool refused")
+				return
+			}
+		}()
+	}
+	close(start)
+	for range workers {
+		<-barrier
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	// All 8 entries remain parked and can be drained cleanly.
+	seen := make(map[any]bool, workers)
+	for range workers {
+		v, leases := b.TakeIdleReadScratch()
+		if v == nil {
+			t.Fatal("missing parked scratch after 8-worker roundtrip")
+		}
+		seen[v] = true
+		for _, l := range leases {
+			l.Close()
+		}
+	}
+	if len(seen) != workers {
+		t.Fatalf("distinct reused scratch=%d want=%d", len(seen), workers)
+	}
+	if v, _ := b.TakeIdleReadScratch(); v != nil {
+		t.Fatal("unexpected extra idle scratch")
+	}
+	if got := b.Stats(); got.TotalBytes != baseline.TotalBytes || got.ReservedBytes != baseline.ReservedBytes || got.ExternalLeases != 0 {
+		t.Fatalf("8-worker reuse accounting: before=%+v after=%+v", baseline, got)
+	}
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatalf("close retained budget: %+v", b.Stats())
 	}
 }
 

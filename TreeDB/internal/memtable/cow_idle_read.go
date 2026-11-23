@@ -3,8 +3,8 @@ package memtable
 import "unsafe"
 
 // Idle read scratch contains only caller-owned buffers and numeric traversal
-// state, never file/dictionary/snapshot authority. At most four entries retain
-// 128KiB of charged backing. Put consumes the original lease capabilities; Take
+// state, never file/dictionary/snapshot authority. At most 16 entries retain
+// 512KiB of charged backing. Put consumes the original lease capabilities; Take
 // creates fresh ones. Old handles can never refund a later borrower's storage.
 // Eviction uses scalar charges under budget.mu, with no callbacks or I/O.
 type cowIdleReadScratch struct {
@@ -37,7 +37,7 @@ func (b *COWBudget) PutIdleReadScratch(value any, leases [2]*COWExternalLease) b
 	for _, e := range b.idleRead[:b.idleReadCount] {
 		charge += e.charges[0] + e.charges[1]
 	}
-	if b.idleReadCount == len(b.idleRead) || charge > 128<<10 {
+	if b.idleReadCount == len(b.idleRead) || charge > cowIdleReadMaxBytes {
 		return false
 	}
 	// Payload stays charged continuously. Retired capability wrappers are dropped

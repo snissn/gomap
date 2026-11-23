@@ -198,20 +198,24 @@ func TestCOWWorkspaceIdleReuseAcrossCapturedBases(t *testing.T) {
 }
 
 // Derive the retained payload from the current concrete layout and allocator
-// charges. A future scratch-field change must preserve all four warm owners
+// charges. A future scratch-field change must preserve all 16 warm owners
 // inside the configured byte ceiling, with continuously accounted storage.
 func TestCOWWorkspaceIdleFourOwnerBoundAndRefund(t *testing.T) {
+	const (
+		maxIdleOwners = 16
+		maxIdleBytes  = 512 << 10
+	)
 	b, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
 	baseline := b.Stats()
 	payload := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{})))
-	if 4*payload > 128<<10 {
-		t.Fatalf("current four-owner payload %d exceeds byte ceiling", 4*payload)
+	if maxIdleOwners*payload > maxIdleBytes {
+		t.Fatalf("current %d-owner payload %d exceeds byte ceiling %d", maxIdleOwners, maxIdleOwners*payload, maxIdleBytes)
 	}
-	t.Logf("workspace=%d point=%d successor=%d charged payload=%d four owners=%d", unsafe.Sizeof(cowReadWorkspace{}), unsafe.Sizeof(cowPointScratch{}), unsafe.Sizeof(tree.OwnedSuccessorScratch{}), payload, 4*payload)
-	for i := 0; i < 5; i++ {
+	t.Logf("workspace=%d point=%d successor=%d charged payload=%d %d owners=%d", unsafe.Sizeof(cowReadWorkspace{}), unsafe.Sizeof(cowPointScratch{}), unsafe.Sizeof(tree.OwnedSuccessorScratch{}), payload, maxIdleOwners, maxIdleOwners*payload)
+	for i := 0; i < maxIdleOwners+1; i++ {
 		w, e := admitCOWReadWorkspace(b, valuelog.COWReadLimits{})
 		if e != nil {
 			t.Fatal(e)
@@ -221,13 +225,13 @@ func TestCOWWorkspaceIdleFourOwnerBoundAndRefund(t *testing.T) {
 		}
 		w.poolable = true
 		w.releaseSnapshotScratch()
-		if i < 4 && (w.point == nil || w.budget == nil || w.lease != nil || w.point.lease != nil) {
+		if i < maxIdleOwners && (w.point == nil || w.budget == nil || w.lease != nil || w.point.lease != nil) {
 			t.Fatalf("owner%d did not park its payload", i)
 		}
-		if i == 4 && (w.point != nil || w.budget != nil) {
-			t.Fatal("fifth owner was not closed/refunded")
+		if i == maxIdleOwners && (w.point != nil || w.budget != nil) {
+			t.Fatal("overflow owner was not closed/refunded")
 		}
-		expected := baseline.ReservedBytes + uint64(min(i+1, 4))*payload
+		expected := baseline.ReservedBytes + uint64(min(i+1, maxIdleOwners))*payload
 		if after := b.Stats(); after.ReservedBytes != expected || after.ExternalLeases != baseline.ExternalLeases {
 			t.Fatalf("owner%d accounting %+v expected%d", i, after, expected)
 		}
@@ -249,7 +253,7 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 		w      *cowReadWorkspace
 		leases [2]*memtable.COWExternalLease
 	}
-	var owners [4]parked
+	var owners [16]parked
 	count := 0
 	payload := uint64(0)
 	for {

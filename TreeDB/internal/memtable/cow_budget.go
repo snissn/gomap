@@ -49,6 +49,11 @@ type COWStats struct {
 	Views, Generations, Sources, ExternalLeases                                                   int
 }
 
+const (
+	cowIdleReadMaxSlots = 16
+	cowIdleReadMaxBytes = 512 << 10
+)
+
 // COWBudget is shared by the fixed shard vector and its frozen generations.
 // C2 charges caller-owned cut/vector/backend-lease allocations through an
 // external lease before allocation, or ExtraBytes before private preparation.
@@ -57,7 +62,7 @@ type COWBudget struct {
 	limits        COWLimits
 	stats         COWStats
 	closed        bool
-	idleRead      [4]cowIdleReadScratch
+	idleRead      [cowIdleReadMaxSlots]cowIdleReadScratch
 	idleReadCount int
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.

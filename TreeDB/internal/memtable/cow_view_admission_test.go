@@ -3,6 +3,7 @@ package memtable
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -118,4 +119,124 @@ func TestCOWViewConcurrentAdmissionAndLastOwnerClose(t *testing.T) {
 			t.Fatalf("admission racing close leaked: %+v", stats)
 		}
 	}
+}
+
+func TestCOWViewSingleAllocationAndClosePaths(t *testing.T) {
+	t.Run("single-alloc-and-fast-close", func(t *testing.T) {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		root := cowTestPublish(t, w, []COWMutation{{Key: []byte("k"), Value: []byte("v")}})
+		defer func() {
+			cowTestRelease(root)
+			cowTestClose(w)
+			b.Close()
+			if stats := b.Stats(); stats.TotalBytes != 0 || stats.Views != 0 || stats.DeferredBytes != 0 {
+				t.Errorf("leaked after close: %+v", stats)
+			}
+		}()
+
+		before := b.Stats()
+		allocs := testing.AllocsPerRun(100, func() {
+			v, err := root.Acquire(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v.Close()
+		})
+		if allocs > 1 {
+			t.Fatalf("COWRoot.Acquire+Close allocated %.0f objects, want <= 1", allocs)
+		}
+		after := b.Stats()
+		after.PeakBytes = before.PeakBytes
+		if after != before {
+			t.Fatalf("fast close accounting mismatch: before=%+v after=%+v", before, after)
+		}
+	})
+
+	t.Run("retiring-generation-holds-deferred-bytes-until-callbacks-finish", func(t *testing.T) {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		p, err := w.Prepare([]COWMutation{{Key: []byte("k"), Value: []byte("v")}}, COWPrepareOptions{ResourceSlots: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var callbackRan atomic.Int32
+		var deferredDuringCallback atomic.Uint64
+		var viewsDuringCallback atomic.Int64
+		if err := p.AttachResources([]COWResourceID{{Kind: 1, ID: 42}}, func() {
+			st := b.Stats()
+			deferredDuringCallback.Store(st.DeferredBytes)
+			viewsDuringCallback.Store(int64(st.Views))
+			callbackRan.Add(1)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		root := p.Publish()
+		view, err := root.Acquire(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Release root, close writer, and close budget so view is the sole last owner.
+		cowTestRelease(root)
+		cowTestClose(w)
+		b.Close()
+
+		view.Close()
+		view.Close() // idempotent duplicate Close
+
+		if callbackRan.Load() != 1 {
+			t.Fatalf("resource callback ran %d times, want 1", callbackRan.Load())
+		}
+		if deferredDuringCallback.Load() == 0 {
+			t.Fatal("view charge was not held in DeferredBytes during retiring generation callback")
+		}
+		if viewsDuringCallback.Load() != 0 {
+			t.Fatalf("Views=%d during callback, want 0", viewsDuringCallback.Load())
+		}
+		if stats := b.Stats(); stats.TotalBytes != 0 || stats.Views != 0 || stats.Generations != 0 || stats.DeferredBytes != 0 {
+			t.Fatalf("retiring view close leaked: %+v", stats)
+		}
+	})
+
+	t.Run("maintenance-child-fast-close-releases-control-and-reservation", func(t *testing.T) {
+		parent, err := NewCOWBudget(DefaultCOWLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := parent.ReserveMaintenance(1 << 20)
+		if err != nil {
+			parent.Close()
+			t.Fatal(err)
+		}
+		w, err := NewCOWWriter(child)
+		if err != nil {
+			child.Close()
+			parent.Close()
+			t.Fatal(err)
+		}
+		root := cowTestPublish(t, w, []COWMutation{{Key: []byte("k"), Value: []byte("v")}})
+		v1, err := root.Acquire(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v2, err := root.Acquire(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cowTestRelease(root)
+		cowTestClose(w)
+		child.Close()
+		// Closing v1 takes fast path (retirement.generation == nil because v2 pins root).
+		v1.Close()
+		if child.Stats().Views != 1 || child.Stats().ControlBytes == 0 {
+			t.Fatalf("after v1 close: %+v", child.Stats())
+		}
+		// Closing v2 retires the generation and drains child + maintenance reservation.
+		v2.Close()
+		if stats := child.Stats(); stats.TotalBytes != 0 || stats.ControlBytes != 0 || stats.Views != 0 {
+			t.Fatalf("child leaked: %+v", stats)
+		}
+		parent.Close()
+		if stats := parent.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+			t.Fatalf("parent leaked: %+v", stats)
+		}
+	})
 }
