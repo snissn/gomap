@@ -23,7 +23,8 @@ import (
 type cowBackendBasis struct {
 	readMu          sync.Mutex // serializes physical workspace reuse, never publication gates
 	reader          *cowReadWorkspace
-	readSlots       [3]cowBasisReadSlot // bounded, opportunistic parallel traversal owners
+	_               [64 - unsafe.Sizeof(sync.Mutex{}) - unsafe.Sizeof(uintptr(0))]byte
+	readSlots       [7]cowBasisReadSlot // bounded, opportunistic 64B-padded parallel traversal owners
 	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
@@ -40,6 +41,36 @@ type cowBackendBasis struct {
 type cowBasisReadSlot struct {
 	mu     sync.Mutex
 	reader *cowReadWorkspace
+	_      [64 - unsafe.Sizeof(sync.Mutex{}) - unsafe.Sizeof(uintptr(0))]byte
+}
+
+func (b *cowBackendBasis) tryLockReadLane(seed uint32) (*sync.Mutex, **cowReadWorkspace, bool) {
+	if b.readMu.TryLock() {
+		return &b.readMu, &b.reader, true
+	}
+	n := uint32(len(b.readSlots))
+	start := seed % n
+	for i := uint32(0); i < n; i++ {
+		slot := &b.readSlots[(start+i)%n]
+		if slot.mu.TryLock() {
+			return &slot.mu, &slot.reader, true
+		}
+	}
+	return nil, nil, false
+}
+
+func (b *cowBackendBasis) lockReadLane(seed uint32) (*sync.Mutex, **cowReadWorkspace) {
+	if mu, reader, ok := b.tryLockReadLane(seed); ok {
+		return mu, reader
+	}
+	idx := seed % uint32(len(b.readSlots)+1)
+	if idx == uint32(len(b.readSlots)) {
+		b.readMu.Lock()
+		return &b.readMu, &b.reader
+	}
+	slot := &b.readSlots[idx]
+	slot.mu.Lock()
+	return &slot.mu, &slot.reader
 }
 
 // physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
@@ -690,11 +721,11 @@ func (db *DB) acquireCOWSnapshot() *Snapshot {
 }
 
 func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
-	db.cow.captureCalls.Add(1)
-	if !db.cow.beginRead() {
+	stripe := uint32(db.cow.captureCalls.Add(1))
+	if !db.cow.beginReadStripe(stripe) {
 		return nil, backenddb.ErrClosed
 	}
-	defer db.cow.endRead()
+	defer db.cow.endReadStripe(stripe)
 	cut := db.cow.retainCut()
 	if cut == nil {
 		return nil, backenddb.ErrClosed

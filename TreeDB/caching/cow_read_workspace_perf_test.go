@@ -316,7 +316,7 @@ func TestCOWSnapshotMissParksPointScratch(t *testing.T) {
 	for range 32 {
 		runOne()
 	}
-	idle2, leases2 := db.cow.budget.TakeIdleReadScratch()
+	idle2, leases2 := db.cow.budget.TakeIdleReadScratch3()
 	if idle2 == nil || leases2[0] == nil || leases2[1] == nil {
 		t.Fatalf("repeated miss snapshots did not retain parked workspace: idle=%v leases=%+v", idle2 != nil, leases2)
 	}
@@ -324,8 +324,55 @@ func TestCOWSnapshotMissParksPointScratch(t *testing.T) {
 	if w2.point != firstPoint {
 		t.Fatalf("miss snapshots reallocated pointScratch: got %p want %p", w2.point, firstPoint)
 	}
-	if !db.cow.budget.PutIdleReadScratch(idle2, leases2) {
+	if !db.cow.budget.PutIdleReadScratch3(idle2, leases2) {
 		t.Fatal("could not restore parked workspace")
+	}
+
+	// Verify compressed outer leaves retain and reuse stateless Snappy/LZ4 block codecs across Snapshot.Close().
+	compDB, _, compWant := cowLeafCacheFixture(t, 64, true)
+	var compDst []byte
+	readComp := func() {
+		snap := compDB.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("nil compressed snapshot")
+		}
+		var err error
+		compDst, err = snap.GetAppend([]byte("a000"), compDst[:0])
+		if err != nil || !bytes.Equal(compDst, compWant) {
+			_ = snap.Close()
+			t.Fatalf("compressed GetAppend=(%d,%v) want len=%d", len(compDst), err, len(compWant))
+		}
+		if err := snap.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cowPressureEvictIdleReadScratch(t, compDB.cow.budget)
+	readComp()
+	compIdle1, compLeases1 := compDB.cow.budget.TakeIdleReadScratch3()
+	if compIdle1 == nil || compLeases1[0] == nil || compLeases1[1] == nil || compLeases1[2] == nil {
+		t.Fatalf("compressed snapshot did not park workspace+point+blockCodec: idle=%v leases=%+v", compIdle1 != nil, compLeases1)
+	}
+	compW1 := compIdle1.(*cowReadWorkspace)
+	firstCodec := compW1.parkedCodec
+	if firstCodec == nil {
+		t.Fatal("parked workspace missing stateless blockCodec")
+	}
+	if !compDB.cow.budget.PutIdleReadScratch3(compIdle1, compLeases1) {
+		t.Fatal("could not restore parked compressed workspace")
+	}
+	for range 16 {
+		readComp()
+	}
+	compIdle2, compLeases2 := compDB.cow.budget.TakeIdleReadScratch3()
+	if compIdle2 == nil {
+		t.Fatal("compressed snapshots lost parked workspace")
+	}
+	compW2 := compIdle2.(*cowReadWorkspace)
+	if compW2.parkedCodec != firstCodec {
+		t.Fatalf("compressed snapshots reallocated block codec: got %p want %p", compW2.parkedCodec, firstCodec)
+	}
+	if !compDB.cow.budget.PutIdleReadScratch3(compIdle2, compLeases2) {
+		t.Fatal("could not restore compressed workspace")
 	}
 }
 

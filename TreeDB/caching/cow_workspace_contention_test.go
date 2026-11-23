@@ -251,13 +251,13 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 	before := budget.Stats()
 	type parked struct {
 		w      *cowReadWorkspace
-		leases [2]*memtable.COWExternalLease
+		leases [3]*memtable.COWExternalLease
 	}
 	var owners [16]parked
 	count := 0
 	payload := uint64(0)
 	for {
-		value, leases := budget.TakeIdleReadScratch()
+		value, leases := budget.TakeIdleReadScratch3()
 		if value == nil {
 			break
 		}
@@ -265,7 +265,7 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 			t.Fatal("idle owner count exceeded bound")
 		}
 		w := value.(*cowReadWorkspace)
-		if w.budget != budget || w.snapshot != nil || w.basis != nil || w.lease != nil || w.codecs != nil || w.input != nil || w.output != nil || w.allocations != nil || (w.point != nil && w.point.lease != nil) {
+		if w.budget != budget || w.snapshot != nil || w.basis != nil || w.lease != nil || w.codecs != nil || w.input != nil || w.output != nil || w.allocations != nil || (w.point != nil && w.point.lease != nil) || (w.parkedCodec != nil && w.parkedCodec.lease != nil) {
 			t.Fatal("idle owner retained cut/value state")
 		}
 		if w.point != nil && !reflect.DeepEqual(w.point.successor, tree.OwnedSuccessorScratch{}) {
@@ -275,11 +275,14 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 		if w.point != nil {
 			payload += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{})))
 		}
+		if w.parkedCodec != nil {
+			payload += w.parkedCodec.charge
+		}
 		owners[count] = parked{w, leases}
 		count++
 	}
 	for i := 0; i < count; i++ {
-		if !budget.PutIdleReadScratch(owners[i].w, owners[i].leases) {
+		if !budget.PutIdleReadScratch3(owners[i].w, owners[i].leases) {
 			t.Fatal("restoring inspected idle owner failed")
 		}
 		owners[i] = parked{}
