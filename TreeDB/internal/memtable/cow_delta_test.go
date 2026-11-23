@@ -3,6 +3,7 @@ package memtable
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -701,7 +702,7 @@ func TestCOWDeltaTwoLevelTraversalPauseAndSize(t *testing.T) {
 func TestCOWDeltaTightBudgetL1Gating(t *testing.T) {
 	limits := DefaultCOWLimits()
 	limits.MaxGenerationBytes = 1 << 20
-	limits.MaxInFlightBytes = 1 << 20
+	limits.MaxInFlightBytes = 512 << 10
 	budget, writer := cowTestWriter(t, limits)
 	var root *COWRoot
 	defer func() {
@@ -732,7 +733,7 @@ func TestCOWDeltaTightBudgetL1Gating(t *testing.T) {
 		}
 		prep, err := writer.Prepare(m, COWPrepareOptions{})
 		if err != nil {
-			t.Fatalf("step %d Prepare failed under tight 1MiB budget: %v", i, err)
+			t.Fatalf("step %d Prepare failed under tight 1MiB/512KiB budget: %v", i, err)
 		}
 		if prep.Charge().Total() > est.Total() {
 			t.Fatalf("step %d Prepare charge %+v > Estimate %+v", i, prep.Charge(), est)
@@ -1134,5 +1135,176 @@ func TestCOWRawBatchPredictionUpperBoundAndSinglePassSetBytes(t *testing.T) {
 	}
 	if _, ok := writer.RawBatchPredictionUpperBound([]COWMutation{{Key: []byte("k00000"), Flags: node.FlagPointer}}); ok {
 		t.Fatal("FlagPointer should return ok=false")
+	}
+}
+
+func TestCOWNonDeleteNodeBoundExactnessAndTightness(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
+	limits := DefaultCOWLimits()
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes = 1 << 30
+	limits.MaxRetiredBytes = 1 << 30
+	limits.MaxGenerationBytes = 256 << 20
+
+	// 1. Tightness check: 4 shards at oldLen=30,000 + ops=2,000 must stay well
+	// below the default 32 MiB available producer in-flight headroom.
+	bound, ok := cowNonDeleteNodeBound(30000, 32000, 2000, cowMaximumHeight(32000), 32000, false)
+	if !ok {
+		t.Fatal("cowNonDeleteNodeBound overflowed at oldLen=30000 ops=2000")
+	}
+	if 4*bound >= 32<<20 {
+		t.Fatalf("4-shard bound %d >= 32 MiB (1-shard=%d)", 4*bound, bound)
+	}
+
+	makeEntries := func(count int, startIdx int, mode string, rng *rand.Rand) []COWMutation {
+		entries := make([]COWMutation, count)
+		for i := range entries {
+			var k int
+			switch mode {
+			case "seq":
+				k = startIdx + i
+			case "desc":
+				k = startIdx + (count - 1 - i)
+			case "rand":
+				k = rng.Intn(startIdx + count*4 + 1)
+			case "replace":
+				if startIdx > 0 {
+					k = rng.Intn(startIdx)
+				}
+			}
+			flags := byte(node.FlagInline)
+			var val []byte
+			if i%11 == 7 {
+				flags = node.FlagTombstone
+			} else {
+				val = []byte(fmt.Sprintf("val-%08d", k))
+			}
+			entries[i] = COWMutation{
+				Key:   []byte(fmt.Sprintf("k%010d", k)),
+				Value: val,
+				Flags: flags,
+			}
+		}
+		return entries
+	}
+
+	verifyStep := func(t *testing.T, label string, writer *COWWriter, root **COWRoot, entries []COWMutation) {
+		t.Helper()
+		est, err := writer.Estimate(entries, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("%s Estimate: %v", label, err)
+		}
+		var bound COWCharge
+		var boundOK bool
+		if len(entries) == 1 {
+			ptBound, ptOK := writer.RawPointPredictionUpperBound(entries[0])
+			if !ptOK || ptBound.History() < est.History() {
+				t.Fatalf("%s RawPointPredictionUpperBound=%+v (ok=%t) < Estimate=%+v", label, ptBound, ptOK, est)
+			}
+		}
+		bound, boundOK = writer.RawBatchPredictionUpperBound(entries)
+		if !boundOK {
+			t.Fatalf("%s prediction upper bound returned false", label)
+		}
+		if bound.Nodes < est.Nodes || bound.History() < est.History() || bound.Total() < est.Total() {
+			t.Fatalf("%s bound %+v < Estimate %+v", label, bound, est)
+		}
+		runtime.GC()
+		var beforeMem, afterMem runtime.MemStats
+		runtime.ReadMemStats(&beforeMem)
+		prep, err := writer.Prepare(entries, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("%s Prepare: %v", label, err)
+		}
+		next := prep.Publish()
+		runtime.ReadMemStats(&afterMem)
+		if prep.Charge().Nodes > est.Nodes || prep.Charge().Total() > est.Total() {
+			t.Fatalf("%s Charge %+v > Estimate %+v", label, prep.Charge(), est)
+		}
+		if alloc := afterMem.TotalAlloc - beforeMem.TotalAlloc; alloc > est.Total() {
+			t.Fatalf("%s TotalAlloc=%d > Estimate.Total=%d", label, alloc, est.Total())
+		}
+		if *root != nil {
+			cowTestRelease(*root)
+		}
+		*root = next
+	}
+
+	// 2. Empty, small, boundary (31/32/63/64), L0/L1 mixing, replacement, and
+	// large sequential/random trees across oldLen 0..20,000.
+	rng := rand.New(rand.NewSource(42))
+	for _, tc := range []struct {
+		name    string
+		seedLen int
+		seedOrd string
+		steps   []struct {
+			n    int
+			mode string
+		}
+	}{
+		{
+			name:    "empty-and-boundary-batches",
+			seedLen: 0,
+			steps: []struct {
+				n    int
+				mode string
+			}{{1, "seq"}, {2, "seq"}, {31, "seq"}, {32, "desc"}, {63, "seq"}, {64, "rand"}, {500, "rand"}, {2000, "seq"}, {2000, "replace"}},
+		},
+		{
+			name:    "l0-l1-mixed-into-dense-63-tree",
+			seedLen: 441, // 7 * 63
+			seedOrd: "seq",
+			steps: []struct {
+				n    int
+				mode string
+			}{{1, "seq"}, {1, "rand"}, {1, "replace"}, {31, "rand"}, {32, "seq"}, {63, "desc"}, {64, "rand"}, {500, "replace"}, {2000, "rand"}},
+		},
+		{
+			name:    "large-tree-20k",
+			seedLen: 20000,
+			seedOrd: "rand",
+			steps: []struct {
+				n    int
+				mode string
+			}{{2000, "rand"}, {2000, "seq"}, {2000, "replace"}, {1, "rand"}, {64, "rand"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget, writer := cowTestWriter(t, limits)
+			var root *COWRoot
+			defer func() {
+				if root != nil {
+					cowTestRelease(root)
+				}
+				cowTestClose(writer)
+				budget.Close()
+			}()
+			if tc.seedLen > 0 {
+				seed := makeEntries(tc.seedLen, 0, tc.seedOrd, rng)
+				verifyStep(t, "seed", writer, &root, seed)
+			}
+			// Inject L0 + L1 entries via point inserts before mixed batches.
+			for j := 0; j < cowDeltaL0MaxEntries+5; j++ {
+				pt := makeEntries(1, tc.seedLen+100000+j, "seq", rng)
+				verifyStep(t, fmt.Sprintf("point-%d", j), writer, &root, pt)
+			}
+			offset := tc.seedLen + 200000
+			for idx, st := range tc.steps {
+				batch := makeEntries(st.n, offset, st.mode, rng)
+				offset += st.n
+				verifyStep(t, fmt.Sprintf("step-%d-%s-%d", idx, st.mode, st.n), writer, &root, batch)
+			}
+			// Also verify 4-shard extrapolation at 20k+ keys stays well under 32 MiB.
+			if tc.seedLen >= 20000 {
+				probe := makeEntries(2000, offset, "rand", rng)
+				est, err := writer.Estimate(probe, COWPrepareOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if 4*est.Total() >= 32<<20 {
+					t.Fatalf("20k-shard 2000-op 4-shard Total=%d >= 32 MiB", 4*est.Total())
+				}
+			}
+		})
 	}
 }

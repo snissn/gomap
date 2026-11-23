@@ -165,18 +165,10 @@ func (w *COWWriter) rawPointPredictionUpperBoundLocked(e COWMutation) (COWCharge
 		if !cowPredictionProductAdd(&opBound, totalOps, perOp) {
 			return COWCharge{}, false
 		}
-		fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
-		oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-		if pathNodes := totalOps * uint64(c.Height); oldNodes > pathNodes {
-			oldNodes = pathNodes
+		c.Nodes = opBound
+		if nonDel, ok := cowNonDeleteNodeBound(uint64(w.private.Len()), uint64(logicalLen+1), totalOps, c.Height, maxEntries, false); ok && nonDel < c.Nodes {
+			c.Nodes = nonDel
 		}
-		maxNodes := uint64((logicalLen+1)/cowBTreeMinItems + 1)
-		var cardBound uint64
-		if !cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) ||
-			!cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) {
-			return COWCharge{}, false
-		}
-		c.Nodes = min(opBound, cardBound)
 		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
 	}
 	var total uint64
@@ -245,18 +237,10 @@ func (w *COWWriter) RawBatchPredictionUpperBound(entries []COWMutation) (COWChar
 	if !cowPredictionProductAdd(&opBound, totalOps, perOp) {
 		return COWCharge{}, false
 	}
-	fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
-	oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-	if pathNodes := totalOps * uint64(c.Height); oldNodes > pathNodes {
-		oldNodes = pathNodes
+	c.Nodes = opBound
+	if nonDel, ok := cowNonDeleteNodeBound(uint64(w.private.Len()), uint64(logicalAfter), totalOps, c.Height, maxEntries, false); ok && nonDel < c.Nodes {
+		c.Nodes = nonDel
 	}
-	maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
-	var cardBound uint64
-	if !cowPredictionProductAdd(&cardBound, oldNodes, fullCapacity) ||
-		!cowPredictionProductAdd(&cardBound, 8*maxNodes, fullCapacity) {
-		return COWCharge{}, false
-	}
-	c.Nodes = min(opBound, cardBound)
 	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
 	c.Temporary = preparedTemp
 	var total uint64
