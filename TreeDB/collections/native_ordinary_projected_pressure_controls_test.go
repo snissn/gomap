@@ -47,7 +47,7 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := bson.Marshal(bson.D{{Key: "name", Value: "same"}, {Key: "pad", Value: string(bytes.Repeat([]byte("a"), 80))}})
+	doc, err := bson.Marshal(bson.D{{Key: "name", Value: "same"}, {Key: "pad", Value: string(bytes.Repeat([]byte("a"), 440))}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,15 +58,17 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 		}
 		return ids, docs
 	}
-	// Prepare a real 32k-row active tail with the same stock estimate shape.
+	// Prepare a real 64k-row active tail below the advisory generation watermark
+	// whose next 16k batch projects past MaxGenerationBytes under StandaloneCOWMemtableLimits.
 	const size = 16000
-	for i := 0; i < 2; i++ {
+	const seedBatches = 4
+	for i := 0; i < seedBatches; i++ {
 		ids, docs := batch(i*size, size)
 		if stored, err := col.InsertBatch(ids, docs); err != nil || len(stored) != size {
 			t.Fatalf("seed %d: %d IDs, %v", i, len(stored), err)
 		}
 	}
-	ids, docs := batch(2*size, size)
+	ids, docs := batch(seedBatches*size, size)
 	checkCapacity := func(t *testing.T, fn func() error) {
 		t.Helper()
 		if err := backend.JoinNativeSemanticCleanupForTest(); err != nil {
@@ -128,7 +130,7 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 		})
 	})
 	t.Run("request_larger_than_fresh_generation", func(t *testing.T) {
-		oversizedIDs, oversizedDocs := batch(2*size, 40000)
+		oversizedIDs, oversizedDocs := batch(seedBatches*size, 75000)
 		checkCapacity(t, func() error {
 			_, err := col.InsertBatch(oversizedIDs, oversizedDocs)
 			return err
