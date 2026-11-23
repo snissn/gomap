@@ -369,7 +369,7 @@ func TestCOWPublicPointReadPointerPreservesViewAdmission(t *testing.T) {
 				}
 			}
 			if phase == "cached" {
-				_, _, flags, _, found := db.cow.cut.domains[db.shardIndex(key)].getEntryWithRevision(key)
+				_, _, flags, _, found := db.cow.cut.lookupShardEntryWithRevision(db.shardIndex(key), key)
 				if !found || flags&node.FlagPointer == 0 {
 					t.Fatal("fixture did not retain an actual cached pointer")
 				}
