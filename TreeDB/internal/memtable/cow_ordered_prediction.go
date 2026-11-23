@@ -100,10 +100,10 @@ func (w *COWWriter) OrderedPredictionUpperBound(entries []COWMutation) (COWCharg
 
 // RawPointPredictionUpperBound provides an O(1) positive-only upper bound for a
 // single raw (non-ordered) inline/tombstone point mutation without probing the
-// B-tree. When the bounded front delta has room, it returns the compact delta
-// upper bound; when the front delta is full and a flush into the B-tree may
-// occur, it returns an O(1) conservative flush upper bound (falling through to
-// exact Estimate on overflow or tight-budget frontiers).
+// B-tree. It covers all three raw paths in O(1):
+//   - Path 1 (L0 insert): compact L0 delta slice charge.
+//   - Path 2 (L0 -> L1 chunk merge): closed-form chunk-split upper bound.
+//   - Path 3 (L1 + L0 -> main B-tree flush): conservative per-fork cardinality bound.
 func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -125,13 +125,33 @@ func (w *COWWriter) RawPointPredictionUpperBound(e COWMutation) (COWCharge, bool
 	if h := w.private.Height(); h > c.Height {
 		c.Height = h
 	}
-	if len(w.delta) < cowDeltaMaxEntries {
+	if len(w.delta) < cowDeltaL0MaxEntries {
 		c.Nodes = cowDeltaCharge(len(w.delta) + 1)
 		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	} else if nextL1 := w.l1Count() + len(w.delta) + 1; w.l1AllowsMerge(nextL1) {
+		// Path 2: merging M = len(L0)+1 <= cowDeltaChunkMax entries into L1.
+		// At most t = min(oldChunks, M) existing chunks are touched; each
+		// touched chunk splits into at most 2 parts of <= cowDeltaChunkMax.
+		m := len(w.delta) + 1
+		if w.l1 == nil || len(w.l1.chunks) == 0 {
+			c.Nodes = cowDeltaL1HeaderCharge(1) + cowDeltaCharge(m)
+		} else {
+			oldChunks := len(w.l1.chunks)
+			touched := min(oldChunks, m)
+			maxChunks := oldChunks + touched
+			var sliceBound uint64
+			if !cowPredictionProductAdd(&sliceBound, uint64(2*touched), cowDeltaCharge(cowDeltaChunkMax)) {
+				return COWCharge{}, false
+			}
+			c.Nodes = cowDeltaL1HeaderCharge(maxChunks)
+			if !cowPredictionAdd(&c.Nodes, sliceBound) {
+				return COWCharge{}, false
+			}
+		}
+		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
 	} else {
-		// Delta is full: a new key flushes len(w.delta)+1 puts into w.private.
-		// Bound conservatively with O(1) per-fork cardinality/operation limits.
-		totalOps := uint64(len(w.delta) + 1)
+		// Path 3: full flush of L1 + L0 + entry into w.private.
+		totalOps := uint64(w.l1Count() + len(w.delta) + 1)
 		maxEntries := w.maxEntries
 		if next := logicalLen + 1; next > maxEntries {
 			maxEntries = next
