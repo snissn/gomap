@@ -139,8 +139,12 @@ type COWCursor struct {
 	view                                  *COWView
 	iter                                  btree.MapIter[string, cowValue]
 	ordered                               cowOrderedCursor
+	delta                                 []cowDeltaEntry
+	deltaIdx                              int
 	record                                COWRecord
 	rawValid, orderedValid, rawSelected   bool
+	deltaValid, deltaSelected             bool
+	equalTreeDelta                        bool
 	start, end                            string
 	bounded, lowerBounded, valid, reverse bool
 }
@@ -231,7 +235,7 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 	if err != nil {
 		return nil, err
 	}
-	c := &COWCursor{view: v, iter: r.tree.Iter(), end: string(end), bounded: end != nil, reverse: reverse}
+	c := &COWCursor{view: v, iter: r.tree.Iter(), delta: r.delta, end: string(end), bounded: end != nil, reverse: reverse}
 	if r.ordered != nil {
 		c.ordered = r.ordered.cursor()
 	}
@@ -242,6 +246,10 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 	} else {
 		c.rawValid = cowIteratorSeek(r.tree, &c.iter, start)
 		c.orderedValid = c.ordered.seekGE(start)
+		if len(c.delta) > 0 {
+			c.deltaIdx = cowDeltaSeekGE(c.delta, start)
+			c.deltaValid = c.deltaIdx < len(c.delta)
+		}
 		c.selectRecord()
 		c.checkEnd()
 	}
@@ -263,6 +271,45 @@ func (c *COWCursor) checkEnd() {
 }
 
 func (c *COWCursor) selectRecord() {
+	if len(c.delta) > 0 {
+		c.orderedValid = false
+		c.equalTreeDelta = false
+		c.deltaSelected = false
+		c.rawSelected = false
+		c.record = COWRecord{}
+		if c.rawValid && c.deltaValid {
+			treeKey := c.iter.Key()
+			deltaEntry := c.delta[c.deltaIdx]
+			if deltaEntry.key == treeKey {
+				c.deltaSelected = true
+				c.equalTreeDelta = true
+				c.record = deltaEntry.value.record(deltaEntry.key)
+			} else if (!c.reverse && deltaEntry.key < treeKey) || (c.reverse && deltaEntry.key > treeKey) {
+				c.deltaSelected = true
+				c.record = deltaEntry.value.record(deltaEntry.key)
+			} else {
+				c.rawSelected = true
+				c.record = c.iter.Value().record(treeKey)
+			}
+			c.valid = true
+			return
+		}
+		if c.deltaValid {
+			c.deltaSelected = true
+			deltaEntry := c.delta[c.deltaIdx]
+			c.record = deltaEntry.value.record(deltaEntry.key)
+			c.valid = true
+			return
+		}
+		if c.rawValid {
+			c.rawSelected = true
+			c.record = c.iter.Value().record(c.iter.Key())
+			c.valid = true
+			return
+		}
+		c.valid = false
+		return
+	}
 	ordered, ord := c.ordered.current()
 	c.orderedValid = c.orderedValid && ord
 	c.rawSelected = c.rawValid && (!c.orderedValid || (!c.reverse && c.iter.Key() <= ordered.Key) || (c.reverse && c.iter.Key() >= ordered.Key))
@@ -286,6 +333,10 @@ func (c *COWCursor) Seek(key []byte) error {
 	}
 	c.rawValid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
 	c.orderedValid = c.ordered.seekGE(key)
+	if len(c.delta) > 0 {
+		c.deltaIdx = cowDeltaSeekGE(c.delta, key)
+		c.deltaValid = c.deltaIdx < len(c.delta)
+	}
 	c.selectRecord()
 	c.checkEnd()
 	return nil
@@ -297,7 +348,22 @@ func (c *COWCursor) Next() error {
 		return ErrCOWClosed
 	}
 	if c.valid {
-		if c.rawSelected {
+		if c.deltaSelected {
+			if c.reverse {
+				c.deltaIdx--
+				c.deltaValid = c.deltaIdx >= 0
+			} else {
+				c.deltaIdx++
+				c.deltaValid = c.deltaIdx < len(c.delta)
+			}
+			if c.equalTreeDelta {
+				if c.reverse {
+					c.rawValid = c.iter.Prev()
+				} else {
+					c.rawValid = c.iter.Next()
+				}
+			}
+		} else if c.rawSelected {
 			if c.reverse {
 				c.rawValid = c.iter.Prev()
 			} else {
@@ -316,7 +382,7 @@ func (c *COWCursor) Next() error {
 	return nil
 }
 func (c *COWCursor) seekReverse(key []byte) {
-	if key == nil || (c.bounded && string(key) >= c.end) {
+	if key == nil || (c.bounded && cowKeyCompare(c.end, key) <= 0) {
 		if c.bounded {
 			if c.iter.Seek(c.end) {
 				c.rawValid = c.iter.Prev()
@@ -327,19 +393,35 @@ func (c *COWCursor) seekReverse(key []byte) {
 			if r, ok := c.ordered.current(); ok && r.Key >= c.end {
 				c.orderedValid = c.ordered.prev()
 			}
+			if len(c.delta) > 0 {
+				c.deltaIdx = cowDeltaSeekLTString(c.delta, c.end)
+				c.deltaValid = c.deltaIdx >= 0
+			}
 		} else {
 			c.rawValid = c.iter.Last()
 			c.orderedValid = c.ordered.last()
+			if len(c.delta) > 0 {
+				c.deltaIdx = len(c.delta) - 1
+				c.deltaValid = c.deltaIdx >= 0
+			}
 		}
 	} else if cowIteratorSeek(c.view.root.tree, &c.iter, key) {
 		c.rawValid = true
-		if c.iter.Key() > string(key) {
+		if cowKeyCompare(c.iter.Key(), key) > 0 {
 			c.rawValid = c.iter.Prev()
 		}
 		c.orderedValid = c.ordered.seekLE(key)
+		if len(c.delta) > 0 {
+			c.deltaIdx = cowDeltaSeekLE(c.delta, key)
+			c.deltaValid = c.deltaIdx >= 0
+		}
 	} else {
 		c.rawValid = c.iter.Last()
 		c.orderedValid = c.ordered.seekLE(key)
+		if len(c.delta) > 0 {
+			c.deltaIdx = cowDeltaSeekLE(c.delta, key)
+			c.deltaValid = c.deltaIdx >= 0
+		}
 	}
 	c.selectRecord()
 	c.checkEnd()
@@ -362,6 +444,11 @@ func (c *COWCursor) Close() {
 	c.valid = false
 	c.iter = btree.MapIter[string, cowValue]{}
 	c.ordered.clear()
+	c.delta = nil
+	c.deltaIdx = 0
+	c.deltaValid = false
+	c.deltaSelected = false
+	c.equalTreeDelta = false
 	c.record = COWRecord{}
 	c.end = ""
 	c.start = ""

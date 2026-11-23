@@ -89,6 +89,8 @@ type COWWriter struct {
 	mu         sync.Mutex
 	private    *btree.Map[string, cowValue]
 	ordered    *cowOrderedTree
+	delta      []cowDeltaEntry
+	deltaAdded int
 	generation *cowGeneration
 	pending    *COWPrepared
 	maxEntries int
@@ -148,7 +150,7 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 	g.refs++
 	g.activeWriters++
 	b.mu.Unlock()
-	w := &COWWriter{private: root.tree.ForkImmutable().SealOwned(), generation: g, maxEntries: root.tree.Len()}
+	w := &COWWriter{private: root.tree.ForkImmutable().SealOwned(), delta: root.delta, deltaAdded: root.deltaAdded, generation: g, maxEntries: root.Len()}
 	if root.ordered != nil {
 		w.ordered = root.ordered.fork()
 	}
@@ -215,7 +217,7 @@ func cowWriterConstructionCharge(resourceLimit int) uint64 {
 func (w *COWWriter) BindReservedEmptyRoot(id COWResourceID, release func()) (*COWRoot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || w.pending != nil || w.private.Len() != 0 || (w.ordered != nil && w.ordered.len() != 0) || release == nil {
+	if w.closed || w.pending != nil || w.private.Len() != 0 || len(w.delta) != 0 || (w.ordered != nil && w.ordered.len() != 0) || release == nil {
 		return nil, ErrCOWPending
 	}
 	g := w.generation
@@ -311,26 +313,105 @@ func cowNodeReserveFor(height int, replacement, remove bool, maxEntries int) uin
 	return h*full + (h+1)*header + (h+1)*(pairs+children)
 }
 
+func (w *COWWriter) canUseDelta(entries []COWMutation, opts COWPrepareOptions) (int, bool, bool) {
+	if w.ordered != nil || len(entries) != 1 || entries[0].Remove || opts.ResourceSlots != 0 {
+		return 0, false, false
+	}
+	idx, inDelta := cowDeltaFind(w.delta, entries[0].Key)
+	if !inDelta && len(w.delta) >= cowDeltaMaxEntries {
+		return 0, false, false
+	}
+	return idx, inDelta, true
+}
+
+func (w *COWWriter) estimateSingleDelta(e COWMutation, opts COWPrepareOptions, deltaIdx int, inDelta, reusePrepared bool) (COWCharge, string, cowValue, bool, bool, error) {
+	var c COWCharge
+	if e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
+		return c, "", "", false, false, fmt.Errorf("COW entry has pointer and tombstone flags")
+	}
+	valueSize, ok := cowValueSize(len(e.Value))
+	if !ok {
+		return c, "", "", false, false, ErrCOWCapacity
+	}
+	var ownedKey string
+	var prevVal cowValue
+	var keyExists, inTree bool
+	nextDeltaLen := len(w.delta)
+	nextLogicalLen := w.private.Len() + w.deltaAdded
+	if inDelta {
+		ownedKey = w.delta[deltaIdx].key
+		prevVal = w.delta[deltaIdx].value
+		keyExists = true
+	} else {
+		nextDeltaLen++
+		treeKey, treeVal, found := cowLookupGE(w.private, e.Key)
+		if found && cowKeyCompare(treeKey, e.Key) == 0 {
+			inTree = true
+			ownedKey = treeKey
+			prevVal = treeVal
+			keyExists = true
+		} else {
+			if nextLogicalLen == int(^uint(0)>>1) {
+				return c, "", "", false, false, ErrCOWCapacity
+			}
+			nextLogicalLen++
+		}
+	}
+	c.Height = cowMaximumHeight(nextLogicalLen)
+	if h := w.private.Height(); h > c.Height {
+		c.Height = h
+	}
+	c.Nodes = cowDeltaCharge(nextDeltaLen)
+	if !keyExists {
+		keyCharge := cowAllocation(uint64(len(e.Key)))
+		valCharge := cowAllocation(uint64(valueSize))
+		payload, ok := cowAdd(keyCharge, valCharge)
+		if !ok {
+			return c, "", "", false, false, ErrCOWCapacity
+		}
+		c.Payload = payload
+	} else {
+		c.Payload = cowAllocation(uint64(valueSize))
+	}
+	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
+	if !reusePrepared {
+		c.Temporary = cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
+	}
+	c.Resources = opts.ResourceBytes
+	c.Extra = opts.ExtraBytes
+	var total uint64
+	for _, n := range [...]uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary, c.Resources, c.Extra} {
+		var ok bool
+		total, ok = cowAdd(total, n)
+		if !ok {
+			return c, "", "", false, false, ErrCOWCapacity
+		}
+	}
+	return c, ownedKey, prevVal, keyExists, inTree, nil
+}
+
 func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COWCharge, error) {
 	var c COWCharge
 	routing := w.ordered.routing(entries)
 	if opts.ResourceSlots < 0 || opts.ResourceSlots > w.generation.budget.limits.MaxResources {
 		return c, ErrCOWCapacity
 	}
-	if len(entries) > int(^uint(0)>>1)-w.private.Len() {
+	deltaLen := len(w.delta)
+	if deltaLen > int(^uint(0)>>1)-w.private.Len() || len(entries) > int(^uint(0)>>1)-w.private.Len()-deltaLen {
 		return c, ErrCOWCapacity
 	}
-	c.Height = cowMaximumHeight(w.private.Len() + len(entries))
+	logicalAfter := w.private.Len() + w.deltaAdded + len(entries)
+	c.Height = cowMaximumHeight(logicalAfter)
 	if h := w.private.Height(); h > c.Height {
 		c.Height = h
 	}
 	// A physical delete can invalidate a later replacement's membership proof.
 	deletes := false
-	allReplace := true
-	allRemove := len(entries) > 0
+	allReplace := w.deltaAdded == 0
+	allRemove := len(entries) > 0 && deltaLen == 0
 	maxEntries := w.maxEntries
-	if n := w.private.Len() + len(entries); n > maxEntries {
-		maxEntries = n
+	if logicalAfter > maxEntries {
+		maxEntries = logicalAfter
 	}
 	for index, e := range entries {
 		routed := routing.routes(index)
@@ -352,6 +433,32 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	add := func(dst *uint64, n uint64) bool { v, ok := cowAdd(*dst, n); *dst = v; return ok }
 	var growth uint64
 	fullCapacity := cowNodeReserveFor(2, true, false, maxEntries) / 2
+	if deltaLen > 0 {
+		copies := cowNodeReserveFor(c.Height, true, false, maxEntries)
+		if deletes {
+			reserve := cowNodeReserveFor(c.Height, false, false, maxEntries)
+			for range deltaLen {
+				if !add(&c.Nodes, reserve) || !add(&growth, reserve-copies) {
+					return c, ErrCOWCapacity
+				}
+			}
+		} else {
+			deltaReplaces := deltaLen - w.deltaAdded
+			for range deltaReplaces {
+				if !add(&c.Nodes, copies) {
+					return c, ErrCOWCapacity
+				}
+			}
+			if w.deltaAdded > 0 {
+				reserve := cowNodeReserveFor(c.Height, false, false, maxEntries)
+				for range w.deltaAdded {
+					if !add(&c.Nodes, reserve) || !add(&growth, reserve-copies) {
+						return c, ErrCOWCapacity
+					}
+				}
+			}
+		}
+	}
 	for index, e := range entries {
 		if !e.Remove && e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
 			return c, fmt.Errorf("COW entry has pointer and tombstone flags")
@@ -369,7 +476,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			}
 			continue
 		}
-		exists := cowHasKey(w.private, e.Key)
+		exists := cowHasKey(w.private, e.Key) || cowDeltaHasKey(w.delta, e.Key)
 		if !exists || e.Remove {
 			allReplace = false
 		}
@@ -403,7 +510,8 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	}
 	// Across any one fork, each original node can be copied only once, even
 	// when deletes and inserts are interleaved. Fresh split nodes are private.
-	if len(entries) > 0 {
+	totalOps := deltaLen + len(entries)
+	if totalOps > 0 {
 		bound := uint64(w.private.Len()/cowBTreeMinItems+1)*fullCapacity + growth
 		if bound < c.Nodes {
 			c.Nodes = bound
@@ -412,10 +520,10 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	// One batch forks only once. A shared original node is copied at most once;
 	// without physical deletes nodes never disappear. This cardinality bound
 	// avoids charging every operation as an independent full-height fork.
-	if len(entries) > 0 && !deletes {
-		maxNodes := uint64((w.private.Len()+len(entries))/cowBTreeMinItems + 1)
+	if totalOps > 0 && !deletes {
+		maxNodes := uint64(logicalAfter/cowBTreeMinItems + 1)
 		oldNodes := uint64(w.private.Len()/cowBTreeMinItems + 1)
-		pathNodes := uint64(len(entries)) * uint64(c.Height)
+		pathNodes := uint64(totalOps) * uint64(c.Height)
 		if oldNodes > pathNodes {
 			oldNodes = pathNodes
 		}
@@ -482,64 +590,19 @@ func (w *COWWriter) Estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	if w.closed {
 		return COWCharge{}, ErrCOWClosed
 	}
+	if deltaIdx, inDelta, ok := w.canUseDelta(entries, opts); ok {
+		c, _, _, _, _, err := w.estimateSingleDelta(entries[0], opts, deltaIdx, inDelta, false)
+		return c, err
+	}
 	return w.estimate(entries, opts)
-}
-
-func (w *COWWriter) estimateSinglePut(e COWMutation, opts COWPrepareOptions, reusePrepared bool) (COWCharge, string, bool, error) {
-	var c COWCharge
-	if w.private.Len() == int(^uint(0)>>1) {
-		return c, "", false, ErrCOWCapacity
-	}
-	if e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
-		return c, "", false, fmt.Errorf("COW entry has pointer and tombstone flags")
-	}
-	valueSize, ok := cowValueSize(len(e.Value))
-	if !ok {
-		return c, "", false, ErrCOWCapacity
-	}
-	c.Height = cowMaximumHeight(w.private.Len() + 1)
-	if h := w.private.Height(); h > c.Height {
-		c.Height = h
-	}
-	maxEntries := w.maxEntries
-	if n := w.private.Len() + 1; n > maxEntries {
-		maxEntries = n
-	}
-	ownedKey, _, exists := cowLookupGE(w.private, e.Key)
-	exists = exists && cowKeyCompare(ownedKey, e.Key) == 0
-	c.Nodes = cowNodeReserveFor(c.Height, exists, false, maxEntries)
-	if !exists {
-		keyCharge := cowAllocation(uint64(len(e.Key)))
-		valCharge := cowAllocation(uint64(valueSize))
-		payload, ok := cowAdd(keyCharge, valCharge)
-		if !ok {
-			return c, "", false, ErrCOWCapacity
-		}
-		c.Payload = payload
-	} else {
-		c.Payload = cowAllocation(uint64(valueSize))
-	}
-	c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) + cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
-	if !reusePrepared {
-		c.Temporary = cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
-	}
-	c.Resources = opts.ResourceBytes
-	c.Extra = opts.ExtraBytes
-	var total uint64
-	for _, n := range [...]uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary, c.Resources, c.Extra} {
-		var ok bool
-		total, ok = cowAdd(total, n)
-		if !ok {
-			return c, "", false, ErrCOWCapacity
-		}
-	}
-	return c, ownedKey, exists, nil
 }
 
 type COWPrepared struct {
 	writer          *COWWriter
 	private         *btree.Map[string, cowValue]
 	ordered         *cowOrderedTree
+	delta           []cowDeltaEntry
+	deltaAdded      int
 	root            *COWRoot
 	charge          COWCharge
 	ids             []COWResourceID
@@ -624,12 +687,13 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 		return nil, ErrCOWPending
 	}
 	var singleOwnedKey string
-	var singleKeyChecked, singleKeyExists bool
+	var singlePrevVal cowValue
+	var singleKeyExists, singleInTree bool
 	var c COWCharge
 	var err error
-	if w.ordered == nil && len(entries) == 1 && !entries[0].Remove && opts.ResourceSlots == 0 {
-		c, singleOwnedKey, singleKeyExists, err = w.estimateSinglePut(entries[0], opts, dst != nil)
-		singleKeyChecked = true
+	deltaIdx, inDelta, useDelta := w.canUseDelta(entries, opts)
+	if useDelta {
+		c, singleOwnedKey, singlePrevVal, singleKeyExists, singleInTree, err = w.estimateSingleDelta(entries[0], opts, deltaIdx, inDelta, dst != nil)
 	} else {
 		c, err = w.estimate(entries, opts)
 		if err == nil && dst != nil && opts.ResourceSlots == 0 {
@@ -666,7 +730,7 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 		// other dimensions without reclaiming scratch or reserving bytes.
 		historyAndReserved, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
 		retirement, ok2 := cowAdd(historyAndReserved, b.stats.DeferredBytes)
-		if !observeProjected || g.nativeSource == nil || w.private.Len() == 0 ||
+		if !observeProjected || g.nativeSource == nil || w.private.Len()+w.deltaAdded == 0 ||
 			!ok || !ok2 || !cowFits(b.limits.MaxRetiredBytes, retirement, total) ||
 			!cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total) {
 			b.mu.Unlock()
@@ -700,28 +764,52 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	b.stats.ReservedBytes += total
 	b.mu.Unlock()
 	var p *COWPrepared
-	if dst != nil {
-		*dst = COWPrepared{writer: w, private: w.private.ForkImmutable(), charge: c, maxEntries: w.private.Len() + len(entries)}
-		p = dst
-	} else {
-		p = &COWPrepared{writer: w, private: w.private.ForkImmutable(), charge: c,
-			ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + len(entries)}
-	}
 	var logicalDelta cowLogicalDelta
-	if w.ordered != nil {
-		p.ordered = w.ordered.fork()
-		logicalDelta = p.ordered.applyValidatedFrom(w.ordered, entries)
-	}
-	if singleKeyChecked {
+	var actualNodes uint64
+	if useDelta {
+		nextDeltaAdded := w.deltaAdded
+		if !inDelta && !singleInTree {
+			nextDeltaAdded++
+		}
+		if dst != nil {
+			*dst = COWPrepared{writer: w, private: w.private, deltaAdded: nextDeltaAdded, charge: c, maxEntries: w.private.Len() + nextDeltaAdded}
+			p = dst
+		} else {
+			p = &COWPrepared{writer: w, private: w.private, deltaAdded: nextDeltaAdded, charge: c, maxEntries: w.private.Len() + nextDeltaAdded}
+		}
 		e := entries[0]
 		ownedKey := singleOwnedKey
 		if !singleKeyExists {
 			ownedKey = string(e.Key)
 		}
 		value := cowEncodeValue(e)
-		previous, _ := p.private.Set(ownedKey, value)
-		logicalDelta.replace(len(e.Key), value, previous)
+		entry := cowDeltaEntry{key: ownedKey, value: value}
+		if inDelta {
+			p.delta = cowDeltaReplace(w.delta, deltaIdx, entry)
+		} else {
+			p.delta = cowDeltaInsert(w.delta, deltaIdx, entry)
+		}
+		logicalDelta.replace(len(e.Key), value, singlePrevVal)
+		p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
+		p.root = &COWRoot{tree: p.private, delta: p.delta, deltaAdded: p.deltaAdded, generation: g}
+		actualNodes = cowDeltaCharge(len(p.delta))
 	} else {
+		if dst != nil {
+			*dst = COWPrepared{writer: w, private: w.private.ForkImmutable(), charge: c, maxEntries: w.private.Len() + w.deltaAdded + len(entries)}
+			p = dst
+		} else {
+			p = &COWPrepared{writer: w, private: w.private.ForkImmutable(), charge: c,
+				ids: make([]COWResourceID, 0, opts.ResourceSlots), owners: make([]cowResourceOwner, 0, opts.ResourceSlots), maxEntries: w.private.Len() + w.deltaAdded + len(entries)}
+		}
+		// Flush any buffered front delta into the forked private tree first.
+		// The opening root already reflects w.delta, so do not adjust logicalDelta here.
+		for _, de := range w.delta {
+			p.private.Set(de.key, de.value)
+		}
+		if w.ordered != nil {
+			p.ordered = w.ordered.fork()
+			logicalDelta = p.ordered.applyValidatedFrom(w.ordered, entries)
+		}
 		routing := w.ordered.routing(entries)
 		for index, e := range entries {
 			if routing.routes(index) {
@@ -754,26 +842,26 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 			previous, _ := p.private.Set(ownedKey, value)
 			logicalDelta.replace(len(e.Key), value, previous)
 		}
-	}
-	p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
-	p.private = p.private.SealOwned()
-	p.root = &COWRoot{tree: p.private, generation: g}
-	if p.ordered != nil {
-		p.root.ordered = p.ordered.immutableCopy()
-	}
-	actualNodes := p.private.AllocationCharge()
-	if p.ordered != nil {
-		orderedNodes := p.ordered.nodeAllocationCharge()
-		if orderedNodes > ^uint64(0)-actualNodes {
-			actualNodes = ^uint64(0)
-		} else {
-			actualNodes += orderedNodes
+		p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
+		p.private = p.private.SealOwned()
+		p.root = &COWRoot{tree: p.private, generation: g}
+		if p.ordered != nil {
+			p.root.ordered = p.ordered.immutableCopy()
+		}
+		actualNodes = p.private.AllocationCharge()
+		if p.ordered != nil {
+			orderedNodes := p.ordered.nodeAllocationCharge()
+			if orderedNodes > ^uint64(0)-actualNodes {
+				actualNodes = ^uint64(0)
+			} else {
+				actualNodes += orderedNodes
+			}
 		}
 	}
 	if err := p.reconcileNodes(actualNodes); err != nil {
 		// No resource callback or published source edge exists yet. End every
 		// private postimage alias before returning the original reservation.
-		p.private, p.ordered, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, nil, nil
+		p.private, p.ordered, p.delta, p.deltaAdded, p.root, p.ids, p.owners, p.writer = nil, nil, nil, 0, nil, nil, nil, nil
 		b.mu.Lock()
 		g.pending -= total
 		b.stats.ReservedBytes -= total
@@ -897,6 +985,8 @@ func (p *COWPrepared) Publish() *COWRoot {
 	b.mu.Unlock()
 	w.private = p.private
 	w.ordered = p.ordered
+	w.delta = p.delta
+	w.deltaAdded = p.deltaAdded
 	if n := p.maxEntries; n > w.maxEntries {
 		w.maxEntries = n
 	}
@@ -908,6 +998,8 @@ func (p *COWPrepared) Publish() *COWRoot {
 	p.writer = nil
 	p.private = nil
 	p.ordered = nil
+	p.delta = nil
+	p.deltaAdded = 0
 	p.root = nil
 	p.ids = nil
 	p.owners = nil
@@ -951,6 +1043,8 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	p.writer = nil
 	p.private = nil
 	p.ordered = nil
+	p.delta = nil
+	p.deltaAdded = 0
 	p.root = nil
 	p.ids = nil
 	return r
@@ -1067,6 +1161,8 @@ func (w *COWWriter) Close() COWRetirement {
 	w.closed = true
 	w.private = nil
 	w.ordered = nil
+	w.delta = nil
+	w.deltaAdded = 0
 	g := w.generation
 	b := g.budget
 	b.mu.Lock()
@@ -1089,6 +1185,8 @@ type COWRoot struct {
 	mu         sync.Mutex
 	tree       *btree.Map[string, cowValue]
 	ordered    *cowOrderedTree
+	delta      []cowDeltaEntry
+	deltaAdded int
 	generation *cowGeneration
 	refs       int
 }
@@ -1196,11 +1294,11 @@ func (r *COWRoot) Release() COWRetirement {
 		return COWRetirement{}
 	}
 	generation := r.generation
-	r.tree, r.ordered, r.generation = nil, nil, nil
+	r.tree, r.ordered, r.delta, r.deltaAdded, r.generation = nil, nil, nil, 0, nil
 	return generation.release()
 }
 func (r *COWRoot) Len() int {
-	n := r.tree.Len()
+	n := r.tree.Len() + r.deltaAdded
 	if r.ordered != nil {
 		n += r.ordered.len()
 	}
@@ -1223,6 +1321,17 @@ func (r *COWRoot) OrderedCounts() (logicalKeys, physicalVersions int) {
 	return r.ordered.keys.Len(), r.ordered.len()
 }
 func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
+	if len(r.delta) > 0 {
+		if idx, ok := cowDeltaFind(r.delta, key); ok {
+			e := r.delta[idx]
+			return e.value.record(e.key), true
+		}
+		k, v, found := cowLookupGE(r.tree, key)
+		if !found || cowKeyCompare(k, key) != 0 {
+			return COWRecord{}, false
+		}
+		return v.record(k), true
+	}
 	record, ok := r.SeekGE(key, nil)
 	if !ok || cowKeyCompare(record.Key, key) != 0 {
 		return COWRecord{}, false
@@ -1241,6 +1350,10 @@ func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
 		r.scanOrderedMerged(iter)
 		return
 	}
+	if len(r.delta) > 0 {
+		cowDeltaScanMerged(r.tree, r.delta, iter)
+		return
+	}
 	r.tree.Scan(func(key string, value cowValue) bool {
 		return iter(value.record(key))
 	})
@@ -1252,6 +1365,17 @@ func (r *COWRoot) ScanOwned(iter func(COWRecord) bool) {
 // The returned strings are immutable generation-owned data.
 func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 	key, v, found := cowLookupGE(r.tree, start)
+	if len(r.delta) > 0 {
+		if di := cowDeltaSeekGE(r.delta, start); di < len(r.delta) {
+			de := r.delta[di]
+			if !found || de.key <= key {
+				if end != nil && cowKeyCompare(de.key, end) >= 0 {
+					return COWRecord{}, false
+				}
+				return de.value.record(de.key), true
+			}
+		}
+	}
 	if r.ordered != nil {
 		if candidate, ok := r.ordered.seekGE(start, end); ok && (!found || candidate.Key < key) {
 			return candidate, true
@@ -1267,6 +1391,17 @@ func (r *COWRoot) SeekGE(start, end []byte) (COWRecord, bool) {
 // It has the same original source lifetime and allocation contract as SeekGE.
 func (r *COWRoot) SeekLT(start, end []byte) (COWRecord, bool) {
 	key, v, found := cowLookupLT(r.tree, end)
+	if len(r.delta) > 0 {
+		if di := cowDeltaSeekLT(r.delta, end); di >= 0 {
+			de := r.delta[di]
+			if !found || de.key >= key {
+				if start != nil && cowKeyCompare(de.key, start) < 0 {
+					return COWRecord{}, false
+				}
+				return de.value.record(de.key), true
+			}
+		}
+	}
 	if r.ordered != nil {
 		if candidate, ok := r.ordered.seekLT(start, end); ok && (!found || candidate.Key > key) {
 			return candidate, true
