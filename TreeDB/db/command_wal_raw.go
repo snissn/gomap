@@ -1702,9 +1702,7 @@ func (db *DB) FinalizePrivateCOWInlinePoint(owner *transactionowner.Owner, entry
 	if err != nil {
 		return err
 	}
-	if _, err := commitlog.PlanRawKVBatchPayloadScan(func(emit func(commitlog.RawKVOperation) error) error {
-		return emit(op)
-	}); err != nil {
+	if err := commitlog.ValidateSingleRawKVOperation(op); err != nil {
 		return err
 	}
 	return finalize(op)

@@ -527,9 +527,13 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 		break
 	}
 
-	holdBegan := time.Now()
-	if hasWaitStart {
-		c.commitWaitNs.Add(uint64(holdBegan.Sub(leaseWaitStart)))
+	trackHold := hasWaitStart || c.journal != nil
+	var holdBegan time.Time
+	if trackHold {
+		holdBegan = time.Now()
+		if hasWaitStart {
+			c.commitWaitNs.Add(uint64(holdBegan.Sub(leaseWaitStart)))
+		}
 	}
 	locksHeld := true
 	canCancel := true
@@ -550,7 +554,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 			st.clearLocked(shard)
 		}
 		locksHeld = false
-		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		if trackHold {
+			c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		}
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
 		if canCancel {
@@ -571,7 +577,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 			accepted = rootpublication.AcceptedTicket{}
 		}
 		locksHeld = false
-		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		if trackHold {
+			c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		}
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
 		return true, joinCOWCleanupError(finalizeErr, detached.drain())
@@ -600,7 +608,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 		}
 		detached := st.cancelAndDetachLocked(shard)
 		locksHeld = false
-		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		if trackHold {
+			c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		}
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
 		return true, joinCOWCleanupError(publishErr, detached.drain())
@@ -615,7 +625,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 	db.mutableBytes.Store(mutableBytes)
 	st.clearLocked(shard)
 	locksHeld = false
-	c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+	if trackHold {
+		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+	}
 	c.writerMu.Unlock()
 	db.writeMu.RUnlock()
 

@@ -1484,6 +1484,56 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectLarge(t *testing.T) {
 	assertRawKVCommandFramePayload(t, path, 9, 4, payload)
 }
 
+func TestValidateSingleRawKVOperationMatchesPlanRawKVBatchPayloadScan(t *testing.T) {
+	cases := []struct {
+		name string
+		op   RawKVOperation
+	}{
+		{name: "set", op: RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}},
+		{name: "set_rev", op: RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v"), Revision: 7}},
+		{name: "set_empty_key", op: RawKVOperation{Op: RawKVOpSet, Key: []byte{}, Value: []byte{}}},
+		{name: "set_nil_key", op: RawKVOperation{Op: RawKVOpSet, Key: nil, Value: []byte("v")}},
+		{name: "set_with_rid", op: RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v"), RID: 1}},
+		{name: "delete", op: RawKVOperation{Op: RawKVOpDelete, Key: []byte("k")}},
+		{name: "delete_rev", op: RawKVOperation{Op: RawKVOpDelete, Key: []byte("k"), Revision: 9}},
+		{name: "delete_with_value", op: RawKVOperation{Op: RawKVOpDelete, Key: []byte("k"), Value: []byte("bad")}},
+		{name: "delete_nil_key", op: RawKVOperation{Op: RawKVOpDelete, Key: nil}},
+		{name: "set_rid", op: RawKVOperation{Op: RawKVOpSetRID, Key: []byte("k"), RID: 42, Revision: 3}},
+		{name: "set_rid_zero", op: RawKVOperation{Op: RawKVOpSetRID, Key: []byte("k"), RID: 0}},
+		{name: "set_rid_with_value", op: RawKVOperation{Op: RawKVOpSetRID, Key: []byte("k"), Value: []byte("bad"), RID: 42}},
+		{name: "set_mat_rid", op: RawKVOperation{Op: RawKVOpSetMaterializedRID, Key: []byte("k"), Value: []byte("v"), RID: 42}},
+		{name: "set_mat_rid_zero", op: RawKVOperation{Op: RawKVOpSetMaterializedRID, Key: []byte("k"), Value: []byte("v"), RID: 0}},
+		{name: "delete_range_valid", op: RawKVOperation{Op: RawKVOpDeleteRange, Key: []byte("a"), Value: []byte("z")}},
+		{name: "delete_range_unbounded", op: RawKVOperation{Op: RawKVOpDeleteRange, Key: nil, Value: nil}},
+		{name: "delete_range_reversed", op: RawKVOperation{Op: RawKVOpDeleteRange, Key: []byte("z"), Value: []byte("a")}},
+		{name: "delete_range_with_rev", op: RawKVOperation{Op: RawKVOpDeleteRange, Key: []byte("a"), Value: []byte("z"), Revision: 1}},
+		{name: "unknown_op", op: RawKVOperation{Op: RawKVOp(99), Key: []byte("k")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ValidateSingleRawKVOperation(tc.op)
+			_, want := PlanRawKVBatchPayloadScan(func(emit func(RawKVOperation) error) error {
+				return emit(tc.op)
+			})
+			if (got == nil) != (want == nil) {
+				t.Fatalf("ValidateSingleRawKVOperation=%v, PlanRawKVBatchPayloadScan=%v", got, want)
+			}
+			if want != nil && !errors.Is(got, want) {
+				t.Fatalf("ValidateSingleRawKVOperation=%v, want %v", got, want)
+			}
+		})
+	}
+	validOp := RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v"), Revision: 5}
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := ValidateSingleRawKVOperation(validOp); err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("ValidateSingleRawKVOperation allocs=%v, want 0", allocs)
+	}
+}
+
 func rawKVOperationSliceScanner(ops []RawKVOperation) RawKVBatchOperationScanner {
 	return func(emit func(RawKVOperation) error) error {
 		for i := range ops {

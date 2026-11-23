@@ -14,6 +14,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const cowBatchMaxReuseHint = 8192
+
+func normalizeCOWBatchReuseHint(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n > cowBatchMaxReuseHint {
+		return cowBatchMaxReuseHint
+	}
+	return n
+}
+
 // cowBatchState exists only for explicitly admitted COW batches. Keeping its
 // ownership and prediction fields separate preserves ordinary batch allocations.
 type cowBatchState struct {
@@ -25,6 +37,7 @@ type cowBatchState struct {
 	txn                          *ConditionalTxn
 	lease                        *memtable.COWExternalLease
 	storageBytes                 uint64
+	lastHint                     int
 	err                          error
 	prepared                     *cowBatchPreparation
 	producer                     *cowFrameCapture
@@ -89,7 +102,14 @@ func (db *DB) newCOWBatch(hint int) *Batch {
 	if err != nil {
 		return &cowDeniedBatch
 	}
-	owner := &cowBatchOwner{batch: Batch{db: db, streamBypassOff: true}, state: cowBatchState{lease: lease, guardReserved: guardReserved}}
+	owner := &cowBatchOwner{
+		batch: Batch{db: db, streamBypassOff: true},
+		state: cowBatchState{
+			lease:         lease,
+			guardReserved: guardReserved,
+			lastHint:      normalizeCOWBatchReuseHint(hint),
+		},
+	}
 	b := &owner.batch
 	b.cowState = &owner.state
 	b.cowReserve(hint)
@@ -135,6 +155,62 @@ func (b *Batch) cowReserve(n int) {
 	b.entries = entries
 }
 
+// cowTryReserveWithCopyArena attempts to admit and allocate at least n entries
+// (plus an optional copyArena chunk of arenaCap bytes) in one atomic budget
+// check without latching b.cowState.err on refusal. Callers use it for
+// best-effort reuse hints and geometric growth so tight budgets fall back
+// cleanly instead of consuming remaining headroom on oversized entry capacity.
+func (b *Batch) cowTryReserveWithCopyArena(n, arenaCap int) bool {
+	if b.cowState.err != nil || b.closed {
+		return false
+	}
+	var totalBytes uint64
+	needEntries := n > cap(b.entries)
+	if needEntries {
+		if n < 0 || uint64(n) > ^uint64(0)/uint64(unsafe.Sizeof(batch.Entry{})) {
+			return false
+		}
+		totalBytes = memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(batch.Entry{})))
+	}
+	needArena := arenaCap > 0
+	if needArena {
+		arenaBytes := memtable.COWAllocationCharge(uint64(arenaCap))
+		if arenaBytes > ^uint64(0)-totalBytes {
+			return false
+		}
+		totalBytes += arenaBytes
+	}
+	if totalBytes == 0 {
+		return true
+	}
+	if err := b.cowAdmitStorage(totalBytes); err != nil {
+		return false
+	}
+	if needEntries {
+		entries := make([]batch.Entry, len(b.entries), n)
+		copy(entries, b.entries)
+		b.entries = entries
+	}
+	if needArena {
+		b.copyArena = make([]byte, 0, arenaCap)
+	}
+	return true
+}
+
+func cowNextCopyArenaCap(curCap, n int) int {
+	capacity := curCap * 2
+	if capacity < 256 {
+		capacity = 256
+	}
+	if capacity > 64<<10 {
+		capacity = 64 << 10
+	}
+	if capacity < n {
+		capacity = n
+	}
+	return capacity
+}
+
 func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 	if b.cowState.err != nil {
 		return b.cowState.err
@@ -142,22 +218,35 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(b.entries) == cap(b.entries) {
-		next := cap(b.entries) * 2
-		if next < 16 {
-			next = 16
-		}
-		if next <= cap(b.entries) {
-			return memtable.ErrCOWCapacity
-		}
-		b.cowReserve(next)
-		if b.cowState.err != nil {
-			return b.cowState.err
-		}
-	}
 	n := len(e.Key) + len(e.Value)
 	if n < len(e.Key) {
 		return memtable.ErrCOWCapacity
+	}
+	if len(b.entries) == cap(b.entries) {
+		if cap(b.entries) == 0 && b.cowState.lastHint > 16 {
+			arenaCap := 0
+			if owned && cap(b.copyArena)-len(b.copyArena) < n {
+				arenaCap = cowNextCopyArenaCap(cap(b.copyArena), n)
+			}
+			if !b.cowTryReserveWithCopyArena(b.cowState.lastHint, arenaCap) {
+				b.cowReserve(16)
+				if b.cowState.err != nil {
+					return b.cowState.err
+				}
+			}
+		} else {
+			next := cap(b.entries) * 2
+			if next < 16 {
+				next = 16
+			}
+			if next <= cap(b.entries) {
+				return memtable.ErrCOWCapacity
+			}
+			b.cowReserve(next)
+			if b.cowState.err != nil {
+				return b.cowState.err
+			}
+		}
 	}
 	if owned {
 		buf, err := b.cowCopyStorage(n)
@@ -194,6 +283,32 @@ func (b *Batch) cowSetOps(ops []batch.Entry) error {
 			return ErrCOWUnsupported
 		}
 	}
+	if len(ops) > 0 {
+		need := len(b.entries) + len(ops)
+		if need < len(b.entries) {
+			return memtable.ErrCOWCapacity
+		}
+		if need > cap(b.entries) {
+			target := need
+			if cap(b.entries) <= int(^uint(0)>>1)/2 {
+				if doubled := cap(b.entries) * 2; doubled > target {
+					target = doubled
+				}
+			}
+			if target < 16 {
+				target = 16
+			}
+			if target > need && !b.cowTryReserveWithCopyArena(target, 0) {
+				target = need
+			}
+			if need > cap(b.entries) {
+				b.cowReserve(target)
+				if b.cowState.err != nil {
+					return b.cowState.err
+				}
+			}
+		}
+	}
 	for _, e := range ops {
 		e.Key = normalizeRawKVPointKey(e.Key)
 		if e.Type == batch.OpPut {
@@ -211,6 +326,9 @@ func (b *Batch) cowReset() {
 		return
 	}
 	b.releaseNativePublication()
+	if n := normalizeCOWBatchReuseHint(len(b.entries)); n > b.cowState.lastHint {
+		b.cowState.lastHint = n
+	}
 	b.entries = nil
 	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil
@@ -315,16 +433,7 @@ func (b *Batch) cowCopyStorage(n int) ([]byte, error) {
 		return nil, memtable.ErrCOWCapacity
 	}
 	if cap(b.copyArena)-len(b.copyArena) < n {
-		capacity := cap(b.copyArena) * 2
-		if capacity < 256 {
-			capacity = 256
-		}
-		if capacity > 64<<10 {
-			capacity = 64 << 10
-		}
-		if capacity < n {
-			capacity = n
-		}
+		capacity := cowNextCopyArenaCap(cap(b.copyArena), n)
 		if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
 			return nil, err
 		}
