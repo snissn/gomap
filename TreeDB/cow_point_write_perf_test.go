@@ -3,8 +3,11 @@ package treedb
 import (
 	"bytes"
 	"encoding/binary"
+	"runtime"
 	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 func openCOWPointPerfDB(tb testing.TB) *DB {
@@ -191,5 +194,62 @@ func TestCOWPointWriteHistoryAndAllocs(t *testing.T) {
 	}
 	if allocs > 18 {
 		t.Fatalf("steady-state COW inline Set allocs/op = %.1f, want <= 18", allocs)
+	}
+}
+
+func TestCOWPointWriteObserverUnwindReleasesGates(t *testing.T) {
+	points := []durabilitycut.Point{
+		durabilitycut.BeforeCOWPreparation,
+		durabilitycut.AfterCOWPreparation,
+		durabilitycut.AfterCOWCanonicalPreparation,
+		durabilitycut.BeforeCOWCutSwap,
+	}
+	for _, point := range points {
+		for _, mode := range []string{"panic", "goexit"} {
+			t.Run(string(point)+"/"+mode, func(t *testing.T) {
+				db := openCOWPointPerfDB(t)
+				if err := db.Set([]byte("seed"), []byte("ok")); err != nil {
+					t.Fatal(err)
+				}
+				triggered := false
+				restore := durabilitycut.Install(func(ev durabilitycut.Event) error {
+					if ev.Point == point && !triggered {
+						triggered = true
+						if mode == "panic" {
+							panic("injected observer panic")
+						}
+						runtime.Goexit()
+					}
+					return nil
+				})
+				done := make(chan any, 1)
+				go func() {
+					defer func() {
+						done <- recover()
+					}()
+					_ = db.Set([]byte("aborted"), []byte("never-visible"))
+				}()
+				recovered := <-done
+				restore()
+				if !triggered {
+					t.Fatalf("observer point %s was not reached", point)
+				}
+				if mode == "panic" && recovered == nil {
+					t.Fatalf("expected panic at %s", point)
+				}
+				// Gates must be released and aborted mutation must not be visible.
+				got, err := db.Get([]byte("aborted"))
+				if err != nil || got != nil {
+					t.Fatalf("aborted key visible after %s %s: got=%q err=%v", point, mode, got, err)
+				}
+				if err := db.Set([]byte("after"), []byte("healthy")); err != nil {
+					t.Fatalf("subsequent Set failed after %s %s: %v", point, mode, err)
+				}
+				gotAfter, err := db.Get([]byte("after"))
+				if err != nil || string(gotAfter) != "healthy" {
+					t.Fatalf("subsequent Get mismatch: got=%q err=%v", gotAfter, err)
+				}
+			})
+		}
 	}
 }

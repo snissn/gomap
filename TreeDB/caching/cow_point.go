@@ -504,6 +504,34 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 
 	holdBegan := time.Now()
 	c.commitWaitNs.Add(uint64(holdBegan.Sub(leaseWaitStart)))
+	locksHeld := true
+	canCancel := true
+	defer func() {
+		if !locksHeld {
+			return
+		}
+		var detached cowPointCancelled
+		if canCancel {
+			detached = st.cancelAndDetachLocked(shard)
+			if accepted.Valid() {
+				if cancelErr := accepted.CancelAccepted(); cancelErr != nil {
+					db.reportError(cancelErr)
+				}
+				accepted = rootpublication.AcceptedTicket{}
+			}
+		} else {
+			st.clearLocked(shard)
+		}
+		locksHeld = false
+		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
+		c.writerMu.Unlock()
+		db.writeMu.RUnlock()
+		if canCancel {
+			if cleanupErr := detached.drain(); cleanupErr != nil {
+				db.reportError(cleanupErr)
+			}
+		}
+	}()
 
 	st.entries[0].Revision = db.nextEntryRevision()
 	finalizeErr := finalizer.FinalizePrivateCOWInlinePoint(owner, st.entries[0], st.prepareFn, st.finalizeFn)
@@ -515,6 +543,7 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 			}
 			accepted = rootpublication.AcceptedTicket{}
 		}
+		locksHeld = false
 		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
@@ -524,29 +553,8 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 		panic("COW inline point succeeded without staged publication")
 	}
 
-	func() {
-		observed := false
-		defer func() {
-			if observed {
-				return
-			}
-			detached := st.cancelAndDetachLocked(shard)
-			if accepted.Valid() {
-				if cancelErr := accepted.CancelAccepted(); cancelErr != nil {
-					db.reportError(cancelErr)
-				}
-				accepted = rootpublication.AcceptedTicket{}
-			}
-			c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
-			c.writerMu.Unlock()
-			db.writeMu.RUnlock()
-			if cleanupErr := detached.drain(); cleanupErr != nil {
-				db.reportError(cleanupErr)
-			}
-		}()
-		_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, db.dir)
-		observed = true
-	}()
+	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, db.dir)
+	canCancel = false
 
 	next := st.cut.next
 	next.logicalSeq = c.cut.logicalSeq + 1
@@ -564,6 +572,7 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 			poisoner.MarkCommandWALRecoveryRequired()
 		}
 		detached := st.cancelAndDetachLocked(shard)
+		locksHeld = false
 		c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
@@ -578,6 +587,7 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 	}
 	db.mutableBytes.Store(mutableBytes)
 	st.clearLocked(shard)
+	locksHeld = false
 	c.commitHoldNs.Add(uint64(time.Since(holdBegan)))
 	c.writerMu.Unlock()
 	db.writeMu.RUnlock()
