@@ -95,8 +95,8 @@ func (r *COWRoot) NewTraversal(work *COWTraversalWork, extraBytes uint64) (*COWT
 			panic("pre-admitted ordered cursor initialization refused")
 		}
 		c.hasOrdered = true
-	} else if len(r.delta) > 0 {
-		c.delta = cowDeltaTraversal{entries: r.delta}
+	} else if r.hasDelta() {
+		c.delta = cowDeltaTraversal{l0: r.delta, l1: r.l1}
 		c.hasDelta = true
 	}
 	return c, nil

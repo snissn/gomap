@@ -140,11 +140,14 @@ type COWCursor struct {
 	iter                                  btree.MapIter[string, cowValue]
 	ordered                               cowOrderedCursor
 	delta                                 []cowDeltaEntry
+	l1                                    *cowDeltaL1
 	deltaIdx                              int
+	l1Chunk, l1Entry                      int
 	record                                COWRecord
 	rawValid, orderedValid, rawSelected   bool
-	deltaValid, deltaSelected             bool
-	equalTreeDelta                        bool
+	deltaValid, l1Valid                   bool
+	hasDelta                              bool
+	stepL0, stepL1, stepTree              bool
 	start, end                            string
 	bounded, lowerBounded, valid, reverse bool
 }
@@ -235,7 +238,7 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 	if err != nil {
 		return nil, err
 	}
-	c := &COWCursor{view: v, iter: r.tree.Iter(), delta: r.delta, end: string(end), bounded: end != nil, reverse: reverse}
+	c := &COWCursor{view: v, iter: r.tree.Iter(), delta: r.delta, l1: r.l1, hasDelta: r.hasDelta(), end: string(end), bounded: end != nil, reverse: reverse}
 	if r.ordered != nil {
 		c.ordered = r.ordered.cursor()
 	}
@@ -246,9 +249,14 @@ func (r *COWRoot) cursorWithExtraBytes(start, end []byte, extraBytes uint64, rev
 	} else {
 		c.rawValid = cowIteratorSeek(r.tree, &c.iter, start)
 		c.orderedValid = c.ordered.seekGE(start)
-		if len(c.delta) > 0 {
-			c.deltaIdx = cowDeltaSeekGE(c.delta, start)
-			c.deltaValid = c.deltaIdx < len(c.delta)
+		if c.hasDelta {
+			if len(c.delta) > 0 {
+				c.deltaIdx = cowDeltaSeekGE(c.delta, start)
+				c.deltaValid = c.deltaIdx < len(c.delta)
+			}
+			if c.l1 != nil {
+				c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekGE(start)
+			}
 		}
 		c.selectRecord()
 		c.checkEnd()
@@ -271,43 +279,57 @@ func (c *COWCursor) checkEnd() {
 }
 
 func (c *COWCursor) selectRecord() {
-	if len(c.delta) > 0 {
+	if c.hasDelta {
 		c.orderedValid = false
-		c.equalTreeDelta = false
-		c.deltaSelected = false
 		c.rawSelected = false
+		c.stepL0, c.stepL1, c.stepTree = false, false, false
 		c.record = COWRecord{}
-		if c.rawValid && c.deltaValid {
-			treeKey := c.iter.Key()
-			deltaEntry := c.delta[c.deltaIdx]
-			if deltaEntry.key == treeKey {
-				c.deltaSelected = true
-				c.equalTreeDelta = true
-				c.record = deltaEntry.value.record(deltaEntry.key)
-			} else if (!c.reverse && deltaEntry.key < treeKey) || (c.reverse && deltaEntry.key > treeKey) {
-				c.deltaSelected = true
-				c.record = deltaEntry.value.record(deltaEntry.key)
-			} else {
-				c.rawSelected = true
-				c.record = c.iter.Value().record(treeKey)
+
+		var bestKey string
+		var bestVal cowValue
+		found := false
+
+		// Evaluate in ascending priority order (tree, then L1, then L0) so
+		// ties overwrite with higher-precedence value (L0 > L1 > tree).
+		if c.rawValid {
+			bestKey = c.iter.Key()
+			bestVal = c.iter.Value()
+			found = true
+			c.stepTree = true
+		}
+		if c.l1Valid {
+			e := c.l1.chunks[c.l1Chunk].entries[c.l1Entry]
+			if !found {
+				bestKey, bestVal, found = e.key, e.value, true
+				c.stepL1 = true
+			} else if e.key == bestKey {
+				bestVal = e.value
+				c.stepL1 = true
+			} else if (!c.reverse && e.key < bestKey) || (c.reverse && e.key > bestKey) {
+				bestKey, bestVal = e.key, e.value
+				c.stepTree = false
+				c.stepL1 = true
 			}
-			c.valid = true
-			return
 		}
 		if c.deltaValid {
-			c.deltaSelected = true
-			deltaEntry := c.delta[c.deltaIdx]
-			c.record = deltaEntry.value.record(deltaEntry.key)
-			c.valid = true
-			return
+			e := c.delta[c.deltaIdx]
+			if !found {
+				bestKey, bestVal, found = e.key, e.value, true
+				c.stepL0 = true
+			} else if e.key == bestKey {
+				bestVal = e.value
+				c.stepL0 = true
+			} else if (!c.reverse && e.key < bestKey) || (c.reverse && e.key > bestKey) {
+				bestKey, bestVal = e.key, e.value
+				c.stepTree = false
+				c.stepL1 = false
+				c.stepL0 = true
+			}
 		}
-		if c.rawValid {
-			c.rawSelected = true
-			c.record = c.iter.Value().record(c.iter.Key())
-			c.valid = true
-			return
+		c.valid = found
+		if found {
+			c.record = bestVal.record(bestKey)
 		}
-		c.valid = false
 		return
 	}
 	ordered, ord := c.ordered.current()
@@ -333,9 +355,14 @@ func (c *COWCursor) Seek(key []byte) error {
 	}
 	c.rawValid = cowIteratorSeek(c.view.root.tree, &c.iter, key)
 	c.orderedValid = c.ordered.seekGE(key)
-	if len(c.delta) > 0 {
-		c.deltaIdx = cowDeltaSeekGE(c.delta, key)
-		c.deltaValid = c.deltaIdx < len(c.delta)
+	if c.hasDelta {
+		if len(c.delta) > 0 {
+			c.deltaIdx = cowDeltaSeekGE(c.delta, key)
+			c.deltaValid = c.deltaIdx < len(c.delta)
+		}
+		if c.l1 != nil {
+			c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekGE(key)
+		}
 	}
 	c.selectRecord()
 	c.checkEnd()
@@ -348,15 +375,24 @@ func (c *COWCursor) Next() error {
 		return ErrCOWClosed
 	}
 	if c.valid {
-		if c.deltaSelected {
-			if c.reverse {
-				c.deltaIdx--
-				c.deltaValid = c.deltaIdx >= 0
-			} else {
-				c.deltaIdx++
-				c.deltaValid = c.deltaIdx < len(c.delta)
+		if c.hasDelta {
+			if c.stepL0 {
+				if c.reverse {
+					c.deltaIdx--
+					c.deltaValid = c.deltaIdx >= 0
+				} else {
+					c.deltaIdx++
+					c.deltaValid = c.deltaIdx < len(c.delta)
+				}
 			}
-			if c.equalTreeDelta {
+			if c.stepL1 {
+				if c.reverse {
+					c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.prevPos(c.l1Chunk, c.l1Entry)
+				} else {
+					c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.nextPos(c.l1Chunk, c.l1Entry)
+				}
+			}
+			if c.stepTree {
 				if c.reverse {
 					c.rawValid = c.iter.Prev()
 				} else {
@@ -393,16 +429,26 @@ func (c *COWCursor) seekReverse(key []byte) {
 			if r, ok := c.ordered.current(); ok && r.Key >= c.end {
 				c.orderedValid = c.ordered.prev()
 			}
-			if len(c.delta) > 0 {
-				c.deltaIdx = cowDeltaSeekLTString(c.delta, c.end)
-				c.deltaValid = c.deltaIdx >= 0
+			if c.hasDelta {
+				if len(c.delta) > 0 {
+					c.deltaIdx = cowDeltaSeekLTString(c.delta, c.end)
+					c.deltaValid = c.deltaIdx >= 0
+				}
+				if c.l1 != nil {
+					c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekLTString(c.end)
+				}
 			}
 		} else {
 			c.rawValid = c.iter.Last()
 			c.orderedValid = c.ordered.last()
-			if len(c.delta) > 0 {
-				c.deltaIdx = len(c.delta) - 1
-				c.deltaValid = c.deltaIdx >= 0
+			if c.hasDelta {
+				if len(c.delta) > 0 {
+					c.deltaIdx = len(c.delta) - 1
+					c.deltaValid = c.deltaIdx >= 0
+				}
+				if c.l1 != nil {
+					c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekLT(nil)
+				}
 			}
 		}
 	} else if cowIteratorSeek(c.view.root.tree, &c.iter, key) {
@@ -411,16 +457,26 @@ func (c *COWCursor) seekReverse(key []byte) {
 			c.rawValid = c.iter.Prev()
 		}
 		c.orderedValid = c.ordered.seekLE(key)
-		if len(c.delta) > 0 {
-			c.deltaIdx = cowDeltaSeekLE(c.delta, key)
-			c.deltaValid = c.deltaIdx >= 0
+		if c.hasDelta {
+			if len(c.delta) > 0 {
+				c.deltaIdx = cowDeltaSeekLE(c.delta, key)
+				c.deltaValid = c.deltaIdx >= 0
+			}
+			if c.l1 != nil {
+				c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekLE(key)
+			}
 		}
 	} else {
 		c.rawValid = c.iter.Last()
 		c.orderedValid = c.ordered.seekLE(key)
-		if len(c.delta) > 0 {
-			c.deltaIdx = cowDeltaSeekLE(c.delta, key)
-			c.deltaValid = c.deltaIdx >= 0
+		if c.hasDelta {
+			if len(c.delta) > 0 {
+				c.deltaIdx = cowDeltaSeekLE(c.delta, key)
+				c.deltaValid = c.deltaIdx >= 0
+			}
+			if c.l1 != nil {
+				c.l1Chunk, c.l1Entry, c.l1Valid = c.l1.seekLE(key)
+			}
 		}
 	}
 	c.selectRecord()
@@ -445,10 +501,11 @@ func (c *COWCursor) Close() {
 	c.iter = btree.MapIter[string, cowValue]{}
 	c.ordered.clear()
 	c.delta = nil
+	c.l1 = nil
 	c.deltaIdx = 0
-	c.deltaValid = false
-	c.deltaSelected = false
-	c.equalTreeDelta = false
+	c.l1Chunk, c.l1Entry = 0, 0
+	c.deltaValid, c.l1Valid, c.hasDelta = false, false, false
+	c.stepL0, c.stepL1, c.stepTree = false, false, false
 	c.record = COWRecord{}
 	c.end = ""
 	c.start = ""

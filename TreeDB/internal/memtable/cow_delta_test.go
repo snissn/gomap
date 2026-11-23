@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -30,8 +31,8 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 		expected[k] = v
 	}
 	root := cowTestPublish(t, writer, seed)
-	if len(root.delta) != 0 || root.deltaAdded != 0 {
-		t.Fatalf("multi-key batch left non-empty delta: len=%d added=%d", len(root.delta), root.deltaAdded)
+	if len(root.delta) != 0 || root.l1 != nil || root.deltaAdded != 0 {
+		t.Fatalf("multi-key batch left non-empty delta/l1: len=%d l1=%v added=%d", len(root.delta), root.l1 != nil, root.deltaAdded)
 	}
 
 	var pinned []*COWRoot
@@ -46,13 +47,14 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 		}
 	}()
 
-	// Apply single-op updates up to cowDeltaMaxEntries: mix of new keys,
-	// shadows of existing tree keys, and re-overwrites of delta keys.
+	// Apply single-op updates across multiple L0->L1 merges: mix of new keys,
+	// shadows of existing tree keys, and re-overwrites of delta/L1 keys.
 	// Verify every published root's Get, SeekGE, SeekLT, Len, ScanOwned,
-	// COWCursor (forward & reverse), COWTraversal (forward, reverse, direction reversal),
-	// and LogicalSizeDelta match the reference map.
+	// COWCursor (forward & reverse), Estimate/Prepare exactness, and LogicalSizeDelta.
 	baseTree := root.tree
-	for step := 0; step < cowDeltaMaxEntries+10; step++ {
+	sawPureL1 := false
+	sawL0AndL1 := false
+	for step := 0; step < cowDeltaL0MaxEntries*3+10; step++ {
 		var k, v string
 		switch step % 4 {
 		case 0:
@@ -64,7 +66,7 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 			k = fmt.Sprintf("k%04d", (step%20)*2)
 			v = fmt.Sprintf("delta-shadow-%04d", step)
 		case 2:
-			// Overwrite a key already in delta (if step >= 2).
+			// Overwrite a key already in delta/L1 (if step >= 2).
 			k = fmt.Sprintf("k%04d", ((step-2)/4)*8+1)
 			v = fmt.Sprintf("delta-reover-%04d", step)
 		case 3:
@@ -100,23 +102,38 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 			t.Fatalf("step %d LogicalSizeDelta=%d want %d", step, deltaBytes, nextLogical-prevLogical)
 		}
 		nextRoot := prep.Publish()
-		if step < cowDeltaMaxEntries/2 && len(nextRoot.delta) > 0 && nextRoot.tree != baseTree {
-			t.Fatalf("step %d unexpectedly forked base tree while delta had capacity", step)
+		if nextRoot.tree != baseTree {
+			t.Fatalf("step %d unexpectedly forked base tree while L0+L1 had capacity (l0=%d l1=%d)", step, len(nextRoot.delta), cowDeltaL1Count(nextRoot.l1))
+		}
+		if prep.Charge() != est {
+			t.Fatalf("step %d L0/L1 path should have exact Estimate==Prepare charge: got %+v want %+v", step, prep.Charge(), est)
+		}
+		if nextRoot.l1 != nil && len(nextRoot.delta) == 0 {
+			sawPureL1 = true
+		}
+		if nextRoot.l1 != nil && len(nextRoot.delta) > 0 {
+			sawL0AndL1 = true
 		}
 		pinned = append(pinned, nextRoot)
 		verifyRootMatchesMap(t, nextRoot, expected)
+	}
+	if !sawPureL1 || !sawL0AndL1 {
+		t.Fatalf("expected to observe both pure-L1 (%v) and L0+L1 (%v) states", sawPureL1, sawL0AndL1)
 	}
 
 	// Verify the earliest pinned snapshot is still 100% immutable and unchanged.
 	verifyRootMatchesMap(t, pinned[0], pinnedSnap)
 
-	// Now test ForkCOWWriter while delta is non-empty.
+	// Now test ForkCOWWriter while BOTH L1 and L0 are non-empty.
 	latest := pinned[len(pinned)-1]
-	if len(latest.delta) == 0 {
-		// Add one single op so latest has a non-empty delta.
+	if len(latest.delta) == 0 || latest.l1 == nil {
+		// Add one single op so latest has both L1 and L0 populated.
 		expected["fork-pre"] = "v1"
 		latest = cowTestPublish(t, writer, []COWMutation{{Key: []byte("fork-pre"), Value: []byte("v1"), Flags: node.FlagInline}})
 		pinned = append(pinned, latest)
+	}
+	if latest.l1 == nil || len(latest.delta) == 0 {
+		t.Fatalf("expected both L1 and L0 populated before fork, got l1=%v l0=%d", latest.l1 != nil, len(latest.delta))
 	}
 	forked, err := ForkCOWWriter(latest)
 	if err != nil {
@@ -126,6 +143,11 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 	for k, v := range expected {
 		forkExpected[k] = v
 	}
+	// Overwrite an existing base-tree key AND insert a new key on the forked writer.
+	forkExpected["k0002"] = "fork-overwrite"
+	forkRoot1 := cowTestPublish(t, forked, []COWMutation{{Key: []byte("k0002"), Value: []byte("fork-overwrite"), Flags: node.FlagInline}})
+	verifyRootMatchesMap(t, forkRoot1, forkExpected)
+	cowTestRelease(forkRoot1)
 	forkExpected["fork-only"] = "fv"
 	forkRoot := cowTestPublish(t, forked, []COWMutation{{Key: []byte("fork-only"), Value: []byte("fv"), Flags: node.FlagInline}})
 	verifyRootMatchesMap(t, forkRoot, forkExpected)
@@ -133,13 +155,13 @@ func TestCOWDeltaLifecycleShadowAndFlush(t *testing.T) {
 	cowTestRelease(forkRoot)
 	cowTestClose(forked)
 
-	// Physical Remove while delta is non-empty flushes delta + removes key.
+	// Physical Remove while L1+L0 are non-empty flushes both levels + removes key.
 	removeKey := "k0000"
 	delete(expected, removeKey)
 	afterRemove := cowTestPublish(t, writer, []COWMutation{{Key: []byte(removeKey), Remove: true}})
 	pinned = append(pinned, afterRemove)
-	if len(afterRemove.delta) != 0 {
-		t.Fatalf("Remove did not flush delta: len=%d", len(afterRemove.delta))
+	if len(afterRemove.delta) != 0 || afterRemove.l1 != nil {
+		t.Fatalf("Remove did not flush L0+L1: l0=%d l1=%v", len(afterRemove.delta), afterRemove.l1 != nil)
 	}
 	verifyRootMatchesMap(t, afterRemove, expected)
 }
@@ -427,27 +449,27 @@ func TestCOWDeltaRandomizedModel(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	expected := map[string]string{}
 	var root *COWRoot
-	for step := 0; step < 250; step++ {
-		op := rng.Intn(10)
+	for step := 0; step < 700; step++ {
+		op := rng.Intn(20)
 		var batch []COWMutation
-		if op < 7 {
-			// Single put
-			k := fmt.Sprintf("k%03d", rng.Intn(80))
+		if op < 16 {
+			// Single put (triggers L0->L1 merges and L1->tree flushes).
+			k := fmt.Sprintf("k%03d", rng.Intn(220))
 			v := fmt.Sprintf("v-%d", step)
 			batch = []COWMutation{{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline}}
 			expected[k] = v
-		} else if op < 9 {
+		} else if op < 19 {
 			// Multi-key batch (2..4 keys)
 			n := 2 + rng.Intn(3)
 			for range n {
-				k := fmt.Sprintf("k%03d", rng.Intn(80))
+				k := fmt.Sprintf("k%03d", rng.Intn(220))
 				v := fmt.Sprintf("b-%d", step)
 				batch = append(batch, COWMutation{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline})
 				expected[k] = v
 			}
 		} else {
 			// Physical remove
-			k := fmt.Sprintf("k%03d", rng.Intn(80))
+			k := fmt.Sprintf("k%03d", rng.Intn(220))
 			batch = []COWMutation{{Key: []byte(k), Remove: true}}
 			delete(expected, k)
 		}
@@ -456,13 +478,428 @@ func TestCOWDeltaRandomizedModel(t *testing.T) {
 			cowTestRelease(root)
 		}
 		root = next
-		if step%10 == 0 || step == 249 {
+		if step%25 == 0 || step == 699 {
 			verifyRootMatchesMap(t, root, expected)
 		}
 	}
 	if root != nil {
 		cowTestRelease(root)
 	}
+}
+
+func TestCOWDeltaTwoLevelPureL1AndThreeWayShadowing(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	defer func() {
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	expected := map[string]string{}
+	var seed []COWMutation
+	for i := 0; i < 40; i++ {
+		k := fmt.Sprintf("k%03d", i*3)
+		v := fmt.Sprintf("tree-%03d", i*3)
+		seed = append(seed, COWMutation{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline})
+		expected[k] = v
+	}
+	root := cowTestPublish(t, writer, seed)
+
+	// Push exactly cowDeltaL0MaxEntries+1 distinct single keys so L0 merges into
+	// L1 and leaves a pure-L1 root (len(delta)==0 && l1!=nil) with multiple chunks
+	// if we push a second wave.
+	for i := 0; i < (cowDeltaL0MaxEntries+1)*2; i++ {
+		k := fmt.Sprintf("k%03d", i*2+1) // mix of tree shadows and new keys
+		if i%5 == 0 {
+			k = fmt.Sprintf("k%03d", (i%12)*3) // explicit tree shadow
+		}
+		v := fmt.Sprintf("l1-%03d", i)
+		next := cowTestPublish(t, writer, []COWMutation{{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline}})
+		cowTestRelease(root)
+		root = next
+		expected[k] = v
+	}
+	// Advance until we land right on a pure-L1 boundary.
+	for step := 0; len(root.delta) != 0 && step < cowDeltaL0MaxEntries+2; step++ {
+		k := fmt.Sprintf("m%03d", step)
+		v := fmt.Sprintf("l1-pad-%03d", step)
+		next := cowTestPublish(t, writer, []COWMutation{{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline}})
+		cowTestRelease(root)
+		root = next
+		expected[k] = v
+	}
+	if len(root.delta) != 0 || root.l1 == nil || cowDeltaL1Count(root.l1) == 0 {
+		t.Fatalf("expected pure-L1 root, got l0=%d l1=%d", len(root.delta), cowDeltaL1Count(root.l1))
+	}
+	verifyRootMatchesMap(t, root, expected)
+	verifyTraversalPingPong(t, root, expected)
+
+	// ScanOwned on pure-L1 root must be 0-alloc.
+	allocs := testing.AllocsPerRun(50, func() {
+		count := 0
+		root.ScanOwned(func(COWRecord) bool {
+			count++
+			return true
+		})
+		if count != len(expected) {
+			t.Fatalf("ScanOwned count=%d want %d", count, len(expected))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("pure-L1 ScanOwned allocated %.2f times/op, want 0", allocs)
+	}
+
+	// Now add L0 keys that shadow L1 keys, shadow tree-only keys, and insert new keys.
+	l0Updates := []struct{ k, v string }{
+		{"k000", "l0-shadow-l1-and-tree"},
+		{"k001", "l0-shadow-l1-only"},
+		{"k003", "l0-shadow-tree-only"},
+		{"a000", "l0-leading-new"},
+		{"z999", "l0-trailing-new"},
+	}
+	for _, u := range l0Updates {
+		next := cowTestPublish(t, writer, []COWMutation{{Key: []byte(u.k), Value: []byte(u.v), Flags: node.FlagInline}})
+		cowTestRelease(root)
+		root = next
+		expected[u.k] = u.v
+	}
+	if len(root.delta) == 0 || root.l1 == nil || root.tree.Len() == 0 {
+		t.Fatalf("expected all 3 layers populated, got l0=%d l1=%d tree=%d", len(root.delta), cowDeltaL1Count(root.l1), root.tree.Len())
+	}
+	verifyRootMatchesMap(t, root, expected)
+	verifyTraversalPingPong(t, root, expected)
+
+	// ScanOwned on 3-layer root must also be 0-alloc.
+	allocs3 := testing.AllocsPerRun(50, func() {
+		count := 0
+		root.ScanOwned(func(COWRecord) bool {
+			count++
+			return true
+		})
+		if count != len(expected) {
+			t.Fatalf("3-layer ScanOwned count=%d want %d", count, len(expected))
+		}
+	})
+	if allocs3 != 0 {
+		t.Fatalf("3-layer ScanOwned allocated %.2f times/op, want 0", allocs3)
+	}
+	cowTestRelease(root)
+}
+
+func TestCOWDeltaTwoLevelTraversalPauseAndSize(t *testing.T) {
+	if sz := unsafe.Sizeof(cowDeltaTraversal{}); sz >= 256 {
+		t.Fatalf("cowDeltaTraversal size=%dB, want <256B", sz)
+	}
+	if sz := unsafe.Sizeof(COWTraversal{}); sz >= 1536 {
+		t.Fatalf("COWTraversal size=%dB, want <1536B", sz)
+	}
+
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	defer func() {
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	// Pure-L1 root with empty tree and a long key inside L1.
+	longKey := strings.Repeat("b", 4096)
+	var root *COWRoot
+	for i := 0; i < cowDeltaL0MaxEntries+1; i++ {
+		k := fmt.Sprintf("a%03d", i)
+		if i == cowDeltaL0MaxEntries {
+			k = longKey
+		}
+		next := cowTestPublish(t, writer, []COWMutation{{Key: []byte(k), Value: []byte("v"), Flags: node.FlagInline}})
+		if root != nil {
+			cowTestRelease(root)
+		}
+		root = next
+	}
+	defer cowTestRelease(root)
+	if root.tree.Len() != 0 || len(root.delta) != 0 || root.l1 == nil {
+		t.Fatalf("expected tree-empty pure-L1 root, got tree=%d l0=%d l1=%v", root.tree.Len(), len(root.delta), root.l1 != nil)
+	}
+
+	// Unpositioned Next/Prev and BOF/EOF recovery on pure-L1 root.
+	tr, err := root.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal: %v", err)
+	}
+	stepDone := func(op COWTraversalOperation, key string) (COWRecord, bool) {
+		t.Helper()
+		w := &COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}
+		if err := tr.Begin(op, key, w); err != nil {
+			t.Fatalf("Begin(%d): %v", op, err)
+		}
+		done, err := tr.Step(w)
+		if err != nil || !done {
+			t.Fatalf("Step(%d): done=%v err=%v", op, done, err)
+		}
+		rec, ok, err := tr.Record(w)
+		if err != nil {
+			t.Fatalf("Record(%d): %v", op, err)
+		}
+		return rec, ok
+	}
+	if rec, ok := stepDone(COWPrev, ""); ok {
+		t.Fatalf("unpositioned Prev on pure-L1 returned %+v", rec)
+	}
+	if rec, ok := stepDone(COWNext, ""); !ok || rec.Key != "a000" {
+		t.Fatalf("unpositioned Next on pure-L1 got (%+v,%v), want a000", rec, ok)
+	}
+	if rec, ok := stepDone(COWLast, ""); !ok || rec.Key != longKey {
+		t.Fatalf("Last on pure-L1 got (%q,%v), want longKey", rec.Key, ok)
+	}
+	if _, ok := stepDone(COWNext, ""); ok {
+		t.Fatal("expected EOF after Last on pure-L1")
+	}
+	if rec, ok := stepDone(COWPrev, ""); !ok || rec.Key != longKey {
+		t.Fatalf("Prev after EOF on pure-L1 got (%q,%v), want longKey", rec.Key, ok)
+	}
+	if done, ret, err := tr.CloseStep(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}); err != nil || !done {
+		t.Fatalf("CloseStep: done=%v err=%v", done, err)
+	} else {
+		ret.Drain()
+	}
+
+	// Pause mid-L1-search comparison and close cleanly.
+	tr2, err := root.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal pause: %v", err)
+	}
+	if err := tr2.Begin(COWSeekGE, strings.Repeat("b", 4095)+"c", &COWTraversalWork{RecordLimit: 16, ByteLimit: 4096}); err != nil {
+		t.Fatalf("Begin SeekGE: %v", err)
+	}
+	paused := false
+	for range 64 {
+		done, err := tr2.Step(&COWTraversalWork{RecordLimit: 2, ByteLimit: 512})
+		if err != nil {
+			t.Fatalf("Step before pause: %v", err)
+		}
+		if tr2.delta.pending {
+			paused = true
+			break
+		}
+		if done {
+			break
+		}
+	}
+	if !paused {
+		t.Fatal("expected pure-L1 traversal to pause mid-SeekGE")
+	}
+	if done, ret, err := tr2.CloseStep(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}); err != nil || !done {
+		t.Fatalf("CloseStep paused L1: done=%v err=%v", done, err)
+	} else {
+		ret.Drain()
+	}
+}
+
+func TestCOWDeltaTightBudgetL1Gating(t *testing.T) {
+	limits := DefaultCOWLimits()
+	limits.MaxGenerationBytes = 1 << 20
+	limits.MaxInFlightBytes = 1 << 20
+	budget, writer := cowTestWriter(t, limits)
+	var root *COWRoot
+	defer func() {
+		if root != nil {
+			cowTestRelease(root)
+		}
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	expected := map[string]string{}
+	sawTreeFlush := false
+	for i := 0; i < 400; i++ {
+		k := fmt.Sprintf("k%06d", (i*73)%400)
+		v := fmt.Sprintf("val-%06d", i)
+		m := []COWMutation{{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline}}
+		est, err := writer.Estimate(m, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("step %d Estimate: %v", i, err)
+		}
+		if bound, ok := writer.RawPointPredictionUpperBound(m[0]); ok {
+			if bound.History() < est.History() {
+				t.Fatalf("step %d RawPointPredictionUpperBound %d < Estimate %d", i, bound.History(), est.History())
+			}
+		}
+		prep, err := writer.Prepare(m, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("step %d Prepare failed under tight 1MiB budget: %v", i, err)
+		}
+		if prep.Charge().Total() > est.Total() {
+			t.Fatalf("step %d Prepare charge %+v > Estimate %+v", i, prep.Charge(), est)
+		}
+		next := prep.Publish()
+		if root != nil {
+			cowTestRelease(root)
+		}
+		root = next
+		expected[k] = v
+		if root.tree.Len() > 0 {
+			sawTreeFlush = true
+		}
+	}
+	if !sawTreeFlush {
+		t.Fatal("expected tight-budget gating to flush L1 into main tree")
+	}
+	verifyRootMatchesMap(t, root, expected)
+}
+
+func TestCOWDeltaPrivateMaxKeySkipAccuracy(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	defer func() {
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	expected := map[string]string{}
+	var root *COWRoot
+	apply := func(batch []COWMutation) {
+		t.Helper()
+		prep, err := writer.Prepare(batch, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("Prepare: %v", err)
+		}
+		delta, valid := prep.LogicalSizeDelta()
+		if !valid {
+			t.Fatal("invalid LogicalSizeDelta")
+		}
+		prev := mapLogicalSize(expected)
+		for _, m := range batch {
+			if m.Remove {
+				delete(expected, string(m.Key))
+			} else {
+				expected[string(m.Key)] = string(m.Value)
+			}
+		}
+		if want := mapLogicalSize(expected) - prev; delta != want {
+			t.Fatalf("LogicalSizeDelta=%d want %d", delta, want)
+		}
+		next := prep.Publish()
+		if root != nil {
+			cowTestRelease(root)
+		}
+		root = next
+		if root.Len() != len(expected) {
+			t.Fatalf("Len=%d want %d", root.Len(), len(expected))
+		}
+	}
+
+	// Seed base tree with keys 000..099 so privateMaxKey == "k0099".
+	var seed []COWMutation
+	for i := 0; i < 100; i++ {
+		seed = append(seed, COWMutation{
+			Key:   []byte(fmt.Sprintf("k%04d", i)),
+			Value: []byte("v1"),
+			Flags: node.FlagInline,
+		})
+	}
+	apply(seed)
+
+	// Ascending single keys > privateMaxKey (hits privateMaxKey skip fast path!).
+	for i := 100; i < 160; i++ {
+		apply([]COWMutation{{
+			Key:   []byte(fmt.Sprintf("k%04d", i)),
+			Value: []byte("v-asc"),
+			Flags: node.FlagInline,
+		}})
+	}
+	// Overwrite existing key <= privateMaxKey.
+	apply([]COWMutation{{Key: []byte("k0050"), Value: []byte("v-overwrite-longer"), Flags: node.FlagInline}})
+	// Remove the current maximum key after flushing to tree.
+	apply([]COWMutation{{Key: []byte("k0159"), Remove: true}})
+	// Insert a key strictly > new max ("k0158") and overwrite an existing key ("k0158").
+	apply([]COWMutation{{Key: []byte("k0158"), Value: []byte("v-158-updated"), Flags: node.FlagInline}})
+	apply([]COWMutation{{Key: []byte("k0159"), Value: []byte("v-159-reborn"), Flags: node.FlagInline}})
+	verifyRootMatchesMap(t, root, expected)
+	cowTestRelease(root)
+}
+
+func verifyTraversalPingPong(t *testing.T, root *COWRoot, expected map[string]string) {
+	t.Helper()
+	keys := sortedMapKeys(expected)
+	tr, err := root.NewTraversal(&COWTraversalWork{RecordLimit: 1 << 20, ByteLimit: 1 << 20}, 0)
+	if err != nil {
+		t.Fatalf("NewTraversal: %v", err)
+	}
+	runOp := func(op COWTraversalOperation, key string) (COWRecord, bool) {
+		t.Helper()
+		if err := tr.Begin(op, key, &COWTraversalWork{RecordLimit: 4, ByteLimit: 4096}); err != nil {
+			t.Fatalf("Begin(%d, %q): %v", op, key, err)
+		}
+		for steps := 0; ; steps++ {
+			if steps > 2000 {
+				t.Fatalf("Step(%d, %q) exceeded max resumable steps", op, key)
+			}
+			done, err := tr.Step(&COWTraversalWork{RecordLimit: 2, ByteLimit: 512})
+			if err != nil {
+				t.Fatalf("Step(%d, %q): %v", op, key, err)
+			}
+			if done {
+				break
+			}
+		}
+		rec, ok, err := tr.Record(&COWTraversalWork{RecordLimit: 4, ByteLimit: 512})
+		if err != nil {
+			t.Fatalf("Record(%d, %q): %v", op, key, err)
+		}
+		return rec, ok
+	}
+
+	rec, ok := runOp(COWFirst, "")
+	if !ok || rec.Key != keys[0] || rec.Value != expected[keys[0]] {
+		t.Fatalf("First got (%q=%q,%v) want %q", rec.Key, rec.Value, ok, keys[0])
+	}
+	for i := 1; i < len(keys); i++ {
+		rec, ok = runOp(COWNext, "")
+		if !ok || rec.Key != keys[i] || rec.Value != expected[keys[i]] {
+			t.Fatalf("Next[%d] got (%q=%q,%v) want %q=%q", i, rec.Key, rec.Value, ok, keys[i], expected[keys[i]])
+		}
+		if i%7 == 0 {
+			prevRec, prevOk := runOp(COWPrev, "")
+			if !prevOk || prevRec.Key != keys[i-1] || prevRec.Value != expected[keys[i-1]] {
+				t.Fatalf("Prev[%d] got (%q=%q,%v) want %q", i, prevRec.Key, prevRec.Value, prevOk, keys[i-1])
+			}
+			fwdRec, fwdOk := runOp(COWNext, "")
+			if !fwdOk || fwdRec.Key != keys[i] || fwdRec.Value != expected[keys[i]] {
+				t.Fatalf("ReNext[%d] got (%q=%q,%v) want %q", i, fwdRec.Key, fwdRec.Value, fwdOk, keys[i])
+			}
+		}
+	}
+	if _, ok := runOp(COWNext, ""); ok {
+		t.Fatal("expected EOF after last key")
+	}
+	for steps := 0; ; steps++ {
+		if steps > 1000 {
+			t.Fatal("CloseStep exceeded max resumable steps")
+		}
+		done, ret, err := tr.CloseStep(&COWTraversalWork{RecordLimit: 4, ByteLimit: 4096})
+		if err != nil {
+			t.Fatalf("CloseStep: %v", err)
+		}
+		if done {
+			ret.Drain()
+			break
+		}
+	}
+}
+
+func cowDeltaL1Count(l1 *cowDeltaL1) int {
+	if l1 == nil {
+		return 0
+	}
+	return l1.count
 }
 
 func mapLogicalSize(m map[string]string) int64 {
