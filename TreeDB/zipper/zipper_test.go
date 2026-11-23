@@ -1235,7 +1235,7 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 		{key: []byte("b0"), child: page.PageChildRef(rightID)},
 	}
 
-	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{}, nil)
+	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{}, nil, nil)
 	if err != nil {
 		t.Fatalf("coalesceLeafChildren: %v", err)
 	}

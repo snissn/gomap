@@ -257,12 +257,29 @@ func testOrdinaryDATARawGroupCancellationRotationAndFallback(t *testing.T, spanN
 	if got, e := old.Get([]byte("key/00001")); e != nil || !bytes.Equal(got, bytes.Repeat([]byte{2}, 128)) {
 		t.Fatalf("held old snapshot %x %v", got, e)
 	}
-	// Unsupported delete maintenance rebuilds a fresh exact census.
+	// Point delete maintenance now emits exact rawLeafEvidence and avoids full scan.
 	if err = d.DeleteSync([]byte("key/00001")); err != nil {
 		t.Fatal(err)
 	}
+	if scans != 0 {
+		t.Fatalf("point delete rescanned %d times", scans)
+	}
+	assertOrdinaryRawCensus(t, d)
+	// Unsupported range delete still rebuilds a fresh exact census.
+	rb := d.NewBatch()
+	if err = rb.DeleteRange([]byte("key/00002"), []byte("key/00010")); err != nil {
+		_ = rb.Close()
+		t.Fatal(err)
+	}
+	if err = rb.WriteSync(); err != nil {
+		_ = rb.Close()
+		t.Fatal(err)
+	}
+	if err = rb.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if scans == 0 {
-		t.Fatal("delete bypassed exact fallback")
+		t.Fatal("range delete bypassed exact fallback")
 	}
 	assertOrdinaryRawCensus(t, d)
 	// Invalid derived evidence must force one exact repair, then resume.
@@ -378,4 +395,150 @@ func assertOrdinaryRawProjectionBoundaries(t *testing.T, d *DB) {
 	project(true)
 	budget.setLimit(math.MaxUint64)
 	assertOrdinaryRawCensus(t, d)
+}
+
+func TestOrdinaryDATAOuterLeafDeletesCoalesceAndRebalanceAvoidCandidateScan(t *testing.T) {
+	testOrdinaryDATAOuterLeafDeletesCoalesceAndRebalanceAvoidCandidateScan(t, false)
+}
+
+func TestOrdinaryDATASpanNativeDeletesCoalesceAndRebalanceAvoidCandidateScan(t *testing.T) {
+	testOrdinaryDATAOuterLeafDeletesCoalesceAndRebalanceAvoidCandidateScan(t, true)
+}
+
+func testOrdinaryDATAOuterLeafDeletesCoalesceAndRebalanceAvoidCandidateScan(t *testing.T, spanNative bool) {
+	t.Helper()
+	opts := Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+	if spanNative {
+		opts.FlushAdmissionPolicy = FlushAdmissionPolicyExplicit
+		opts.FlushApplySpanNative = true
+		opts.FlushApplyConcurrency = 4
+		opts.FlushApplyMinEntries = 1
+		opts.FlushApplyMinSpans = 1
+		opts.FlushApplyMinBytes = 1
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	log := &registeredLeafPageLog{db: d, dir: d.dir}
+	if err = log.ensureWriter(); err != nil {
+		t.Fatal(err)
+	}
+	d.SetLeafPageLog(log)
+	defer closeVacuumTestLeafPageLog(t, d, log)
+
+	const totalKeys = 3000
+	seed := d.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		if err := seed.Set([]byte(fmt.Sprintf("k/%05d", i)), bytes.Repeat([]byte{byte(i)}, 128)); err != nil {
+			_ = seed.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := seed.WriteSync(); err != nil {
+		_ = seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertOrdinaryRawCensus(t, d)
+
+	// Rotate to a second leaf-log segment so subsequent deletes rewrite leaves
+	// into segment 2 while dropping edges from segment 1.
+	seg1 := log.fileID
+	if err = log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log.fileID, err = valuelog.EncodeFileID(rewriteLeafLogLaneID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.path = filepath.Join(LeafLogDirPath(d.dir), fmt.Sprintf("value-l%d-000002.log", rewriteLeafLogLaneID))
+	log.w, err = valuelog.NewWriter(log.path, log.fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.RegisterValueLogSegment(log.path, log.fileID); err != nil {
+		t.Fatal(err)
+	}
+
+	scans := 0
+	d.testScanCandidateExternalReferencesHook = func() { scans++ }
+	defer func() { d.testScanCandidateExternalReferencesHook = nil }()
+
+	// Phase 1: delete scattered keys + mixed puts to trigger leaf rebalance/merge.
+	b1 := d.NewBatch()
+	for i := 0; i < totalKeys; i += 2 {
+		if err := b1.Delete([]byte(fmt.Sprintf("k/%05d", i))); err != nil {
+			_ = b1.Close()
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i < 300; i += 4 {
+		if err := b1.Set([]byte(fmt.Sprintf("k/%05d", i)), bytes.Repeat([]byte("u"), 128)); err != nil {
+			_ = b1.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b1.WriteSync(); err != nil {
+		_ = b1.Close()
+		t.Fatal(err)
+	}
+	if err := b1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 0 {
+		t.Fatalf("phase 1 mixed delete/put triggered %d full candidate scans", scans)
+	}
+	assertOrdinaryRawCensus(t, d)
+
+	// Phase 2: delete contiguous runs to produce completely empty leaves (pruning)
+	// and underfull siblings (coalescing/rebalancing).
+	b2 := d.NewBatch()
+	for i := 500; i < 2500; i++ {
+		if err := b2.Delete([]byte(fmt.Sprintf("k/%05d", i))); err != nil {
+			_ = b2.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b2.WriteSync(); err != nil {
+		_ = b2.Close()
+		t.Fatal(err)
+	}
+	if err := b2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 0 {
+		t.Fatalf("phase 2 contiguous delete triggered %d full candidate scans", scans)
+	}
+	assertOrdinaryRawCensus(t, d)
+
+	// Phase 3: delete all remaining keys so every segment 1 edge drops to 0.
+	b3 := d.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		if err := b3.Delete([]byte(fmt.Sprintf("k/%05d", i))); err != nil {
+			_ = b3.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b3.WriteSync(); err != nil {
+		_ = b3.Close()
+		t.Fatal(err)
+	}
+	if err := b3.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 0 {
+		t.Fatalf("phase 3 full delete triggered %d full candidate scans", scans)
+	}
+	assertOrdinaryRawCensus(t, d)
+	d.valueLogRefTracker.mu.RLock()
+	seg1Count := d.valueLogRefTracker.rawCounts.get(seg1)
+	d.valueLogRefTracker.mu.RUnlock()
+	if seg1Count != 0 {
+		t.Fatalf("segment 1 still has %d raw edges after deleting all keys", seg1Count)
+	}
+	assertCandidateTrackerMatchesFullScan(t, d)
 }
