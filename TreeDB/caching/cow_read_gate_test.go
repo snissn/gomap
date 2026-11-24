@@ -15,9 +15,45 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+func TestCOWBasisReadSlotPadding(t *testing.T) {
+	if sz := unsafe.Sizeof(cowBasisReadSlot{}); sz != 64 {
+		t.Fatalf("cowBasisReadSlot size = %d, want 64", sz)
+	}
+	var basis cowBackendBasis
+	if off := unsafe.Offsetof(basis.readSlots); off%64 != 0 {
+		t.Fatalf("cowBackendBasis.readSlots offset = %d, want multiple of 64", off)
+	}
+	total := len(basis.readSlots) + 1
+	locked := make([]*sync.Mutex, 0, total)
+	seen := make(map[*sync.Mutex]bool, total)
+	for seed := uint32(0); seed < uint32(total); seed++ {
+		mu, _, ok := basis.tryLockReadLane(seed)
+		if !ok {
+			for _, m := range locked {
+				m.Unlock()
+			}
+			t.Fatalf("tryLockReadLane(%d) failed with %d/%d lanes held", seed, len(locked), total)
+		}
+		locked = append(locked, mu)
+		seen[mu] = true
+	}
+	if _, _, ok := basis.tryLockReadLane(0); ok {
+		t.Fatal("tryLockReadLane succeeded with all 8 lanes held")
+	}
+	for _, m := range locked {
+		m.Unlock()
+	}
+	if len(seen) != total {
+		t.Fatalf("distinct locked read lanes = %d, want %d", len(seen), total)
+	}
+}
+
 func TestCOWReadGateStripeDistributionAndLocking(t *testing.T) {
 	if sz := unsafe.Sizeof(cowReadGateShard{}); sz != 64 {
 		t.Fatalf("cowReadGateShard size = %d, want 64", sz)
+	}
+	if sz := unsafe.Sizeof(cowBasisReadSlot{}); sz != 64 {
+		t.Fatalf("cowBasisReadSlot size = %d, want 64", sz)
 	}
 	if cowReadStripe(nil) != 0 || cowReadStripe([]byte{}) != 0 {
 		t.Fatalf("empty key must hash to stripe 0")

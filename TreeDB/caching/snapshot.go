@@ -422,17 +422,19 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.iteratorMu.Unlock()
 	var err error
 	if s.cowCut != nil {
-		if s.cowReader != nil {
-			s.cowReader.releaseSnapshotScratch()
-			s.cowReader = nil
-		}
 		s.rootPointShards = nil
 		s.rootIterator = rootDomainSnapshot{}
 		if d := s.cowDomains; d != nil {
 			s.cowDomains = nil
 			s.cowCut.releaseDomains(d)
 		}
-		s.cowPin.Close()
+		reader, pin := s.cowReader, s.cowPin
+		s.cowReader, s.cowPin = nil, nil
+		if reader != nil {
+			reader.releaseSnapshotScratchWithView(pin)
+		} else if pin != nil {
+			pin.Close()
+		}
 		err = s.db.cow.releaseCut(s.cowCut)
 	} else if s.backend != nil {
 		err = s.backend.Close()

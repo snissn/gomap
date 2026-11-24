@@ -431,3 +431,162 @@ func TestCOWIdleReadScratchSingleReceiptOwnershipPressureAndClose(t *testing.T) 
 		t.Fatalf("single receipt close: %+v", got)
 	}
 }
+
+func TestCOWIdleReadScratchThreeLeasesAndTwoLeaseIsolation(t *testing.T) {
+	b, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := b.Stats()
+
+	l0, err := b.AcquireExternal(512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l1, err := b.AcquireExternal(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l2, err := b.AcquireExternal(2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3 := new([64]byte)
+	if !b.PutIdleReadScratch3(v3, [3]*COWExternalLease{l0, l1, l2}) {
+		t.Fatal("PutIdleReadScratch3 refused")
+	}
+	// Duplicate third lease must be rejected before consuming anything.
+	if b.PutIdleReadScratch3(v3, [3]*COWExternalLease{l0, nil, l0}) {
+		t.Fatal("duplicate lease accepted")
+	}
+	// 2-lease TakeIdleReadScratch must not drop a 3-lease entry.
+	if got2, _ := b.TakeIdleReadScratch(); got2 != nil {
+		t.Fatalf("2-lease TakeIdleReadScratch returned 3-lease entry: %v", got2)
+	}
+	// 2-lease entry pushed afterward is visible to TakeIdleReadScratch while 3-lease stays parked.
+	v2, twoLeases := idleReadTestAllocation(t, b)
+	if !b.PutIdleReadScratch(v2, twoLeases) {
+		t.Fatal("2-lease PutIdleReadScratch failed")
+	}
+	got2, got2Leases := b.TakeIdleReadScratch()
+	if got2 != v2 || got2Leases[0] == nil || got2Leases[1] == nil {
+		t.Fatalf("unexpected 2-lease take: %v %+v", got2, got2Leases)
+	}
+	for _, l := range got2Leases {
+		l.Close()
+	}
+
+	got3, got3Leases := b.TakeIdleReadScratch3()
+	if got3 != v3 || got3Leases[0] == nil || got3Leases[1] == nil || got3Leases[2] == nil {
+		t.Fatalf("TakeIdleReadScratch3 mismatch: %v %+v", got3, got3Leases)
+	}
+	if !b.PutIdleReadScratch3(got3, got3Leases) {
+		t.Fatal("repark 3-lease failed")
+	}
+	if got := b.Stats(); got.ReservedBytes != baseline.ReservedBytes+512+1024+2048 || got.ExternalLeases != 0 {
+		t.Fatalf("3-lease parked stats=%+v", got)
+	}
+	got3, got3Leases = b.TakeIdleReadScratch3()
+	for _, l := range got3Leases {
+		l.Close()
+	}
+	if got := b.Stats(); got.TotalBytes != baseline.TotalBytes || got.ReservedBytes != baseline.ReservedBytes || got.ExternalLeases != 0 {
+		t.Fatalf("3-lease refund mismatch: before=%+v after=%+v", baseline, got)
+	}
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatalf("close leaked: %+v", b.Stats())
+	}
+}
+
+func TestCOWIdleReadScratchCloseAndPutFused(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	prepared, err := w.Prepare([]COWMutation{{Key: []byte("k"), Value: []byte("v")}}, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := prepared.Publish()
+	baseline := b.Stats()
+
+	// 1. Immediate refund path (root still retained by caller): view closes and parks 3 leases in one lock.
+	view1, err := root.Acquire(128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l0, err := b.AcquireExternal(256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l1, err := b.AcquireExternal(512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l2, err := b.AcquireExternal(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch1 := new([64]byte)
+	if !view1.CloseAndPutIdleReadScratch3(scratch1, [3]*COWExternalLease{l0, l1, l2}) {
+		t.Fatal("CloseAndPutIdleReadScratch3 refused immediate-refund park")
+	}
+	if got := b.Stats(); got.Views != baseline.Views || got.ExternalLeases != 0 || got.ReservedBytes != baseline.ReservedBytes+256+512+1024 {
+		t.Fatalf("immediate-refund fused stats=%+v baseline=%+v", got, baseline)
+	}
+
+	// 2. TakeIdleReadScratch3 returns distinct fresh handles with exact stats and zero leak.
+	got1, fresh1 := b.TakeIdleReadScratch3()
+	if got1 != scratch1 || fresh1[0] == nil || fresh1[1] == nil || fresh1[2] == nil || fresh1[0] == l0 || fresh1[1] == l1 || fresh1[2] == l2 {
+		t.Fatalf("TakeIdleReadScratch3 mismatch: got=%v fresh=%+v", got1, fresh1)
+	}
+
+	// 3. Failed park rollback (duplicate lease): view still closes cleanly, caller keeps valid leases.
+	view2, err := root.Acquire(128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view2.CloseAndPutIdleReadScratch3(got1, [3]*COWExternalLease{fresh1[0], nil, fresh1[0]}) {
+		t.Fatal("CloseAndPutIdleReadScratch3 accepted duplicate lease")
+	}
+	if got := b.Stats(); got.Views != baseline.Views {
+		t.Fatalf("failed park did not close view: views=%d want=%d", got.Views, baseline.Views)
+	}
+	for _, l := range fresh1 {
+		l.Close()
+	}
+	if got := b.Stats(); got.TotalBytes != baseline.TotalBytes || got.ReservedBytes != baseline.ReservedBytes || got.ExternalLeases != 0 {
+		t.Fatalf("failed-park rollback leaked: before=%+v after=%+v", baseline, got)
+	}
+
+	// 4. Deferred retirement path (view holds the last reference to a frozen root).
+	view3, err := root.Acquire(128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cowTestRelease(root)
+	cowTestClose(w)
+	d0, err := b.AcquireExternal(256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1, err := b.AcquireExternal(512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch2 := new([64]byte)
+	if !view3.CloseAndPutIdleReadScratch3(scratch2, [3]*COWExternalLease{d0, d1, nil}) {
+		t.Fatal("CloseAndPutIdleReadScratch3 refused deferred-retirement park")
+	}
+	if got := b.Stats(); got.Views != 0 || got.DeferredBytes != 0 || got.ExternalLeases != 0 || got.ReservedBytes != 256+512 {
+		t.Fatalf("deferred-retirement fused stats=%+v", got)
+	}
+	got2, fresh2 := b.TakeIdleReadScratch3()
+	if got2 != scratch2 || fresh2[0] == nil || fresh2[1] == nil || fresh2[2] != nil {
+		t.Fatalf("deferred-retirement take mismatch: got=%v fresh=%+v", got2, fresh2)
+	}
+	fresh2[0].Close()
+	fresh2[1].Close()
+	b.Close()
+	if got := b.Stats(); got.TotalBytes != 0 || got.ReservedBytes != 0 || got.ExternalLeases != 0 || got.Views != 0 {
+		t.Fatalf("final drain leaked: %+v", got)
+	}
+}

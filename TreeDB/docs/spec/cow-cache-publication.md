@@ -249,14 +249,20 @@ A dictionary capacity refusal can hand a synchronous point back to that same
 cut, preserving fresh-owner refund outside the basis mutex.
 
 Successful owned point copy-out and cut-local traversal can return workspace
-metadata and optional point buffers through the original budget's idle scratch
-stack. It retains at most 16
-entries and 512 KiB of charged payload. Snapshot, backend basis and all successor
-page aliases are cleared first. Cut-local codecs, dictionary capabilities,
-input/output buffers and allocation chains are discarded and fully refunded
-before parking; they are never pooled. Parking consumes the original one or two
-receipt capabilities and refunds their wrappers; a borrower receives fresh
-receipts. Pointer-only cached reads need no point arrays or second receipt.
+metadata, optional point buffers, and at most one stateless Snappy/LZ4 block
+decoder (`id == 0`, no dictionary definition, input/raw buffers `<= 64 KiB`)
+through the original budget's idle scratch stack. It retains at most 16
+entries and 512 KiB of charged payload. Snapshot, backend basis, active codec
+slices and all successor page aliases are cleared first. Dictionary decoders,
+generic codecs, input/output buffers and allocation chains are discarded and
+fully refunded before parking; they are never pooled. Parking consumes up to
+three original receipt capabilities and refunds their wrappers (and snapshot
+teardown may fuse parking with its `COWView` release under one budget mutex
+acquisition); a borrower receives fresh receipts allocated outside the budget
+mutex. Pointer-only cached reads need no point arrays or additional receipts.
+Retained backend bases expose 8 cache-line-padded traversal lanes (the primary
+`readMu` plus 7 `readSlots`) so parallel synchronous point reads hash across
+disjoint lanes without serializing on a single mutex.
 Borrowed value/iterator materialization stays conservative; owned append paths
 become eligible only after copying into the caller's destination. Stale close, resize, shrink or split cannot affect a new owner.
 Any otherwise refused in-flight, retirement or total byte admission discards

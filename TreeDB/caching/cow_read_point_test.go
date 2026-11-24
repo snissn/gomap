@@ -258,9 +258,15 @@ func TestCOWPublicPointReadQueuedClose(t *testing.T) {
 			}
 			basis := db.cow.cut.basis
 			basis.readMu.Lock()
+			for i := range basis.readSlots {
+				basis.readSlots[i].mu.Lock()
+			}
 			locked := true
 			defer func() {
 				if locked {
+					for i := range basis.readSlots {
+						basis.readSlots[i].mu.Unlock()
+					}
 					basis.readMu.Unlock()
 				}
 			}()
@@ -289,6 +295,9 @@ func TestCOWPublicPointReadQueuedClose(t *testing.T) {
 					t.Fatal("Close did not queue behind point")
 				}
 				runtime.Gosched()
+			}
+			for i := range basis.readSlots {
+				basis.readSlots[i].mu.Unlock()
 			}
 			basis.readMu.Unlock()
 			locked = false

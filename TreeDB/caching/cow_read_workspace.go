@@ -39,6 +39,7 @@ type cowReadCodec struct {
 	definition *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
 	input, raw []byte
 	lease      *memtable.COWExternalLease
+	charge     uint64
 }
 type cowPointScratch struct {
 	lease     *memtable.COWExternalLease
@@ -54,6 +55,8 @@ type cowReadWorkspace struct {
 	lease         *memtable.COWExternalLease
 	allocations   *cowReadAllocation
 	codecs        []*cowReadCodec
+	inlineCodecs  [1]*cowReadCodec
+	parkedCodec   *cowReadCodec
 	input, output []byte
 	point         *cowPointScratch
 	poolable      bool
@@ -75,11 +78,17 @@ func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 }
 
 func newCOWReadWorkspace(s *Snapshot) (*cowReadWorkspace, error) {
-	if idle, leases := s.cowCache.budget.TakeIdleReadScratch(); idle != nil {
+	if idle, leases := s.cowCache.budget.TakeIdleReadScratch3(); idle != nil {
 		w := idle.(*cowReadWorkspace)
 		w.lease = leases[0]
 		if w.point != nil {
 			w.point.lease = leases[1]
+		}
+		if c := w.parkedCodec; c != nil {
+			w.parkedCodec = nil
+			c.lease = leases[2]
+			w.inlineCodecs[0] = c
+			w.codecs = w.inlineCodecs[:1:len(w.inlineCodecs)]
 		}
 		w.snapshot = s
 		w.poolable = false
@@ -425,7 +434,7 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		owner.Close()
 		return nil, err
 	}
-	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
+	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease, charge: bytes}
 	w.codecs[slot] = c
 	return c, nil
 }
@@ -442,32 +451,75 @@ func (c *cowReadCodec) close() {
 	lease.Close()
 }
 
-// Value buffers and codecs remain cut-owned. After the final admitted read,
-// discard those children and refund every value receipt before recycling only
-// the original workspace metadata and optional point arrays. No output,
-// dictionary, file, snapshot or page alias crosses this ownership transfer.
+func (c *cowReadCodec) reusableIdleBlockCodec() bool {
+	return c != nil && c.id == 0 && c.definition == nil &&
+		(c.codec == valuelog.BlockCodecSnappy || c.codec == valuelog.BlockCodecLZ4) &&
+		c.lease != nil && cap(c.input) <= 64<<10 && cap(c.raw) <= 64<<10
+}
+
+// Value buffers and dictionary decoders remain cut-owned. After the final
+// admitted read, discard dictionary/generic state and retain at most one
+// stateless Snappy/LZ4 block decoder alongside the workspace metadata and
+// optional point arrays. No output, dictionary, file, snapshot or page alias
+// crosses this ownership transfer.
 func (w *cowReadWorkspace) releaseSnapshotScratch() {
+	w.releaseSnapshotScratchWithView(nil)
+}
+
+func (w *cowReadWorkspace) releaseSnapshotScratchWithView(view *memtable.COWView) {
 	if w != nil && w.poolable {
 		// End traversal aliases before any decoder/buffer charge is refunded.
 		if w.point != nil {
 			w.point.successor = tree.OwnedSuccessorScratch{}
 		}
 		w.snapshot, w.basis = nil, nil
+		kept := w.parkedCodec
+		w.parkedCodec = nil
+		for i, c := range w.codecs {
+			w.codecs[i] = nil
+			if c == nil {
+				continue
+			}
+			if kept == nil && c.reusableIdleBlockCodec() {
+				kept = c
+				continue
+			}
+			c.close()
+		}
+		w.codecs = nil
+		w.inlineCodecs = [1]*cowReadCodec{}
 		w.closeValueScratch()
-		leases := [2]*memtable.COWExternalLease{w.lease, nil}
-		w.lease = nil
+		var leases [3]*memtable.COWExternalLease
+		leases[0], w.lease = w.lease, nil
 		if w.point != nil {
 			leases[1], w.point.lease = w.point.lease, nil
 		}
-		if w.budget.PutIdleReadScratch(w, leases) {
+		if kept != nil {
+			w.parkedCodec = kept
+			leases[2], kept.lease = kept.lease, nil
+		}
+		var parked bool
+		if view != nil {
+			parked = view.CloseAndPutIdleReadScratch3(w, leases)
+			view = nil
+		} else {
+			parked = w.budget.PutIdleReadScratch3(w, leases)
+		}
+		if parked {
 			return
 		}
 		w.lease = leases[0]
 		if w.point != nil {
 			w.point.lease = leases[1]
 		}
+		if kept != nil {
+			kept.lease = leases[2]
+		}
 	}
 	w.close()
+	if view != nil {
+		view.Close()
+	}
 }
 
 func (w *cowReadWorkspace) close() {
@@ -491,6 +543,10 @@ func (w *cowReadWorkspace) close() {
 
 // Drop all cut-bound value state before its independent receipts are refunded.
 func (w *cowReadWorkspace) closeValueScratch() {
+	if c := w.parkedCodec; c != nil {
+		w.parkedCodec = nil
+		c.close()
+	}
 	for i, c := range w.codecs {
 		w.codecs[i] = nil
 		if c != nil {
@@ -498,6 +554,7 @@ func (w *cowReadWorkspace) closeValueScratch() {
 		}
 	}
 	w.codecs = nil
+	w.inlineCodecs = [1]*cowReadCodec{}
 	w.input = nil
 	w.output = nil
 	for w.allocations != nil {
@@ -982,9 +1039,52 @@ func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	// Check immutable memtable domains before acquiring cowReadMu; inline values
+	// and tombstones need neither traversal scratch nor value-log decoding.
+	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return dst, revision, tree.ErrKeyNotFound
+		}
+		if flags&node.FlagPointer == 0 {
+			return append(dst, normalizeRawKVValue(val)...), revision, nil
+		}
+		s.cowReadMu.Lock()
+		defer s.cowReadMu.Unlock()
+		value, rev, err := s.cowValueFromEntryLocked(node.LeafEntry{Key: key, ValuePtr: ptr, Flags: flags, Revision: revision})
+		if err != nil {
+			if err == tree.ErrKeyNotFound && s.cowReader != nil {
+				s.cowReader.poolable = true
+			}
+			return dst, rev, err
+		}
+		out := append(dst, value...)
+		if s.cowReader != nil {
+			s.cowReader.poolable = true
+		}
+		return out, rev, nil
+	}
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	value, revision, err := s.cowValueLocked(key)
+	entry, err := s.cowPhysicalEntryLocked(key)
+	if err == errCOWPhysicalDictionary {
+		w, werr := s.cowWorkspaceLocked()
+		if werr != nil {
+			return dst, 0, werr
+		}
+		point, perr := w.pointScratch()
+		if perr != nil {
+			return dst, 0, perr
+		}
+		entry, err = s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], w.readLeaf)
+	}
+	if err != nil {
+		if err == tree.ErrKeyNotFound && s.cowReader != nil {
+			s.cowReader.poolable = true
+		}
+		return dst, 0, err
+	}
+	value, revision, err := s.cowValueFromEntryLocked(entry)
 	if err != nil {
 		if err == tree.ErrKeyNotFound && s.cowReader != nil {
 			s.cowReader.poolable = true

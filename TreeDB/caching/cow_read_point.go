@@ -117,15 +117,15 @@ func (db *DB) cowGetVersionedAppend(key, dst []byte, missingIsNil bool) (out []b
 // Pointers and captured-only dictionary providers retain the original
 // cut-local materializer; capable dictionary leaves finish this traversal.
 func (b *cowBackendBasis) appendInline(db *DB, key, dst []byte, freshOwner *cowFreshReadOwner) (out []byte, result node.LeafEntry, handled bool, err error) {
-	b.readMu.Lock()
-	defer b.readMu.Unlock()
-	fresh := b.reader == nil
+	mu, slotReader := b.lockReadLane(cowReadStripe(key))
+	defer mu.Unlock()
+	fresh := *slotReader == nil
 	defer func() {
 		// Pointer/dictionary metadata has detached page aliases. Preserve a new
 		// owner for reuse unless its original cut actually refuses admission.
-		*freshOwner = cowReadHandoffLocked(&b.readMu, &b.reader, fresh, !handled, err)
+		*freshOwner = cowReadHandoffLocked(mu, slotReader, fresh, !handled, err)
 	}()
-	w, err := b.physicalWorkspaceLocked(db.cow.budget, db.cow.readLimits())
+	w, err := b.workspaceLocked(slotReader, db.cow.budget, db.cow.readLimits())
 	if err != nil {
 		return dst, node.LeafEntry{}, true, err
 	}

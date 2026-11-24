@@ -96,11 +96,22 @@ func (v *COWView) Release() COWRetirement {
 }
 
 func (v *COWView) Close() {
+	_ = v.CloseAndPutIdleReadScratch3(nil, [3]*COWExternalLease{})
+}
+
+// CloseAndPutIdleReadScratch3 closes the view and, when value is non-nil,
+// attempts to park caller-owned read scratch under the same budget mutex
+// acquisition. It always closes the view; when it returns false, the caller
+// retains its original leases and must restore or close them.
+func (v *COWView) CloseAndPutIdleReadScratch3(value any, leases [3]*COWExternalLease) bool {
+	if v == nil {
+		return false
+	}
 	v.mu.Lock()
 	r := v.root
 	if r == nil {
 		v.mu.Unlock()
-		return
+		return false
 	}
 	v.root = nil
 	lease := &v.leaseStorage
@@ -109,8 +120,12 @@ func (v *COWView) Close() {
 	retirement := r.Release()
 	r = nil
 	b := lease.budget
+	parked := false
 	if retirement.generation == nil {
 		b.mu.Lock()
+		if value != nil {
+			parked = b.putIdleReadScratch3Locked(value, leases)
+		}
 		if !lease.closed {
 			lease.closed = true
 			charge := lease.charge
@@ -121,14 +136,18 @@ func (v *COWView) Close() {
 		}
 		b.mu.Unlock()
 		b.releaseMaintenanceReservation()
-		return
+		return parked
 	}
 	b.mu.Lock()
+	if value != nil {
+		parked = b.putIdleReadScratch3Locked(value, leases)
+	}
 	b.stats.Views--
 	b.stats.DeferredBytes += lease.charge
 	b.mu.Unlock()
 	retirement.viewLease = lease
 	retirement.Drain()
+	return parked
 }
 
 // COWCursor owns its own view, so closing the creating cut/view does not revoke
