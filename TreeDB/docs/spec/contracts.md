@@ -379,12 +379,16 @@ side stores do not inherit this main-store budget. No on-disk format changes.
 
 ### 2.5.2 Explicit immutable COW cache
 
-`Options.MemtableMode="cow_btree"` and explicit experimental
-`Options.MemtableMode="cow_ordered"` select the
+`Options.MemtableMode="cow_btree"` (explicitly, or via Open-time
+`Options.MemtableWorkload=MemtableWorkloadSemantic` / `OptionsForSemantic` when
+`MemtableMode` is `""` or `"auto"` on a writable, non-backend-only open) and
+explicit experimental `Options.MemtableMode="cow_ordered"` select the
 [coherent COW cut contract](cow-cache-publication.md). These immutable modes
-require exact selectors: `adaptive:cow_btree` and `adaptive:cow_ordered` return
-`caching.ErrCOWUnsupported` before backend opening or storage creation.
-Ordinary mutable `adaptive:<mode>` selectors remain supported. Snapshot capture pins one
+require Open-time selection: runtime `adaptive:cow_btree` and
+`adaptive:cow_ordered` return `caching.ErrCOWUnsupported` before backend opening
+or storage creation. Default raw-KV opens (`MemtableWorkloadDefault`, zero value)
+continue resolving `""` and `"auto"` to `"adaptive"`. Ordinary mutable
+`adaptive:<mode>` selectors remain supported. Snapshot capture pins one
 complete shard/source/backend-basis cut without rotation, record copying or
 history sorting. Owned point/versioned reads, presence/prefix queries,
 successors and forward/reverse iterators all resolve through that cut, including when

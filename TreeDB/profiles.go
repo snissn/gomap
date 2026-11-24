@@ -281,6 +281,19 @@ func OptionsFor(profile Profile, dir string) Options {
 	return opts
 }
 
+// OptionsForSemantic returns Options pre-filled for the given production
+// Profile with Open-time automatic semantic/collection memtable selection
+// (MemtableWorkloadSemantic -> "cow_btree" + StandaloneCOWMemtableLimits when
+// MemtableMode is empty or "auto" on writable, non-backend-only opens).
+//
+// Like OptionsFor, OptionsForSemantic rejects bench_unsafe and panics for
+// unknown profiles.
+func OptionsForSemantic(profile Profile, dir string) Options {
+	opts := OptionsFor(profile, dir)
+	opts.MemtableWorkload = MemtableWorkloadSemantic
+	return opts
+}
+
 // OptionsForBenchmark is the explicit benchmark/test constructor boundary. It
 // is the only options constructor that can select bench_unsafe.
 func OptionsForBenchmark(profile Profile, dir string) Options {

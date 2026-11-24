@@ -203,12 +203,13 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 			}
 			return observed.observation(limits), nil
 		}
-		// In durable command-WAL mode with a running size-maintenance worker,
-		// soft reservation pressure (3/4..7/8 of MaxInFlightBytes) still leaves
-		// headroom for concurrent writers while the background worker seals and
-		// retires the captured prefix. Hard reservation pressure (>=7/8) and
-		// non-reservation pressure retain the synchronous foreground drain.
-		if db.nativePressureDrainEnabled() && !db.relaxedSync &&
+		// In command-WAL modes (both durable and relaxed) with a running
+		// size-maintenance worker, soft reservation pressure (3/4..7/8 of
+		// MaxInFlightBytes) still leaves headroom for concurrent writers while
+		// the background worker seals and retires the captured prefix, gated by
+		// reservationDrainFloor hysteresis. Hard reservation pressure (>=7/8)
+		// and non-reservation pressure retain the synchronous foreground drain.
+		if db.nativePressureDrainEnabled() &&
 			!observed.nonReservationPressure(limits) && !observed.reservationHardPressure(limits) {
 			if floor := c.reservationDrainFloor.Load(); floor == 0 || observed.stats.ReservedBytes >= floor {
 				select {
@@ -256,7 +257,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		if (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
-			canDeferReservation := !db.relaxedSync && !remaining.nonReservationPressure(limits) && !remaining.reservationHardPressure(limits)
+			canDeferReservation := !remaining.nonReservationPressure(limits) && !remaining.reservationHardPressure(limits)
 			if !remaining.underPressure(limits) || canDeferReservation {
 				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
 				if rolloverErr == nil {
@@ -282,7 +283,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 						return backenddb.NativeProducerObservation{}, observeErr
 					}
 					if !after.underPressure(limits) ||
-						(!db.relaxedSync && !after.nonReservationPressure(limits) && !after.reservationHardPressure(limits)) {
+						(!after.nonReservationPressure(limits) && !after.reservationHardPressure(limits)) {
 						return after.observation(limits), nil
 					}
 				} else if rolloverErr != memtable.ErrCOWCapacity {

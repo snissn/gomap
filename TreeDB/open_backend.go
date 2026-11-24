@@ -122,6 +122,9 @@ func openBackendWithCachedServices(opts Options) (*DB, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, err
 	}
+	if err := resolveOpenMemtablePolicy(&opts, true); err != nil {
+		return nil, err
+	}
 	if err := validateCOWOpenOptions(&opts); err != nil {
 		return nil, err
 	}

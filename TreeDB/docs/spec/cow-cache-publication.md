@@ -14,13 +14,34 @@ qualified coherent read cuts permit shared grouped publication admission.
 
 ## Selection and finite admission
 
-Use a production profile and select the cache before Open:
+Use a production profile and select the cache before Open (either explicitly via
+`MemtableMode = "cow_btree"` or via Open-time semantic workload selection with
+`treedb.OptionsForSemantic` / `Options.MemtableWorkload = treedb.MemtableWorkloadSemantic`):
 
 ```go
 opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./cow-data")
 opts.MemtableMode = "cow_btree"
 database, err := treedb.Open(opts)
 ```
+
+For collection/document/gateway callers that want automatic Open-time selection
+without hardcoding `"cow_btree"` or limits, `treedb.OptionsForSemantic(profile, dir)`
+sets `Options.MemtableWorkload = treedb.MemtableWorkloadSemantic`. When
+`MemtableMode` is empty or `"auto"` on a writable, non-backend-only `Open`,
+TreeDB resolves `MemtableMode` to `"cow_btree"` and fills an all-zero
+`COWMemtableLimits` with `StandaloneCOWMemtableLimits()` before opening storage.
+Default raw-KV opens (`MemtableWorkloadDefault`, zero value) continue resolving
+`""` and `"auto"` to `"adaptive"`. Runtime adaptive rotation remains strictly
+for mutable raw-KV shards; `"adaptive:cow_btree"` and `"adaptive:cow_ordered"`
+still return `caching.ErrCOWUnsupported` before mutating storage.
+
+In both durable and relaxed command-WAL modes with an active size-maintenance
+worker, soft reservation pressure (`3/4..7/8` of `MaxInFlightBytes`) signals the
+background worker (`nativeReservationFlushCh`) to seal and retire the captured
+prefix concurrently with foreground writes, gated by `reservationDrainFloor`
+hysteresis (`step = MaxInFlightBytes/16`) to avoid repeated no-op handoffs when
+a held reader pins reservations above `3/4`. Hard reservation pressure (`>= 7/8`)
+and all non-reservation pressure retain synchronous foreground reclamation.
 
 `COWMemtableLimits` is the public finite-limit bundle. An all-zero bundle uses
 the following defaults; a nonzero bundle must supply every positive finite
