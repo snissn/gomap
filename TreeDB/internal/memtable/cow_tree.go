@@ -1200,20 +1200,22 @@ func applySortedNonDeleteCOWMutations(tr *btree.Map[string, cowValue], entries [
 		}
 	}
 	var valArena, keyArena []byte
-	valSide := perValAdmitted
-	if totalValBytes > 0 {
-		valCharge := cowAllocation(totalValBytes)
-		// Never let the value arena exceed the per-value admission slice;
-		// otherwise a fallback to per-entry key copies could exceed admittedPayload.
-		if valCharge <= perValAdmitted && valCharge <= admittedPayload {
-			valArena = make([]byte, totalValBytes)
-			valSide = valCharge
+	if bytesToStringZeroCopy {
+		valSide := perValAdmitted
+		if totalValBytes > 0 {
+			valCharge := cowAllocation(totalValBytes)
+			// Never let the value arena exceed the per-value admission slice;
+			// otherwise a fallback to per-entry key copies could exceed admittedPayload.
+			if valCharge <= perValAdmitted && valCharge <= admittedPayload {
+				valArena = make([]byte, totalValBytes)
+				valSide = valCharge
+			}
 		}
-	}
-	if totalKeyBytes > 0 && valSide < admittedPayload {
-		keyCharge := cowAllocation(totalKeyBytes)
-		if keyCharge <= admittedPayload-valSide {
-			keyArena = make([]byte, totalKeyBytes)
+		if totalKeyBytes > 0 && valSide < admittedPayload {
+			keyCharge := cowAllocation(totalKeyBytes)
+			if keyCharge <= admittedPayload-valSide {
+				keyArena = make([]byte, totalKeyBytes)
+			}
 		}
 	}
 	valOff := 0

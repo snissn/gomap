@@ -3,6 +3,8 @@
 
 package memtable
 
+const bytesToStringZeroCopy = false
+
 func bytesToStringNoCopy(b []byte) string {
 	if len(b) == 0 {
 		return ""
