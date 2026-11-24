@@ -130,7 +130,7 @@ func (w *COWWriter) rawPointPredictionUpperBoundLocked(e COWMutation) (COWCharge
 		c.Height = h
 	}
 	if len(w.delta) < cowDeltaL0MaxEntries {
-		c.Nodes = cowDeltaCharge(len(w.delta) + 1)
+		c.Nodes = cowDeltaCharge(cowDeltaL0MaxEntries)
 		c.Wrappers = cowAllocation(uint64(unsafe.Sizeof(COWRoot{})))
 	} else if nextL1 := w.l1Count() + len(w.delta) + 1; w.l1AllowsMerge(nextL1) {
 		// Path 2: merging M = len(L0)+1 <= cowDeltaChunkMax entries into L1.

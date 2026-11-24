@@ -2,12 +2,14 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestCOWReadCutSizeClass(t *testing.T) {
@@ -217,5 +219,122 @@ func TestNewActiveCOWSnapshotInitialState(t *testing.T) {
 	if s1.generation.Load() != 1 || s1.closed.Load() || s1.readState.Load() != 0 {
 		t.Fatalf("unexpected initial snapshot state: gen=%d closed=%v readState=%d",
 			s1.generation.Load(), s1.closed.Load(), s1.readState.Load())
+	}
+}
+
+func TestCOWReadCutRecycleAndDrain(t *testing.T) {
+	db := cowPointReadFixture(t)
+	budget := db.cow.budget
+
+	// Sequential point writes with no pinned snapshots should recycle the prior
+	// drained cowReadCut pointer across iterations.
+	seen := make(map[*cowReadCut]struct{})
+	reused := false
+	for i := 0; i < 64; i++ {
+		k := fmt.Sprintf("recycle-k-%04d", i)
+		v := fmt.Sprintf("recycle-v-%04d", i)
+		if err := db.Set([]byte(k), []byte(v)); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+		cur := db.cow.liveCut.Load()
+		if _, ok := seen[cur]; ok {
+			reused = true
+		}
+		seen[cur] = struct{}{}
+	}
+	if !reused {
+		t.Fatalf("expected cowReadCut pointer reuse across sequential point writes (unique=%d)", len(seen))
+	}
+
+	// Stress concurrent lock-free retainCut() readers alongside rapid point
+	// writes and deletes under -race to verify no ABA or torn-zeroing races.
+	const readers = 6
+	const writes = 400
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	errCh := make(chan error, readers)
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				k := fmt.Sprintf("race-k-%04d", (i+id)%32)
+				if _, err := db.Get([]byte(k)); err != nil {
+					errCh <- fmt.Errorf("reader %d Get(%q): %v", id, k, err)
+					return
+				}
+				if i%16 == 0 {
+					snap := db.AcquireSnapshot()
+					if snap == nil {
+						errCh <- fmt.Errorf("reader %d AcquireSnapshot returned nil", id)
+						return
+					}
+					_, err := snap.Get([]byte(k))
+					closeErr := snap.Close()
+					if (err != nil && !errors.Is(err, tree.ErrKeyNotFound)) || closeErr != nil {
+						errCh <- fmt.Errorf("reader %d snap Get/Close: err=%v closeErr=%v", id, err, closeErr)
+						return
+					}
+				}
+			}
+		}(r)
+	}
+
+	expected := make(map[string]string, 32)
+	for i := 0; i < writes; i++ {
+		k := fmt.Sprintf("race-k-%04d", i%32)
+		if i%5 == 4 {
+			if err := db.Delete([]byte(k)); err != nil {
+				close(stop)
+				wg.Wait()
+				t.Fatalf("Delete %d: %v", i, err)
+			}
+			delete(expected, k)
+		} else {
+			v := fmt.Sprintf("race-v-%04d", i)
+			if err := db.Set([]byte(k), []byte(v)); err != nil {
+				close(stop)
+				wg.Wait()
+				t.Fatalf("Set %d: %v", i, err)
+			}
+			expected[k] = v
+		}
+	}
+	close(stop)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 32; i++ {
+		k := fmt.Sprintf("race-k-%04d", i)
+		got, err := db.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("final Get(%q): %v", k, err)
+		}
+		want, ok := expected[k]
+		if !ok {
+			if got != nil {
+				t.Fatalf("final Get(%q) = %q, want nil", k, got)
+			}
+		} else if string(got) != want {
+			t.Fatalf("final Get(%q) = %q, want %q", k, got, want)
+		}
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if db.cow.recycledCut.Load() != nil {
+		t.Fatal("recycledCut was not cleared on Close")
+	}
+	if got := budget.Stats(); got.TotalBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatalf("budget did not drain to zero after Close: %+v", got)
 	}
 }

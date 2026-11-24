@@ -91,6 +91,7 @@ type COWWriter struct {
 	private       *btree.Map[string, cowValue]
 	ordered       *cowOrderedTree
 	delta         []cowDeltaEntry
+	deltaTail     []cowDeltaEntry // writer-owned write-once append-tail backing for L0
 	l1            *cowDeltaL1
 	deltaAdded    int
 	privateMaxKey string
@@ -525,6 +526,12 @@ func (w *COWWriter) canMergeToL1(entries []COWMutation, opts COWPrepareOptions) 
 	return idx, plan, true
 }
 
+func (w *COWWriter) canAppendDeltaTail(inL0 bool, deltaIdx int) bool {
+	return !inL0 && deltaIdx == len(w.delta) && len(w.delta) > 0 &&
+		len(w.delta) < cap(w.deltaTail) && len(w.deltaTail) == len(w.delta) &&
+		&w.delta[0] == &w.deltaTail[0]
+}
+
 func (w *COWWriter) estimateSingleDelta(e COWMutation, opts COWPrepareOptions, deltaIdx int, inL0, mergeToL1 bool, plan cowL1MergePlan, reusePrepared bool) (COWCharge, string, cowValue, bool, bool, error) {
 	var c COWCharge
 	if e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
@@ -571,6 +578,11 @@ func (w *COWWriter) estimateSingleDelta(e COWMutation, opts COWPrepareOptions, d
 	}
 	if mergeToL1 {
 		c.Nodes = plan.nodeCharge
+	} else if len(w.delta) == 0 {
+		// Pre-charge one full write-once append-tail L0 backing once per run.
+		c.Nodes = cowDeltaCharge(cowDeltaL0MaxEntries)
+	} else if w.canAppendDeltaTail(inL0, deltaIdx) {
+		c.Nodes = 0
 	} else {
 		nextDeltaLen := len(w.delta)
 		if !inL0 {
@@ -824,24 +836,26 @@ func (w *COWWriter) Estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 }
 
 type COWPrepared struct {
-	writer          *COWWriter
-	private         *btree.Map[string, cowValue]
-	ordered         *cowOrderedTree
-	delta           []cowDeltaEntry
-	l1              *cowDeltaL1
-	deltaAdded      int
-	privateMaxKey   string
-	hasPrivateMax   bool
-	root            *COWRoot
-	charge          COWCharge
-	ids             []COWResourceID
-	owners          []cowResourceOwner
-	maxEntries      int
-	deferredBudget  *COWBudget
-	deferredCharge  uint64
-	logicalBytes    int64
-	logicalOverflow bool
-	drainClaimed    bool
+	writer            *COWWriter
+	private           *btree.Map[string, cowValue]
+	ordered           *cowOrderedTree
+	delta             []cowDeltaEntry
+	deltaTail         []cowDeltaEntry
+	deltaTailAppended bool
+	l1                *cowDeltaL1
+	deltaAdded        int
+	privateMaxKey     string
+	hasPrivateMax     bool
+	root              *COWRoot
+	charge            COWCharge
+	ids               []COWResourceID
+	owners            []cowResourceOwner
+	maxEntries        int
+	deferredBudget    *COWBudget
+	deferredCharge    uint64
+	logicalBytes      int64
+	logicalOverflow   bool
+	drainClaimed      bool
 }
 
 func (p *COWPrepared) Charge() COWCharge { return p.charge }
@@ -1041,12 +1055,26 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 		entry := cowDeltaEntry{key: ownedKey, value: value}
 		if useL0 {
 			p.l1 = w.l1
-			if inL0 {
+			if len(w.delta) == 0 {
+				buf := make([]cowDeltaEntry, 1, cowDeltaL0MaxEntries)
+				buf[0] = entry
+				p.delta = buf[:1:1]
+				p.deltaTail = buf[:1:cowDeltaL0MaxEntries]
+				actualNodes = cowDeltaCharge(cowDeltaL0MaxEntries)
+			} else if w.canAppendDeltaTail(inL0, deltaIdx) {
+				tail := w.deltaTail[:len(w.delta)+1]
+				tail[len(w.delta)] = entry
+				p.delta = tail[:len(tail):len(tail)]
+				p.deltaTail = tail
+				p.deltaTailAppended = true
+				actualNodes = 0
+			} else if inL0 {
 				p.delta = cowDeltaReplace(w.delta, deltaIdx, entry)
+				actualNodes = cowDeltaCharge(len(p.delta))
 			} else {
 				p.delta = cowDeltaInsert(w.delta, deltaIdx, entry)
+				actualNodes = cowDeltaCharge(len(p.delta))
 			}
-			actualNodes = cowDeltaCharge(len(p.delta))
 		} else {
 			p.l1, actualNodes = cowDeltaL1BuildMerge(w.l1, w.delta, deltaIdx, entry, mergePlan)
 			p.delta = nil
@@ -1125,7 +1153,11 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	if err := p.reconcileNodes(actualNodes); err != nil {
 		// No resource callback or published source edge exists yet. End every
 		// private postimage alias before returning the original reservation.
-		p.private, p.ordered, p.delta, p.l1, p.deltaAdded, p.privateMaxKey, p.hasPrivateMax, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, 0, "", false, nil, nil, nil, nil
+		if p.deltaTailAppended {
+			p.deltaTail[len(p.deltaTail)-1] = cowDeltaEntry{}
+			w.deltaTail = nil
+		}
+		p.private, p.ordered, p.delta, p.deltaTail, p.deltaTailAppended, p.l1, p.deltaAdded, p.privateMaxKey, p.hasPrivateMax, p.root, p.ids, p.owners, p.writer = nil, nil, nil, nil, false, nil, 0, "", false, nil, nil, nil, nil
 		b.mu.Lock()
 		g.pending -= total
 		b.stats.ReservedBytes -= total
@@ -1250,6 +1282,7 @@ func (p *COWPrepared) Publish() *COWRoot {
 	w.private = p.private
 	w.ordered = p.ordered
 	w.delta = p.delta
+	w.deltaTail = p.deltaTail
 	w.l1 = p.l1
 	w.deltaAdded = p.deltaAdded
 	w.privateMaxKey = p.privateMaxKey
@@ -1264,6 +1297,8 @@ func (p *COWPrepared) Publish() *COWRoot {
 	p.private = nil
 	p.ordered = nil
 	p.delta = nil
+	p.deltaTail = nil
+	p.deltaTailAppended = false
 	p.l1 = nil
 	p.deltaAdded = 0
 	p.privateMaxKey = ""
@@ -1301,6 +1336,12 @@ func (p *COWPrepared) Cancel() COWRetirement {
 	}
 	b.stats.TotalBytes -= p.charge.Total() - deferred
 	b.mu.Unlock()
+	if p.deltaTailAppended {
+		p.deltaTail[len(p.deltaTail)-1] = cowDeltaEntry{}
+		w.deltaTail = nil
+	}
+	p.deltaTail = nil
+	p.deltaTailAppended = false
 	w.pending = nil
 	r := COWRetirement{}
 	if deferred != 0 {
@@ -1433,6 +1474,7 @@ func (w *COWWriter) Close() COWRetirement {
 	w.private = nil
 	w.ordered = nil
 	w.delta = nil
+	w.deltaTail = nil
 	w.l1 = nil
 	w.deltaAdded = 0
 	w.privateMaxKey = ""

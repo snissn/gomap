@@ -41,6 +41,7 @@ type cowPointStaging struct {
 
 func cowPointStagingCharge(shards int) uint64 {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointStaging{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadCut{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(cowRawSuccessor{}))) +
@@ -273,18 +274,19 @@ func (st *cowPointStaging) prepareInlinePointLocked() (err error) {
 		return memtable.ErrCOWCapacity
 	}
 
-	next := &cowReadCut{
-		visibleCommandLSN:     old.visibleCommandLSN,
-		logicalSeq:            old.logicalSeq,
-		frozenLogicalSeq:      old.frozenLogicalSeq,
-		frozenCommandLSN:      old.frozenCommandLSN,
-		frozenSemanticRootSet: old.frozenSemanticRootSet,
-		semanticRootSet:       old.semanticRootSet,
-		basis:                 old.basis,
-		leaseStorage:          st.cutLeaseStorage,
-		cache:                 c,
+	next := c.takeRecycledCut()
+	if next == nil {
+		next = &cowReadCut{}
 	}
-	next.refs.Store(1)
+	next.visibleCommandLSN = old.visibleCommandLSN
+	next.logicalSeq = old.logicalSeq
+	next.frozenLogicalSeq = old.frozenLogicalSeq
+	next.frozenCommandLSN = old.frozenCommandLSN
+	next.frozenSemanticRootSet = old.frozenSemanticRootSet
+	next.semanticRootSet = old.semanticRootSet
+	next.basis = old.basis
+	next.leaseStorage = st.cutLeaseStorage
+	next.cache = c
 	st.cutLeaseStorage = memtable.COWExternalLease{}
 	next.lease = &next.leaseStorage
 	next.initShards(shards)
