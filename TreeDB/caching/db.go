@@ -35859,7 +35859,7 @@ func (b *Batch) ensureOrdinaryState() {
 
 func (db *DB) NewBatch() *Batch {
 	if db != nil && db.cow != nil {
-		return db.newCOWBatch(batchDefaultEntriesCap)
+		return db.newCOWBatchAdaptive()
 	}
 	capHint := batchDefaultEntriesCap
 	shardGroupCap := 0
@@ -37086,11 +37086,17 @@ func (b *Batch) releaseShardEntryGroups(groups [][]batch.Entry) {
 }
 
 func (b *Batch) updateBatchCopyHint() {
-	if b == nil || b.ordinaryBatchState == nil || b.db == nil {
+	if b == nil || b.db == nil {
 		return
 	}
-	if n := b.copyBytes; n > 0 {
-		b.db.observeBatchCopyBytes(n)
+	if b.ordinaryBatchState != nil {
+		if n := b.copyBytes; n > 0 {
+			b.db.observeBatchCopyBytes(n)
+		}
+		return
+	}
+	if b.cowState != nil && b.cowState.copiedBytes > 0 {
+		b.db.observeBatchCopyBytes(b.cowState.copiedBytes)
 	}
 }
 

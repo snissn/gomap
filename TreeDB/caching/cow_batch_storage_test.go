@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"unsafe"
 
@@ -369,5 +370,171 @@ func TestCOWBatchResetLastHintPreSizingAndTightBudgetFallback(t *testing.T) {
 	}
 	if after := db.cow.budget.Stats(); after.ExternalBytes != baseline.ExternalBytes || after.ExternalLeases != baseline.ExternalLeases {
 		t.Fatalf("external charge leaked: before=%+v after=%+v", baseline, after)
+	}
+}
+
+func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
+	db := cowPointerFixture(t)
+	baseline := db.cow.budget.Stats()
+
+	// 1. Cold DB keeps eager 16-entry constructor contract.
+	cold := db.NewBatch()
+	if cold.cowState.err != nil || cap(cold.entries) != batchDefaultEntriesCap {
+		_ = cold.Close()
+		t.Fatalf("cold NewBatch(): cap(entries)=%d want=%d err=%v", cap(cold.entries), batchDefaultEntriesCap, cold.cowState.err)
+	}
+	if err := cold.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Commit a large batch to warm batchEntryHint and batchCopyBytesHint.
+	warm := db.NewBatch()
+	val := make([]byte, 320)
+	for i := 0; i < 256; i++ {
+		if err := warm.Set([]byte(fmt.Sprintf("warm-%04d", i)), val); err != nil {
+			_ = warm.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := warm.Write(); err != nil {
+		_ = warm.Close()
+		t.Fatal(err)
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantEntryHint := int(db.batchEntryHint.Load())
+	wantCopyHint := int(db.batchCopyBytesHint.Load())
+	if wantEntryHint <= batchDefaultEntriesCap || wantCopyHint <= 4096 {
+		t.Fatalf("expected warm hints: entry=%d copy=%d", wantEntryHint, wantCopyHint)
+	}
+
+	// 3. Warm NewBatch skips eager backing in constructor, then admits both
+	// entry and copyArena hints together on first owned write.
+	adaptive := db.NewBatch()
+	if adaptive.cowState.err != nil || cap(adaptive.entries) != 0 || cap(adaptive.copyArena) != 0 {
+		_ = adaptive.Close()
+		t.Fatalf("warm NewBatch allocated eagerly: entries=%d arena=%d err=%v", cap(adaptive.entries), cap(adaptive.copyArena), adaptive.cowState.err)
+	}
+	wantArenaCap := db.batchCopyArenaInitCap(adaptive.cowState.lastHint)
+	if err := adaptive.Set([]byte("owned"), []byte("payload")); err != nil {
+		_ = adaptive.Close()
+		t.Fatal(err)
+	}
+	if cap(adaptive.entries) != adaptive.cowState.lastHint || cap(adaptive.copyArena) < wantArenaCap {
+		_ = adaptive.Close()
+		t.Fatalf("warm Set admission mismatch: entries=%d (want %d) arena=%d (want >= %d)", cap(adaptive.entries), adaptive.cowState.lastHint, cap(adaptive.copyArena), wantArenaCap)
+	}
+	if err := adaptive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. SetView skips copyArena while still using lastHint for entries.
+	viewBatch := db.NewBatch()
+	if err := viewBatch.SetView([]byte("view-k"), []byte("view-v")); err != nil {
+		_ = viewBatch.Close()
+		t.Fatal(err)
+	}
+	if cap(viewBatch.entries) != viewBatch.cowState.lastHint || cap(viewBatch.copyArena) != 0 {
+		_ = viewBatch.Close()
+		t.Fatalf("SetView unexpected copyArena: entries=%d arena=%d", cap(viewBatch.entries), cap(viewBatch.copyArena))
+	}
+	if err := viewBatch.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 5. Tight budget: NewBatch succeeds (zero eager backing), then first Set
+	// falls back cleanly to 16 entries and 256B copyArena without latching err.
+	beforeTight := db.cow.budget.Stats()
+	leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	ownerBytes := cowBatchBaseBytes(false)
+	entry16Bytes := memtable.COWAllocationCharge(uint64(batchDefaultEntriesCap) * uint64(unsafe.Sizeof(batch.Entry{})))
+	arena256Bytes := memtable.COWAllocationCharge(256)
+	headroom := leaseBytes + ownerBytes + entry16Bytes + arena256Bytes
+	avail := db.cow.budget.Limits().MaxInFlightBytes - beforeTight.ReservedBytes - leaseBytes
+	filler, err := db.cow.budget.AcquireExternal(avail - headroom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := db.NewBatch()
+	if tight.cowState.err != nil {
+		filler.Close()
+		_ = tight.Close()
+		t.Fatalf("tight warm NewBatch latched err=%v", tight.cowState.err)
+	}
+	if err := tight.Set([]byte("tight-k"), []byte("ok")); err != nil {
+		filler.Close()
+		_ = tight.Close()
+		t.Fatalf("tight Set failed instead of falling back: %v", err)
+	}
+	filler.Close()
+	if tight.cowState.err != nil || cap(tight.entries) != batchDefaultEntriesCap || cap(tight.copyArena) != 256 {
+		_ = tight.Close()
+		t.Fatalf("tight fallback mismatch: err=%v entries=%d arena=%d", tight.cowState.err, cap(tight.entries), cap(tight.copyArena))
+	}
+	if err := tight.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after := db.cow.budget.Stats()
+	if after.ReservedBytes != beforeTight.ReservedBytes || after.ExternalBytes != beforeTight.ExternalBytes || after.ExternalLeases != beforeTight.ExternalLeases {
+		t.Fatalf("external charge leaked: baseline=%+v beforeTight=%+v after=%+v", baseline, beforeTight, after)
+	}
+}
+
+func BenchmarkCOWNewBatchAdaptive(b *testing.B) {
+	dir := b.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		b.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		AllowUnsafe:              true,
+		MemtableMode:             "cow_btree",
+		FlushThreshold:           1 << 30,
+		MemtableShards:           4,
+		ValueLogPointerThreshold: 512,
+		ValueLogCompression:      uint8(vlogCompressionOff),
+	})
+	if err != nil {
+		_ = backend.Close()
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	const batchEntries = 8000
+	keys := make([][]byte, batchEntries)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("k%07d", i))
+	}
+	val := make([]byte, 128)
+	// Warm DB hints with one committed batch.
+	warm := db.NewBatch()
+	for i := range keys {
+		if err := warm.Set(keys[i], val); err != nil {
+			_ = warm.Close()
+			b.Fatal(err)
+		}
+	}
+	if err := warm.Write(); err != nil {
+		_ = warm.Close()
+		b.Fatal(err)
+	}
+	if err := warm.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		batch := db.NewBatch()
+		for i := range keys {
+			if err := batch.Set(keys[i], val); err != nil {
+				_ = batch.Close()
+				b.Fatal(err)
+			}
+		}
+		if err := batch.Close(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
