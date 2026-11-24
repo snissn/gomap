@@ -64,7 +64,7 @@ func (p *nativeBulkInsertPreimage) admit(n uint64) error {
 }
 
 func nativeBulkInsertEligibleMeta(db *backenddb.DB, meta CollectionMeta) bool {
-	if meta.Options.ColumnStore != nil || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
+	if nativeTypedMeta(meta) || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
 		return false
 	}
 	format := normalizedDocumentFormat(meta.Options.DocumentFormat)
@@ -325,15 +325,14 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		}
 	}
 
-	if err = rejectBatchUniqueConflicts(runtimes, changed); err != nil {
-		return nil, err
-	}
-
 	planCharge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, planner.options, runtimes, changed)
 	if err != nil {
 		return nil, err
 	}
 	if err = p.admit(planCharge); err != nil {
+		return nil, err
+	}
+	if err = rejectBatchUniqueConflicts(runtimes, changed); err != nil {
 		return nil, err
 	}
 	direct, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed, stateEntries, roots)
