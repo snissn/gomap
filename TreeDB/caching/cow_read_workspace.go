@@ -43,6 +43,7 @@ type cowReadCodec struct {
 }
 type cowPointScratch struct {
 	lease     *memtable.COWExternalLease
+	leafGen   uint64
 	key, leaf [page.PageSize]byte
 	successor tree.OwnedSuccessorScratch
 }
@@ -902,13 +903,22 @@ func (db *DB) cowPhysicalDictionary(c *cowCache) *cowCacheDictionaryRead {
 }
 
 func (b *cowBackendBasis) readPhysicalPoint(c *cowCache, w *cowReadWorkspace, key []byte, localBlock bool, independent *cowCacheDictionaryRead) (node.LeafEntry, error) {
+	return b.readPhysicalPointCached(c, w, key, localBlock, independent, nil)
+}
+
+func (b *cowBackendBasis) readPhysicalPointCached(c *cowCache, w *cowReadWorkspace, key []byte, localBlock bool, independent *cowCacheDictionaryRead, cache *tree.FixedScratchLeafCache) (node.LeafEntry, error) {
 	point, err := w.pointScratch()
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	return b.snapshot.GetEntryExactWithPinnedCOWLeaf(key, point.key[:], point.leaf[:], w.limits, func(ptr page.LeafLogPtr, dst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
+	if cache == nil {
+		point.leafGen++
+	}
+	entry, err := b.snapshot.GetEntryExactWithPinnedCOWLeafCached(key, point.key[:], point.leaf[:], cache, w.limits, func(ptr page.LeafLogPtr, dst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
+		point.leafGen++
 		return readInspectedPhysicalLeaf(c, w, ptr, dst, false, localBlock, independent, &record)
 	})
+	return entry, err
 }
 
 func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead, record *backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
@@ -995,12 +1005,16 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 // Physical entries borrow this snapshot's admitted page scratch. cowReadMu
 // excludes its reuse until the existing caller has completed copy-out.
 func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
+	return s.cowPhysicalEntryCachedLocked(key, nil)
+}
+
+func (s *Snapshot) cowPhysicalEntryCachedLocked(key []byte, cache *tree.FixedScratchLeafCache) (node.LeafEntry, error) {
 	basis := s.cowCut.basis
 	w, err := s.cowWorkspaceLocked()
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	entry, err := basis.readPhysicalPoint(s.cowCache, w, key, true, s.db.cowPhysicalDictionary(s.cowCache))
+	entry, err := basis.readPhysicalPointCached(s.cowCache, w, key, true, s.db.cowPhysicalDictionary(s.cowCache), cache)
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -1013,6 +1027,10 @@ func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
+	return s.cowEntryCachedLocked(key, nil)
+}
+
+func (s *Snapshot) cowEntryCachedLocked(key []byte, cache *tree.FixedScratchLeafCache) (node.LeafEntry, error) {
 	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
 	if found {
 		if flags&(node.FlagPointer|node.FlagTombstone) == 0 {
@@ -1022,7 +1040,7 @@ func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 		// GetEntry alone copies it into the caller-owned returned entry.
 		return node.LeafEntry{Key: key, Value: val, ValuePtr: ptr, Flags: flags, Revision: revision}, nil
 	}
-	entry, err := s.cowPhysicalEntryLocked(key)
+	entry, err := s.cowPhysicalEntryCachedLocked(key, cache)
 	if err != errCOWPhysicalDictionary {
 		return entry, err
 	}
@@ -1035,6 +1053,10 @@ func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
+	if cache != nil {
+		cache.Reset()
+	}
+	point.leafGen++
 	return s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], w.readLeaf)
 }
 
@@ -1076,6 +1098,7 @@ func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.Entr
 		if perr != nil {
 			return dst, 0, perr
 		}
+		point.leafGen++
 		entry, err = s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], w.readLeaf)
 	}
 	if err != nil {
@@ -1178,6 +1201,10 @@ func (r *cowViewResult) close() {
 // Copy borrowed bytes under the original read locks. The callback runs only
 // after both the snapshot read gate and the workspace lock have been released.
 func (s *Snapshot) cowViewCopy(key []byte, result *cowViewResult) (bool, error) {
+	return s.cowViewCopyCached(key, result, nil, nil, nil)
+}
+
+func (s *Snapshot) cowViewCopyCached(key []byte, result *cowViewResult, cache *tree.FixedScratchLeafCache, cachePoint **cowPointScratch, cacheGen *uint64) (bool, error) {
 	key = normalizeRawKVPointKey(key)
 	stripe := cowReadStripe(key)
 	if err := s.beginReadStripe(stripe); err != nil {
@@ -1186,7 +1213,26 @@ func (s *Snapshot) cowViewCopy(key []byte, result *cowViewResult) (bool, error) 
 	defer s.endReadStripe(stripe)
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
-	value, _, err := s.cowValueLocked(key)
+	if cache != nil && cachePoint != nil && cacheGen != nil {
+		if s.cowReader == nil || s.cowReader.point == nil || s.cowReader.point != *cachePoint || s.cowReader.point.leafGen != *cacheGen {
+			cache.Reset()
+		}
+	}
+	entry, err := s.cowEntryCachedLocked(key, cache)
+	if cache != nil && cachePoint != nil && cacheGen != nil {
+		if s.cowReader != nil && s.cowReader.point != nil {
+			*cachePoint = s.cowReader.point
+			*cacheGen = s.cowReader.point.leafGen
+		} else {
+			*cachePoint = nil
+			*cacheGen = 0
+			cache.Reset()
+		}
+	}
+	var value []byte
+	if err == nil {
+		value, _, err = s.cowValueFromEntryLocked(entry)
+	}
 	if err == tree.ErrKeyNotFound {
 		if !result.reusable() {
 			result.close()

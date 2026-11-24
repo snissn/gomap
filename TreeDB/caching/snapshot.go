@@ -1153,15 +1153,20 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 		if fn == nil {
 			return errors.New("caching snapshot: GetManyView nil callback")
 		}
-		var result cowViewResult
+		var (
+			result     cowViewResult
+			leafCache  tree.FixedScratchLeafCache
+			cachePoint *cowPointScratch
+			cacheGen   uint64
+		)
 		defer result.close()
 		for i, key := range keys {
-			found, err := s.cowViewCopy(key, &result)
+			found, err := s.cowViewCopyCached(key, &result, &leafCache, &cachePoint, &cacheGen)
 			if err != nil && result.lease != nil && errors.Is(err, memtable.ErrCOWCapacity) {
 				// The prior callback's copy can compete with this lookup's read
 				// workspace. No callback has seen this key, so retry once without it.
 				result.close()
-				found, err = s.cowViewCopy(key, &result)
+				found, err = s.cowViewCopyCached(key, &result, &leafCache, &cachePoint, &cacheGen)
 			}
 			if err != nil {
 				return err

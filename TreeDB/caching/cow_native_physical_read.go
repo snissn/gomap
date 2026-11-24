@@ -26,6 +26,7 @@ func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDiction
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
+	point.leafGen++
 	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 		return b.readNativePhysicalLeafLocked(cache, provider, ptr, dst)
 	})
