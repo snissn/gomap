@@ -102,7 +102,7 @@ func (r *nativeDomainRead) seek(start, end []byte, scratch *nativeDomainReadScra
 // memory sources, newest-wins ordering and inspection of every probe are shared
 // by point successors and streaming consumers.
 func (r *nativeDomainRead) seekWithCursor(start, end []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, inspect func() error, cursor *nativeDomainCursor, forward bool, admit func(uint64) error) (node.LeafEntry, bool, error) {
-	if r == nil || r.domain == nil || scratch == nil {
+	if r == nil || r.domain == nil || (cursor == nil && scratch == nil) {
 		return node.LeafEntry{}, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	// An iterator's original lower bound constrains BOTH source families,

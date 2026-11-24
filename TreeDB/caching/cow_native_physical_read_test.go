@@ -716,3 +716,270 @@ func TestCOWNativeLeafWorkspaceAdmissionAndLifetime(t *testing.T) {
 		t.Fatal("final original ownership", stats)
 	}
 }
+
+// Prove concurrent native physical reads never serialize behind basis.readMu or
+// cache.physicalMu: they spill to pooled lanes and, when all lanes are held, to
+// a bounded per-call admitted temporary workspace (respecting COWLimits). Also
+// prove TryReleaseIdleNativeReadScratch() drains all pooled physicalSlots.
+func TestCOWNativePhysicalReadContendedFallbackAndIdleScratch(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		Durability:                 backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPageReadCacheEntries:   -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		TransactionOwner:           owner,
+		DisableWAL:                 true,
+		AllowUnsafe:                true,
+		MemtableMode:               "cow_btree",
+		FlushThreshold:             1 << 30,
+		IndexOuterLeavesInValueLog: true,
+		ValueLogPointerThreshold:   128,
+		ValueLogCompression:        uint8(vlogCompressionBlock),
+		ValueLogBlockCodec:         0, // Snappy
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		t.Fatal(err)
+	}
+	inlineWant := []byte("inline-value-small")
+	pointerWant := bytes.Repeat([]byte("pointer-value-payload-"), 32)
+	for i := 0; i < 64; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("k%03d", i)), inlineWant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Set([]byte("ptr-key"), pointerWant); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	capRaw, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capRaw.Close()
+	capture := capRaw.(*NativeSemanticCapture)
+	basis := capture.cut.basis
+	budget := db.cow.budget
+	token, ok := capture.Snapshot().StateToken()
+	if !ok {
+		t.Fatal("missing basis state token")
+	}
+
+	// Find a real leaf pointer and value pointer.
+	var leafPtr page.LeafLogPtr
+	var ks, ls [page.PageSize]byte
+	stop := errors.New("stop")
+	_, err = capture.Snapshot().GetEntryExactWithFixedScratch([]byte("k000"), ks[:], ls[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) {
+		leafPtr = p
+		return nil, stop
+	})
+	if !errors.Is(err, stop) || leafPtr.FileID == 0 {
+		t.Fatalf("expected outer leaf ptr, got %+v err=%v", leafPtr, err)
+	}
+	ptrEntry, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("ptr-key"), false)
+	if err != nil || ptrEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected value pointer entry, got %+v err=%v", ptrEntry, err)
+	}
+	valPtr := ptrEntry.ValuePtr
+
+	runWithTimeout := func(label string, fn func() error) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- fn() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s blocked while mutexes were held", label)
+		}
+	}
+
+	// 1. Hold lane-0 locks (basis.readMu + physicalMu): reads must spill to
+	// readSlots / bounded per-call temporary workspaces and complete immediately
+	// without leaking reservations.
+	basis.readMu.Lock()
+	db.cow.physicalMu.Lock()
+	runWithTimeout("lane-0 held NativeEntryAtRoot", func() error {
+		e, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("k000"), true)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(e.Value, inlineWant) {
+			return fmt.Errorf("got %q want %q", e.Value, inlineWant)
+		}
+		return nil
+	})
+	runWithTimeout("lane-0 held NativeLeafPage", func() error {
+		var dst [page.PageSize]byte
+		got, err := capture.NativeLeafPage(leafPtr, dst[:])
+		if err != nil {
+			return err
+		}
+		if len(got) != page.PageSize {
+			return fmt.Errorf("len=%d", len(got))
+		}
+		return nil
+	})
+	runWithTimeout("lane-0 held NativeValueAtPointer", func() error {
+		got, err := capture.NativeValueAtPointer(valPtr, nil)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, pointerWant) {
+			return fmt.Errorf("len=%d want=%d", len(got), len(pointerWant))
+		}
+		return nil
+	})
+	db.cow.physicalMu.Unlock()
+	basis.readMu.Unlock()
+
+	// 2. Hold ALL basis read lanes AND physicalMu: reads must spill to
+	// bounded per-call admitted temporary workspaces and complete immediately,
+	// releasing all temporary reservations upon return.
+	basis.readMu.Lock()
+	for i := range basis.readSlots {
+		basis.readSlots[i].mu.Lock()
+	}
+	db.cow.physicalMu.Lock()
+	beforeTemp := budget.Stats()
+	runWithTimeout("all lanes held NativeEntryAtRoot", func() error {
+		e, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("k000"), true)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(e.Value, inlineWant) {
+			return fmt.Errorf("got %q want %q", e.Value, inlineWant)
+		}
+		return nil
+	})
+	runWithTimeout("all lanes held NativeLeafPage", func() error {
+		var dst [page.PageSize]byte
+		got, err := capture.NativeLeafPage(leafPtr, dst[:])
+		if err != nil {
+			return err
+		}
+		if len(got) != page.PageSize {
+			return fmt.Errorf("len=%d", len(got))
+		}
+		return nil
+	})
+	runWithTimeout("all lanes held NativeValueAtPointer", func() error {
+		got, err := capture.NativeValueAtPointer(valPtr, nil)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, pointerWant) {
+			return fmt.Errorf("len=%d want=%d", len(got), len(pointerWant))
+		}
+		return nil
+	})
+	afterTemp := budget.Stats()
+	if afterTemp.ReservedBytes != beforeTemp.ReservedBytes || afterTemp.ExternalLeases != beforeTemp.ExternalLeases {
+		t.Fatalf("temporary workspace leaked budget: before=%+v after=%+v", beforeTemp, afterTemp)
+	}
+
+	// Exhaust budget while all lanes are held: temporary workspace admission
+	// must refuse cleanly with ErrCOWCapacity.
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes - overhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runWithTimeout("all lanes held + full budget NativeEntryAtRoot", func() error {
+		_, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("k000"), true)
+		if !errors.Is(err, memtable.ErrCOWCapacity) {
+			return fmt.Errorf("got err=%v want ErrCOWCapacity", err)
+		}
+		return nil
+	})
+	runWithTimeout("all lanes held + full budget NativeValueAtPointer", func() error {
+		_, err := capture.NativeValueAtPointer(valPtr, nil)
+		if !errors.Is(err, memtable.ErrCOWCapacity) {
+			return fmt.Errorf("got err=%v want ErrCOWCapacity", err)
+		}
+		return nil
+	})
+	pressure.Close()
+
+	db.cow.physicalMu.Unlock()
+	for i := range basis.readSlots {
+		basis.readSlots[i].mu.Unlock()
+	}
+	basis.readMu.Unlock()
+
+	// 3. High concurrency storm (24 readers > 16 lanes) exercising lanes + temp fallback.
+	var wg sync.WaitGroup
+	errs := make(chan error, 24)
+	for g := 0; g < 24; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			var dst [page.PageSize]byte
+			for j := 0; j < 32; j++ {
+				k := []byte(fmt.Sprintf("k%03d", (id+j)%64))
+				e, err := capture.NativeEntryAtRoot(token.RootPageID, k, true)
+				if err != nil || !bytes.Equal(e.Value, inlineWant) {
+					errs <- fmt.Errorf("g=%d entry err=%v val=%q", id, err, e.Value)
+					return
+				}
+				if j%4 == 0 {
+					v, err := capture.NativeValueAtPointer(valPtr, nil)
+					if err != nil || !bytes.Equal(v, pointerWant) {
+						errs <- fmt.Errorf("g=%d value err=%v len=%d", id, err, len(v))
+						return
+					}
+				}
+				if j%4 == 1 {
+					p, err := capture.NativeLeafPage(leafPtr, dst[:])
+					if err != nil || len(p) != page.PageSize {
+						errs <- fmt.Errorf("g=%d leaf err=%v len=%d", id, err, len(p))
+						return
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	if err := capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+		t.Fatalf("close leaked budget: %+v", stats)
+	}
+}

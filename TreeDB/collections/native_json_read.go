@@ -33,6 +33,15 @@ type NativeJSONRead struct {
 	scratchLease  *memtable.COWExternalLease
 	lease         *memtable.COWExternalLease
 	failure       error
+	oneShot       bool
+}
+
+type nativePhysicalEntryIntoReader interface {
+	NativeEntryAtRootInto(root uint64, key, dst []byte) (node.LeafEntry, error)
+}
+
+type nativePhysicalValueIntoReader interface {
+	NativeValueAtPointerInto(ptr page.ValuePtr, dst []byte, admitOutput func(uint64) error) ([]byte, error)
 }
 
 func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, resultErr error) {
@@ -78,13 +87,261 @@ func nativeJSONCatalogProjection(capture backenddb.NativeSemanticCapture) (backe
 	return engine, err
 }
 
-func (m *NativeJSONManager) Get(collection string, id []byte) (value []byte, resultErr error) {
-	r, err := m.Capture(collection)
+func (m *NativeJSONManager) Get(collection string, id []byte) ([]byte, error) {
+	return m.getInto(collection, id, nil)
+}
+
+// getInto performs a streamlined one-shot point lookup against one pinned
+// immutable cut without heap-allocating a NativeJSONRead handle or copying
+// CollectionMeta when no reentrant read scope escapes to the caller.
+func (m *NativeJSONManager) getInto(collection string, id, dst []byte) (value []byte, resultErr error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return nil, err
+	}
+	if m == nil || m.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	capture, err := m.db.CaptureNativeSemanticState()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, r.Close()) }()
-	return r.Get(id)
+	var col *nativeCollectionState
+	var privateEngine *nativeEngineVersion
+	var scratchLease *memtable.COWExternalLease
+	defer func() {
+		col = nil
+		resultErr = errors.Join(resultErr, closeNativeCatalog(capture, privateEngine))
+		if scratchLease != nil {
+			scratchLease.Close()
+		}
+	}()
+	_, col, privateEngine, err = resolveNativeCatalog(capture, collection)
+	if err != nil {
+		return nil, err
+	}
+	meta := col.schema.meta
+	typed := nativeTypedMeta(*meta)
+	reconstruct := typed && meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
+	d, ok := col.domains.Get("primary")
+	if !ok {
+		return nil, tree.ErrKeyNotFound
+	}
+	if d == nil || d.refs.Load() <= 0 {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if typed {
+		if row, residual, found := d.typed.find(id); found {
+			if row == nil {
+				return nil, tree.ErrKeyNotFound
+			}
+			if !reconstruct {
+				if dst != nil {
+					return append(dst[:0], residual...), nil
+				}
+				out := make([]byte, len(residual))
+				copy(out, residual)
+				return out, nil
+			}
+			r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
+			out, err := r.reconstructPendingTyped(row, residual)
+			scratchLease = r.detachScratch()
+			r = NativeJSONRead{}
+			if err != nil {
+				return nil, err
+			}
+			if dst != nil {
+				return append(dst[:0], out...), nil
+			}
+			return out, nil
+		}
+	}
+	var entry node.LeafEntry
+	var resolved bool
+	if d.pending != nil {
+		if row, found := d.pending.Get(id); found {
+			entry, resolved = nativeDomainRecordEntry(row), true
+		}
+	}
+	if !resolved {
+		if row, found := d.captured.get(id); found {
+			entry, resolved = nativeDomainRecordEntry(row), true
+		}
+	}
+	owned := false
+	copiedToDst := false
+	if !resolved {
+		if d.baseRoot == 0 {
+			return nil, tree.ErrKeyNotFound
+		}
+		if physicalInto, ok := capture.(nativePhysicalEntryIntoReader); ok && dst != nil && !reconstruct {
+			entry, err = physicalInto.NativeEntryAtRootInto(d.baseRoot, id, dst)
+			if err != nil {
+				return nil, err
+			}
+			owned = true
+			copiedToDst = true
+		} else if physical, ok := capture.(backenddb.NativePhysicalReader); ok {
+			entry, err = physical.NativeEntryAtRoot(d.baseRoot, id, true)
+			if err != nil {
+				return nil, err
+			}
+			owned = true
+		} else {
+			domain, domainErr := newNativeDomainRead(d, capture.Snapshot())
+			if domainErr != nil {
+				return nil, domainErr
+			}
+			r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, domain: domain, oneShot: true}
+			scratch, scratchErr := r.physicalScratch()
+			if scratchErr != nil {
+				scratchLease = r.detachScratch()
+				r = NativeJSONRead{}
+				return nil, scratchErr
+			}
+			entry, err = domain.baseEntry(id, scratch, r.readLeaf)
+			if err != nil {
+				scratchLease = r.detachScratch()
+				r = NativeJSONRead{}
+				return nil, err
+			}
+			out, matErr := r.materializeEntryLocked(id, entry, false, nil, reconstruct)
+			entry = node.LeafEntry{}
+			scratchLease = r.detachScratch()
+			r = NativeJSONRead{}
+			if matErr != nil {
+				return nil, matErr
+			}
+			if dst != nil {
+				return append(dst[:0], out...), nil
+			}
+			return out, nil
+		}
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, tree.ErrKeyNotFound
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		var val []byte
+		if physicalValInto, ok := capture.(nativePhysicalValueIntoReader); ok && dst != nil && !reconstruct {
+			val, err = physicalValInto.NativeValueAtPointerInto(entry.ValuePtr, dst, nil)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
+		} else if physicalVal, ok := capture.(backenddb.NativePhysicalValueReader); ok {
+			val, err = physicalVal.NativeValueAtPointer(entry.ValuePtr, nil)
+		} else {
+			r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
+			val, err = r.readValue(entry.ValuePtr, nil)
+			scratchLease = r.detachScratch()
+			r = NativeJSONRead{}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if reconstruct {
+			r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
+			val, err = r.reconstructTyped(id, val)
+			scratchLease = r.detachScratch()
+			r = NativeJSONRead{}
+			if err != nil {
+				return nil, err
+			}
+		}
+		if dst != nil {
+			return append(dst[:0], val...), nil
+		}
+		return val, nil
+	}
+	if reconstruct {
+		r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
+		val, err := r.reconstructTyped(id, entry.Value)
+		entry = node.LeafEntry{}
+		scratchLease = r.detachScratch()
+		r = NativeJSONRead{}
+		if err != nil {
+			return nil, err
+		}
+		if dst != nil {
+			return append(dst[:0], val...), nil
+		}
+		return val, nil
+	}
+	if copiedToDst {
+		return entry.Value, nil
+	}
+	if dst != nil {
+		return append(dst[:0], entry.Value...), nil
+	}
+	if owned {
+		return entry.Value, nil
+	}
+	out := make([]byte, len(entry.Value))
+	copy(out, entry.Value)
+	return out, nil
+}
+
+// withOneShotRead pins one immutable cut and executes fn against a private
+// stack-local NativeJSONRead without acquiring a redundant handle lease.
+// Callers MUST NOT allow the *NativeJSONRead pointer to escape fn.
+func (m *NativeJSONManager) withOneShotRead(name string, fn func(*NativeJSONRead) error) (resultErr error) {
+	if err := ValidateCollectionName(name); err != nil {
+		return err
+	}
+	if m == nil || m.db == nil {
+		return backenddb.ErrClosed
+	}
+	capture, err := m.db.CaptureNativeSemanticState()
+	if err != nil {
+		return err
+	}
+	var r NativeJSONRead
+	r.capture = capture
+	r.database = m.db
+	r.oneShot = true
+	defer func() {
+		r.domain = nativeDomainRead{}
+		scratchLease := r.detachScratch()
+		r.meta = CollectionMeta{}
+		r.database = nil
+		metadataLease := r.metadataLease
+		r.metadataLease = nil
+		r.collection = nil
+		r.engine = nil
+		privateEngine := r.privateEngine
+		r.privateEngine = nil
+		capToClose := r.capture
+		r.capture = nil
+		resultErr = errors.Join(resultErr, closeNativeCatalog(capToClose, privateEngine))
+		if scratchLease != nil {
+			scratchLease.Close()
+		}
+		if metadataLease != nil {
+			metadataLease.Close()
+		}
+	}()
+	r.engine, r.collection, r.privateEngine, err = resolveNativeCatalog(capture, name)
+	if err != nil {
+		return err
+	}
+	c := r.collection
+	r.meta = *c.schema.meta
+	if d, ok := c.domains.Get("primary"); ok {
+		r.domain, err = newNativeDomainRead(d, capture.Snapshot())
+		if err != nil {
+			return err
+		}
+	}
+	return fn(&r)
+}
+
+func (r *NativeJSONRead) cursorReadLeaf() func(page.LeafLogPtr, []byte) ([]byte, error) {
+	if r.oneShot {
+		if physical, ok := r.capture.(backenddb.NativePhysicalLeafReader); ok {
+			return physical.NativeLeafPage
+		}
+	}
+	return r.readLeaf
 }
 
 // physicalScratch is private to this read scope and serialized by its owner.
@@ -145,6 +402,10 @@ func (r *NativeJSONRead) getAdmitted(id []byte, admitOutput func(uint64) error) 
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.getAdmittedLocked(id, admitOutput)
+}
+
+func (r *NativeJSONRead) getAdmittedLocked(id []byte, admitOutput func(uint64) error) ([]byte, error) {
 	if r.capture == nil || r.failure != nil || r.closing {
 		return nil, backenddb.ErrClosed
 	}

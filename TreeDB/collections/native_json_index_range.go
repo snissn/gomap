@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -26,12 +27,12 @@ func (c *Collection) scanNativeIndexRange(name string, opts IndexRangeOptions, d
 	if opts.Desc {
 		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
-	read, err := c.nativeJSON.Capture(c.name)
-	if err != nil {
-		return false, false, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	return read.scanIndexRange(name, opts, documents, visit)
+	err := c.nativeJSON.withOneShotRead(c.name, func(read *NativeJSONRead) error {
+		var scanErr error
+		truncated, indexFound, scanErr = read.scanIndexRange(name, opts, documents, visit)
+		return scanErr
+	})
+	return truncated, indexFound, err
 }
 
 func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, documents bool, visit func([]byte, []byte) (bool, error)) (truncated, indexFound bool, resultErr error) {
@@ -64,7 +65,10 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 	// numeric scalars fit the same fixed allowance. Three capacities cover the
 	// encoder's growing backing and the independent bound, as on equality reads.
 	// Admit before encoding.
-	charge := memtable.COWAllocationCharge(page.PageSize+1) + memtable.COWAllocationCharge(uint64(len(name))+6)
+	charge := memtable.COWAllocationCharge(page.PageSize+1) +
+		memtable.COWAllocationCharge(uint64(len(name))+6) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainCursor{}))) +
+		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
 	if index.ValueType == IndexValueBSONOrderedV2 {
 		// Escaped NUL IDs use the maintained decoder's temporary owned
 		// suffix, independently of the seek cursor and the caller's copy.
@@ -91,12 +95,22 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 		}
 		charge += amount
 	}
+	domain, hasDomain := r.collection.domains.Get("index/" + name)
+	var preAdmitted uint64
+	if hasDomain && domain != nil && domain.baseRoot != 0 {
+		projCharge := memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())
+		if projCharge > ^uint64(0)-charge {
+			return false, true, memtable.ErrCOWCapacity
+		}
+		charge += projCharge
+		preAdmitted = projCharge
+	}
 	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return false, true, err
 	}
 	var seen map[string]struct{}
-	operation := func() (bool, error) {
+	operation := func() (truncated bool, operationErr error) {
 		if dedupe {
 			seen = make(map[string]struct{})
 		}
@@ -106,46 +120,80 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 		}
 		valueType := index.ValueType
 		index = IndexDefinition{}
-		domainName := "index/" + name
+		if !hasDomain {
+			return false, nil
+		}
+		read, err := newNativeDomainRead(domain, r.capture.Snapshot())
+		domain = nil
+		if err != nil {
+			return false, err
+		}
+		physical := nativeDomainCursor{read: read, start: start, end: end}
+		read = nativeDomainRead{}
 		cursor := make([]byte, page.PageSize+1)
+		curStart := start
+		defer func() {
+			operationErr = errors.Join(operationErr, physical.close())
+			cursor, curStart, start, end = nil, nil, nil, nil
+		}()
+		admit := func(n uint64) error {
+			if n <= preAdmitted {
+				preAdmitted -= n
+				return nil
+			}
+			extra := n - preAdmitted
+			preAdmitted = 0
+			if extra > ^uint64(0)-charge {
+				return memtable.ErrCOWCapacity
+			}
+			if err := lease.Resize(charge + extra); err != nil {
+				return err
+			}
+			charge += extra
+			return nil
+		}
+		readLeaf := r.cursorReadLeaf()
 		emitted := 0
+		forward := false
 		for {
 			if r.capture == nil || r.failure != nil || r.closing {
 				return false, backenddb.ErrClosed
 			}
-			domain, ok := r.collection.domains.Get(domainName)
-			if !ok {
-				return false, nil
-			}
-			read, err := newNativeDomainRead(domain, r.capture.Snapshot())
-			if err != nil {
-				return false, err
-			}
-			entry, found, err := nativeJSONSeekLive(&read, r, start, end, cursor)
+			entry, found, err := physical.read.seekWithCursor(curStart, end, nil, readLeaf, false, nil, &physical, forward, admit)
 			if err != nil || !found {
 				return false, err
 			}
 			if len(entry.Key) >= len(cursor) {
+				entry = node.LeafEntry{}
 				return false, memtable.ErrCOWCapacity
-			}
-			id, err := indexKeyDocumentID(valueType, entry.Key)
-			if err != nil {
-				return false, err
 			}
 			n := copy(cursor, entry.Key)
 			cursor[n] = 0
-			start = cursor[:n+1]
+			curStart = cursor[:n+1]
+			forward = true
+			if entry.Flags&node.FlagTombstone != 0 {
+				entry = node.LeafEntry{}
+				continue
+			}
+			id, err := indexKeyDocumentID(valueType, entry.Key)
+			if err != nil {
+				entry = node.LeafEntry{}
+				return false, err
+			}
 			if dedupe {
 				if _, exists := seen[string(id)]; exists {
+					entry = node.LeafEntry{}
 					continue
 				}
 				// Lookahead certifies truncation but need not retain a new key.
 				if opts.Limit == 0 || emitted < opts.Limit {
 					delta := memtable.COWAllocationCharge(768) + memtable.COWAllocationCharge(uint64(len(id)))
 					if delta > ^uint64(0)-charge {
+						entry = node.LeafEntry{}
 						return false, memtable.ErrCOWCapacity
 					}
 					if err := lease.Resize(charge + delta); err != nil {
+						entry = node.LeafEntry{}
 						return false, err
 					}
 					charge += delta
@@ -155,40 +203,36 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 			// End every borrowed secondary alias before primary lookup or user
 			// code can reuse physical scratch. The visitor pins this SAME cut.
 			id = bytes.Clone(id)
-			entry, read, domain = node.LeafEntry{}, nativeDomainRead{}, nil
-			cont, accepted, err := func() (bool, bool, error) {
+			entry = node.LeafEntry{}
+			var document []byte
+			if documents {
+				document, err = r.getAdmittedLocked(id, nil)
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					id = nil
+					continue
+				}
+				if err != nil {
+					id = nil
+					return false, err
+				}
+			}
+			if opts.Limit > 0 && emitted >= opts.Limit {
+				id, document = nil, nil
+				return true, nil
+			}
+			cont, err := func() (bool, error) {
 				r.mu.Unlock()
 				defer r.mu.Lock()
-				var document []byte
-				if documents {
-					var err error
-					document, err = r.Get(id)
-					if errors.Is(err, tree.ErrKeyNotFound) {
-						return true, false, nil
-					}
-					if err != nil {
-						return false, false, err
-					}
-				}
-				if opts.Limit > 0 && emitted >= opts.Limit {
-					return false, true, nil
-				}
-				cont, err := visit(id, document)
-				return cont, true, err
+				return visit(id, document)
 			}()
-			id = nil
+			id, document = nil, nil
 			if err != nil {
 				return false, err
-			}
-			if accepted && opts.Limit > 0 && emitted >= opts.Limit {
-				return true, nil
 			}
 			if !cont {
 				return false, nil
 			}
-			if accepted {
-				emitted++
-			}
+			emitted++
 		}
 	}
 	truncated, err = operation()

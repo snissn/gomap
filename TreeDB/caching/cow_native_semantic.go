@@ -18,7 +18,7 @@ type NativeSemanticCapture struct {
 	projectionMu sync.Mutex // derived initialization versus this capture's Close
 	cache        *cowCache
 	cut          *cowReadCut
-	lease        *memtable.COWExternalLease
+	leaseStorage memtable.COWExternalLease
 	dictionary   cowDictionaryReadProvider // immutable provider capability; shared decoders own copied definitions
 }
 
@@ -26,7 +26,7 @@ func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*Native
 	if db == nil || db.cow == nil || owner == nil || db.cow.txnOwner != owner {
 		return nil, ErrCOWUnsupported
 	}
-	lease, err := db.cow.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeSemanticCapture{}))))
+	lease, err := db.cow.budget.AcquireExternalValue(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeSemanticCapture{}))))
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +36,7 @@ func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*Native
 		return nil, backenddb.ErrClosed
 	}
 	provider, _ := db.dictStore.(cowDictionaryReadProvider)
-	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease, dictionary: provider}, nil
+	return &NativeSemanticCapture{cache: db.cow, cut: cut, leaseStorage: lease, dictionary: provider}, nil
 }
 
 // One fixed, separately synchronized derived slot belongs to the original cut.
@@ -124,8 +124,8 @@ func (c *NativeSemanticCapture) Close() error {
 		c.projectionMu.Unlock()
 		return nil
 	}
-	cut, cache, lease := c.cut, c.cache, c.lease
-	c.cut, c.cache, c.lease, c.dictionary = nil, nil, nil, nil
+	cut, cache, lease := c.cut, c.cache, c.leaseStorage
+	c.cut, c.cache, c.leaseStorage, c.dictionary = nil, nil, memtable.COWExternalLease{}, nil
 	c.projectionMu.Unlock()
 	// Release and any last-cut cleanup run outside both projection locks.
 	err := cache.releaseCut(cut)

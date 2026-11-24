@@ -24136,18 +24136,16 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		if maxResults < 0 {
 			return nil, false, errors.New("collections: max index results cannot be negative")
 		}
-		read, err := c.nativeJSON.Capture(c.name)
-		if err != nil {
-			return nil, false, err
-		}
-		defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-		err = read.visitIndexValueIDs(indexName, value, func(id []byte) error {
-			if maxResults > 0 && len(result) == maxResults {
-				truncated = true
-				return errNativeIndexVisitComplete
-			}
-			result = append(result, bytes.Clone(id))
-			return nil
+		err := c.nativeJSON.withOneShotRead(c.name, func(read *NativeJSONRead) error {
+			return read.visitIndexValueIDs(indexName, value, func(id []byte) error {
+				if maxResults > 0 && len(result) == maxResults {
+					truncated = true
+					return errNativeIndexVisitComplete
+				}
+				// visitIndexValueIDs already hands over a caller-owned cloned ID.
+				result = append(result, id)
+				return nil
+			})
 		})
 		if errors.Is(err, errNativeIndexVisitComplete) {
 			err = nil

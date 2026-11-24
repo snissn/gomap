@@ -24,7 +24,7 @@ type cowBackendBasis struct {
 	readMu          sync.Mutex // serializes physical workspace reuse, never publication gates
 	reader          *cowReadWorkspace
 	_               [64 - unsafe.Sizeof(sync.Mutex{}) - unsafe.Sizeof(uintptr(0))]byte
-	readSlots       [7]cowBasisReadSlot // bounded, opportunistic 64B-padded parallel traversal owners
+	readSlots       [15]cowBasisReadSlot // bounded, opportunistic 64B-padded parallel traversal owners
 	logicalSeq      uint64
 	refs            atomic.Int64
 	snapshot        *backenddb.Snapshot
@@ -458,7 +458,7 @@ func cowReadStripe(key []byte) uint32 {
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
 	ordered bool
-	// Lock order is scope/caller -> basis.readMu -> physicalMu -> budget.mu.
+	// Lock order is scope/caller -> basis.readMu/readSlot.mu -> physicalMu -> budget.mu.
 	// Pure decoder scratch never acquires a basis, scope or publication lock.
 	physicalMu                                                                                     sync.Mutex
 	physicalReader                                                                                 *cowReadWorkspace
