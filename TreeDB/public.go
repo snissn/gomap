@@ -34,6 +34,21 @@ type Options = db.Options
 
 type COWMemtableLimits = db.COWMemtableLimits
 
+// MemtableWorkload describes the Open-time automatic memtable selection policy
+// used when Options.MemtableMode is empty or "auto".
+type MemtableWorkload = db.MemtableWorkload
+
+const (
+	// MemtableWorkloadDefault selects the default mutable adaptive memtable
+	// policy for raw KV workloads when MemtableMode is empty or "auto".
+	MemtableWorkloadDefault = db.MemtableWorkloadDefault
+	// MemtableWorkloadSemantic selects the immutable COW B-tree memtable
+	// ("cow_btree") and StandaloneCOWMemtableLimits at Open time for writable,
+	// non-backend-only semantic/collection workloads when MemtableMode is empty
+	// or "auto".
+	MemtableWorkloadSemantic = db.MemtableWorkloadSemantic
+)
+
 func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtableLimits() }
 
 // StandaloneCOWMemtableLimits returns the larger per-database budget used by
@@ -789,6 +804,9 @@ func Open(opts Options) (*DB, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return nil, err
 	}
+	if err := resolveOpenMemtablePolicy(&opts, false); err != nil {
+		return nil, err
+	}
 	if err := validateCOWOpenOptions(&opts); err != nil {
 		return nil, err
 	}
@@ -808,10 +826,36 @@ func openResolved(opts Options) (*DB, error) {
 // profile/format options are resolved unchanged before selecting cache services.
 // This choice is made only at Open; a live cache never changes its owner role.
 func openResolvedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
+	if err := resolveOpenMemtablePolicy(&opts, backendOnly); err != nil {
+		return nil, err
+	}
 	if err := validateCOWOpenOptions(&opts); err != nil {
 		return nil, err
 	}
 	return openValidatedWithCacheRole(opts, backendOnly)
+}
+
+// resolveOpenMemtablePolicy resolves Open-time automatic memtable selection
+// before immutable COW option validation or storage creation. Runtime
+// "adaptive" rotation stays strictly for mutable raw-KV shards.
+func resolveOpenMemtablePolicy(opts *Options, backendOnly bool) error {
+	if opts == nil {
+		return fmt.Errorf("treedb: nil options")
+	}
+	switch opts.MemtableWorkload {
+	case MemtableWorkloadDefault, MemtableWorkloadSemantic:
+	default:
+		return fmt.Errorf("treedb: invalid memtable workload %d", opts.MemtableWorkload)
+	}
+	if opts.MemtableWorkload == MemtableWorkloadSemantic &&
+		(opts.MemtableMode == "" || opts.MemtableMode == "auto") &&
+		!opts.ReadOnly && !backendOnly {
+		opts.MemtableMode = "cow_btree"
+		if opts.COWMemtableLimits == (COWMemtableLimits{}) {
+			opts.COWMemtableLimits = StandaloneCOWMemtableLimits()
+		}
+	}
+	return nil
 }
 
 // Validate immutable publication policy before ordinary initialization can
@@ -1155,7 +1199,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		// Keep the requested physical and durability options intact for DATA.
 		cacheMode = "btree"
 	}
-	if cacheMode == "" {
+	if cacheMode == "" || cacheMode == "auto" {
 		cacheMode = "adaptive"
 	}
 	nativeSemanticOwner := cacheMode == "cow_btree" || cacheMode == "cow_ordered"

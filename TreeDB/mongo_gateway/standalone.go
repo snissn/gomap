@@ -245,8 +245,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 		return nil, err
 	}
 
-	treeOpts := treedb.OptionsFor(normalized.Profile, normalized.Dir)
-	treeOpts.MemtableMode = "cow_btree"
+	treeOpts := treedb.OptionsForSemantic(normalized.Profile, normalized.Dir)
 	treeOpts.COWMemtableLimits = normalized.COWMemtableLimits
 	freshOrdinaryBSON := normalized.usesRelaxedStandaloneBSONPolicy() && normalized.DefaultCollectionOptions.ColumnStore == nil
 	treeOpts.FreshSystemPagerLeaves = freshOrdinaryBSON
