@@ -661,7 +661,17 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	if len(runtimes) == 0 {
 		return nil, nil
 	}
-	uniqueProbes := make([]uniqueProbeCandidate, 0, len(items))
+	hasUnique := false
+	for _, runtime := range runtimes {
+		if runtime.def.unique {
+			hasUnique = true
+			break
+		}
+	}
+	var uniqueProbes []uniqueProbeCandidate
+	if hasUnique {
+		uniqueProbes = make([]uniqueProbeCandidate, 0, len(items))
+	}
 	encoder := indexEncodeArena{
 		buf:       make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes))),
 		states:    make([][][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
@@ -673,6 +683,9 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 			return nil, err
 		}
 		items[i].state = state
+		if !hasUnique {
+			continue
+		}
 		for runtimeIdx, runtime := range runtimes {
 			if !runtime.def.unique {
 				continue

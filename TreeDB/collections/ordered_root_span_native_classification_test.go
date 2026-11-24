@@ -226,6 +226,7 @@ func collectionOrderedRootRouteClassificationRows() []collectionOrderedRootRoute
 			InternalAnchors: []collectionOrderedRootRouteAnchor{collectionRouteInsertBatchPlanRootNamesAndBaseIDs, collectionRouteBuildRootDescriptorSystemDeltaIterator},
 			DBPublishAnchors: []collectionOrderedRootRouteAnchor{
 				collectionRouteDBPublishOrderedRootDeltaGroup,
+				collectionRouteDBPublishOrderedRootDeltaBatchPreflight,
 			},
 			ExpectedOutcome: collectionOrderedRootOutcomeNonCommandWALDeltaGroup,
 			DownstreamActions: []collectionOrderedRootDownstreamAction{
@@ -233,7 +234,7 @@ func collectionOrderedRootRouteClassificationRows() []collectionOrderedRootRoute
 				collectionOrderedRootActionRequires3023Correctness,
 			},
 			RootGroups:        "primary plus any secondary, text, vector, or index-state roots in the insert plan",
-			ProductionSupport: "foreground non-command-WAL insert publish is current serial behavior; #3022/#3023 must classify span-native route changes",
+			ProductionSupport: "single-root non-command-WAL insert uses delta group publish; multi-root insert uses parallel ordered-root delta batch publish",
 			Covers:            []string{"non_command_wal_publish", "insert_root_groups", "multi_index_roots"},
 		},
 		{
@@ -242,6 +243,7 @@ func collectionOrderedRootRouteClassificationRows() []collectionOrderedRootRoute
 			InternalAnchors: []collectionOrderedRootRouteAnchor{collectionRouteCommandWALActive, collectionRouteWithCommandWALPublishCoordinator, collectionRouteNewInsertCommandWALIntent},
 			DBPublishAnchors: []collectionOrderedRootRouteAnchor{
 				collectionRouteDBPublishOrderedRootDeltaGroupCommandWAL,
+				collectionRouteDBPublishOrderedRootDeltaBatchPreflightCommandWAL,
 			},
 			ExpectedOutcome: collectionOrderedRootOutcomeCommandWALDeltaGroup,
 			DownstreamActions: []collectionOrderedRootDownstreamAction{
@@ -249,7 +251,7 @@ func collectionOrderedRootRouteClassificationRows() []collectionOrderedRootRoute
 				collectionOrderedRootActionRequires3023Correctness,
 			},
 			RootGroups:        "same insert root group as non-command-WAL, with command intent appended before ordered-root publish",
-			ProductionSupport: "command-WAL insert publish is supported; span-native eligibility must preserve command-WAL ordering",
+			ProductionSupport: "command-WAL insert publish is supported; multi-root direct insert uses parallel ordered-root delta batch publish preserving command-WAL ordering",
 			Covers:            []string{"command_wal_publish", "insert_root_groups", "multi_index_roots"},
 		},
 		{
