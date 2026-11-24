@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -1294,5 +1295,153 @@ func TestCOWMetadataDigestEquivalenceAndTamper(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestInspectCOWLeafRecordPinnedParityAndFaultInjection(t *testing.T) {
+	// Build a valid full 4 KiB leaf page and test raw + snappy + lz4 grouped
+	// leaf records through both InspectCOWLeafRecord/ReadCOWLeafPage and
+	// InspectCOWLeafRecordPinned/ReadCOWLeafPageMapped (mapped + unmapped).
+	wantPage := make([]byte, page.PageSize)
+	for i := range wantPage {
+		wantPage[i] = byte((i*13 + 7) & 0xff)
+	}
+	for _, tc := range []struct {
+		name  string
+		codec BlockCodec
+	}{
+		{name: "raw", codec: BlockCodecNone},
+		{name: "snappy", codec: BlockCodecSnappy},
+		{name: "lz4", codec: BlockCodecLZ4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			osFile, ptr := cowTestLeafRecord(t, wantPage, tc.codec)
+			f := cowOpenManagedLeafForTest(t, osFile.Name(), ptr.FileID)
+
+			var decode COWDecodeFunc
+			if tc.codec != BlockCodecNone {
+				dec, err := NewCOWBlockDecoder(tc.codec, 256<<10, 256<<10, func(COWDecoderAllocationSizes) error { return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(dec.Close)
+				decode = dec.Decode
+			}
+
+			wantShape, err := f.InspectCOWLeafRecord(ptr, cowTestLimits)
+			if err != nil {
+				t.Fatalf("InspectCOWLeafRecord: %v", err)
+			}
+			hitsBefore := f.mmapReadHits.Load()
+			totalHitsBefore := f.totalMmapReadHits()
+			pinnedShape, mapped, err := f.InspectCOWLeafRecordPinned(ptr, cowTestLimits)
+			if err != nil {
+				t.Fatalf("InspectCOWLeafRecordPinned: %v", err)
+			}
+			if runtime.GOOS != "windows" && mapped == nil {
+				t.Fatal("expected non-nil mapped slice on mmap-enabled file")
+			}
+			if f.mmapReadHits.Load() != hitsBefore {
+				t.Fatalf("InspectCOWLeafRecordPinned bumped unstriped mmapReadHits: before=%d after=%d", hitsBefore, f.mmapReadHits.Load())
+			}
+			if runtime.GOOS != "windows" && f.totalMmapReadHits() != totalHitsBefore+1 {
+				t.Fatalf("InspectCOWLeafRecordPinned totalMmapReadHits=%d, want %d", f.totalMmapReadHits(), totalHitsBefore+1)
+			}
+			// All non-digest fields must match InspectCOWLeafRecord exactly.
+			// Mapped borrows omit the metadata digest; unmapped fallbacks (e.g., Windows)
+			// delegate to inspectCOWLeafReadAt which retains the digest.
+			if mapped != nil && pinnedShape.metadata != (cowMetadataDigest{}) {
+				t.Fatalf("mapped InspectCOWLeafRecordPinned unexpectedly populated metadata digest: %+v", pinnedShape.metadata)
+			}
+			wantNoDigest := wantShape
+			wantNoDigest.metadata = cowMetadataDigest{}
+			gotNoDigest := pinnedShape
+			gotNoDigest.metadata = cowMetadataDigest{}
+			if gotNoDigest != wantNoDigest {
+				t.Fatalf("pinned shape mismatch:\n got=%+v\nwant=%+v", gotNoDigest, wantNoDigest)
+			}
+
+			input := make([]byte, pinnedShape.PayloadBytes())
+			raw := make([]byte, pinnedShape.RawBytes)
+			dst := make([]byte, page.PageSize)
+			// Verify ReadCOWLeafPageMapped copies compressed bytes into payloadScratch
+			// (decoderInput) rather than passing a direct mmap alias to decode.
+			var sawAlias bool
+			wrappedDecode := decode
+			if tc.codec != BlockCodecNone {
+				wrappedDecode = func(frame FrameHeader, payload, out []byte) ([]byte, error) {
+					if mapped != nil && len(payload) > 0 {
+						pAddr := uintptr(unsafe.Pointer(&payload[0]))
+						mLo := uintptr(unsafe.Pointer(&mapped[0]))
+						mHi := uintptr(unsafe.Pointer(&mapped[len(mapped)-1]))
+						if pAddr >= mLo && pAddr <= mHi {
+							sawAlias = true
+						}
+					}
+					return decode(frame, payload, out)
+				}
+			}
+			got, err := f.ReadCOWLeafPageMapped(ptr, pinnedShape, mapped, input, raw, dst, wrappedDecode)
+			if err != nil {
+				t.Fatalf("ReadCOWLeafPageMapped: %v", err)
+			}
+			if sawAlias {
+				t.Fatal("decoder received direct mmap alias instead of payloadScratch copy")
+			}
+			if !bytes.Equal(got, wantPage) {
+				t.Fatal("ReadCOWLeafPageMapped returned wrong page bytes")
+			}
+			if f.mmapReadHits.Load() != hitsBefore {
+				t.Fatalf("ReadCOWLeafPageMapped bumped unstriped mmapReadHits: before=%d after=%d", hitsBefore, f.mmapReadHits.Load())
+			}
+			if runtime.GOOS != "windows" && f.totalMmapReadHits() != totalHitsBefore+2 {
+				t.Fatalf("ReadCOWLeafPageMapped totalMmapReadHits=%d, want %d", f.totalMmapReadHits(), totalHitsBefore+2)
+			}
+
+			// Scratch capacity error must still be enforced.
+			if _, err := f.ReadCOWLeafPageMapped(ptr, pinnedShape, mapped, input[:0:0], raw, dst, decode); !errors.Is(err, ErrCOWReadCapacity) {
+				t.Fatalf("short payloadScratch err=%v, want ErrCOWReadCapacity", err)
+			}
+			// Corrupt CRC in a copied mapped slice must fail with ErrCorrupt.
+			if mapped != nil {
+				corrupt := append([]byte(nil), mapped...)
+				corrupt[len(corrupt)-1] ^= 0xff
+				if _, err := f.ReadCOWLeafPageMapped(ptr, pinnedShape, corrupt, input, raw, dst, decode); !errors.Is(err, ErrCorrupt) {
+					t.Fatalf("corrupt mapped slice err=%v, want ErrCorrupt", err)
+				}
+			}
+			// Limit rejection parity between InspectCOWLeafRecord and InspectCOWLeafRecordPinned.
+			tight := COWReadLimits{MaxRecordBytes: 1, MaxRawBytes: 1, MaxValueBytes: 1}
+			if _, _, err := f.InspectCOWLeafRecordPinned(ptr, tight); !errors.Is(err, ErrCOWReadCapacity) {
+				t.Fatalf("tight limits err=%v, want ErrCOWReadCapacity", err)
+			}
+
+			// Unmapped fallback (fault-injection path): mapped == nil and ReadCOWLeafPageMapped falls back cleanly.
+			withMappedLeafSealedBudget(t, 0)
+			unmappedMgr, err := NewManager(filepath.Dir(osFile.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := unmappedMgr.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			unmapped, err := unmappedMgr.fileFor(ptr.FileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			uShape, uMapped, err := unmapped.InspectCOWLeafRecordPinned(ptr, cowTestLimits)
+			if err != nil {
+				t.Fatalf("unmapped InspectCOWLeafRecordPinned: %v", err)
+			}
+			if uMapped != nil {
+				t.Fatal("expected nil mapped slice when mmap is disabled")
+			}
+			uGot, err := unmapped.ReadCOWLeafPageMapped(ptr, uShape, uMapped, input, raw, dst, decode)
+			if err != nil || !bytes.Equal(uGot, wantPage) {
+				t.Fatalf("unmapped ReadCOWLeafPageMapped: err=%v eq=%v", err, bytes.Equal(uGot, wantPage))
+			}
+		})
 	}
 }

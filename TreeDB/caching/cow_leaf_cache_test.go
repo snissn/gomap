@@ -73,19 +73,25 @@ func TestCOWCopiedLeafChecksumProof(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			db, backend, want := cowLeafCacheModeFixture(t, 128, false, mode)
 			key := []byte("a000")
+			initialMarks := cowLeafCacheCounter(t, backend, "page_checksum_verified_marks")
 			if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("initial record verification: got %q, err %v", got, err)
 			}
-			initialMarks := cowLeafCacheCounter(t, backend, "page_checksum_verified_marks")
+			if cowLeafCacheCounter(t, backend, "page_checksum_verified_marks") <= initialMarks {
+				t.Fatal("initial verified decode did not immediately mark the admitted page checksum")
+			}
 			initialHits := cowLeafCacheCounter(t, backend, "hits")
+			initialVerifiedHits := cowLeafCacheCounter(t, backend, "page_checksum_verified_hits")
+			beforeSecond := tree.OuterLeafReadStatsSnapshot()
 			if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("initial copied page: got %q, err %v", got, err)
 			}
 			if cowLeafCacheCounter(t, backend, "hits") <= initialHits {
 				t.Fatal("expected a decoded cache hit after record verification")
 			}
-			if cowLeafCacheCounter(t, backend, "page_checksum_verified_marks") <= initialMarks {
-				t.Fatal("first verified copy did not mark the exact page checksum")
+			if cowLeafCacheCounter(t, backend, "page_checksum_verified_hits") <= initialVerifiedHits ||
+				tree.OuterLeafReadStatsSnapshot().ChecksumSkippedTotal <= beforeSecond.ChecksumSkippedTotal {
+				t.Fatal("second read did not immediately reuse the verified cached page proof")
 			}
 			snap, err := db.acquireCOWSnapshotWithError()
 			if err != nil {

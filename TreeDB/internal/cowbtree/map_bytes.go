@@ -57,6 +57,28 @@ func searchStringBytes[V any](n *mapNode[string, V], key []byte) (int, bool) {
 	return lo, false
 }
 
+// GetEntryBytes looks up a byte-slice key in a string-keyed Map without
+// mutating the tree, allocating a string key (including under -tags treedb_safe),
+// or invoking isolation/work-accounting machinery. On a hit it returns the
+// tree's existing owned immutable string key alongside its value.
+func GetEntryBytes[V any](tr *Map[string, V], key []byte) (string, V, bool) {
+	if tr == nil {
+		var zero V
+		return "", zero, false
+	}
+	for n := tr.root; n != nil; {
+		i, found := searchStringBytes(n, key)
+		if found {
+			return n.items[i].key, n.items[i].value, true
+		}
+		if n.leaf() {
+			return "", tr.empty.value, false
+		}
+		n = (*n.children)[i]
+	}
+	return "", tr.empty.value, false
+}
+
 func nodeSetBytes[V any](tr *Map[string, V], pn **mapNode[string, V], key []byte, value V) (prev V, replaced bool, split bool) {
 	n := *pn
 	var i int

@@ -63,3 +63,56 @@ func TestSetBytesParityAllocationChargeAndZeroAllocReplace(t *testing.T) {
 		t.Fatalf("SetBytes replace allocated %.2f times/op, want 0", allocs)
 	}
 }
+
+func TestGetEntryBytes(t *testing.T) {
+	// Nil and empty maps must return miss with zero allocations.
+	var nilMap *Map[string, string]
+	if k, v, ok := GetEntryBytes(nilMap, []byte("a")); ok || k != "" || v != "" {
+		t.Fatalf("nil map hit: (%q, %q, %v)", k, v, ok)
+	}
+	empty := NewMap[string, string](32).SealOwned()
+	if k, v, ok := GetEntryBytes(empty, []byte("a")); ok || k != "" || v != "" {
+		t.Fatalf("empty map hit: (%q, %q, %v)", k, v, ok)
+	}
+
+	m := NewMap[string, string](32)
+	const n = 2000
+	for i := 0; i < n; i++ {
+		m.Set(fmt.Sprintf("k%05d", i*2), fmt.Sprintf("v%05d", i*2))
+	}
+	sealed := m.SealOwned()
+
+	for i := 0; i < n; i++ {
+		kBytes := []byte(fmt.Sprintf("k%05d", i*2))
+		wantK := fmt.Sprintf("k%05d", i*2)
+		wantV := fmt.Sprintf("v%05d", i*2)
+		gotK, gotV, ok := GetEntryBytes(sealed, kBytes)
+		if !ok || gotK != wantK || gotV != wantV {
+			t.Fatalf("hit %d: got (%q, %q, %v), want (%q, %q, true)", i, gotK, gotV, ok, wantK, wantV)
+		}
+		missBytes := []byte(fmt.Sprintf("k%05d", i*2+1))
+		if mk, mv, mok := GetEntryBytes(sealed, missBytes); mok || mk != "" || mv != "" {
+			t.Fatalf("miss %d: got (%q, %q, %v), want miss", i, mk, mv, mok)
+		}
+	}
+
+	hitKey := []byte("k02000")
+	missKey := []byte("k02001")
+	hitAllocs := testing.AllocsPerRun(200, func() {
+		k, v, ok := GetEntryBytes(sealed, hitKey)
+		if !ok || k != "k02000" || v != "v02000" {
+			t.Fatalf("unexpected hit: (%q, %q, %v)", k, v, ok)
+		}
+	})
+	if hitAllocs != 0 {
+		t.Fatalf("GetEntryBytes hit allocated %.2f times/op, want 0", hitAllocs)
+	}
+	missAllocs := testing.AllocsPerRun(200, func() {
+		if _, _, ok := GetEntryBytes(sealed, missKey); ok {
+			t.Fatal("unexpected hit on missKey")
+		}
+	})
+	if missAllocs != 0 {
+		t.Fatalf("GetEntryBytes miss allocated %.2f times/op, want 0", missAllocs)
+	}
+}
