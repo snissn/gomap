@@ -302,6 +302,15 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 				}
 				t.Logf("original outer-leaf dispatch %s=%d", key, count)
 			}
+			// Overwrite one middle seed key and checkpoint so the initial leaf
+			// segment holds genuine reclaimable dead leaf bytes independent of
+			// flush chunk size (ensuring CompactStorage exercises leaf pack).
+			if err := database.Set([]byte("leaf-seed-00000512"), bytes.Repeat([]byte("leaf-registration-v2"), 64)); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
 			old := database.AcquireSnapshot()
 			if old == nil {
 				t.Fatal("missing old cut")

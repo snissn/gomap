@@ -74,11 +74,13 @@ func (m *cowFrozenMerge) close() error {
 
 // Only use entries from cowTable.newIterator: its COWRecord strings are
 // immutable and remain owned by the captured cut through backend Write/Close,
-// including after the cursor advances or closes.
-func writeCOWFrozenRawChunks(sources []cowTable, merge *cowFrozenMerge, chunkCap int, write func([]batch.Entry, bool) error) error {
+// including after the cursor advances or closes. The caller stages the tail
+// separately from preceding chunks so it can release the raw buffer before
+// final publication.
+func writeCOWFrozenRawChunks(sources []cowTable, merge *cowFrozenMerge, chunkCap int, write func([]batch.Entry) error) ([]batch.Entry, error) {
 	ops := make([]batch.Entry, 0, chunkCap)
-	writeChunk := func(last bool) error {
-		if err := write(ops, last); err != nil {
+	writeChunk := func() error {
+		if err := write(ops); err != nil {
 			return err
 		}
 		ops = ops[:0]
@@ -86,7 +88,7 @@ func writeCOWFrozenRawChunks(sources []cowTable, merge *cowFrozenMerge, chunkCap
 	}
 	emit := func(entry batch.Entry) error {
 		if len(ops) == chunkCap {
-			if err := writeChunk(false); err != nil {
+			if err := writeChunk(); err != nil {
 				return err
 			}
 		}
@@ -97,7 +99,7 @@ func writeCOWFrozenRawChunks(sources []cowTable, merge *cowFrozenMerge, chunkCap
 		var stats canonicalFlushRun
 		err := mergeCanonicalStableIteratorHeap(merge.heap, &stats, emit)
 		if err = joinCOWCleanupError(err, merge.close()); err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		// Preserve per-source batches and the existing physical precedence
@@ -108,15 +110,15 @@ func writeCOWFrozenRawChunks(sources []cowTable, merge *cowFrozenMerge, chunkCap
 				if len(ops) == 0 {
 					return nil
 				}
-				return writeChunk(false)
+				return writeChunk()
 			}); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 	// Even an exact multiple stays pending until every cursor has closed and
 	// reported its terminal status. A raw-empty build still publishes coverage.
-	return writeChunk(true)
+	return ops, nil
 }
 
 func streamCOWFrozenSource(it iterator.UnsafeIterator, emit func(batch.Entry) error, begin func() error) (err error) {

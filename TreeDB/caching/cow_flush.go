@@ -494,6 +494,21 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 	return db.flushCOWFrozenCut(syncFlush, publish, c.retainCut())
 }
 
+// cowFlushDefaultMaxChunkEntries is the fallback chunk cap when
+// db.flushBackendMaxEntries <= 0. Open() supplies normalized profile limits
+// (16,384 relaxed / 32,768 durable) and explicit overrides remain
+// authoritative; all are bounded by 25% of maintenance MaxInFlightBytes.
+const cowFlushDefaultMaxChunkEntries = 65536
+
+func (db *DB) cowFrozenFlushChunkLimit(maintenance *memtable.COWBudget) int {
+	limit := cowFlushDefaultMaxChunkEntries
+	if db.flushBackendMaxEntries > 0 {
+		limit = db.flushBackendMaxEntries
+	}
+	maxByBudget := (maintenance.Limits().MaxInFlightBytes / 4) / uint64(unsafe.Sizeof(batch.Entry{}))
+	return int(min(uint64(limit), max(1, maxByBudget)))
+}
+
 // flushCOWFrozenCut consumes the one original retained source cut. Explicit
 // boundaries captured it under P before post-frontier admissions; background
 // passes use its immutable frozen logical/semantic coverage, excluding mutable
@@ -524,25 +539,18 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
-	n := len(cut.frozen)
-	chunkCap := db.flushBackendMaxEntries
-	if chunkCap <= 0 || chunkCap > 1024 {
-		chunkCap = 1024
-	}
-	entries := 0
+	maxCap := db.cowFrozenFlushChunkLimit(c.maintenance)
+	totalEntries := 0
 	for _, source := range cut.frozen {
-		entries += min(source.Len(), chunkCap-entries)
-		if entries == chunkCap {
-			break
+		if sourceLen := source.Len(); sourceLen > 0 {
+			totalEntries += min(sourceLen, maxCap-totalEntries)
+			if totalEntries >= maxCap {
+				break
+			}
 		}
 	}
-	if entries > 0 {
-		chunkCap = entries
-	} else if n == 0 {
-		chunkCap = 1
-	}
+	chunkCap := max(1, totalEntries)
 	fixedCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.StableResourceCaptureLease{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(checkpointCommandWALPublish{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{})))
-	charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
 	lease, err := c.maintenance.AcquireExternal(fixedCharge)
 	if err != nil {
 		return joinCOWCleanupError(cowGenerationAdmissionError(generationPressure, err), c.releaseCut(cut))
@@ -629,9 +637,6 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if err = backend.DrainRetiredIndexGenerations(h.guard); err != nil {
 		return err
 	}
-	if err = lease.Resize(charge); err != nil {
-		return cowGenerationAdmissionError(generationPressure, err)
-	}
 	merge, err := openCOWFrozenMerge(c.budget, cut.frozen)
 	if err != nil {
 		return err
@@ -709,11 +714,37 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if cut.frozenSemanticRootSet == nil && operation != nil {
 		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
 	}
-	err = writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry, last bool) error {
-		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground)
+	for {
+		charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
+		err = lease.Resize(charge)
+		if err == nil || !errors.Is(err, memtable.ErrCOWCapacity) || chunkCap <= 1 {
+			break
+		}
+		chunkCap /= 2
+	}
+	if err != nil {
+		return errors.Join(cowGenerationAdmissionError(generationPressure, err), group.Close())
+	}
+	tail, err := writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry) error {
+		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, false, flushCollectionBackground)
 	})
-	// Only the captured prefix and handoff controls can outlive this build.
+	var finalBatch batch.Interface
+	var commandPublishAttached bool
+	if err == nil {
+		finalBatch, commandPublishAttached, err = db.stageCanonicalFlushRunOpsChunk(tail, publish, group, true, flushCollectionBackground)
+	}
+	// The staged batch owns its entry metadata and borrows key/value bytes from
+	// the captured cut. Refund the raw backing before Write admits the successor
+	// snapshot. Only the captured prefix and handoff controls outlive the build.
+	tail = nil
 	err = joinCOWCleanupError(err, lease.Resize(fixedCharge))
+	if finalBatch != nil {
+		if err == nil {
+			err = db.writeStagedCanonicalFlushRunChunk(finalBatch, syncFlush, publish, commandPublishAttached)
+		} else {
+			err = joinCOWCleanupError(err, finalBatch.Close())
+		}
+	}
 	err = errors.Join(err, group.Close())
 	// End local coverage accesses before completeCOWHandoff can refund this
 	// original control tranche. Only scalar completion escapes, never ranges.

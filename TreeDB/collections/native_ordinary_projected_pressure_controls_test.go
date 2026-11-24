@@ -19,6 +19,10 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 	opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+	// Keep the seeded generation active until the explicit relief request.
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	owner, err := treedb.Open(opts)
 	if err != nil {
@@ -91,7 +95,8 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 		afterStats := owner.Stats()
 		if err != nil || next != backend.CommandWALNextLSN() || before.LogicalSequence != after.LogicalSequence ||
 			stats[rollovers] != afterStats[rollovers] || stats[refusals] != afterStats[refusals] || before.ReservedBytes != after.ReservedBytes {
-			t.Fatalf("capacity refusal changed state: before=%+v after=%+v next=%d..%d", before, after, next, backend.CommandWALNextLSN())
+			t.Fatalf("capacity refusal changed state: before=%+v after=%+v next=%d..%d rollovers=%s..%s refusals=%s..%s observeErr=%v",
+				before, after, next, backend.CommandWALNextLSN(), stats[rollovers], afterStats[rollovers], stats[refusals], afterStats[refusals], err)
 		}
 	}
 	t.Run("validated_bson", func(t *testing.T) {
