@@ -177,6 +177,21 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 		return false, false, err
 	}
 	defer unlockVector()
+	if len(ids) > 1 && projection == nil {
+		var preStarted time.Time
+		if stats != nil {
+			preStarted = time.Now()
+		}
+		pre, preErr := prepareNativeBulkInsertPreimage(c.nativeJSON, c.name, ids, documents, stats != nil)
+		if preErr != nil {
+			return false, false, mutationNotAcceptedError(preErr)
+		}
+		var preElapsed time.Duration
+		if stats != nil {
+			preElapsed = time.Since(preStarted)
+		}
+		return c.nativeJSON.commitBulkInsertAttempt(c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
+	}
 	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal)
 }
 

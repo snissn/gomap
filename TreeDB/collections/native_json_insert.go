@@ -34,6 +34,12 @@ func (r *nativeInsertProjectedRefusal) Unwrap() error { return r.pressure.Refusa
 
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) error {
+	if m == nil || m.db == nil {
+		return backenddb.ErrClosed
+	}
+	if len(ids) > 1 && len(ids) == len(documents) {
+		return m.insertBulkBatch(name, ids, documents)
+	}
 	for attempt := 0; ; attempt++ {
 		tx, err := m.Begin(name)
 		_, retry, err := finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil, nil)
@@ -53,6 +59,10 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 }
 
 func finishNativeJSONInsertWithJournal(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (recordStats, retry bool, resultErr error) {
+	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, nil, 0, stats, ordinaryOnly, projection, projected, journal)
+}
+
+func finishNativeJSONInsertWithPreimage(tx *NativeJSONTxn, err error, ids, documents [][]byte, pre *nativeBulkInsertPreimage, preElapsed time.Duration, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (recordStats, retry bool, resultErr error) {
 	var previous *nativeInsertProjectedRefusal
 	if projected != nil {
 		previous, *projected = *projected, nil
@@ -102,11 +112,20 @@ func finishNativeJSONInsertWithJournal(tx *NativeJSONTxn, err error, ids, docume
 	if stats != nil {
 		started = time.Now()
 	}
-	if err = tx.InsertBatch(ids, documents); err != nil {
-		return false, false, mutationNotAcceptedError(err)
+	attached := false
+	if pre != nil && projection == nil && ordinary {
+		attached, err = tx.attachNativeBulkInsertPreimage(pre, stats)
+		if err != nil {
+			return false, false, mutationNotAcceptedError(err)
+		}
+	}
+	if !attached {
+		if err = tx.InsertBatch(ids, documents); err != nil {
+			return false, false, mutationNotAcceptedError(err)
+		}
 	}
 	if stats != nil {
-		stats.PrepareDocuments = time.Since(started)
+		stats.PrepareDocuments = preElapsed + time.Since(started)
 	}
 	err = tx.commitNativePlanWithJournal(false, nil, false, stats, &retry, nil, projected, journal)
 	return stats != nil, retry && ordinary, err
@@ -136,7 +155,11 @@ func (t *NativeJSONTxn) collectNativeInsertStats(g *nativeJSONTxnBinding, direct
 		}
 	}
 	s := stats
-	s.Documents, s.Indexes = len(g.rows.rows), len(indexes)
+	docCount := len(g.rows.rows)
+	if docCount == 0 {
+		docCount = len(direct.primaryEntries)
+	}
+	s.Documents, s.Indexes = docCount, len(indexes)
 	// These are prepared logical domain runs, not physical checkpoint roots.
 	s.Runs = 1 + len(g.plan.additional)
 	if len(indexes) != 0 {

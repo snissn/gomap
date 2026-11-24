@@ -25,7 +25,13 @@ func TestNativeOrdinaryProjectedGenerationPressure(t *testing.T) {
 }
 
 func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) {
-	const rows = 100000
+	rows := 100000
+	if batchSize >= 16000 {
+		// Compact sorted bulk COW staging eliminates intermediate node churn so
+		// 100k ~250B rows fit inside one 64 MiB generation; 180k rows cross the
+		// below-watermark projected refusal threshold and trigger auto-rollover.
+		rows = 180000
+	}
 	const publications = "treedb.cache.cow.publications_total"
 	const rollovers = "treedb.cache.cow.rollovers_total"
 	const reserved = "treedb.cache.cow.reserved_bytes"

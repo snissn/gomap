@@ -779,7 +779,8 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 		// the sentinel. Consumed alone only transfers descriptor ownership.
 		*expired = apply == nil && !typedGroup && err == backenddb.ErrTxnTooOld &&
 			!result.Assigned && result.AssignedLSN == 0 && !result.Uncertain &&
-			!result.LogicalInstalled && !backenddb.CommitPublicationAccepted(err) &&
+			!result.LogicalInstalled && !result.WALCompleted && !result.WALStable &&
+			!backenddb.CommitPublicationAccepted(err) &&
 			!errors.Is(err, ErrCommitAmbiguous)
 	}
 	if projected != nil && apply == nil && !typedGroup &&

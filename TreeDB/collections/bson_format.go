@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 func prepareBSONInsertDocuments(documents [][]byte) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
@@ -26,6 +27,67 @@ func validateBSONDocument(document []byte) error {
 func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	raw := bson.Raw(document)
 	state := encoder.appendState(len(runtimes))
+	if len(runtimes) > 1 && len(runtimes) <= 8 && len(document) >= 5 {
+		allTopLevelSimple := true
+		for _, runtime := range runtimes {
+			if len(runtime.def.components) > 1 ||
+				(len(runtime.def.components) == 1 && runtime.def.components[0].Direction == IndexDirectionDescending) ||
+				len(runtime.path) != 1 {
+				allTopLevelSimple = false
+				break
+			}
+		}
+		if allTopLevelSimple {
+			var values [8]bson.RawValue
+			var foundMask uint8
+			foundCount := 0
+			rem := document[4 : len(document)-1]
+			parsedOK := true
+			for len(rem) > 0 && foundCount < len(runtimes) {
+				var elem bsoncore.Element
+				var ok bool
+				elem, rem, ok = bsoncore.ReadElement(rem)
+				if !ok {
+					parsedOK = false
+					break
+				}
+				key, err := elem.KeyErr()
+				if err != nil {
+					parsedOK = false
+					break
+				}
+				for i, runtime := range runtimes {
+					bit := uint8(1) << uint(i)
+					if foundMask&bit != 0 {
+						continue
+					}
+					if key == runtime.path[0] {
+						val := elem.Value()
+						values[i] = bson.RawValue{Type: bson.Type(val.Type), Value: val.Data}
+						foundMask |= bit
+						foundCount++
+					}
+				}
+			}
+			if parsedOK {
+				for runtimeIdx, runtime := range runtimes {
+					bit := uint8(1) << uint(runtimeIdx)
+					if foundMask&bit == 0 {
+						if runtime.def.valueType == IndexValueBSONOrderedV2 {
+							if err := appendBSONIndexValueToState(state, runtimeIdx, runtime, bson.RawValue{}, opts, encoder); err != nil {
+								return nil, err
+							}
+						}
+						continue
+					}
+					if err := appendBSONIndexValueToState(state, runtimeIdx, runtime, values[runtimeIdx], opts, encoder); err != nil {
+						return nil, err
+					}
+				}
+				return state, nil
+			}
+		}
+	}
 	for runtimeIdx, runtime := range runtimes {
 		if err := appendBSONIndexRuntimeState(raw, state, runtimeIdx, runtime, opts, encoder); err != nil {
 			return nil, err

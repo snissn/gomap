@@ -96,23 +96,28 @@ func extractNativeInsertEffectsAndText(name string, incarnation uint64, plan *di
 	if roots+len(text) > 0 {
 		additional = make([]nativeJSONDomainChange, 0, roots+len(text))
 	}
-	effects := make([]txnhistory.Effect, len(primary), len(primary)+extra+textEffects)
+	effects := make([]txnhistory.Effect, len(primary)+extra+textEffects)
 	namespace := func(domain uint64) txnhistory.Namespace {
 		return txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: incarnation, Domain: domain, Interpretation: 1}
 	}
+	primaryNS := namespace(1)
 	for i, row := range plan.primaryEntries {
 		primary[i] = memtable.COWMutation{Key: row.key, Value: row.value, Ptr: row.ptr, Flags: row.flags}
-		effects[i] = txnhistory.Effect{Namespace: namespace(1), Kind: txnhistory.PointEffect, Key: row.key}
+		effects[i] = txnhistory.Effect{Namespace: primaryNS, Kind: txnhistory.PointEffect, Key: row.key}
 	}
+	effectOff := len(primary)
 	appendRows := func(root string, domain uint64, rows []directBufferedRootEntry) {
 		if len(rows) == 0 {
 			return
 		}
+		ns := namespace(domain)
 		delta := nativeJSONDomainChange{name: strings.TrimPrefix(root, name+"/"), policy: nativeInsertRootPolicy(plan, root), entries: make([]memtable.COWMutation, len(rows))}
+		dst := effects[effectOff : effectOff+len(rows)]
 		for i, row := range rows {
 			delta.entries[i] = memtable.COWMutation{Key: row.key, Value: row.value, Ptr: row.ptr, Flags: row.flags}
-			effects = append(effects, txnhistory.Effect{Namespace: namespace(domain), Kind: txnhistory.PointEffect, Key: row.key})
+			dst[i] = txnhistory.Effect{Namespace: ns, Kind: txnhistory.PointEffect, Key: row.key}
 		}
+		effectOff += len(rows)
 		additional = append(additional, delta)
 	}
 	appendRows(plan.templateRootName, 2, plan.templateEntries)
@@ -127,26 +132,30 @@ func extractNativeInsertEffectsAndText(name string, incarnation uint64, plan *di
 		if len(secondary.entries) == 0 {
 			continue
 		}
-		delta := nativeJSONDomainChange{name: strings.TrimPrefix(secondary.rootName, name+"/"), policy: nativeInsertRootPolicy(plan, secondary.rootName), entries: make([]memtable.COWMutation, len(secondary.entries))}
+		ns := namespace(secondaryDomain(secondary.runtimeIdx))
+		entries := make([]memtable.COWMutation, len(secondary.entries))
+		dst := effects[effectOff : effectOff+len(secondary.entries)]
 		for i, row := range secondary.entries {
 			flags := byte(node.FlagInline)
 			if row.tombstone {
 				flags = node.FlagTombstone
 			}
-			delta.entries[i] = memtable.COWMutation{Key: row.key, Flags: flags}
-			effects = append(effects, txnhistory.Effect{Namespace: namespace(secondaryDomain(secondary.runtimeIdx)), Kind: txnhistory.PointEffect, Key: row.key})
+			entries[i] = memtable.COWMutation{Key: row.key, Flags: flags}
+			dst[i] = txnhistory.Effect{Namespace: ns, Kind: txnhistory.PointEffect, Key: row.key}
 		}
-		additional = append(additional, delta)
+		effectOff += len(secondary.entries)
+		additional = append(additional, nativeJSONDomainChange{name: strings.TrimPrefix(secondary.rootName, name+"/"), policy: nativeInsertRootPolicy(plan, secondary.rootName), entries: entries})
 	}
 	// Full-domain text ranges follow the unchanged non-text point prefix. They
 	// retain the original Interpretation=1 and nil start/end bounds.
 	for _, change := range text {
 		additional = append(additional, change)
 		if len(change.entries) != 0 {
-			effects = append(effects, txnhistory.Effect{Namespace: namespace(nativeTextDomainNumber(meta[0], change.name)), Kind: txnhistory.RangeEffect})
+			effects[effectOff] = txnhistory.Effect{Namespace: namespace(nativeTextDomainNumber(meta[0], change.name)), Kind: txnhistory.RangeEffect}
+			effectOff++
 		}
 	}
-	return additional, effects, nil
+	return additional, effects[:effectOff], nil
 }
 
 func nativeInsertRootPolicy(plan *directBufferedInsertPlan, root string) backenddb.OrderedRootStoragePolicy {

@@ -135,7 +135,10 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 		})
 	})
 	t.Run("request_larger_than_fresh_generation", func(t *testing.T) {
-		oversizedIDs, oversizedDocs := batch(seedBatches*size, 75000)
+		// 90k 470B rows require >64 MiB on a fresh empty generation (~47.5 MiB
+		// payload + ~24 MiB COW node bound), so even with compact bulk staging
+		// it genuinely exceeds MaxGenerationBytes without tripping MaxInFlightBytes.
+		oversizedIDs, oversizedDocs := batch(seedBatches*size, 90000)
 		checkCapacity(t, func() error {
 			_, err := col.InsertBatch(oversizedIDs, oversizedDocs)
 			return err

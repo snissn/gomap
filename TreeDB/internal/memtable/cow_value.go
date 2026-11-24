@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -15,6 +16,17 @@ type cowValue string
 
 const cowValueMetadataBytes = 25 // ValuePtr16, EntryRevision8, flags1
 
+var (
+	cowEmptyInlineValue    = cowEncodeEmptyFlagValue(node.FlagInline)
+	cowEmptyTombstoneValue = cowEncodeEmptyFlagValue(node.FlagTombstone)
+)
+
+func cowEncodeEmptyFlagValue(flags byte) cowValue {
+	var metadata [cowValueMetadataBytes]byte
+	metadata[24] = flags
+	return cowValue(metadata[:])
+}
+
 func cowValueSize(payloadBytes int) (int, bool) {
 	if payloadBytes < 0 || payloadBytes > int(^uint(0)>>1)-cowValueMetadataBytes {
 		return 0, false
@@ -22,10 +34,25 @@ func cowValueSize(payloadBytes int) (int, bool) {
 	return cowValueMetadataBytes + payloadBytes, true
 }
 
+func cowIsEmptyConstantValue(e COWMutation) (cowValue, bool) {
+	if len(e.Value) == 0 && e.Ptr == (page.ValuePtr{}) && e.Revision == 0 {
+		switch e.Flags {
+		case node.FlagInline:
+			return cowEmptyInlineValue, true
+		case node.FlagTombstone:
+			return cowEmptyTombstoneValue, true
+		}
+	}
+	return "", false
+}
+
 // cowEncodeValue is called only after Prepare admits the rounded encoded size
 // and cowValueSize checks int overflow. Grow creates one backing for both the
 // metadata and payload; String transfers its immutable alias without a copy.
 func cowEncodeValue(e COWMutation) cowValue {
+	if v, ok := cowIsEmptyConstantValue(e); ok {
+		return v
+	}
 	var metadata [cowValueMetadataBytes]byte
 	binary.LittleEndian.PutUint64(metadata[0:8], e.Ptr.Offset)
 	binary.LittleEndian.PutUint32(metadata[8:12], e.Ptr.Length)
@@ -37,6 +64,23 @@ func cowEncodeValue(e COWMutation) cowValue {
 	value.Write(metadata[:])
 	value.Write(e.Value)
 	return cowValue(value.String())
+}
+
+// cowEncodeValueInto encodes e into a pre-allocated batch arena when non-empty,
+// returning the encoded cowValue and updated arena offset.
+func cowEncodeValueInto(arena []byte, off int, e COWMutation) (cowValue, int) {
+	if v, ok := cowIsEmptyConstantValue(e); ok {
+		return v, off
+	}
+	n := cowValueMetadataBytes + len(e.Value)
+	dst := arena[off : off+n]
+	binary.LittleEndian.PutUint64(dst[0:8], e.Ptr.Offset)
+	binary.LittleEndian.PutUint32(dst[8:12], e.Ptr.Length)
+	binary.LittleEndian.PutUint32(dst[12:16], e.Ptr.FileID)
+	binary.LittleEndian.PutUint64(dst[16:24], uint64(e.Revision))
+	dst[24] = e.Flags
+	copy(dst[cowValueMetadataBytes:], e.Value)
+	return cowValue(bytesToStringNoCopy(dst)), off + n
 }
 
 // record borrows the immutable encoding through its owning root/view. Payload
