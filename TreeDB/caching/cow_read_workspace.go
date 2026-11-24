@@ -49,18 +49,20 @@ type cowPointScratch struct {
 }
 
 type cowReadWorkspace struct {
-	snapshot      *Snapshot
-	basis         *backenddb.Snapshot // borrowed from the original basis owner, never retained here
-	budget        *memtable.COWBudget
-	limits        valuelog.COWReadLimits
-	lease         *memtable.COWExternalLease
-	allocations   *cowReadAllocation
-	codecs        []*cowReadCodec
-	inlineCodecs  [1]*cowReadCodec
-	parkedCodec   *cowReadCodec
-	input, output []byte
-	point         *cowPointScratch
-	poolable      bool
+	snapshot        *Snapshot
+	basis           *backenddb.Snapshot // borrowed from the original basis owner, never retained here
+	budget          *memtable.COWBudget
+	limits          valuelog.COWReadLimits
+	lease           *memtable.COWExternalLease
+	allocations     *cowReadAllocation
+	codecs          []*cowReadCodec
+	inlineCodecs    [1]*cowReadCodec
+	parkedCodec     *cowReadCodec
+	input, output   []byte
+	point           *cowPointScratch
+	projection      tree.OwnedPointerProjectionWorkspace
+	projectionLease *memtable.COWExternalLease
+	poolable        bool
 }
 
 // Cut-local workspaces are serialized by cowReadMu. Their fixed traversal and
@@ -523,10 +525,39 @@ func (w *cowReadWorkspace) releaseSnapshotScratchWithView(view *memtable.COWView
 	}
 }
 
+func (w *cowReadWorkspace) admitProjection(rawBytes uint64) error {
+	charge := memtable.COWAllocationCharge(rawBytes)
+	if w.projectionLease == nil {
+		lease, err := w.budget.AcquireExternal(charge)
+		if err != nil {
+			return err
+		}
+		w.projectionLease = lease
+		return nil
+	}
+	// If both ordinary and primary layouts are ever initialized in the same
+	// workspace, grow the projection receipt to cover both.
+	if err := w.projectionLease.Resize(2 * charge); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *cowReadWorkspace) closeProjection() {
+	w.projection.Reset()
+	w.projection = tree.OwnedPointerProjectionWorkspace{}
+	lease := w.projectionLease
+	w.projectionLease = nil
+	if lease != nil {
+		lease.Close()
+	}
+}
+
 func (w *cowReadWorkspace) close() {
 	if w == nil {
 		return
 	}
+	w.closeProjection()
 	if w.point != nil {
 		point := w.point
 		w.point = nil
@@ -959,6 +990,60 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 		localDictionary = !shared
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
+		if native {
+			if c.physicalMu.TryLock() {
+				// A preceding decoder may have admitted this exact inspected leaf
+				// while we raced. Preserve the original policy before copying a hit.
+				if data, state, hit, cacheErr := record.CopyVerifiedPage(dst); cacheErr != nil || hit {
+					c.physicalMu.Unlock()
+					return data, state, cacheErr
+				}
+				shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
+				if workspaceErr != nil {
+					c.physicalMu.Unlock()
+					if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
+						return nil, noProof, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
+					}
+					return nil, noProof, workspaceErr
+				}
+				data, err := shared.readPinnedLeaf(record, dst, independent)
+				var state tree.LeafLogPageReadState
+				if err == nil {
+					state, err = record.AdmitVerifiedPageWithState(data)
+				}
+				c.physicalMu.Unlock()
+				if err != nil {
+					if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
+						return nil, noProof, &cowPhysicalDictionaryCapacity{cause: err}
+					}
+					return nil, noProof, err
+				}
+				return data, state, nil
+			}
+			// Lane 0 (physicalMu) is busy: admit a bounded per-call temporary
+			// decoder workspace and release it immediately after copy-out so
+			// concurrent readers never serialize or retain overflow leases.
+			temp, workspaceErr := admitCOWReadWorkspace(c.budget, w.limits)
+			if workspaceErr != nil {
+				if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
+					return nil, noProof, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
+				}
+				return nil, noProof, workspaceErr
+			}
+			defer temp.close()
+			data, err := temp.readPinnedLeaf(record, dst, independent)
+			var state tree.LeafLogPageReadState
+			if err == nil {
+				state, err = record.AdmitVerifiedPageWithState(data)
+			}
+			if err != nil {
+				if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
+					return nil, noProof, &cowPhysicalDictionaryCapacity{cause: err}
+				}
+				return nil, noProof, err
+			}
+			return data, state, nil
+		}
 		c.physicalMu.Lock()
 		// A preceding decoder may have admitted this exact inspected leaf
 		// while we waited. Preserve the original policy before copying a hit.

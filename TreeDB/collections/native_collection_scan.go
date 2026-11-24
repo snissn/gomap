@@ -81,13 +81,9 @@ func (r *NativeJSONRead) scanDocuments(afterID []byte, maxDocuments int, documen
 			charge += n
 			return nil
 		}
-		scratch, err := r.physicalScratch()
-		if err != nil {
-			return false, err
-		}
 		// The physical projection retains this method value; its two-word
 		// cohort was admitted alongside the cursor, as for native text scans.
-		readLeaf := r.readLeaf
+		readLeaf := r.cursorReadLeaf()
 		typed := nativeTypedMeta(r.meta)
 		reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 		scanned := 0
@@ -96,7 +92,7 @@ func (r *NativeJSONRead) scanDocuments(afterID []byte, maxDocuments int, documen
 			if r.closing || r.capture == nil || r.failure != nil {
 				return false, backenddb.ErrClosed
 			}
-			entry, found, err := physical.read.seekWithCursor(start, nil, scratch, readLeaf, false, nil, &physical, forward, admit)
+			entry, found, err := physical.read.seekWithCursor(start, nil, nil, readLeaf, false, nil, &physical, forward, admit)
 			if err != nil || !found {
 				return false, err
 			}

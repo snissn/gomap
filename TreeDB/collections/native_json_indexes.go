@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -304,66 +305,142 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 	if visit == nil {
 		return errors.New("collections: nil index ID visitor")
 	}
+	if r.collection == nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
 	// Public query buffers are caller-scoped; admit original temporary backing
 	// before encoding and release it after all key/cursor aliases end.
 	queryCharge, err := nativeIndexQueryCharge(index, value)
 	if err != nil {
 		return err
 	}
+	unique := index.Unique
+	charge := queryCharge
+	addCharge := func(n uint64) bool {
+		if n > ^uint64(0)-charge {
+			return false
+		}
+		charge += n
+		return true
+	}
 	cursorCharge := memtable.COWAllocationCharge(page.PageSize + 1)
-	if queryCharge > ^uint64(0)-cursorCharge {
+	if !unique {
+		if !addCharge(cursorCharge) {
+			return memtable.ErrCOWCapacity
+		}
+	}
+	if !addCharge(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainCursor{})))) ||
+		!addCharge(memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))) {
 		return memtable.ErrCOWCapacity
 	}
-	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(queryCharge + cursorCharge)
+	domain, hasDomain := r.collection.domains.Get("index/" + name)
+	var preAdmitted uint64
+	if hasDomain && domain != nil && domain.baseRoot != 0 {
+		projCharge := memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())
+		if !addCharge(projCharge) {
+			return memtable.ErrCOWCapacity
+		}
+		preAdmitted = projCharge
+	}
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return err
 	}
-	operation := func() error {
+	operation := func() (operationErr error) {
 		encoded, err := encodeIndexScalar(index.ValueType, value)
 		if err != nil {
 			return err
 		}
 		end := prefixEnd(encoded)
-		if r.collection == nil {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
 		valueType := index.ValueType
 		index = IndexDefinition{}
-		cursor := make([]byte, page.PageSize+1)
-		start := encoded
+		if !hasDomain {
+			return nil
+		}
+		read, err := newNativeDomainRead(domain, r.capture.Snapshot())
+		domain = nil
+		if err != nil {
+			return err
+		}
+		physical := nativeDomainCursor{read: read, start: encoded, end: end}
+		read = nativeDomainRead{}
+		var cursor []byte
+		if !unique {
+			cursor = make([]byte, page.PageSize+1)
+		}
+		curStart := encoded
+		defer func() {
+			operationErr = errors.Join(operationErr, physical.close())
+			cursor, curStart, encoded, end = nil, nil, nil, nil
+		}()
+		admit := func(n uint64) error {
+			if n <= preAdmitted {
+				preAdmitted -= n
+				return nil
+			}
+			extra := n - preAdmitted
+			preAdmitted = 0
+			if extra > ^uint64(0)-charge {
+				return memtable.ErrCOWCapacity
+			}
+			if err := lease.Resize(charge + extra); err != nil {
+				return err
+			}
+			charge += extra
+			return nil
+		}
+		readLeaf := r.cursorReadLeaf()
+		forward := false
 		for {
 			if r.capture == nil || r.failure != nil || r.closing {
 				return backenddb.ErrClosed
 			}
-			domain, ok := r.collection.domains.Get("index/" + name)
-			if !ok {
-				return nil
-			}
-			read, err := newNativeDomainRead(domain, r.capture.Snapshot())
-			if err != nil {
-				return err
-			}
-			entry, found, err := nativeJSONSeekLive(&read, r, start, end, cursor)
+			entry, found, err := physical.read.seekWithCursor(curStart, end, nil, readLeaf, false, nil, &physical, forward, admit)
 			if err != nil || !found {
 				return err
 			}
 			if !bytes.HasPrefix(entry.Key, encoded) {
+				entry = node.LeafEntry{}
 				return nil
+			}
+			if entry.Flags&node.FlagTombstone != 0 {
+				if cursor == nil {
+					if err := admit(cursorCharge); err != nil {
+						entry = node.LeafEntry{}
+						return err
+					}
+					cursor = make([]byte, page.PageSize+1)
+				}
+				if len(entry.Key) >= len(cursor) {
+					entry = node.LeafEntry{}
+					return memtable.ErrCOWCapacity
+				}
+				n := copy(cursor, entry.Key)
+				cursor[n] = 0
+				curStart = cursor[:n+1]
+				forward = true
+				entry = node.LeafEntry{}
+				continue
 			}
 			id, err := indexKeyDocumentID(valueType, entry.Key)
 			if err != nil {
+				entry = node.LeafEntry{}
 				return err
 			}
-			if len(entry.Key) >= len(cursor) {
-				return memtable.ErrCOWCapacity
+			if !unique {
+				if len(entry.Key) >= len(cursor) {
+					entry = node.LeafEntry{}
+					return memtable.ErrCOWCapacity
+				}
+				n := copy(cursor, entry.Key)
+				cursor[n] = 0
+				curStart = cursor[:n+1]
+				forward = true
 			}
-			n := copy(cursor, entry.Key)
-			cursor[n] = 0
-			start = cursor[:n+1]
 			// The callback receives an independent caller-owned ID. End every
 			// borrowed domain/page alias before allowing reentrant Get or Close.
 			id = bytes.Clone(id)
-			entry, read, domain = node.LeafEntry{}, nativeDomainRead{}, nil
+			entry = node.LeafEntry{}
 			err = func() error {
 				r.mu.Unlock()
 				defer r.mu.Lock()
@@ -372,6 +449,9 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 			id = nil
 			if err != nil {
 				return err
+			}
+			if unique {
+				return nil
 			}
 		}
 	}

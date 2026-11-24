@@ -187,17 +187,14 @@ func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {
 	if len(id) == 0 {
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
 	}
-	value, err := c.nativeJSON.Get(c.name, id)
+	value, err := c.nativeJSON.getInto(c.name, id, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return dst[:0], false, nil
 	}
 	if err != nil {
 		return dst[:0], false, err
 	}
-	if dst == nil {
-		return value, true, nil
-	}
-	return append(dst[:0], value...), true, nil
+	return value, true, nil
 }
 
 func (c *Collection) openNativeReadView() (*CollectionReadView, error) {

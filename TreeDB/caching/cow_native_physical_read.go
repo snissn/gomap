@@ -1,7 +1,10 @@
 package caching
 
 import (
+	"bytes"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -11,13 +14,38 @@ import (
 // nativeEntryAtRoot shares only physical decoding/traversal, never logical
 // visibility. The caller's original cut retains this basis through copy-out.
 func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
-	b.readMu.Lock()
-	defer b.readMu.Unlock()
+	return b.nativeEntryAtRootInto(cache, provider, root, key, copyValue, nil, false)
+}
+
+func (b *cowBackendBasis) nativeEntryAtRootInto(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool) (node.LeafEntry, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
-	w, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	if mu, owner, ok := b.tryLockReadLane(cowReadStripe(key)); ok {
+		defer mu.Unlock()
+		fresh := *owner == nil
+		w, err := b.workspaceLocked(owner, cache.budget, limits)
+		if err != nil {
+			return node.LeafEntry{}, err
+		}
+		entry, err := b.readNativeEntryWithWorkspace(cache, w, provider, root, key, copyValue, dst, useDst)
+		if err != nil && fresh && *owner == w && w.point == nil && len(w.codecs) == 0 && w.allocations == nil {
+			*owner = nil
+			w.close()
+		}
+		return entry, err
+	}
+	// All basis read lanes are busy: admit a bounded per-call temporary
+	// workspace so concurrent readers never serialize.
+	w, err := admitCOWReadWorkspace(cache.budget, limits)
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
+	w.basis = b.snapshot
+	defer w.close()
+	return b.readNativeEntryWithWorkspace(cache, w, provider, root, key, copyValue, dst, useDst)
+}
+
+func (b *cowBackendBasis) readNativeEntryWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool) (node.LeafEntry, error) {
 	point, err := w.pointScratch()
 	if err != nil {
 		return node.LeafEntry{}, err
@@ -27,8 +55,8 @@ func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDiction
 		return node.LeafEntry{}, err
 	}
 	point.leafGen++
-	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		return b.readNativePhysicalLeafLocked(cache, provider, ptr, dst)
+	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
 	})
 	if err != nil {
 		return node.LeafEntry{}, err
@@ -39,8 +67,12 @@ func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDiction
 	value := entry.Value
 	entry.Value = nil
 	if copyValue && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
-		entry.Value = make([]byte, len(value))
-		copy(entry.Value, value)
+		if useDst {
+			entry.Value = append(dst[:0], value...)
+		} else {
+			entry.Value = make([]byte, len(value))
+			copy(entry.Value, value)
+		}
 	}
 	return entry, nil
 }
@@ -51,6 +83,14 @@ func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyV
 	}
 	return c.cut.basis.nativeEntryAtRoot(c.cache, c.dictionary, root, key, copyValue)
 }
+
+func (c *NativeSemanticCapture) NativeEntryAtRootInto(root uint64, key, dst []byte) (node.LeafEntry, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return node.LeafEntry{}, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeEntryAtRootInto(c.cache, c.dictionary, root, key, true, dst, dst != nil)
+}
+
 func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	if tx == nil || tx.ConditionalTxn == nil {
 		return node.LeafEntry{}, backenddb.ErrConditionalTxnClosed
@@ -62,17 +102,177 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, provider, root, key, copyValue)
 }
 
-// nativeLeafPage uses the SAME basis traversal lock and cache decoder owner as
-// nativeEntryAtRoot. ReadCOWLeafPage and verified cache hits copy into caller dst
-// before these locks end; no shared scratch or file authority escapes.
+// nativeLeafPage uses lane 0 (basis.readMu / basis.reader) when uncontended to
+// preserve workspace reuse invariants, and falls back to a bounded per-call
+// stack workspace when contended so concurrent leaf readers never serialize or
+// retain extra ExternalLeases.
 func (b *cowBackendBasis) nativeLeafPage(cache *cowCache, provider cowDictionaryReadProvider, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	b.readMu.Lock()
-	defer b.readMu.Unlock()
 	limit := cache.budget.Limits().MaxInFlightBytes
-	if _, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}); err != nil {
+	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	if b.readMu.TryLock() {
+		defer b.readMu.Unlock()
+		fresh := b.reader == nil
+		w, err := b.physicalWorkspaceLocked(cache.budget, limits)
+		if err != nil {
+			return nil, err
+		}
+		data, err := b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, dst)
+		if err != nil && fresh && b.reader == w && w.point == nil && len(w.codecs) == 0 && w.allocations == nil {
+			b.reader = nil
+			w.close()
+		}
+		return data, err
+	}
+	// Lane 0 is busy: admit a bounded per-call temporary workspace on the stack
+	// and refund its lease immediately after copy-out into caller dst.
+	lease, err := cache.budget.AcquireExternalValue(cowReadWorkspaceInspectionCharge())
+	if err != nil {
 		return nil, err
 	}
-	return b.readNativePhysicalLeafLocked(cache, provider, ptr, dst)
+	w := cowReadWorkspace{basis: b.snapshot, budget: cache.budget, limits: limits}
+	defer func() {
+		w.closeValueScratch()
+		w.basis, w.budget = nil, nil
+		lease.Close()
+	}()
+	return b.readNativePhysicalLeafWithWorkspace(cache, &w, provider, ptr, dst)
+}
+
+// nativeSeekLiveKeyAtRoot performs a non-blocking settled SeekGE skipping
+// physical tombstones using a warm basis read lane (or bounded temporary
+// fallback) and returns an owned copy of the winning key.
+func (b *cowBackendBasis) nativeSeekLiveKeyAtRoot(cache *cowCache, provider cowDictionaryReadProvider, root uint64, start, end []byte) ([]byte, bool, error) {
+	limit := cache.budget.Limits().MaxInFlightBytes
+	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	if mu, owner, ok := b.tryLockReadLane(cowReadStripe(start)); ok {
+		defer mu.Unlock()
+		fresh := *owner == nil
+		w, err := b.workspaceLocked(owner, cache.budget, limits)
+		if err != nil {
+			return nil, false, err
+		}
+		key, found, err := b.seekLiveKeyWithWorkspace(cache, w, provider, root, start, end)
+		if err != nil && fresh && *owner == w && w.point == nil && len(w.codecs) == 0 && w.allocations == nil {
+			*owner = nil
+			w.close()
+		}
+		return key, found, err
+	}
+	w, err := admitCOWReadWorkspace(cache.budget, limits)
+	if err != nil {
+		return nil, false, err
+	}
+	w.basis = b.snapshot
+	defer w.close()
+	return b.seekLiveKeyWithWorkspace(cache, w, provider, root, start, end)
+}
+
+func (b *cowBackendBasis) seekLiveKeyWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, start, end []byte) ([]byte, bool, error) {
+	point, err := w.pointScratch()
+	if err != nil {
+		return nil, false, err
+	}
+	reader, err := b.snapshot.NativeReaderAtRoot(root)
+	if err != nil {
+		return nil, false, err
+	}
+	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
+	}
+	curStart := start
+	var nextStartBuf [page.PageSize + 1]byte
+	for {
+		point.leafGen++
+		entry, found, err := reader.SeekGEEntryWithFixedScratch(curStart, end, point.key[:], point.leaf[:], &point.successor, readLeaf)
+		if err != nil || !found {
+			return nil, false, err
+		}
+		if entry.Flags&node.FlagTombstone == 0 {
+			return bytes.Clone(entry.Key), true, nil
+		}
+		if len(entry.Key) >= len(nextStartBuf) {
+			return nil, false, memtable.ErrCOWCapacity
+		}
+		n := copy(nextStartBuf[:], entry.Key)
+		nextStartBuf[n] = 0
+		curStart = nextStartBuf[:n+1]
+	}
+}
+
+func (c *NativeSemanticCapture) NativeSeekLiveKeyAtRoot(root uint64, start, end []byte) ([]byte, bool, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeSeekLiveKeyAtRoot(c.cache, c.dictionary, root, start, end)
+}
+
+// nativeScanLiveKeysAtRoot streams live keys in [start, end) from a settled
+// physical root using a warm lane's reusable OwnedPointerProjectionWorkspace.
+// visit MUST be an internal, non-blocking, non-reentrant collector that copies
+// any bytes it retains; arbitrary user callbacks MUST NOT run inside visit.
+func (b *cowBackendBasis) nativeScanLiveKeysAtRoot(cache *cowCache, provider cowDictionaryReadProvider, root uint64, start, end []byte, visit func(key []byte) (bool, error)) error {
+	limit := cache.budget.Limits().MaxInFlightBytes
+	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	if mu, owner, ok := b.tryLockReadLane(cowReadStripe(start)); ok {
+		defer mu.Unlock()
+		fresh := *owner == nil
+		w, err := b.workspaceLocked(owner, cache.budget, limits)
+		if err != nil {
+			return err
+		}
+		err = b.scanLiveKeysWithWorkspace(cache, w, provider, root, start, end, visit)
+		if err != nil && fresh && *owner == w && w.point == nil && w.projectionLease == nil && len(w.codecs) == 0 && w.allocations == nil {
+			*owner = nil
+			w.close()
+		}
+		return err
+	}
+	w, err := admitCOWReadWorkspace(cache.budget, limits)
+	if err != nil {
+		return err
+	}
+	w.basis = b.snapshot
+	defer w.close()
+	return b.scanLiveKeysWithWorkspace(cache, w, provider, root, start, end, visit)
+}
+
+func (b *cowBackendBasis) scanLiveKeysWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, start, end []byte, visit func(key []byte) (bool, error)) error {
+	reader, err := b.snapshot.NativeReaderAtRoot(root)
+	if err != nil {
+		return err
+	}
+	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
+	}
+	it, err := reader.OwnedPointerProjectionIteratorWithWorkspace(start, end, readLeaf, &w.projection, w.admitProjection)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = it.Close()
+		w.projection.Reset()
+	}()
+	for ; it.Valid(); it.Next() {
+		_, _, flags, _ := iterator.UnsafeEntryWithRevision(it)
+		if err := it.Error(); err != nil {
+			return err
+		}
+		if flags&node.FlagTombstone != 0 {
+			continue
+		}
+		cont, err := visit(it.UnsafeKey())
+		if err != nil || !cont {
+			return err
+		}
+	}
+	return it.Error()
+}
+
+func (c *NativeSemanticCapture) NativeScanLiveKeysAtRoot(root uint64, start, end []byte, visit func(key []byte) (bool, error)) error {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeScanLiveKeysAtRoot(c.cache, c.dictionary, root, start, end, visit)
 }
 
 func (c *NativeSemanticCapture) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
@@ -96,25 +296,50 @@ func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) 
 // The provider is a synchronous capability from the original capture/txn.
 // readPhysicalLeafWithDictionary inspects its exact pinned file before any hit;
 // the cache decoder independently owns admitted definition bytes on a miss.
-func (b *cowBackendBasis) readNativePhysicalLeafLocked(cache *cowCache, provider cowDictionaryReadProvider, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+func (b *cowBackendBasis) readNativePhysicalLeafWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	var independent *cowCacheDictionaryRead
 	if provider != nil {
 		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
 	}
-	return b.readPhysicalLeafWithDictionary(cache, b.reader, ptr, dst, true, false, independent)
+	return b.readPhysicalLeafWithDictionary(cache, w, ptr, dst, true, false, independent)
 }
 
-// nativeValueAtPointer borrows the exact retained basis file and the original
-// cache's independently owned decoder. No basis/file/caller scope is retained by
-// scratch. Copy-out and retained-output admission finish under physicalMu.
+// nativeValueAtPointer borrows the exact retained basis file and one of the
+// original cache's independently owned decoders. No basis/file/caller scope is
+// retained by scratch. Copy-out and retained-output admission finish before the
+// lane lock ends.
 func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
-	cache.physicalMu.Lock()
-	defer cache.physicalMu.Unlock()
+	return b.nativeValueAtPointerInto(cache, provider, ptr, nil, false, admitOutput)
+}
+
+func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
-	w, err := cache.physicalWorkspaceLocked(valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	if cache.physicalMu.TryLock() {
+		defer cache.physicalMu.Unlock()
+		fresh := cache.physicalReader == nil
+		w, err := cache.physicalWorkspaceLocked(limits)
+		if err != nil {
+			return nil, err
+		}
+		owned, err := b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
+		if err != nil && fresh && cache.physicalReader == w && len(w.codecs) == 0 && w.allocations == nil {
+			cache.physicalReader = nil
+			w.close()
+		}
+		return owned, err
+	}
+	// Lane 0 (physicalMu) is busy: admit a bounded per-call temporary decoder
+	// workspace so concurrent value reads never serialize or retain overflow leases.
+	w, err := admitCOWReadWorkspace(cache.budget, limits)
 	if err != nil {
 		return nil, err
 	}
+	defer w.close()
+	return b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
+}
+
+func (b *cowBackendBasis) readNativeValueWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	f, _, err := b.snapshot.PinnedValueLogSegment(ptr.FileID)
 	if err != nil {
 		return nil, err
@@ -139,6 +364,9 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDict
 			return nil, err
 		}
 	}
+	if useDst {
+		return append(dst[:0], value...), nil
+	}
 	owned := make([]byte, len(value))
 	copy(owned, value)
 	return owned, nil
@@ -149,6 +377,13 @@ func (c *NativeSemanticCapture) NativeValueAtPointer(ptr page.ValuePtr, admitOut
 		return nil, backenddb.ErrClosed
 	}
 	return c.cut.basis.nativeValueAtPointer(c.cache, c.dictionary, ptr, admitOutput)
+}
+
+func (c *NativeSemanticCapture) NativeValueAtPointerInto(ptr page.ValuePtr, dst []byte, admitOutput func(uint64) error) ([]byte, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeValueAtPointerInto(c.cache, c.dictionary, ptr, dst, dst != nil, admitOutput)
 }
 
 func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
