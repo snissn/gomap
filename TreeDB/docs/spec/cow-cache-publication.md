@@ -271,6 +271,20 @@ callbacks, I/O or cache locks. Active borrowers are never reclaimed. Budget
 Close drains all idle entries, and bounded retention work reserves the fixed
 maximum descriptor eviction work before it can have an effect.
 
+Committed COW batches above the default entry capacity may likewise park their
+cleared, zero-length staging and write-preparation slices (containing no `Batch`,
+`DB`, lease, key/value, or read-cut references) in a 2-slot inline idle batch
+scratch stack on the same `COWBudget`, capped at `min(8 MiB, MaxInFlightBytes/4)`
+of continuously charged payload. Post-write reset shrinks the still-open batch
+lease to base while parking the cleared slices; eligible steady-state `Close`
+consumes the closing lease and parks the slices; explicit `Reset` continues to
+shrink directly to base without parking. Adaptive `NewBatch` pops LIFO with a
+fresh external lease allocated outside the budget mutex, and write preparation
+reuses already-sized slice capacities without double-charging while still
+admitting per-attempt transient bytes. Any in-flight, retirement, or total
+admission pressure and `COWBudget.Close` reclaim parked idle batch scratch under
+the same budget mutex with no callbacks or I/O.
+
 Each actual capacity is reserved before allocation. Cut-local capacity is
 refunded through the existing reader Close. Shared successor scratch remains
 charged to its exact backend basis until the last basis reference releases;

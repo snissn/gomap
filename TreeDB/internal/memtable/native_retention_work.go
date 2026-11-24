@@ -66,11 +66,12 @@ func (l *cowViewReleaseLease) Close() {
 	b.releaseMaintenanceReservation()
 }
 
-// One admission can discard at most cowIdleReadMaxSlots entries across all byte
-// predicates. Each constant-time pop copies then clears exactly one inline
-// descriptor. Reserve those 2*cowIdleReadMaxSlots descriptor touches before the
-// admission's first effect; budget/counter accesses retain their existing
-// full-budget read/write bound.
+// One admission can discard at most cowIdleReadMaxSlots read entries and
+// cowIdleBatchMaxSlots batch entries across all byte predicates. Each
+// constant-time pop copies then clears exactly one inline descriptor. Reserve
+// those descriptor touches before the admission's first effect; budget/counter
+// accesses retain their existing full-budget read/write bound.
 func cowIdleReadEvictionWorkBytes() uint64 {
-	return 2 * uint64(cowIdleReadMaxSlots) * uint64(unsafe.Sizeof(cowIdleReadScratch{}))
+	return 2*uint64(cowIdleReadMaxSlots)*uint64(unsafe.Sizeof(cowIdleReadScratch{})) +
+		2*uint64(cowIdleBatchMaxSlots)*uint64(unsafe.Sizeof(cowIdleBatchScratch{}))
 }

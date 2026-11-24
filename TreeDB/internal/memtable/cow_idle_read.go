@@ -197,7 +197,7 @@ func (b *COWBudget) reclaimReadScratchLocked() bool {
 func (b *COWBudget) hasIdleReadScratchLocked() bool { return b.idleReadCount != 0 }
 func (b *COWBudget) inFlightFitsLocked(n uint64) bool {
 	for !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, n) {
-		if !b.reclaimReadScratchLocked() {
+		if !b.reclaimIdleScratchLocked() {
 			return false
 		}
 	}

@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"math"
 	"time"
 	"unsafe"
 
@@ -14,7 +15,92 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const cowBatchMaxReuseHint = 8192
+const (
+	cowBatchMaxReuseHint     = 8192
+	cowBatchCopyArenaHintMax = 2 << 20
+)
+
+func cowBatchCopyArenaHint(db *DB, entryHint int) int {
+	observed := db.batchCopyBytesHint.Load()
+	if observed <= 0 {
+		return 0
+	}
+	if observed > batchCopyArenaInitMax {
+		if observed > cowBatchCopyArenaHintMax {
+			return cowBatchCopyArenaHintMax
+		}
+		// Round up to 64 KiB so batches slightly above 1 MiB (e.g. 8000*136B)
+		// fit in a single copyArena without a 64 KiB overflow tail chunk.
+		const align = 64 << 10
+		rounded := int(((observed + align - 1) / align) * align)
+		if rounded > cowBatchCopyArenaHintMax {
+			rounded = cowBatchCopyArenaHintMax
+		}
+		return rounded
+	}
+	return db.batchCopyArenaInitCap(entryHint)
+}
+
+// cowBatchScratch retains ONLY cleared, zero-length batch slice backings for
+// budget-admitted idle reuse. It never references Batch, DB, COWExternalLease,
+// keys, values, or read cuts.
+type cowBatchScratch struct {
+	entries           []batch.Entry
+	copyArena         []byte
+	predictionGroups  [][]memtable.COWMutation
+	predictionStorage []memtable.COWMutation
+	shardAdds         []int64
+	shardCnts         []int
+	shardIdxs         []int
+	eligibleIdxs      []int
+}
+
+func cowBatchScratchCharge(s *cowBatchScratch) uint64 {
+	if s == nil {
+		return 0
+	}
+	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchScratch{})))
+	if cap(s.entries) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.entries)) * uint64(unsafe.Sizeof(batch.Entry{})))
+	}
+	if cap(s.copyArena) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.copyArena)))
+	}
+	if cap(s.predictionGroups) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.predictionGroups)) * uint64(unsafe.Sizeof([]memtable.COWMutation{})))
+	}
+	if cap(s.predictionStorage) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.predictionStorage)) * uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	}
+	if cap(s.shardAdds) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.shardAdds)) * uint64(unsafe.Sizeof(int64(0))))
+	}
+	if cap(s.shardCnts) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.shardCnts)) * uint64(unsafe.Sizeof(int(0))))
+	}
+	if cap(s.shardIdxs) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.shardIdxs)) * uint64(unsafe.Sizeof(int(0))))
+	}
+	if cap(s.eligibleIdxs) > 0 {
+		bytes += memtable.COWAllocationCharge(uint64(cap(s.eligibleIdxs)) * uint64(unsafe.Sizeof(int(0))))
+	}
+	return bytes
+}
+
+func cowDeleteArenaCap(entryHint, keyLen, copyHint int) int {
+	if copyHint <= 0 {
+		return 0
+	}
+	perKey := max(keyLen, 16)
+	if entryHint <= 0 {
+		return min(copyHint, 4096)
+	}
+	if entryHint > math.MaxInt/perKey {
+		return copyHint
+	}
+	est := max(4096, entryHint*perKey)
+	return min(copyHint, est)
+}
 
 func normalizeCOWBatchReuseHint(n int) int {
 	if n <= 0 {
@@ -45,6 +131,8 @@ type cowBatchState struct {
 	producer                     *cowFrameCapture
 	predictionGroups             [][]memtable.COWMutation
 	predictionStorage            []memtable.COWMutation
+	scratch                      *cowBatchScratch
+	largestCopyArena             []byte
 	inPublication, trustedAppend bool
 	guardReserved                bool
 	shardAssignmentsReady        bool
@@ -97,9 +185,62 @@ func (db *DB) NewPrivateCOWPointBatch(owner *transactionowner.Owner) *Batch {
 	return b
 }
 
+func (b *Batch) cowAttachIdleScratch(sc *cowBatchScratch, payload uint64) {
+	if cap(sc.entries) > 0 {
+		b.entries = sc.entries[:0]
+	}
+	if cap(sc.copyArena) > 0 {
+		b.copyArena = sc.copyArena[:0]
+	}
+	if cap(sc.shardAdds) > 0 {
+		b.shardAdds = sc.shardAdds[:0]
+	}
+	if cap(sc.shardCnts) > 0 {
+		b.shardCnts = sc.shardCnts[:0]
+	}
+	if cap(sc.shardIdxs) > 0 {
+		b.shardIdxs = sc.shardIdxs[:0]
+	}
+	if cap(sc.eligibleIdxs) > 0 {
+		b.eligibleIdxs = sc.eligibleIdxs[:0]
+	}
+	if cap(sc.predictionGroups) > 0 {
+		b.cowState.predictionGroups = sc.predictionGroups[:0]
+	}
+	if cap(sc.predictionStorage) > 0 {
+		b.cowState.predictionStorage = sc.predictionStorage[:0]
+	}
+	b.cowState.storageBytes += payload
+	b.cowState.scratch = sc
+	*sc = cowBatchScratch{}
+}
+
 func (db *DB) newCOWBatch(hint int) *Batch {
 	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
 	charge := cowBatchBaseBytes(guardReserved)
+	normHint := normalizeCOWBatchReuseHint(hint)
+	copyHint := cowBatchCopyArenaHint(db, normHint)
+	if normHint > batchDefaultEntriesCap {
+		if val, lease, payload := db.cow.budget.TakeIdleBatchScratch(charge); lease != nil {
+			sc := val.(*cowBatchScratch)
+			owner := &cowBatchOwner{
+				batch: Batch{db: db, streamBypassOff: true},
+				state: cowBatchState{
+					lease:         lease,
+					guardReserved: guardReserved,
+					lastHint:      normHint,
+					copyArenaHint: copyHint,
+				},
+			}
+			b := &owner.batch
+			b.cowState = &owner.state
+			b.cowAttachIdleScratch(sc, payload)
+			if cap(b.entries) < hint {
+				b.cowReserve(hint)
+			}
+			return b
+		}
+	}
 	lease, err := db.cow.budget.AcquireExternal(charge)
 	if err != nil {
 		return &cowDeniedBatch
@@ -109,7 +250,8 @@ func (db *DB) newCOWBatch(hint int) *Batch {
 		state: cowBatchState{
 			lease:         lease,
 			guardReserved: guardReserved,
-			lastHint:      normalizeCOWBatchReuseHint(hint),
+			lastHint:      normHint,
+			copyArenaHint: copyHint,
 		},
 	}
 	b := &owner.batch
@@ -121,14 +263,29 @@ func (db *DB) newCOWBatch(hint int) *Batch {
 func (db *DB) newCOWBatchAdaptive() *Batch {
 	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
 	charge := cowBatchBaseBytes(guardReserved)
+	entryHint := normalizeCOWBatchReuseHint(db.batchEntriesCapHint(batchDefaultEntriesCap))
+	copyHint := cowBatchCopyArenaHint(db, entryHint)
+	if entryHint > batchDefaultEntriesCap {
+		if val, lease, payload := db.cow.budget.TakeIdleBatchScratch(charge); lease != nil {
+			sc := val.(*cowBatchScratch)
+			owner := &cowBatchOwner{
+				batch: Batch{db: db, streamBypassOff: true},
+				state: cowBatchState{
+					lease:         lease,
+					guardReserved: guardReserved,
+					lastHint:      entryHint,
+					copyArenaHint: copyHint,
+				},
+			}
+			b := &owner.batch
+			b.cowState = &owner.state
+			b.cowAttachIdleScratch(sc, payload)
+			return b
+		}
+	}
 	lease, err := db.cow.budget.AcquireExternal(charge)
 	if err != nil {
 		return &cowDeniedBatch
-	}
-	entryHint := normalizeCOWBatchReuseHint(db.batchEntriesCapHint(batchDefaultEntriesCap))
-	copyHint := 0
-	if db.batchCopyBytesHint.Load() > 0 {
-		copyHint = db.batchCopyArenaInitCap(entryHint)
 	}
 	owner := &cowBatchOwner{
 		batch: Batch{db: db, streamBypassOff: true},
@@ -257,13 +414,25 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		return memtable.ErrCOWCapacity
 	}
 	if len(b.entries) == cap(b.entries) {
+		if cap(b.entries) == 0 && b.cowState.txn == nil && b.cowState.lastHint > batchDefaultEntriesCap &&
+			b.db != nil && b.db.cow != nil {
+			if val, payload := b.db.cow.budget.TakeIdleBatchScratchIntoLease(b.cowState.lease); val != nil {
+				b.cowAttachIdleScratch(val.(*cowBatchScratch), payload)
+			}
+		}
+	}
+	if len(b.entries) == cap(b.entries) {
 		if cap(b.entries) == 0 && (b.cowState.lastHint > batchDefaultEntriesCap || b.cowState.copyArenaHint > 256) {
 			targetEntries := max(batchDefaultEntriesCap, b.cowState.lastHint)
 			arenaCap := 0
 			if owned && cap(b.copyArena)-len(b.copyArena) < n {
 				arenaCap = cowNextCopyArenaCap(cap(b.copyArena), n)
-				if b.cowState.copyArenaHint > arenaCap {
-					arenaCap = b.cowState.copyArenaHint
+				copyHint := b.cowState.copyArenaHint
+				if e.Type == batch.OpDelete {
+					copyHint = cowDeleteArenaCap(targetEntries, len(e.Key), copyHint)
+				}
+				if copyHint > arenaCap {
+					arenaCap = copyHint
 				}
 			}
 			if !b.cowTryReserveWithCopyArena(targetEntries, arenaCap) {
@@ -287,7 +456,7 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		}
 	}
 	if owned {
-		buf, err := b.cowCopyStorage(n)
+		buf, err := b.cowCopyStorageWithDelete(n, len(e.Key), e.Type == batch.OpDelete)
 		if err != nil {
 			return err
 		}
@@ -360,17 +529,60 @@ func (b *Batch) cowSetOps(ops []batch.Entry) error {
 	return nil
 }
 
-func (b *Batch) cowReset() {
-	if b == &cowDeniedBatch {
-		return
+func (b *Batch) cowBuildIdleScratch() (*cowBatchScratch, uint64) {
+	clear(b.entries)
+	clear(b.cowState.predictionStorage)
+	clear(b.cowState.predictionGroups)
+	sc := b.cowState.scratch
+	if sc == nil {
+		sc = &cowBatchScratch{}
 	}
+	*sc = cowBatchScratch{}
+	if cap(b.entries) > 0 {
+		sc.entries = b.entries[:0]
+	}
+	bestArena := b.copyArena
+	if cap(b.cowState.largestCopyArena) > cap(bestArena) {
+		bestArena = b.cowState.largestCopyArena
+	}
+	if cap(bestArena) > 0 {
+		sc.copyArena = bestArena[:0]
+	}
+	if cap(b.cowState.predictionGroups) > 0 {
+		sc.predictionGroups = b.cowState.predictionGroups[:0]
+	}
+	if cap(b.cowState.predictionStorage) > 0 {
+		sc.predictionStorage = b.cowState.predictionStorage[:0]
+	}
+	if cap(b.shardAdds) > 0 {
+		sc.shardAdds = b.shardAdds[:0]
+	}
+	if cap(b.shardCnts) > 0 {
+		sc.shardCnts = b.shardCnts[:0]
+	}
+	if cap(b.shardIdxs) > 0 {
+		sc.shardIdxs = b.shardIdxs[:0]
+	}
+	if cap(b.eligibleIdxs) > 0 {
+		sc.eligibleIdxs = b.eligibleIdxs[:0]
+	}
+	return sc, cowBatchScratchCharge(sc)
+}
+
+func (b *Batch) cowResetFields() {
 	b.releaseNativePublication()
 	if n := normalizeCOWBatchReuseHint(len(b.entries)); n > b.cowState.lastHint {
 		b.cowState.lastHint = n
 	}
 	if copied := b.cowState.copiedBytes; copied > b.cowState.copyArenaHint {
-		if copied > batchCopyArenaInitMax {
-			copied = batchCopyArenaInitMax
+		if copied > cowBatchCopyArenaHintMax {
+			copied = cowBatchCopyArenaHintMax
+		} else if copied > batchCopyArenaInitMax {
+			const align = 64 << 10
+			copied = ((copied + align - 1) / align) * align
+			if copied > cowBatchCopyArenaHintMax {
+				copied = cowBatchCopyArenaHintMax
+			}
 		}
 		b.cowState.copyArenaHint = copied
 	}
@@ -378,12 +590,14 @@ func (b *Batch) cowReset() {
 	b.entries = nil
 	b.mvccSummary = mvccadmission.Summary{}
 	b.copyArena = nil
+	b.cowState.largestCopyArena = nil
 	b.shardAdds = nil
 	b.shardCnts = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
 	b.cowState.predictionGroups = nil
 	b.cowState.predictionStorage = nil
+	b.cowState.scratch = nil
 	b.cowState.shardAssignmentsReady = false
 	b.cowState.privatePoint = false
 	b.stableViewValueLeaseChunks = nil
@@ -393,6 +607,9 @@ func (b *Batch) cowReset() {
 	b.commandWALPreparedRevision, b.commandWALMaterializedRID = false, false
 	b.entryRevision = page.LegacyEntryRevision
 	b.cowState.err = nil
+}
+
+func (b *Batch) cowShrinkLeaseToBase() {
 	if b.cowState.txn != nil {
 		// Read dependencies can still alias discarded copyArena backing.
 		// ConditionalTxn.finish clears them before closing this batch.
@@ -409,8 +626,53 @@ func (b *Batch) cowReset() {
 	}
 }
 
+func (b *Batch) cowReset() {
+	if b == &cowDeniedBatch {
+		return
+	}
+	b.cowResetFields()
+	b.cowShrinkLeaseToBase()
+}
+
+func (b *Batch) cowResetAfterWrite() {
+	if b == &cowDeniedBatch {
+		return
+	}
+	if b.cowState.txn == nil && b.cowState.err == nil && !b.closed &&
+		b.db != nil && b.db.cow != nil && cap(b.entries) > batchDefaultEntriesCap {
+		sc, retained := b.cowBuildIdleScratch()
+		b.cowResetFields()
+		if b.db.cow.budget.ParkIdleBatchScratchFromLease(sc, b.cowState.lease, cowBatchBaseBytes(b.cowState.guardReserved), retained) {
+			b.cowState.storageBytes = 0
+			return
+		}
+		sc = nil
+		b.cowShrinkLeaseToBase()
+		return
+	}
+	b.cowReset()
+}
+
 func (b *Batch) cowClose() error {
 	if b == &cowDeniedBatch || b.closed {
+		return nil
+	}
+	if b.cowState.err == nil && b.cowState.txn == nil &&
+		!b.cowState.inPublication && b.cowState.native == nil &&
+		b.cowState.prepared == nil && b.cowState.producer == nil &&
+		b.db != nil && b.db.cow != nil &&
+		b.db.batchEntryHint.Load() > batchDefaultEntriesCap &&
+		cap(b.entries) > batchDefaultEntriesCap {
+		sc, retained := b.cowBuildIdleScratch()
+		b.cowResetFields()
+		b.closed = true
+		if b.db.cow.budget.PutIdleBatchScratch(sc, b.cowState.lease, retained) {
+			b.cowState.storageBytes = 0
+			return nil
+		}
+		sc = nil
+		b.cowState.storageBytes = 0
+		b.cowState.lease.Close()
 		return nil
 	}
 	b.cowReset()
@@ -424,14 +686,37 @@ func (b *Batch) cowClose() error {
 // the writer sequencer. Failed attempts remain charged until the batch resets.
 func (b *Batch) cowPrepareWriteStorage() error {
 	n, shards := len(b.entries), len(b.db.mutableShards)
-	bytes := memtable.COWAllocationCharge(uint64(shards)*8) + memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0))))
-	bytes += 2 * memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(int(0))))
+	needShardAdds := cap(b.shardAdds) < shards
+	needShardCnts := cap(b.shardCnts) < shards
+	needShardIdxs := cap(b.shardIdxs) < n
+	needEligibleIdxs := cap(b.eligibleIdxs) < n
+	needPredictionGroups := cap(b.cowState.predictionGroups) < shards
+	needPredictionStorage := cap(b.cowState.predictionStorage) < n
+
+	var bytes uint64
+	if needShardAdds {
+		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(int64(0))))
+	}
+	if needShardCnts {
+		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof(int(0))))
+	}
+	if needShardIdxs {
+		bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(int(0))))
+	}
+	if needEligibleIdxs {
+		bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(int(0))))
+	}
+	if needPredictionGroups {
+		bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof([]memtable.COWMutation{})))
+	}
+	if needPredictionStorage {
+		bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	}
+	// Per-attempt transient allocations remain charged on every write attempt.
 	bytes += 2 * memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof([]byte{})))
 	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(valuelog.Record{})))
 	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(outerLeafRecordGroup{})))
 	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(page.ValuePtr{})))
-	bytes += memtable.COWAllocationCharge(uint64(shards) * uint64(unsafe.Sizeof([]memtable.COWMutation{})))
-	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof(memtable.COWMutation{})))
 	// Fresh COW prepare/finalize/replay method values are created later in
 	// canonical dispatch. Admit their function+receiver environments before
 	// creating any of them; keep the shared scratch owner until Reset/Close.
@@ -442,12 +727,45 @@ func (b *Batch) cowPrepareWriteStorage() error {
 	if err := b.cowAdmitStorage(bytes); err != nil {
 		return err
 	}
-	b.cowState.predictionGroups = make([][]memtable.COWMutation, shards)
-	b.cowState.predictionStorage = make([]memtable.COWMutation, n)
-	b.shardAdds = make([]int64, shards)
-	b.shardCnts = make([]int, shards)
-	b.shardIdxs = make([]int, n)
-	b.eligibleIdxs = make([]int, 0, n)
+	if needPredictionGroups {
+		b.cowState.predictionGroups = make([][]memtable.COWMutation, shards)
+	} else {
+		if len(b.cowState.predictionGroups) > shards {
+			clear(b.cowState.predictionGroups[shards:])
+		}
+		b.cowState.predictionGroups = b.cowState.predictionGroups[:shards]
+		clear(b.cowState.predictionGroups)
+	}
+	if needPredictionStorage {
+		b.cowState.predictionStorage = make([]memtable.COWMutation, n)
+	} else {
+		if len(b.cowState.predictionStorage) > 0 {
+			clear(b.cowState.predictionStorage)
+		}
+		b.cowState.predictionStorage = b.cowState.predictionStorage[:n]
+	}
+	if needShardAdds {
+		b.shardAdds = make([]int64, shards)
+	} else {
+		b.shardAdds = b.shardAdds[:shards]
+		clear(b.shardAdds)
+	}
+	if needShardCnts {
+		b.shardCnts = make([]int, shards)
+	} else {
+		b.shardCnts = b.shardCnts[:shards]
+		clear(b.shardCnts)
+	}
+	if needShardIdxs {
+		b.shardIdxs = make([]int, n)
+	} else {
+		b.shardIdxs = b.shardIdxs[:n]
+	}
+	if needEligibleIdxs {
+		b.eligibleIdxs = make([]int, 0, n)
+	} else {
+		b.eligibleIdxs = b.eligibleIdxs[:0]
+	}
 	// Keys and fixed shard ownership remain unchanged through prediction,
 	// placement and canonical preparation. Only values/pointers/revisions change.
 	for i, entry := range b.entries {
@@ -475,12 +793,24 @@ func putCOWValueLogPtrs(ptrs []page.ValuePtr, observer valuelog.ProducedFrameObs
 // Read dependencies share its transaction lifetime instead of growing a second
 // arena whose discarded backing remains aliased by old read-index keys.
 func (b *Batch) cowCopyStorage(n int) ([]byte, error) {
+	return b.cowCopyStorageWithDelete(n, n, false)
+}
+
+func (b *Batch) cowCopyStorageWithDelete(n, keyLen int, isDelete bool) ([]byte, error) {
 	if n < 0 {
 		return nil, memtable.ErrCOWCapacity
 	}
 	if cap(b.copyArena)-len(b.copyArena) < n {
+		if cap(b.copyArena) > cap(b.cowState.largestCopyArena) {
+			b.cowState.largestCopyArena = b.copyArena[:0]
+		}
 		capacity := cowNextCopyArenaCap(cap(b.copyArena), n)
-		if !(cap(b.copyArena) == 0 && b.cowState.copyArenaHint > capacity && b.cowTryReserveWithCopyArena(0, b.cowState.copyArenaHint)) {
+		hint := b.cowState.copyArenaHint
+		if isDelete {
+			hint = cowDeleteArenaCap(max(batchDefaultEntriesCap, b.cowState.lastHint), keyLen, hint)
+		}
+		useHint := (cap(b.copyArena) == 0 || cap(b.copyArena) < hint) && hint > capacity
+		if !(useHint && b.cowTryReserveWithCopyArena(0, hint)) {
 			if err := b.cowAdmitStorage(memtable.COWAllocationCharge(uint64(capacity))); err != nil {
 				return nil, err
 			}
