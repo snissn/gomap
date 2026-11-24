@@ -530,6 +530,43 @@ func cowFrozenFlushChunkCap(db *DB, maintenance *memtable.COWBudget, totalEntrie
 	return limit
 }
 
+func cowFlushBasisReserveBytes(basis *cowBackendBasis, maxResources int) uint64 {
+	files := 16
+	if basis != nil {
+		files += len(basis.pins)
+	}
+	if maxResources > 0 && files > maxResources {
+		files = maxResources
+	}
+	return (16 << 10) + uint64(files)*512 + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+}
+
+func cowMaintenanceAvailableBytes(maintenance *memtable.COWBudget) uint64 {
+	if maintenance == nil {
+		return 0
+	}
+	stats := maintenance.Stats()
+	limits := maintenance.Limits()
+	var avail uint64
+	if limits.MaxInFlightBytes > stats.ReservedBytes {
+		avail = limits.MaxInFlightBytes - stats.ReservedBytes
+	}
+	if limits.MaxTotalBytes <= stats.TotalBytes {
+		return 0
+	}
+	if rem := limits.MaxTotalBytes - stats.TotalBytes; rem < avail {
+		avail = rem
+	}
+	retiredUsed := stats.HistoryBytes + stats.ReservedBytes + stats.DeferredBytes
+	if limits.MaxRetiredBytes <= retiredUsed {
+		return 0
+	}
+	if rem := limits.MaxRetiredBytes - retiredUsed; rem < avail {
+		avail = rem
+	}
+	return avail
+}
+
 // flushCOWFrozenCut consumes the one original retained source cut. Explicit
 // boundaries captured it under P before post-frontier admissions; background
 // passes use its immutable frozen logical/semantic coverage, excluding mutable
@@ -734,6 +771,21 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 	if cut.frozenSemanticRootSet == nil && operation != nil {
 		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
+	}
+	// PrepareAcceptedSnapshot registers the basis-admission callback that runs
+	// during the final writeCOWFrozenRawChunks call while this chunk lease is
+	// still held. Keep sufficient maintenance headroom for that successor basis.
+	avail := cowMaintenanceAvailableBytes(c.maintenance)
+	basisReserve := cowFlushBasisReserveBytes(cut.basis, c.budget.Limits().MaxResources)
+	var maxChunkBytes uint64
+	if avail > basisReserve {
+		maxChunkBytes = avail - basisReserve
+	}
+	for chunkCap > 1 && memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{}))) > maxChunkBytes {
+		chunkCap /= 2
+		if chunkCap < 1 {
+			chunkCap = 1
+		}
 	}
 	for {
 		charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))

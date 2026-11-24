@@ -557,6 +557,20 @@ func TestCOWFrozenFlushChunkCapScalingAndTightMaintenanceFallback(t *testing.T) 
 				memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{}))) +
 				memtable.COWAllocationCharge(uint64(1024)*entryBytes) + 1024,
 		},
+		{
+			// Leave enough headroom for fixedCharge + h.next + a full 2048-entry chunk,
+			// but NOT enough for the final publication's admitCOWBackendBasis if all
+			// 2048 entries were reserved at once.
+			name:   "preserve_publication_basis_headroom",
+			prefix: "pubheadroom",
+			allowBytes: memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.StableResourceCaptureLease{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(checkpointCommandWALPublish{}))) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{}))) +
+				cowBasisInstallCharge(len(db.cow.writers), db.cow.budget.Limits().MaxSources) +
+				cowFrozenSetCharge(db.cow.budget.Limits().MaxSources) +
+				memtable.COWAllocationCharge(uint64(entriesCount)*entryBytes) + 1024,
+		},
 	} {
 		backend.chunks = nil
 		writeRolledBatch(tc.prefix, entriesCount)
