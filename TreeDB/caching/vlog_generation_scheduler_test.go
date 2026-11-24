@@ -8856,7 +8856,7 @@ func TestCheckpoint_AutomaticKickDoesNotForceBackendCheckpoint(t *testing.T) {
 }
 
 func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing.T) {
-	disableVlogGenerationLoop(t)
+	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -8881,57 +8881,35 @@ func TestVlogGenerationAutomaticCheckpointKickPreservesQueuedFollowup(t *testing
 		t.Fatalf("seed automatic rewrite queue: %v", err)
 	}
 
-	boundary.resetBoundaryCalls()
-	db.queueVlogGenerationRewriteQueue(true)
-	db.schedulePendingVlogGenerationRewriteQueue()
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls == 1 {
-			break
+	runQueue := func(automatic bool, wantCalls int) {
+		t.Helper()
+		db.queueVlogGenerationRewriteQueue(automatic)
+		db.schedulePendingVlogGenerationRewriteQueue()
+		deadline := time.Now().Add(2 * schedulerTestWait(t))
+		for db.vlogGenerationRewriteQueueRunning.Load() {
+			if time.Now().After(deadline) {
+				t.Fatalf("queued follow-up worker still running: automatic=%t", automatic)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			_, calls := recorder.recordedRewrite()
-			t.Fatalf("automatic queued follow-up did not rewrite: calls=%d", calls)
+		if _, calls := recorder.recordedRewrite(); calls != wantCalls {
+			t.Fatalf("queued follow-up rewrite calls=%d, want %d (automatic=%t)", calls, wantCalls, automatic)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
+	boundary.resetBoundaryCalls()
+	runQueue(true, 1)
 	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 || vacuums != 0 {
 		t.Fatalf("automatic queued follow-up boundaries: checkpoints=%d vacuums=%d, want 0/0", checkpoints, vacuums)
 	}
 
-	// The same queued path remains a full durability and post-rewrite vacuum
-	// boundary when explicitly requested.
+	// Seed the explicit work after the automatic worker has finished scanning
+	// for follow-ups. Otherwise that worker can pick it up in automatic mode.
 	if err := db.setVlogGenerationRewriteQueue([]uint32{12}); err != nil {
 		t.Fatalf("seed explicit rewrite queue: %v", err)
 	}
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	boundary.resetBoundaryCalls()
-	db.queueVlogGenerationRewriteQueue(false)
-	db.schedulePendingVlogGenerationRewriteQueue()
-	deadline = time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, calls := recorder.recordedRewrite()
-			t.Fatalf("explicit queued follow-up did not rewrite: calls=%d", calls)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	// The rewrite counter increments when ValueLogRewriteOnline starts; the
-	// checkpoint and post-rewrite vacuum boundaries land later in the same
-	// pass, so they must be waited on rather than sampled once.
-	deadline = time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints != 0 && vacuums != 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	runQueue(false, 2)
 	if checkpoints, vacuums := boundary.boundaryCalls(); checkpoints == 0 || vacuums != 1 {
 		t.Fatalf("explicit queued follow-up boundaries: checkpoints=%d vacuums=%d, want checkpoint and one vacuum", checkpoints, vacuums)
 	}
