@@ -1253,6 +1253,62 @@ func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error
 	return nil
 }
 
+// appendRawKVPointCommandV2Direct encodes a single-op RawKVBatchV1 Set/Delete
+// V2 command frame directly into w.scratch (stream WAL) or w.fixed.pending
+// (fixed-capacity WAL) with zero intermediate payload allocations.
+func (w *Writer) appendRawKVPointCommandV2Direct(class CommandDurabilityClass, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, size int) error {
+	if lsn == 0 {
+		return ErrCorrupt
+	}
+	if err := w.commandFrameSizeError(size); err != nil {
+		return err
+	}
+	var err error
+	if w.fixed != nil {
+		err = w.appendFixedRawKVPointCommandV2Direct(class, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
+	} else {
+		frame := encodeTrustedRawKVPointCommandFrameV2SizedTo(w.scratch[:0], class, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
+		w.scratch = frame
+		// Strict V2 readers reject compressed segment storage so recovery can
+		// inspect frame identity directly at a torn terminal tail.
+		err = w.writeRawSegmentWithChecksum(frame, crc.Checksum(frame))
+	}
+	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
+		w.scratch = make([]byte, 0, w.commandBufRetain)
+	}
+	return err
+}
+
+func (w *Writer) appendFixedRawKVPointCommandV2Direct(class CommandDurabilityClass, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, size int) error {
+	if size > int(^uint(0)>>1)-segmentHeaderSize {
+		return ErrRecordTooLarge
+	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	total := segmentHeaderSize + size
+	before := len(w.fixed.pending)
+	if before > int(^uint(0)>>1)-total {
+		return ErrRecordTooLarge
+	}
+	pending := slices.Grow(w.fixed.pending, total)[:before+total]
+	frame := encodeTrustedRawKVPointCommandFrameV2SizedTo(pending[before+segmentHeaderSize:before+segmentHeaderSize], class, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
+	header := pending[before : before+segmentHeaderSize]
+	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
+	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	w.fixed.pending = pending
+	w.size += int64(total)
+	return nil
+}
+
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
 	if op.Op == RawKVOpSetMaterializedRID {
 		return ErrCommandWALUnsupportedVersion

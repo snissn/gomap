@@ -31,6 +31,88 @@ type ExternalRefFenceV1 struct {
 	Digest [sha256.Size]byte
 }
 
+var rawKVCommandFrameV2HeaderTemplate = func() [commandFrameHeaderSize]byte {
+	var h [commandFrameHeaderSize]byte
+	copy(h[0:4], commandFrameMagic[:])
+	binary.LittleEndian.PutUint16(h[4:6], CommandFrameVersionV2)
+	binary.LittleEndian.PutUint16(h[6:8], CommandFrameVersionV2)
+	binary.LittleEndian.PutUint16(h[8:10], uint16(CommandKindRawKVBatch))
+	binary.LittleEndian.PutUint16(h[10:12], uint16(CommandScopeRawKV))
+	binary.LittleEndian.PutUint16(h[52:54], uint16(PayloadFormatRawKVBatchV1))
+	return h
+}()
+
+func trustedRawKVPointCommandFrameV2Lens(class CommandDurabilityClass, op RawKVOp, key, value []byte, revision uint64) (valueLen, payloadLen, total int, err error) {
+	if !validCommandDurabilityClass(class) {
+		return 0, 0, 0, ErrCorrupt
+	}
+	if op != RawKVOpSet && op != RawKVOpDelete {
+		return 0, 0, 0, ErrCorrupt
+	}
+	if key == nil {
+		return 0, 0, 0, ErrCorrupt
+	}
+	valueLen = len(value)
+	if op == RawKVOpDelete && valueLen != 0 {
+		return 0, 0, 0, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(valueLen) {
+		return 0, 0, 0, ErrRecordTooLarge
+	}
+	opHeaderSize := rawKVOpHeaderSize
+	if revision != 0 {
+		opHeaderSize = rawKVOpRevisionHeaderSize
+	}
+	payloadLen64 := uint64(rawKVBatchHeaderSize) + uint64(opHeaderSize) + uint64(len(key)) + uint64(valueLen)
+	if payloadLen64 > maxCommandFrameUint32 || payloadLen64 > uint64(int(^uint(0)>>1)) {
+		return 0, 0, 0, ErrRecordTooLarge
+	}
+	payloadLen = int(payloadLen64)
+	total, err = commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return valueLen, payloadLen, total, nil
+}
+
+func encodeTrustedRawKVPointCommandFrameV2SizedTo(dst []byte, class CommandDurabilityClass, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int) []byte {
+	if cap(dst) < total {
+		dst = make([]byte, total)
+	} else {
+		dst = dst[:total]
+	}
+	frame := dst
+	copy(frame[:commandFrameHeaderSize], rawKVCommandFrameV2HeaderTemplate[:])
+	binary.LittleEndian.PutUint64(frame[20:28], lsn)
+	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint16(frame[54:56], uint16(class))
+	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
+
+	off := commandFrameHeaderSize
+	payloadVersion := rawKVBatchPayloadVersion
+	opHeaderSize := rawKVOpHeaderSize
+	if revision != 0 {
+		payloadVersion = rawKVBatchPayloadVersionWithRevisions
+		opHeaderSize = rawKVOpRevisionHeaderSize
+	}
+	binary.LittleEndian.PutUint16(frame[off:off+2], payloadVersion)
+	binary.LittleEndian.PutUint32(frame[off+2:off+6], 1)
+	off += rawKVBatchHeaderSize
+	frame[off] = byte(op)
+	binary.LittleEndian.PutUint32(frame[off+1:off+5], uint32(len(key)))
+	binary.LittleEndian.PutUint32(frame[off+5:off+9], uint32(valueLen))
+	if revision != 0 {
+		binary.LittleEndian.PutUint64(frame[off+9:off+17], revision)
+	}
+	off += opHeaderSize
+	copy(frame[off:], key)
+	off += len(key)
+	if op == RawKVOpSet {
+		copy(frame[off:], value)
+	}
+	return frame
+}
+
 func validCommandDurabilityClass(class CommandDurabilityClass) bool {
 	return class == CommandDurabilityDurable || class == CommandDurabilityRelaxed
 }

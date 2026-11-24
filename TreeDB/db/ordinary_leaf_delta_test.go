@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -541,4 +542,139 @@ func testOrdinaryDATAOuterLeafDeletesCoalesceAndRebalanceAvoidCandidateScan(t *t
 		t.Fatalf("segment 1 still has %d raw edges after deleting all keys", seg1Count)
 	}
 	assertCandidateTrackerMatchesFullScan(t, d)
+}
+
+func TestOrdinaryDATAWALOnRelaxedCheckpointsAvoidCandidateScan(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOnRelaxed,
+		CommandWAL:                 true,
+		IndexOuterLeavesInValueLog: true,
+		DisableBackgroundPrune:     true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+	log := &registeredLeafPageLog{db: d, dir: d.dir}
+	if err := log.ensureWriter(); err != nil {
+		t.Fatal(err)
+	}
+	d.SetLeafPageLog(log)
+	logClosed := false
+	defer func() {
+		if !logClosed {
+			closeVacuumTestLeafPageLog(t, d, log)
+		}
+	}()
+
+	putRound := func(round int) {
+		t.Helper()
+		b := d.NewBatch()
+		defer b.Close()
+		for i := 0; i < 1000; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("key/%05d", i)), bytes.Repeat([]byte{byte(round)}, 128)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Bootstrap initial data and establish the ordinary raw census.
+	putRound(1)
+	assertOrdinaryRawCensus(t, d)
+
+	scans := 0
+	d.testScanCandidateExternalReferencesHook = func() { scans++ }
+	defer func() {
+		if d != nil {
+			d.testScanCandidateExternalReferencesHook = nil
+		}
+	}()
+
+	// Interleave overwrite rounds with AppliedLSN-only publications, fallback
+	// refreshes, and no-op command-WAL publications (the exact paths hit by
+	// wal_on_fast checkpoints).
+	for round := 2; round <= 5; round++ {
+		lsn, err := d.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("noop/marker"), []byte{byte(round)}, false)
+		if err != nil {
+			t.Fatalf("round %d AppendRawKVPointCommandWALTrusted: %v", round, err)
+		}
+		if err := d.PublishCommandWALAppliedLSN(lsn, []CommandWALLSNRange{{First: lsn, Last: lsn}}, false); err != nil {
+			t.Fatalf("round %d PublishCommandWALAppliedLSN: %v", round, err)
+		}
+		assertOrdinaryRawCensus(t, d)
+
+		if err := d.RefreshCommandWALCheckpointFallback(); err != nil {
+			t.Fatalf("round %d RefreshCommandWALCheckpointFallback: %v", round, err)
+		}
+		assertOrdinaryRawCensus(t, d)
+
+		// Also exercise PublishCommandWALNoop (publishCommandWALNoop in command_wal_raw.go).
+		noopPayload, err := commitlog.EncodeRawKVBatchPayload(nil)
+		if err != nil {
+			t.Fatalf("round %d EncodeRawKVBatchPayload(nil): %v", round, err)
+		}
+		noopIntent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, noopPayload)
+		if err != nil {
+			t.Fatalf("round %d NewCommandWALIntent: %v", round, err)
+		}
+		if err := d.PublishCommandWALNoop(noopIntent, false); err != nil {
+			t.Fatalf("round %d PublishCommandWALNoop: %v", round, err)
+		}
+		assertOrdinaryRawCensus(t, d)
+
+		putRound(round)
+		assertOrdinaryRawCensus(t, d)
+	}
+
+	if scans != 0 {
+		t.Fatalf("WAL-on-relaxed overwrite + checkpoint rounds performed %d full candidate scans, want 0", scans)
+	}
+	assertCandidateTrackerMatchesFullScan(t, d)
+
+	// Verify read-back before close.
+	for i := 0; i < 1000; i++ {
+		got, err := d.Get([]byte(fmt.Sprintf("key/%05d", i)))
+		if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{5}, 128)) {
+			t.Fatalf("pre-close read key/%05d: got len=%d err=%v", i, len(got), err)
+		}
+	}
+
+	d.testScanCandidateExternalReferencesHook = nil
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d.SetLeafPageLog(nil)
+	logClosed = true
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+
+	// Fresh reopen recovery check.
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() {
+		if err := reopen.Close(); err != nil {
+			t.Fatalf("reopen Close: %v", err)
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		got, err := reopen.Get([]byte(fmt.Sprintf("key/%05d", i)))
+		if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{5}, 128)) {
+			t.Fatalf("reopen read key/%05d: got len=%d err=%v", i, len(got), err)
+		}
+	}
 }
