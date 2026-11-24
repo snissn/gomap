@@ -431,3 +431,89 @@ func TestNativeIndexCursorCorrectnessAndOverlays(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCompoundUniqueIndexScalarPrefixVisitsAllMatches(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.MemtableMode = "cow_btree"
+	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+	owner, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := owner.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+	backend, err := owner.NativeSemanticBackend()
+	if err != nil {
+		t.Fatalf("NativeSemanticBackend: %v", err)
+	}
+	mgr := NewCollectionManager(backend)
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Fatalf("mgr.Close: %v", err)
+		}
+	}()
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "compound_unique",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{
+			{
+				Name:      "xy",
+				ValueType: IndexValueBSONOrderedV2,
+				Unique:    true,
+				Components: []IndexComponent{
+					{Field: "x", Direction: IndexDirectionAscending},
+					{Field: "y", Direction: IndexDirectionAscending},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("compound_unique")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	docs := []struct {
+		id string
+		x  string
+		y  int64
+	}{
+		{"doc-1", "a", 1},
+		{"doc-2", "a", 2},
+		{"doc-3", "a", 3},
+		{"doc-4", "b", 1},
+	}
+	ids := make([][]byte, len(docs))
+	raws := make([][]byte, len(docs))
+	for i, d := range docs {
+		ids[i] = []byte(d.id)
+		raw, err := bson.Marshal(bson.D{{Key: "x", Value: d.x}, {Key: "y", Value: d.y}})
+		if err != nil {
+			t.Fatalf("bson.Marshal: %v", err)
+		}
+		raws[i] = raw
+	}
+	if _, err := col.InsertBatch(ids, raws); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	rawA, err := bson.Marshal(bson.D{{Key: "v", Value: "a"}})
+	if err != nil {
+		t.Fatalf("bson.Marshal lookup: %v", err)
+	}
+	got, err := col.FindByIndexValue("xy", bson.Raw(rawA).Lookup("v"))
+	if err != nil {
+		t.Fatalf("FindByIndexValue: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("FindByIndexValue(xy, a) returned %d IDs (%q), want 3", len(got), got)
+	}
+}

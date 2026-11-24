@@ -314,7 +314,10 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 	if err != nil {
 		return err
 	}
-	unique := index.Unique
+	// Restrict single-match early exit to complete single-component unique
+	// keys. Compound unique indexes encode only a leading scalar prefix here,
+	// so multiple documents may share that prefix and must all be visited.
+	unique := index.Unique && len(index.Components) <= 1 && !orderedBSONIndexRequiresCompoundRangeAPI(index)
 	charge := queryCharge
 	addCharge := func(n uint64) bool {
 		if n > ^uint64(0)-charge {
