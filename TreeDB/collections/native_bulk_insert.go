@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // nativeBulkInsertPreimage holds strictly COW-admitted, schema-validated insert
@@ -161,7 +162,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		lease:       lease,
 	}
 	defer func() {
-		if resultErr != nil {
+		if pre == nil {
 			p.Close()
 		}
 	}()
@@ -247,6 +248,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		stateCount := n * len(runtimes)
 		var scratchCap int
 		var initialBufCap int
+		var parserScratchCharge uint64
 		if simpleBSON {
 			maxDocLen := 0
 			for i := 0; i < n; i++ {
@@ -260,6 +262,29 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			if initialBufCap < 4096 {
 				initialBufCap = 4096
 			}
+			// Admit one-document parser/extraction work scratch (matching
+			// prepareValidation) so dotted-path or malformed/array BSON
+			// traversal cannot allocate beyond COW capacity.
+			maxDepth := uint64(1)
+			for _, rt := range runtimes {
+				if uint64(len(rt.path)) > maxDepth {
+					maxDepth = uint64(len(rt.path))
+				}
+			}
+			sourceUpper := uint64(max(maxDocLen, scratchCap))
+			if sourceUpper > ^uint64(0)/128 {
+				return nil, memtable.ErrCOWCapacity
+			}
+			decoderAllowance := memtable.COWAllocationCharge(sourceUpper * 128)
+			refUnit := 4 * uint64(unsafe.Sizeof(bson.RawValue{}))
+			if uint64(maxDocLen) > ^uint64(0)/maxDepth || uint64(maxDocLen)*maxDepth > ^uint64(0)/refUnit {
+				return nil, memtable.ErrCOWCapacity
+			}
+			refAllowance := memtable.COWAllocationCharge(uint64(maxDocLen) * maxDepth * refUnit)
+			if refAllowance > ^uint64(0)-decoderAllowance {
+				return nil, memtable.ErrCOWCapacity
+			}
+			parserScratchCharge = decoderAllowance + refAllowance
 		} else {
 			for i := 0; i < n; i++ {
 				doc := changed[i].document
@@ -272,6 +297,13 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 				if source > scratchCap {
 					scratchCap = source
 				}
+				docCharge, chargeErr := nativeJSONIndexedCharge(meta, [][]byte{nil}, [][]byte{doc}, false, true)
+				if chargeErr != nil {
+					return nil, chargeErr
+				}
+				if docCharge > parserScratchCharge {
+					parserScratchCharge = docCharge
+				}
 				for _, index := range meta.Indexes {
 					if !scalar && (index.MultiKey || meta.Options.AllowArrayValuesInIndex) {
 						if err = admitNativeInsertArray(len(doc), uint64(unsafe.Sizeof([]byte{})), p.admit); err != nil {
@@ -280,6 +312,17 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 					}
 				}
 			}
+		}
+		if err = p.admit(parserScratchCharge); err != nil {
+			if simpleBSON && errors.Is(err, memtable.ErrCOWCapacity) {
+				// Conservative O(1) upper bound exceeded available capacity; fall
+				// back to the standard per-document prepareValidation path so
+				// large scalar-field documents with small indexed values still
+				// succeed while oversized non-scalar arrays are rejected before
+				// allocation.
+				return nil, nil
+			}
+			return nil, err
 		}
 		for _, alloc := range []struct {
 			count int

@@ -186,12 +186,15 @@ func appendBSONCompoundIndexRuntimeState(raw bson.Raw, state orderedDocumentInde
 
 func appendBSONIndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value bson.RawValue, opts collectionOptions, encoder *indexEncodeArena) error {
 	if array, ok := value.ArrayOK(); ok {
+		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+			if err := array.Validate(); err != nil {
+				return err
+			}
+			return fmt.Errorf("collections: array value not allowed for index")
+		}
 		values, err := array.Values()
 		if err != nil {
 			return err
-		}
-		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
-			return fmt.Errorf("collections: array value not allowed for index")
 		}
 		var encodedInline [8][]byte
 		encoded := encodedInline[:0]

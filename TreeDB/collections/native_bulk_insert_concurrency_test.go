@@ -838,3 +838,57 @@ func TestNativeBulkInsertIndexedJSONDottedPathFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeBulkInsertDisallowedBSONArrayRejectedWithoutUnadmittedAlloc(t *testing.T) {
+	meta := &CollectionMeta{
+		Name: "bson_scalar_items",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "category", Field: "category", ValueType: IndexValueString},
+		},
+	}
+	owner, _, manager, col := openNativeBulkInsertFixture(
+		t,
+		t.TempDir(),
+		treedb.ProfileCommandWALRelaxed,
+		treedb.DefaultCOWMemtableLimits(),
+		meta,
+	)
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("manager.Close: %v", err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Errorf("owner.Close: %v", err)
+		}
+	}()
+
+	arr := make(bson.A, 4096)
+	for i := range arr {
+		arr[i] = "x"
+	}
+	badDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "bad-0"},
+		{Key: "category", Value: arr},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal(bad): %v", err)
+	}
+	goodDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "good-1"},
+		{Key: "category", Value: "ok"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal(good): %v", err)
+	}
+
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("bad-0"), []byte("good-1")}, [][]byte{badDoc, goodDoc}); err == nil {
+		t.Fatal("expected disallowed array value in scalar-indexed BSON batch to fail")
+	}
+	// Collection remains clean after rejected batch.
+	if got, err := col.Get([]byte("good-1")); err != nil || got != nil {
+		t.Fatalf("rejected batch unexpectedly persisted good-1: got=%x err=%v", got, err)
+	}
+}
