@@ -19,6 +19,9 @@ MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 TIMEOUT="${TIMEOUT:-120m}"
 TITLE="${TITLE:-Mongo API InsertMany Producer Scaling}"
+TREEDB_PROFILE="${TREEDB_PROFILE:-bench_unsafe}"
+TREEDB_OPEN_MODE="${TREEDB_OPEN_MODE:-legacy}"
+TREEDB_MEMTABLE_MODE="${TREEDB_MEMTABLE_MODE:-}"
 
 usage() {
   cat <<'EOF'
@@ -45,6 +48,11 @@ Options:
   --mongo-compact BOOL   Compact MongoDB before final stats collection.
   --timeout DURATION     Per-cell timeout. Default: 120m.
   --title TITLE          Bundle title.
+  --treedb-profile NAME  TreeDB profile. Default: bench_unsafe.
+  --treedb-open-mode MODE
+                         TreeDB open mode: legacy or standalone (COW). Default: legacy.
+  --treedb-memtable-mode MODE
+                         Optional TreeDB memtable mode override (for example: cow_btree).
   --help                 Show this help.
 
 Environment overrides use the uppercase variable names in the script.
@@ -145,6 +153,21 @@ while [[ $# -gt 0 ]]; do
       TITLE="$2"
       shift 2
       ;;
+    --treedb-profile)
+      require_value "$1" "${2-}"
+      TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --treedb-open-mode)
+      require_value "$1" "${2-}"
+      TREEDB_OPEN_MODE="$2"
+      shift 2
+      ;;
+    --treedb-memtable-mode)
+      require_value "$1" "${2-}"
+      TREEDB_MEMTABLE_MODE="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -207,6 +230,9 @@ for producers in $PRODUCERS_LIST; do
     mongo_compact_args=(--mongo-compact "$MONGO_COMPACT")
   fi
   env \
+    TREEDB_PROFILE="$TREEDB_PROFILE" \
+    TREEDB_OPEN_MODE="$TREEDB_OPEN_MODE" \
+    TREEDB_MEMTABLE_MODE="$TREEDB_MEMTABLE_MODE" \
     TREEDB_DOCUMENT_FORMATS=bson \
     TREEDB_CLIENT_MODES=driver-command-raw \
     MONGO_CLIENT_MODES=driver-command-raw \

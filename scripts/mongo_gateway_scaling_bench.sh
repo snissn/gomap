@@ -25,6 +25,8 @@ UPDATE_INDEXED_FIELD="${UPDATE_INDEXED_FIELD:-false}"
 # command_wal_relaxed for command-WAL coverage once indexed catalog command
 # support is enabled for this workload; bench_unsafe is the explicit no-WAL ceiling.
 TREEDB_PROFILE="${TREEDB_PROFILE:-bench_unsafe}"
+TREEDB_OPEN_MODE="${TREEDB_OPEN_MODE:-legacy}"
+TREEDB_MEMTABLE_MODE="${TREEDB_MEMTABLE_MODE:-}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver-command-raw}"
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-none}"
@@ -75,6 +77,10 @@ Options:
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
   --profile NAME         TreeDB profile. Default: bench_unsafe.
+  --treedb-open-mode MODE
+                         TreeDB open mode: legacy or standalone (COW). Default: legacy.
+  --treedb-memtable-mode MODE
+                         Optional TreeDB memtable mode override (for example: cow_btree).
   --maintenance MODE     TreeDB maintenance mode. Default: none.
   --update-indexed-field Include the city field in update phases to exercise
                          secondary-index maintenance; requires INDEXES=2.
@@ -242,6 +248,16 @@ while [[ $# -gt 0 ]]; do
     --profile)
       require_option_value "$1" "${2-}"
       TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --treedb-open-mode)
+      require_option_value "$1" "${2-}"
+      TREEDB_OPEN_MODE="$2"
+      shift 2
+      ;;
+    --treedb-memtable-mode)
+      require_option_value "$1" "${2-}"
+      TREEDB_MEMTABLE_MODE="$2"
       shift 2
       ;;
     --maintenance)
@@ -599,11 +615,17 @@ run_cell() {
   local tree_data="$TREE_DIR/$tree_config"
   local database="${DATABASE_PREFIX}_${config_suffix}"
 
-  echo "==> TreeDB $scenario readers=$readers writers=$writers"
+  local tree_open_args=(-treedb-open-mode "$TREEDB_OPEN_MODE")
+  if [[ -n "$TREEDB_MEMTABLE_MODE" ]]; then
+    tree_open_args+=(-treedb-memtable-mode "$TREEDB_MEMTABLE_MODE")
+  fi
+
+  echo "==> TreeDB $scenario readers=$readers writers=$writers open_mode=$TREEDB_OPEN_MODE"
   run_bench treedb "$tree_raw" "$database" "$readers" "$reads" "$writers" "$writes" \
     -treedb-dir "$tree_data" \
     -keep-treedb-dir \
     -treedb-profile "$TREEDB_PROFILE" \
+    "${tree_open_args[@]}" \
     -treedb-document-format "$TREEDB_DOCUMENT_FORMAT" \
     -client-mode "$TREEDB_CLIENT_MODE" \
     -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \

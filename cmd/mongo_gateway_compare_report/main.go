@@ -51,6 +51,9 @@ type benchmarkResult struct {
 	ConcurrentWriterSweep      []int             `json:"concurrent_writer_sweep,omitempty"`
 	ConcurrentRangeReaderSweep []int             `json:"concurrent_range_reader_sweep,omitempty"`
 	TreeDBDocumentFormat       string            `json:"treedb_document_format,omitempty"`
+	TreeDBProfile              string            `json:"treedb_profile,omitempty"`
+	TreeDBOpenMode             string            `json:"treedb_open_mode,omitempty"`
+	TreeDBMemtableMode         string            `json:"treedb_memtable_mode,omitempty"`
 	Phases                     []phaseResult     `json:"phases"`
 	ProfileDir                 string            `json:"profile_dir,omitempty"`
 	ProfileManifest            string            `json:"profile_manifest,omitempty"`

@@ -238,6 +238,23 @@ func (opts StandaloneOptions) usesRelaxedStandaloneBSONPolicy() bool {
 		opts.Profile == treedb.ProfileCommandWALRelaxed && opts.ClusterSubmitter == nil
 }
 
+// ConfigureNativeSemanticBackend attaches a CollectionManager backed by a
+// NativeSemanticBackend (such as a standalone COW TreeDB owner) so the gateway
+// enables native insert buffering and command-WAL diagnostics without relying
+// on unexported Server fields.
+func (s *Server) ConfigureNativeSemanticBackend(manager *collections.CollectionManager, backend *backenddb.DB) {
+	if s == nil {
+		return
+	}
+	s.Collections = manager
+	s.nativeInsertBufferManager = manager
+	if backend != nil {
+		s.diagnosticCommandWALEnabled = backend.CommandWALEnabled
+	} else {
+		s.diagnosticCommandWALEnabled = nil
+	}
+}
+
 // OpenStandaloneServer opens TreeDB and returns a standalone MongoDB gateway.
 func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	normalized, err := NormalizeStandaloneOptions(opts)
@@ -273,9 +290,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 		return failedOpen(fmt.Errorf("mongo gateway standalone: shared COW catalog preflight: %w", err))
 	}
 	server := NewServer()
-	server.Collections = manager
-	server.nativeInsertBufferManager = manager
-	server.diagnosticCommandWALEnabled = backend.CommandWALEnabled
+	server.ConfigureNativeSemanticBackend(manager, backend)
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
 	server.ClusterSubmitter = normalized.ClusterSubmitter
