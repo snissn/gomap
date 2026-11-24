@@ -1648,6 +1648,91 @@ func (j *CommandJournal) appendCommand(
 	return lsn, nil
 }
 
+// AppendRawKVPointCommandV2ObservedAndFlush encodes and appends a single
+// caller-validated raw-KV Set/Delete V2 command frame directly into the
+// writer's buffer without intermediate payload allocations, and optionally
+// flushes/syncs under the same journal mutex.
+func (j *CommandJournal) AppendRawKVPointCommandV2ObservedAndFlush(
+	class CommandDurabilityClass,
+	baseAppliedLSN uint64,
+	op RawKVOp,
+	key, value []byte,
+	revision uint64,
+	flush bool,
+	sync bool,
+	beforeAppend func() error,
+	afterAppend func(uint64, []*CommandJournalStableRotation) error,
+) (lsn uint64, flushAttempted bool, err error) {
+	if j == nil {
+		return 0, false, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, false, errors.New("commitlog: command journal is closed")
+	}
+	observe := durabilitycut.Enabled()
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, false, err
+	}
+	valueLen, payloadLen, size, err := trustedRawKVPointCommandFrameV2Lens(class, op, key, value, revision)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := j.writer.commandFrameSizeError(size); err != nil {
+		return 0, false, err
+	}
+	if beforeAppend != nil {
+		if err := beforeAppend(); err != nil {
+			return 0, false, err
+		}
+	}
+	syncRotation := class == CommandDurabilityDurable
+	deferRotationNamespace := class == CommandDurabilityRelaxed
+	previousSegment := j.segmentSeq
+	if err := j.maybeRotateForFrameLockedObservedWithNamespaceDebt(size, syncRotation, deferRotationNamespace, observe); err != nil {
+		return 0, false, err
+	}
+	if j.segmentSeq != previousSegment {
+		if err := j.writer.commandFrameSizeError(size); err != nil {
+			return 0, false, err
+		}
+		if int64(size) > int64(1<<63-1)-segmentHeaderSize || !j.writer.fixedFitsAppend(int64(segmentHeaderSize)+int64(size)) {
+			return 0, false, ErrRecordTooLarge
+		}
+	}
+	lsn, err = j.reserveLSNLocked()
+	if err != nil {
+		return 0, false, err
+	}
+	if err := j.writer.appendRawKVPointCommandV2Direct(class, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, false, errors.Join(err, rollbackErr)
+		}
+		return 0, false, err
+	}
+	j.recordAppendedLSNLocked(lsn)
+	if afterAppend != nil {
+		rotations, err := j.takePendingStableRotationsLocked()
+		if err != nil {
+			return lsn, false, err
+		}
+		if err := afterAppend(lsn, rotations); err != nil {
+			return lsn, false, err
+		}
+	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, false, err
+	}
+	if !flush {
+		return lsn, false, nil
+	}
+	if err := j.flushDirectCommandWALLocked(sync, observe); err != nil {
+		return lsn, true, err
+	}
+	return lsn, true, nil
+}
+
 func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawKVOperation) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")

@@ -1034,6 +1034,28 @@ func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDel
 	return newValueLogRefDelta()
 }
 
+// newNoopValueLogRefDeltaForRootsIfTrackable returns a zero-edge delta for a
+// root-unchanged publication captured under durablePublishMu. For ordinary
+// DATA roots with outer leaves in the value log it certifies exact zero-change
+// raw outer-leaf evidence so AppliedLSN-only and no-op publications preserve
+// tracker.rawValid instead of forcing full reachability scans on subsequent
+// flushes. It intentionally leaves ordinaryRawProducer false so ineligible
+// roots (non-empty systemRoot, PRIMARY index) still fall back cleanly to
+// planOuterLeafBaseDependencyReuseV1.
+func (db *DB) newNoopValueLogRefDeltaForRootsIfTrackable(idx *indexGen, baseSeq, userRoot uint64) *valueLogRefDelta {
+	delta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	if delta == nil {
+		return nil
+	}
+	if db.indexOuterLeavesInValueLog && idx != nil && idx.primary == nil && userRoot != 0 {
+		delta.rawExact = true
+		delta.rawIndexID = idx.id
+		delta.rawInput = userRoot
+		delta.rawOutput = userRoot
+	}
+	return delta
+}
+
 func lookupValueLogRefAtKey(tr *tree.Tree, key []byte) (uint32, bool, error) {
 	runLookupValueLogRefAtKeyHook()
 	if tr == nil {

@@ -170,6 +170,14 @@ func (db *DB) projectOrdinaryRawReferences(idx *indexGen, next page.MetaPageBody
 	return references, true, nil
 }
 
+// SetScanCandidateExternalReferencesHookForTesting installs a test observer for
+// fallback candidate reachability scans and returns a restore callback.
+func (db *DB) SetScanCandidateExternalReferencesHookForTesting(hook func()) func() {
+	previous := db.testScanCandidateExternalReferencesHook
+	db.testScanCandidateExternalReferencesHook = hook
+	return func() { db.testScanCandidateExternalReferencesHook = previous }
+}
+
 func applyProjectedReferenceChanges(counts *valueLogRefCounts, delta *valueLogRefDelta) error {
 	return delta.forEachChange(func(id uint32, change int64) error {
 		old := counts.get(id)

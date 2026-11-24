@@ -2691,17 +2691,7 @@ func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevisionAndMode(op co
 	if revision == page.LegacyEntryRevision {
 		return 0, fmt.Errorf("%w: command wal revision allocator returned legacy revision", ErrCommandWALRejected)
 	}
-	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
-		Op: op, Key: key, Value: value, Revision: uint64(revision),
-	}})
-	if err != nil {
-		return 0, err
-	}
-	return db.appendCommandWALIntent(&commandWALBatchIntent{
-		kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
-		payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: true,
-		statsPath: commandWALAppendStatsPoint, statsPathSet: true, capturedDurable: mode == RawKVCommandWALAppendCapturedDurable,
-	}, mode.sync())
+	return db.appendRawKVPointCommandWALV2Direct(op, key, value, uint64(revision), mode)
 }
 
 func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp, key, value []byte, revision uint64, sync bool) (uint64, error) {
@@ -2728,15 +2718,95 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
-	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: op, Key: key, Value: value, Revision: revision}})
-	if err != nil {
-		return 0, err
+	return db.appendRawKVPointCommandWALV2Direct(op, key, value, revision, rawKVCommandWALAppendMode(sync))
+}
+
+func (db *DB) appendRawKVPointCommandWALV2Direct(op commitlog.RawKVOp, key, value []byte, revision uint64, mode RawKVCommandWALAppendMode) (uint64, error) {
+	if op != commitlog.RawKVOpSet && op != commitlog.RawKVOpDelete {
+		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+			Op: op, Key: key, Value: value, Revision: revision,
+		}})
+		if err != nil {
+			return 0, err
+		}
+		return db.appendCommandWALIntent(&commandWALBatchIntent{
+			kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
+			payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: true,
+			statsPath: commandWALAppendStatsPoint, statsPathSet: true, capturedDurable: mode == RawKVCommandWALAppendCapturedDurable,
+		}, mode.sync())
 	}
-	return db.appendCommandWALIntent(&commandWALBatchIntent{
-		kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
-		payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: true,
-		statsPath: commandWALAppendStatsPoint, statsPathSet: true,
-	}, sync)
+	tracked, admissionErr := db.beginSemanticBackendOperation(nil, false)
+	if admissionErr != nil {
+		return 0, admissionErr
+	}
+	defer db.endSemanticBackendOperation(tracked)
+
+	if db.closing.Load() || db.commandJournal == nil {
+		return 0, db.commandWALJournalUnavailableError()
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	sync := mode.sync()
+	capturedDurable := mode == RawKVCommandWALAppendCapturedDurable
+	class := commitlog.CommandDurabilityRelaxed
+	if sync || capturedDurable {
+		class = commitlog.CommandDurabilityDurable
+	}
+	var baseAppliedLSN uint64
+	if st := db.state.Load(); st != nil {
+		baseAppliedLSN = st.AppliedCommandLSN
+	}
+	var beforeAppend func() error
+	if sync || capturedDurable {
+		beforeAppend = func() error {
+			return db.syncCommandWALDependenciesThrough(^uint64(0), nil)
+		}
+	}
+	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
+		rotationFiles := commandWALStableRotationTokens(rotations)
+		if err := db.commandWALDebt.add(lsn, rotationFiles); err != nil {
+			for _, token := range rotationFiles {
+				token.Release()
+			}
+			return err
+		}
+		return nil
+	}
+	lsn, flushAttempted, err := db.commandJournal.AppendRawKVPointCommandV2ObservedAndFlush(
+		class, baseAppliedLSN, op, key, value, revision, !capturedDurable, sync, beforeAppend, afterAppend,
+	)
+	if lsn != 0 || err == nil {
+		db.observeCommandWALAppend(commandWALAppendStatsPoint, 0)
+	}
+	if !flushAttempted {
+		if err != nil {
+			if lsn != 0 {
+				db.commandWALFlushPoisoned.Store(true)
+			}
+			return lsn, err
+		}
+		if capturedDurable {
+			commandWALStoreMax(&db.commandWALDurableMarkerLSN, lsn)
+		}
+		db.observeCommandWALAccepted(lsn)
+		return lsn, nil
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
+	db.observeCommandWALFlush(commandWALAppendStatsPoint, sync, 0)
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
+		return lsn, err
+	}
+	if sync {
+		db.closeCommandWALDurablePrefixThrough(lsn)
+	}
+	db.observeCommandWALAccepted(lsn)
+	return lsn, nil
 }
 
 // AppendRawKVBatchPayloadCommandWAL appends a prebuilt RawKVBatch payload as a
@@ -3002,6 +3072,7 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	}
 	db.durablePublishMu.Lock()
 	durablePublishLocked = true
+	idx := db.idx.Load()
 	// The intent is root-neutral. Capture the roots only after entering the
 	// durable publish gate so a publication that completed while this caller
 	// waited cannot be rolled back when the applied LSN advances.
@@ -3010,7 +3081,7 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
-	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+	vlogRefDelta := db.newNoopValueLogRefDeltaForRootsIfTrackable(idx, baseSeq, userRoot)
 	db.commitMu.Unlock()
 	db.writeMu.Unlock()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
@@ -3116,11 +3187,12 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	} else if intent.trustedPayload && !intent.statsPathSet {
 		appendPath = commandWALAppendStatsPayload
 	}
+	externalRefStart := time.Time{}
 	if requestTiming != nil {
 		requestTiming.BackendIntentPlanningSerialization += time.Since(planningStart)
 		requestTiming.ExternalRefOrderingObserved = true
+		externalRefStart = time.Now()
 	}
-	externalRefStart := time.Now()
 	dependencies, err := db.captureCommandWALExternalDependencies(intent)
 	if requestTiming != nil {
 		requestTiming.ExternalRefOrdering += time.Since(externalRefStart)
@@ -3143,11 +3215,11 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if intent.rawKVRIDCache != nil && dependencies == nil {
 		intent.rawKVRIDCache.release()
 	}
-	beforeAppend := func() error {
-		if !sync && !intent.capturedDurable {
-			return nil
+	var beforeAppend func() error
+	if sync || intent.capturedDurable {
+		beforeAppend = func() error {
+			return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
 		}
-		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
 		rotationFiles := commandWALStableRotationTokens(rotations)

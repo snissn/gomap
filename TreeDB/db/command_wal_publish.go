@@ -237,6 +237,7 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 	}
 	db.durablePublishMu.Lock()
 	durablePublishLocked = true
+	idx := db.idx.Load()
 	if currentRoots {
 		// Applied-LSN-only publications carry no constructed root candidate.
 		// Bind them to the latest roots only after entering the durable publish
@@ -250,11 +251,17 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		rootsUnchanged = true
 		// This path binds the existing user root, rather than accepting a
 		// constructed candidate. Transfer only coverage of this exact base.
-		negativeCoverage = db.prepareNegativeCoverage(db.idx.Load(), baseSeq, newRootID, newRootID, nil)
+		negativeCoverage = db.prepareNegativeCoverage(idx, baseSeq, newRootID, newRootID, nil)
+	} else if rootsUnchanged {
+		// Re-verify under durablePublishMu so rawIndexID matches idx.id at
+		// publish time and concurrent commits/cutovers cannot alias a stale base.
+		db.mu.RLock()
+		rootsUnchanged = db.meta.CommitSeq == baseSeq && newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
+		db.mu.RUnlock()
 	}
 	var vlogRefDelta *valueLogRefDelta
 	if rootsUnchanged {
-		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+		vlogRefDelta = db.newNoopValueLogRefDeltaForRootsIfTrackable(idx, baseSeq, newRootID)
 	}
 	db.writeMu.Unlock()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
