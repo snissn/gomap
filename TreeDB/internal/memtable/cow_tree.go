@@ -1190,24 +1190,33 @@ func cowEntriesStrictlySortedNonDelete(entries []COWMutation) bool {
 }
 
 func applySortedNonDeleteCOWMutations(tr *btree.Map[string, cowValue], entries []COWMutation, admittedPayload uint64) cowLogicalDelta {
-	var totalKeyBytes, totalValBytes uint64
+	var totalKeyBytes, totalValBytes, perValAdmitted uint64
 	for _, e := range entries {
 		totalKeyBytes += uint64(len(e.Key))
 		if _, isConst := cowIsEmptyConstantValue(e); !isConst {
-			totalValBytes += uint64(cowValueMetadataBytes + len(e.Value))
+			vSize := uint64(cowValueMetadataBytes + len(e.Value))
+			totalValBytes += vSize
+			perValAdmitted += cowAllocation(vSize)
 		}
 	}
 	var valArena, keyArena []byte
-	valCharge := uint64(0)
+	remainingPayload := admittedPayload
 	if totalValBytes > 0 {
-		valCharge = cowAllocation(totalValBytes)
-		if valCharge <= admittedPayload {
+		valCharge := cowAllocation(totalValBytes)
+		if valCharge <= remainingPayload {
 			valArena = make([]byte, totalValBytes)
+			remainingPayload -= valCharge
+		} else if perValAdmitted <= remainingPayload {
+			// Value arena was skipped; preserve the fallback per-entry value
+			// encoding reservation before deciding whether a key arena fits.
+			remainingPayload -= perValAdmitted
+		} else {
+			remainingPayload = 0
 		}
 	}
 	if totalKeyBytes > 0 {
 		keyCharge := cowAllocation(totalKeyBytes)
-		if keyCharge <= admittedPayload-valCharge {
+		if keyCharge <= remainingPayload {
 			keyArena = make([]byte, totalKeyBytes)
 		}
 	}

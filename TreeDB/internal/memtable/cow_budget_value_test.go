@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -116,5 +117,53 @@ func TestCOWRootAtomicRefcountConcurrentLifecycle(t *testing.T) {
 	b.Close()
 	if got := b.Stats(); got.TotalBytes != 0 || got.Views != 0 || got.Generations != 0 {
 		t.Fatalf("leaked budget stats after concurrent root close: %+v", got)
+	}
+}
+
+func TestCOWSortedNonDeleteReplacementArenaBudgetGuard(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+
+	// Seed 21 sorted keys with 7-byte values (vSize=8 -> per-entry cowAllocation=8,
+	// admittedPayload for pure replacements = 21*8 = 168, while cowAllocation(168) = 176 > 168).
+	const n = 21
+	initial := make([]COWMutation, n)
+	replace := make([]COWMutation, n)
+	for i := 0; i < n; i++ {
+		key := []byte(fmt.Sprintf("replace-key-%04d", i))
+		initial[i] = COWMutation{Key: key, Value: []byte("initval"), Flags: node.FlagInline}
+		replace[i] = COWMutation{Key: key, Value: []byte(fmt.Sprintf("val%04d", i)), Flags: node.FlagInline}
+	}
+
+	r1 := cowTestPublish(t, w, initial)
+	est, err := w.Estimate(replace, COWPrepareOptions{})
+	if err != nil {
+		t.Fatalf("Estimate(replace): %v", err)
+	}
+	wantPayload := uint64(n) * cowAllocation(cowValueMetadataBytes+7)
+	if est.Payload != wantPayload {
+		t.Fatalf("Estimate(replace).Payload=%d, want %d", est.Payload, wantPayload)
+	}
+	if cowAllocation(uint64(n)*(cowValueMetadataBytes+7)) <= est.Payload {
+		t.Fatalf("test invariant violated: expected contiguous valCharge > admittedPayload (%d)", est.Payload)
+	}
+	r2 := cowTestPublish(t, w, replace)
+
+	for i := 0; i < n; i++ {
+		got, ok := r2.Get(replace[i].Key)
+		if !ok {
+			t.Fatalf("missing key %q after sorted replacement", replace[i].Key)
+		}
+		if got.Value != string(replace[i].Value) {
+			t.Fatalf("key %q value=%q, want %q", replace[i].Key, got.Value, replace[i].Value)
+		}
+	}
+
+	// Verify budget accounting stays bounded and refunds completely on close.
+	cowTestClose(w)
+	cowTestRelease(r1)
+	cowTestRelease(r2)
+	b.Close()
+	if got := b.Stats(); got.TotalBytes != 0 || got.Views != 0 || got.Generations != 0 {
+		t.Fatalf("leaked budget stats after sorted replacement: %+v", got)
 	}
 }

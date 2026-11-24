@@ -747,3 +747,94 @@ func BenchmarkNativeBulkInsertBSON(b *testing.B) {
 	}
 }
 
+func TestNativeBulkInsertIndexedJSONDottedPathFallback(t *testing.T) {
+	meta := &CollectionMeta{
+		Name: "json_dotted_items",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "meta_tag", Field: "meta.tag", ValueType: IndexValueString},
+		},
+	}
+	owner, backend, manager, col := openNativeBulkInsertFixture(
+		t,
+		t.TempDir(),
+		treedb.ProfileCommandWALRelaxed,
+		treedb.StandaloneCOWMemtableLimits(),
+		meta,
+	)
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("manager.Close: %v", err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Errorf("owner.Close: %v", err)
+		}
+	}()
+
+	if nativeBulkInsertEligibleMeta(backend, *meta) {
+		t.Fatal("indexed JSON collection unexpectedly eligible for preimage bulk fast path")
+	}
+
+	const (
+		producers = 4
+		batchSize = 64
+	)
+	idsByProd := make([][][]byte, producers)
+	docsByProd := make([][][]byte, producers)
+	for p := 0; p < producers; p++ {
+		ids := make([][]byte, batchSize)
+		docs := make([][]byte, batchSize)
+		for i := 0; i < batchSize; i++ {
+			id := fmt.Sprintf("jp%02d-r%04d", p, i)
+			ids[i] = []byte(id)
+			docs[i] = []byte(fmt.Sprintf(`{"_id":%q,"meta":{"tag":"tag-%02d"}}`, id, p))
+		}
+		idsByProd[p] = ids
+		docsByProd[p] = docs
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, producers)
+	var wg sync.WaitGroup
+	for p := 0; p < producers; p++ {
+		wg.Add(1)
+		go func(prod int) {
+			defer wg.Done()
+			<-start
+			if err := col.nativeJSON.InsertBatch(meta.Name, idsByProd[prod], docsByProd[prod]); err != nil {
+				errs <- fmt.Errorf("producer=%d: %w", prod, err)
+			}
+		}(p)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	// Verify secondary dotted-path index entries were populated cleanly.
+	read, err := col.nativeJSON.Capture(meta.Name)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	defer func() {
+		if err := read.Close(); err != nil {
+			t.Errorf("read.Close: %v", err)
+		}
+	}()
+	for p := 0; p < producers; p++ {
+		count := 0
+		if err := read.visitIndexValueIDs("meta_tag", fmt.Sprintf("tag-%02d", p), func([]byte) error {
+			count++
+			return nil
+		}); err != nil {
+			t.Fatalf("visitIndexValueIDs(tag-%02d): %v", p, err)
+		}
+		if count != batchSize {
+			t.Fatalf("visitIndexValueIDs(tag-%02d) count=%d, want %d", p, count, batchSize)
+		}
+	}
+}

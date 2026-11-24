@@ -67,7 +67,15 @@ func nativeBulkInsertEligibleMeta(db *backenddb.DB, meta CollectionMeta) bool {
 	if meta.Options.ColumnStore != nil || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
 		return false
 	}
-	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
+	format := normalizedDocumentFormat(meta.Options.DocumentFormat)
+	if format == DocumentFormatTemplateV1 {
+		return false
+	}
+	// Indexed JSON documents may fall back to json.NewDecoder (for example on
+	// dotted paths), whose decoded object graph must be admitted via the
+	// standard validateDocument/prepareValidation staging path. Keep those on
+	// the standard path (still coordinated by coord.nativeBulkInsertMu).
+	if format != DocumentFormatBSON && len(meta.Indexes) != 0 {
 		return false
 	}
 	if err := nativeTypedProfile(db, meta); err != nil {

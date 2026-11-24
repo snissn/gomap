@@ -25,6 +25,7 @@ func txnJournalControlCharge(n int) uint64 {
 	}
 	return charge
 }
+
 const (
 	defaultTxnJournalCapacity = 4096
 	maxTxnJournalCapacity     = 65536
