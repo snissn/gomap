@@ -687,7 +687,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.db.noteWrite()
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
-	b.Reset()
+	b.cowResetAfterWrite()
 	if err != nil {
 		b.db.reportError(err)
 		return err

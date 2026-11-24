@@ -50,20 +50,24 @@ type COWStats struct {
 }
 
 const (
-	cowIdleReadMaxSlots = 16
-	cowIdleReadMaxBytes = 512 << 10
+	cowIdleReadMaxSlots  = 16
+	cowIdleReadMaxBytes  = 512 << 10
+	cowIdleBatchMaxSlots = 2
+	cowIdleBatchMaxBytes = 8 << 20
 )
 
 // COWBudget is shared by the fixed shard vector and its frozen generations.
 // C2 charges caller-owned cut/vector/backend-lease allocations through an
 // external lease before allocation, or ExtraBytes before private preparation.
 type COWBudget struct {
-	mu            sync.Mutex
-	limits        COWLimits
-	stats         COWStats
-	closed        bool
-	idleRead      [cowIdleReadMaxSlots]cowIdleReadScratch
-	idleReadCount int
+	mu             sync.Mutex
+	limits         COWLimits
+	stats          COWStats
+	closed         bool
+	idleBatchCount uint8
+	idleRead       [cowIdleReadMaxSlots]cowIdleReadScratch
+	idleReadCount  int
+	idleBatch      [cowIdleBatchMaxSlots]cowIdleBatchScratch
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.
 	maintenance        *COWBudget
@@ -101,6 +105,8 @@ func (b *COWBudget) Close() {
 	b.closed = true
 	for b.reclaimReadScratchLocked() {
 	}
+	for b.reclaimIdleBatchLocked() {
+	}
 	maintenance := b.maintenance
 	b.releaseControlLocked()
 	b.mu.Unlock()
@@ -110,7 +116,7 @@ func (b *COWBudget) Close() {
 	b.releaseMaintenanceReservation()
 }
 func (b *COWBudget) releaseControlLocked() {
-	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 && !b.hasIdleReadScratchLocked() {
+	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 && !b.hasIdleReadScratchLocked() && !b.hasIdleBatchScratchLocked() {
 		b.stats.TotalBytes -= b.stats.ControlBytes
 		b.stats.ControlBytes = 0
 	}
@@ -330,7 +336,7 @@ func (b *COWBudget) retirementFitsLocked(n uint64) bool {
 		if ok && cowFits(b.limits.MaxRetiredBytes, used, n) {
 			return true
 		}
-		if !b.reclaimReadScratchLocked() {
+		if !b.reclaimIdleScratchLocked() {
 			return false
 		}
 	}
@@ -352,7 +358,7 @@ func cowAllocation(n uint64) uint64 { return retainedalloc.AllocationCharge(n) }
 func (b *COWBudget) addLocked(n uint64) bool {
 	total, ok := cowAdd(b.stats.TotalBytes, n)
 	for !ok || total > b.limits.MaxTotalBytes {
-		if !b.reclaimReadScratchLocked() {
+		if !b.reclaimIdleScratchLocked() {
 			return false
 		}
 		total, ok = cowAdd(b.stats.TotalBytes, n)

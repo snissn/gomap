@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"unsafe"
 
@@ -373,6 +374,16 @@ func TestCOWBatchResetLastHintPreSizingAndTightBudgetFallback(t *testing.T) {
 	}
 }
 
+func drainCOWIdleBatchScratch(db *DB) {
+	for {
+		_, lease, _ := db.cow.budget.TakeIdleBatchScratch(0)
+		if lease == nil {
+			return
+		}
+		lease.Close()
+	}
+}
+
 func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 	db := cowPointerFixture(t)
 	baseline := db.cow.budget.Stats()
@@ -387,7 +398,8 @@ func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 2. Commit a large batch to warm batchEntryHint and batchCopyBytesHint.
+	// 2. Commit a large batch to warm batchEntryHint and batchCopyBytesHint,
+	// parking its cleared scratch via cowResetAfterWrite().
 	warm := db.NewBatch()
 	val := make([]byte, 320)
 	for i := 0; i < 256; i++ {
@@ -409,8 +421,46 @@ func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 		t.Fatalf("expected warm hints: entry=%d copy=%d", wantEntryHint, wantCopyHint)
 	}
 
-	// 3. Warm NewBatch skips eager backing in constructor, then admits both
-	// entry and copyArena hints together on first owned write.
+	// 2b. Steady-state idle batch scratch reuse right after warm.Write():
+	// NewBatch() immediately recycles parked capacities with zero reallocations.
+	reused := db.NewBatch()
+	if reused.cowState.err != nil || cap(reused.entries) < 256 || cap(reused.copyArena) == 0 ||
+		len(reused.entries) != 0 || len(reused.copyArena) != 0 ||
+		cap(reused.cowState.predictionGroups) < len(db.mutableShards) ||
+		cap(reused.cowState.predictionStorage) < 256 ||
+		cap(reused.shardAdds) < len(db.mutableShards) ||
+		cap(reused.shardCnts) < len(db.mutableShards) ||
+		cap(reused.shardIdxs) < 256 ||
+		cap(reused.eligibleIdxs) < 256 {
+		_ = reused.Close()
+		t.Fatalf("steady-state NewBatch did not recycle parked scratch: entries=%d/%d arena=%d/%d pred=%d/%d shards=%d/%d/%d/%d err=%v",
+			len(reused.entries), cap(reused.entries), len(reused.copyArena), cap(reused.copyArena),
+			cap(reused.cowState.predictionGroups), cap(reused.cowState.predictionStorage),
+			cap(reused.shardAdds), cap(reused.shardCnts), cap(reused.shardIdxs), cap(reused.eligibleIdxs), reused.cowState.err)
+	}
+	entriesPtr := &reused.entries[:1][0]
+	arenaPtr := &reused.copyArena[:1][0]
+	if err := reused.Set([]byte("reused-owned"), []byte("reused-payload")); err != nil {
+		_ = reused.Close()
+		t.Fatal(err)
+	}
+	if &reused.entries[0] != entriesPtr || &reused.copyArena[:1][0] != arenaPtr {
+		_ = reused.Close()
+		t.Fatal("steady-state recycled batch reallocated entries or copyArena")
+	}
+	if err := reused.Write(); err != nil {
+		_ = reused.Close()
+		t.Fatal(err)
+	}
+	if err := reused.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Evict parked idle batch scratch to test empty-pool adaptive hint behavior.
+	drainCOWIdleBatchScratch(db)
+
+	// 3. Empty-pool warm NewBatch skips eager backing in constructor, then admits
+	// both entry and copyArena hints together on first owned write.
 	adaptive := db.NewBatch()
 	if adaptive.cowState.err != nil || cap(adaptive.entries) != 0 || cap(adaptive.copyArena) != 0 {
 		_ = adaptive.Close()
@@ -428,8 +478,9 @@ func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 	if err := adaptive.Close(); err != nil {
 		t.Fatal(err)
 	}
+	drainCOWIdleBatchScratch(db)
 
-	// 4. SetView skips copyArena while still using lastHint for entries.
+	// 4. Empty-pool SetView skips copyArena while still using lastHint for entries.
 	viewBatch := db.NewBatch()
 	if err := viewBatch.SetView([]byte("view-k"), []byte("view-v")); err != nil {
 		_ = viewBatch.Close()
@@ -442,6 +493,7 @@ func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 	if err := viewBatch.Close(); err != nil {
 		t.Fatal(err)
 	}
+	drainCOWIdleBatchScratch(db)
 
 	// 5. Tight budget: NewBatch succeeds (zero eager backing), then first Set
 	// falls back cleanly to 16 entries and 256B copyArena without latching err.
@@ -478,6 +530,227 @@ func TestCOWNewBatchAdaptiveHintAndTightBudgetFallback(t *testing.T) {
 	after := db.cow.budget.Stats()
 	if after.ReservedBytes != beforeTight.ReservedBytes || after.ExternalBytes != beforeTight.ExternalBytes || after.ExternalLeases != beforeTight.ExternalLeases {
 		t.Fatalf("external charge leaked: baseline=%+v beforeTight=%+v after=%+v", baseline, beforeTight, after)
+	}
+}
+
+func TestCOWBatchIdleScratchReuseAndPressureEviction(t *testing.T) {
+	db := cowPointerFixture(t)
+	baseline := db.cow.budget.Stats()
+
+	// 1. Write a warm batch > batchDefaultEntriesCap; cowResetAfterWrite parks scratch.
+	b1 := db.NewBatch()
+	val := make([]byte, 128)
+	for i := 0; i < 128; i++ {
+		if err := b1.Set([]byte(fmt.Sprintf("idle-%04d", i)), val); err != nil {
+			_ = b1.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b1.Write(); err != nil {
+		_ = b1.Close()
+		t.Fatal(err)
+	}
+	if err := b1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	parkedStats := db.cow.budget.Stats()
+	if parkedStats.ExternalLeases != baseline.ExternalLeases || parkedStats.ExternalBytes <= baseline.ExternalBytes {
+		t.Fatalf("cowResetAfterWrite did not park idle scratch: baseline=%+v parked=%+v", baseline, parkedStats)
+	}
+
+	// 2. Next NewBatch recycles all 8 slice backings and cowPrepareWriteStorage reuses all 6 write slices.
+	b2 := db.NewBatch()
+	predGroupsPtr := &b2.cowState.predictionGroups[:1][0]
+	predStoragePtr := &b2.cowState.predictionStorage[:1][0]
+	shardAddsPtr := &b2.shardAdds[:1][0]
+	shardCntsPtr := &b2.shardCnts[:1][0]
+	shardIdxsPtr := &b2.shardIdxs[:1][0]
+	eligibleIdxsPtr := &b2.eligibleIdxs[:1][0]
+	entriesPtr := &b2.entries[:1][0]
+	arenaPtr := &b2.copyArena[:1][0]
+
+	for i := 0; i < 64; i++ {
+		if err := b2.Set([]byte(fmt.Sprintf("idle2-%04d", i)), val); err != nil {
+			_ = b2.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b2.cowPrepareWriteStorage(); err != nil {
+		_ = b2.Close()
+		t.Fatal(err)
+	}
+	if &b2.entries[0] != entriesPtr || &b2.copyArena[:1][0] != arenaPtr ||
+		&b2.cowState.predictionGroups[0] != predGroupsPtr ||
+		&b2.cowState.predictionStorage[0] != predStoragePtr ||
+		&b2.shardAdds[0] != shardAddsPtr ||
+		&b2.shardCnts[0] != shardCntsPtr ||
+		&b2.shardIdxs[0] != shardIdxsPtr ||
+		&b2.eligibleIdxs[:1][0] != eligibleIdxsPtr {
+		_ = b2.Close()
+		t.Fatal("cowPrepareWriteStorage reallocated recycled slice backing")
+	}
+	if err := b2.Write(); err != nil {
+		_ = b2.Close()
+		t.Fatal(err)
+	}
+	if err := b2.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Steady-state NewBatch -> Set -> Close (without Write) parks via cowClose().
+	b3 := db.NewBatch()
+	b3EntriesPtr := &b3.entries[:1][0]
+	if err := b3.Set([]byte("close-park"), val); err != nil {
+		_ = b3.Close()
+		t.Fatal(err)
+	}
+	if err := b3.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b4 := db.NewBatch()
+	if cap(b4.entries) < 128 || &b4.entries[:1][0] != b3EntriesPtr {
+		_ = b4.Close()
+		t.Fatalf("cowClose did not park scratch for reuse: cap=%d", cap(b4.entries))
+	}
+	// Explicit user Reset() shrinks to base without parking.
+	b4.Reset()
+	if cap(b4.entries) != 0 || b4.cowState.storageBytes != 0 {
+		_ = b4.Close()
+		t.Fatalf("explicit Reset retained backing: cap=%d storageBytes=%d", cap(b4.entries), b4.cowState.storageBytes)
+	}
+	if err := b4.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if v, l, _ := db.cow.budget.TakeIdleBatchScratch(0); v != nil || l != nil {
+		if l != nil {
+			l.Close()
+		}
+		t.Fatal("explicit Reset unexpectedly parked idle batch scratch")
+	}
+	steadyBase := db.cow.budget.Stats()
+	if steadyBase.ExternalLeases != baseline.ExternalLeases || steadyBase.ExternalBytes >= parkedStats.ExternalBytes {
+		t.Fatalf("explicit Reset did not release parked scratch charge: baseline=%+v parked=%+v steady=%+v", baseline, parkedStats, steadyBase)
+	}
+
+	// 4. Budget pressure evicts parked idle batch scratch before refusing admission.
+	b5 := db.NewBatch()
+	for i := 0; i < 64; i++ {
+		if err := b5.Set([]byte(fmt.Sprintf("press-%04d", i)), val); err != nil {
+			_ = b5.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := b5.Write(); err != nil {
+		_ = b5.Close()
+		t.Fatal(err)
+	}
+	if err := b5.Close(); err != nil {
+		t.Fatal(err)
+	}
+	beforePressure := db.cow.budget.Stats()
+	if beforePressure.ExternalBytes <= steadyBase.ExternalBytes {
+		t.Fatalf("expected parked scratch before pressure: steady=%+v before=%+v", steadyBase, beforePressure)
+	}
+	leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := db.cow.budget.AcquireExternal(db.cow.budget.Limits().MaxInFlightBytes - steadyBase.ReservedBytes - leaseBytes)
+	if err != nil {
+		t.Fatalf("parked idle batch scratch blocked admissible allocation: %v", err)
+	}
+	pressure.Close()
+	if v, l, _ := db.cow.budget.TakeIdleBatchScratch(0); v != nil || l != nil {
+		if l != nil {
+			l.Close()
+		}
+		t.Fatal("budget pressure did not evict idle batch scratch")
+	}
+	if after := db.cow.budget.Stats(); after.ExternalBytes != steadyBase.ExternalBytes || after.ExternalLeases != steadyBase.ExternalLeases {
+		t.Fatalf("post-eviction stats mismatch: steady=%+v after=%+v", steadyBase, after)
+	}
+}
+
+func TestCOWBatchDeleteArenaSizing(t *testing.T) {
+	// 1. Direct unit checks for cowDeleteArenaCap including overflow safety.
+	if got := cowDeleteArenaCap(1000, 8, 1<<20); got != 16000 {
+		t.Fatalf("cowDeleteArenaCap(1000, 8, 1MiB)=%d want 16000", got)
+	}
+	if got := cowDeleteArenaCap(16, 8, 1<<20); got != 4096 {
+		t.Fatalf("cowDeleteArenaCap(16, 8, 1MiB)=%d want 4096", got)
+	}
+	if got := cowDeleteArenaCap(1000, 200, 65536); got != 65536 {
+		t.Fatalf("cowDeleteArenaCap(1000, 200, 64KiB)=%d want 65536", got)
+	}
+	if got := cowDeleteArenaCap(math.MaxInt, 32, 1<<20); got != 1<<20 {
+		t.Fatalf("overflow cowDeleteArenaCap=%d want 1MiB", got)
+	}
+	if got := cowDeleteArenaCap(0, 8, 1<<20); got != 4096 {
+		t.Fatalf("zero-entryHint cowDeleteArenaCap=%d want 4096", got)
+	}
+	if got := cowDeleteArenaCap(1000, 8, 0); got != 0 {
+		t.Fatalf("zero-copyHint cowDeleteArenaCap=%d want 0", got)
+	}
+
+	// 2. End-to-end: warm DB with large-value writes, then verify delete batches
+	// clamp initial copyArena on BOTH cowAddEntry (cap(entries)==0) and cowCopyStorage (cap(entries)>0).
+	db := cowPointerFixture(t)
+	warm := db.NewBatch()
+	largeVal := make([]byte, 512)
+	for i := 0; i < 512; i++ {
+		if err := warm.Set([]byte(fmt.Sprintf("k%07d", i)), largeVal); err != nil {
+			_ = warm.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := warm.Write(); err != nil {
+		_ = warm.Close()
+		t.Fatal(err)
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	drainCOWIdleBatchScratch(db)
+
+	// Path A: cowAddEntry when cap(entries)==0 && owned && OpDelete.
+	delA := db.NewBatch()
+	fullWriteHint := delA.cowState.copyArenaHint
+	wantDeleteCap := cowDeleteArenaCap(max(batchDefaultEntriesCap, delA.cowState.lastHint), 8, fullWriteHint)
+	if fullWriteHint <= wantDeleteCap*4 {
+		_ = delA.Close()
+		t.Fatalf("fixture did not produce large write copyArenaHint: full=%d delete=%d", fullWriteHint, wantDeleteCap)
+	}
+	if err := delA.Delete([]byte("k0000001")); err != nil {
+		_ = delA.Close()
+		t.Fatal(err)
+	}
+	if cap(delA.copyArena) != wantDeleteCap {
+		_ = delA.Close()
+		t.Fatalf("cowAddEntry delete copyArena cap=%d want=%d (unclamped write hint=%d)", cap(delA.copyArena), wantDeleteCap, fullWriteHint)
+	}
+	delA.Reset()
+	if err := delA.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Path B: cowCopyStorage when cap(entries)>0 && cap(copyArena)==0 on delete entry.
+	delB := db.NewBatch()
+	if err := delB.SetView([]byte("view-key"), []byte("view-val")); err != nil {
+		_ = delB.Close()
+		t.Fatal(err)
+	}
+	if cap(delB.entries) == 0 || cap(delB.copyArena) != 0 {
+		_ = delB.Close()
+		t.Fatalf("expected non-empty entries and nil copyArena after SetView: entries=%d arena=%d", cap(delB.entries), cap(delB.copyArena))
+	}
+	if err := delB.Delete([]byte("k0000002")); err != nil {
+		_ = delB.Close()
+		t.Fatal(err)
+	}
+	if cap(delB.copyArena) != wantDeleteCap {
+		_ = delB.Close()
+		t.Fatalf("cowCopyStorage delete copyArena cap=%d want=%d (unclamped write hint=%d)", cap(delB.copyArena), wantDeleteCap, fullWriteHint)
+	}
+	delB.Reset()
+	if err := delB.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -70,6 +70,13 @@ func TestCOWNativeIdleDictionaryDecoderLifetime(t *testing.T) {
 		t.Fatal("busy decoder custody changed")
 	}
 	db.cow.physicalMu.Unlock()
+	for {
+		_, l, _ := budget.TakeIdleBatchScratch(0)
+		if l == nil {
+			break
+		}
+		l.Close()
+	}
 	before := budget.Stats()
 	// This is the original finite budget and an actual lease request, including
 	// its original header. The live decoder makes this exact request refuse.

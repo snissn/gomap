@@ -287,12 +287,46 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 		}
 		owners[i] = parked{}
 	}
+	type parkedBatch struct {
+		sc     *cowBatchScratch
+		lease  *memtable.COWExternalLease
+		charge uint64
+	}
+	var batchOwners [2]parkedBatch
+	batchCount := 0
+	for {
+		value, lease, charge := budget.TakeIdleBatchScratch(0)
+		if lease == nil {
+			break
+		}
+		if batchCount == len(batchOwners) {
+			t.Fatal("idle batch scratch count exceeded bound")
+		}
+		sc := value.(*cowBatchScratch)
+		if len(sc.entries) != 0 || len(sc.copyArena) != 0 || len(sc.predictionGroups) != 0 ||
+			len(sc.predictionStorage) != 0 || len(sc.shardAdds) != 0 || len(sc.shardCnts) != 0 ||
+			len(sc.shardIdxs) != 0 || len(sc.eligibleIdxs) != 0 {
+			t.Fatal("idle batch scratch retained non-empty slice length")
+		}
+		if got := cowBatchScratchCharge(sc); got != charge {
+			t.Fatalf("idle batch scratch charge mismatch: got %d want %d", got, charge)
+		}
+		payload += charge
+		batchOwners[batchCount] = parkedBatch{sc: sc, lease: lease, charge: charge}
+		batchCount++
+	}
+	for i := batchCount - 1; i >= 0; i-- {
+		if !budget.PutIdleBatchScratch(batchOwners[i].sc, batchOwners[i].lease, batchOwners[i].charge) {
+			t.Fatal("restoring inspected idle batch scratch failed")
+		}
+		batchOwners[i] = parkedBatch{}
+	}
 	restored := budget.Stats()
 	restored.PeakBytes = before.PeakBytes
 	if restored != before {
 		t.Fatalf("idle inspection changed live charges: before%+v after%+v", before, restored)
 	}
-	if count == 0 {
+	if count == 0 && batchCount == 0 {
 		return
 	}
 	liveReserved := before.ReservedBytes - payload
@@ -320,5 +354,11 @@ func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
 	}
 	if value, _ := budget.TakeIdleReadScratch(); value != nil {
 		t.Fatal("idle payload survived pressure")
+	}
+	if value, l, _ := budget.TakeIdleBatchScratch(0); value != nil || l != nil {
+		if l != nil {
+			l.Close()
+		}
+		t.Fatal("idle batch scratch survived pressure")
 	}
 }
