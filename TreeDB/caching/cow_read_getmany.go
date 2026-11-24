@@ -18,9 +18,10 @@ import (
 const (
 	cowGetManySortMinKeys        = 16
 	cowGetManyParallelMinKeys    = 128
-	cowGetManyMinKeysPerWorker   = 64
+	cowGetManyMinKeysPerWorker   = 256
 	cowGetManyMaxWorkers         = 8
-	cowGetManyViewMicroChunkSize = 64
+	cowGetManyViewMicroChunkSize = 128
+	cowGetManyProbePoolMaxCap    = 16384
 )
 
 func cowGetManyWorkerCount(keyCount int) (workers int, parallel bool) {
@@ -58,6 +59,34 @@ type cowGetManyProbe struct {
 	key     []byte
 }
 
+var cowGetManyProbePool sync.Pool // stores *[]cowGetManyProbe
+
+func acquireCOWGetManyProbes(hint int) []cowGetManyProbe {
+	if hint <= 0 {
+		return nil
+	}
+	if hint <= cowGetManyProbePoolMaxCap {
+		if raw := cowGetManyProbePool.Get(); raw != nil {
+			if p, ok := raw.(*[]cowGetManyProbe); ok && p != nil {
+				s := *p
+				if cap(s) >= hint {
+					return s[:0]
+				}
+			}
+		}
+	}
+	return make([]cowGetManyProbe, 0, hint)
+}
+
+func releaseCOWGetManyProbes(s []cowGetManyProbe) {
+	if cap(s) == 0 || cap(s) > cowGetManyProbePoolMaxCap {
+		return
+	}
+	clear(s[:cap(s)])
+	s = s[:0]
+	cowGetManyProbePool.Put(&s)
+}
+
 func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 	s, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
@@ -73,6 +102,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 		fallbackIdx []int
 		inlineArena []byte
 	)
+	defer func() { releaseCOWGetManyProbes(misses) }()
 	for i, rawKey := range keys {
 		key := normalizeRawKVPointKey(rawKey)
 		val, _, flags, _, found := s.lookupCachedRootDomainEntryWithRevision(key)
@@ -99,7 +129,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 			continue
 		}
 		if misses == nil {
-			misses = make([]cowGetManyProbe, 0, len(keys)-i)
+			misses = acquireCOWGetManyProbes(len(keys) - i)
 		}
 		misses = append(misses, cowGetManyProbe{origIdx: i, key: key})
 	}
@@ -216,21 +246,25 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 		if workers == 1 {
 			runWorker(0, 0, len(misses))
 		} else {
-			var wg sync.WaitGroup
-			perWorker := (len(misses) + workers - 1) / workers
-			for w := 0; w < workers; w++ {
-				lo := w * perWorker
-				if lo >= len(misses) {
-					break
+			func() {
+				var wg sync.WaitGroup
+				defer wg.Wait()
+				perWorker := (len(misses) + workers - 1) / workers
+				hi0 := min(perWorker, len(misses))
+				for w := 1; w < workers; w++ {
+					lo := w * perWorker
+					if lo >= len(misses) {
+						break
+					}
+					hi := min(lo+perWorker, len(misses))
+					wg.Add(1)
+					go func(id, start, end int) {
+						defer wg.Done()
+						runWorker(id, start, end)
+					}(w, lo, hi)
 				}
-				hi := min(lo+perWorker, len(misses))
-				wg.Add(1)
-				go func(id, start, end int) {
-					defer wg.Done()
-					runWorker(id, start, end)
-				}(w, lo, hi)
-			}
-			wg.Wait()
+				runWorker(0, 0, hi0)
+			}()
 		}
 
 		for _, werr := range workerErrs {
@@ -262,11 +296,16 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 }
 
 type cowGetManyViewStaged struct {
-	origIdx int
-	key     []byte
-	start   int
-	end     int
-	found   bool
+	probeIdx int
+	start    int
+	end      int
+	found    bool
+}
+
+var cowGetManyViewStagedPool = sync.Pool{
+	New: func() any {
+		return new([cowGetManyViewMicroChunkSize]cowGetManyViewStaged)
+	},
 }
 
 func (db *DB) cowGetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
@@ -297,6 +336,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 		memResult   cowViewResult
 	)
 	defer memResult.close()
+	defer func() { releaseCOWGetManyProbes(misses) }()
 
 	for i, rawKey := range keys {
 		key := normalizeRawKVPointKey(rawKey)
@@ -342,7 +382,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 			continue
 		}
 		if misses == nil {
-			misses = make([]cowGetManyProbe, 0, len(keys)-i)
+			misses = acquireCOWGetManyProbes(len(keys) - i)
 		}
 		misses = append(misses, cowGetManyProbe{origIdx: i, key: key})
 	}
@@ -378,17 +418,47 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 		basis := s.cowCut.basis
 		independent := s.db.cowPhysicalDictionary(s.cowCache)
 
+		perWorker := (len(misses) + workers - 1) / workers
+		activeWorkers := (len(misses) + perWorker - 1) / perWorker
+		const workerSharedArenaMax = 16 << 10
+		workerInitCap := min(workerSharedArenaMax, max(128, min(cowGetManyViewMicroChunkSize, perWorker)*128))
+		var (
+			sharedArena      []byte
+			sharedArenaLease *memtable.COWExternalLease
+		)
+		if activeWorkers > 0 {
+			totalShared := activeWorkers * workerInitCap
+			if l, err := s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(totalShared))); err == nil {
+				sharedArenaLease = l
+				sharedArena = make([]byte, totalShared)
+			}
+		}
+		releaseSharedArena := func() {
+			sharedArena = nil
+			if sharedArenaLease != nil {
+				l := sharedArenaLease
+				sharedArenaLease = nil
+				l.Close()
+			}
+		}
+		defer releaseSharedArena()
+
 		runWorker := func(workerID, lo, hi int) {
 			chunk := misses[lo:hi]
+			staged := cowGetManyViewStagedPool.Get().(*[cowGetManyViewMicroChunkSize]cowGetManyViewStaged)
+			defer cowGetManyViewStagedPool.Put(staged)
 			var (
 				fb          []int
-				staged      [cowGetManyViewMicroChunkSize]cowGetManyViewStaged
 				arena       []byte
 				arenaLease  *memtable.COWExternalLease
 				leafCache   tree.FixedScratchLeafCache
 				cachedPoint *cowPointScratch
 				cachedGen   uint64
 			)
+			if sharedArena != nil {
+				base := workerID * workerInitCap
+				arena = sharedArena[base : base : base+workerInitCap]
+			}
 			releaseArena := func() {
 				arena = nil
 				if arenaLease != nil {
@@ -399,8 +469,29 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 			}
 			defer releaseArena()
 
-			ensureArenaCap := func(need int) error {
-				if cap(arena) >= need && arenaLease != nil {
+			ensureArenaCap := func(need, subLen int) error {
+				if cap(arena) >= need {
+					return nil
+				}
+				if cap(arena) == 0 {
+					const maxInitArena = 16 << 10
+					perEntry := max(need, 128)
+					initCap := maxInitArena
+					if subLen > 0 && subLen < maxInitArena/perEntry {
+						initCap = subLen * perEntry
+					}
+					initCap = max(need, initCap)
+					releaseArena()
+					l, err := s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(initCap)))
+					if errors.Is(err, memtable.ErrCOWCapacity) && initCap > need {
+						initCap = need
+						l, err = s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(initCap)))
+					}
+					if err != nil {
+						return err
+					}
+					arenaLease = l
+					arena = make([]byte, 0, initCap)
 					return nil
 				}
 				newCap := max(need, 8192)
@@ -412,6 +503,10 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 					// Empty arena: release old backing before admitting/allocating replacement.
 					releaseArena()
 					l, err := s.cowCache.budget.AcquireExternal(charge)
+					if errors.Is(err, memtable.ErrCOWCapacity) && newCap > need {
+						newCap = need
+						l, err = s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(newCap)))
+					}
 					if err != nil {
 						return err
 					}
@@ -421,6 +516,10 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 				}
 				// Non-empty arena: admit replacement while retaining old charge across copy.
 				newLease, err := s.cowCache.budget.AcquireExternal(charge)
+				if errors.Is(err, memtable.ErrCOWCapacity) && newCap > need {
+					newCap = need
+					newLease, err = s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(newCap)))
+				}
 				if err != nil {
 					return err
 				}
@@ -486,7 +585,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 						}
 						entry, err := read(p.key, point.key[:], point.leaf[:], &leafCache)
 						if err == tree.ErrKeyNotFound {
-							staged[stagedN] = cowGetManyViewStaged{origIdx: p.origIdx, key: p.key, found: false}
+							staged[stagedN] = cowGetManyViewStaged{probeIdx: i, found: false}
 							stagedN++
 							continue
 						}
@@ -501,7 +600,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 							return err
 						}
 						if entry.Flags&node.FlagTombstone != 0 {
-							staged[stagedN] = cowGetManyViewStaged{origIdx: p.origIdx, key: p.key, found: false}
+							staged[stagedN] = cowGetManyViewStaged{probeIdx: i, found: false}
 							stagedN++
 							continue
 						}
@@ -510,11 +609,11 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 							continue
 						}
 						if len(entry.Value) == 0 {
-							staged[stagedN] = cowGetManyViewStaged{origIdx: p.origIdx, key: p.key, found: true}
+							staged[stagedN] = cowGetManyViewStaged{probeIdx: i, found: true}
 							stagedN++
 							continue
 						}
-						if err := ensureArenaCap(len(arena) + len(entry.Value)); err != nil {
+						if err := ensureArenaCap(len(arena)+len(entry.Value), len(sub)); err != nil {
 							if errors.Is(err, memtable.ErrCOWCapacity) {
 								capacityExhaustedAt = pos + i
 								return nil
@@ -525,11 +624,10 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 						vStart := len(arena)
 						arena = append(arena, entry.Value...)
 						staged[stagedN] = cowGetManyViewStaged{
-							origIdx: p.origIdx,
-							key:     p.key,
-							start:   vStart,
-							end:     len(arena),
-							found:   true,
+							probeIdx: i,
+							start:    vStart,
+							end:      len(arena),
+							found:    true,
 						}
 						stagedN++
 					}
@@ -566,7 +664,8 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 							val = []byte{}
 						}
 					}
-					if err := fn(st.origIdx, st.key, val, st.found); err != nil {
+					p := sub[st.probeIdx]
+					if err := fn(p.origIdx, p.key, val, st.found); err != nil {
 						setErr(err)
 						return
 					}
@@ -590,22 +689,37 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 		if workers == 1 {
 			runWorker(0, 0, len(misses))
 		} else {
-			var wg sync.WaitGroup
-			perWorker := (len(misses) + workers - 1) / workers
-			for w := 0; w < workers; w++ {
-				lo := w * perWorker
-				if lo >= len(misses) {
-					break
+			func() {
+				var wg sync.WaitGroup
+				done := false
+				defer func() {
+					if !done {
+						cancel.Store(true)
+					}
+					wg.Wait()
+				}()
+				perWorker := (len(misses) + workers - 1) / workers
+				hi0 := min(perWorker, len(misses))
+				for w := 1; w < workers; w++ {
+					lo := w * perWorker
+					if lo >= len(misses) {
+						break
+					}
+					hi := min(lo+perWorker, len(misses))
+					wg.Add(1)
+					go func(id, start, end int) {
+						defer wg.Done()
+						runWorker(id, start, end)
+					}(w, lo, hi)
 				}
-				hi := min(lo+perWorker, len(misses))
-				wg.Add(1)
-				go func(id, start, end int) {
-					defer wg.Done()
-					runWorker(id, start, end)
-				}(w, lo, hi)
-			}
-			wg.Wait()
+				runWorker(0, 0, hi0)
+				done = true
+			}()
 		}
+
+		// Release the shared worker arena immediately after all workers have
+		// joined so scalar fallback has the full remaining COW budget available.
+		releaseSharedArena()
 
 		if firstErr != nil {
 			return firstErr
