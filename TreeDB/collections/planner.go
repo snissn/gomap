@@ -92,18 +92,19 @@ type indexDefinition struct {
 }
 
 type insertBatchPlanner struct {
-	collection             string
-	primaryRoot            string
-	templateRoot           string
-	indexStateRoot         string
-	indexes                []indexDefinition
-	cachedIndexRuntimes    []indexRuntime
-	cachedIndexRuntimesErr error
-	options                collectionOptions
-	buildPrimaryVal        func(documentID, document []byte) ([]byte, error)
-	cloneTemplateRunValues bool
-	directBufferedRuns     bool
-	pointerizePrimary      bool
+	collection              string
+	primaryRoot             string
+	templateRoot            string
+	indexStateRoot          string
+	indexes                 []indexDefinition
+	cachedIndexRuntimes     []indexRuntime
+	cachedIndexRuntimesErr  error
+	options                 collectionOptions
+	buildPrimaryVal         func(documentID, document []byte) ([]byte, error)
+	cloneTemplateRunValues  bool
+	directBufferedRuns      bool
+	prebuildUniqueValueRuns bool
+	pointerizePrimary       bool
 }
 
 type insertBatchPlan struct {
@@ -128,12 +129,14 @@ type insertBatchPlanStats struct {
 }
 
 type collectionRootRun struct {
-	name           string
-	kind           collectionRootKind
-	indexName      string
-	indexValueType IndexValueType
-	table          memtable.Table
-	storagePolicy  backenddb.OrderedRootStoragePolicy
+	name             string
+	kind             collectionRootKind
+	indexName        string
+	indexValueType   IndexValueType
+	table            memtable.Table
+	uniqueValueTable memtable.Table
+	uniquePrefixes   [][]byte
+	storagePolicy    backenddb.OrderedRootStoragePolicy
 }
 
 type directBufferedInsertPlan struct {
@@ -1549,14 +1552,20 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 				return err
 			}
 			table.Freeze()
-			plan.runs = append(plan.runs, collectionRootRun{
+			run := collectionRootRun{
 				name:           p.collection + "/index/" + runtime.def.name,
 				kind:           collectionRootSecondary,
 				indexName:      runtime.def.name,
 				indexValueType: runtime.def.valueType,
 				table:          table,
 				storagePolicy:  runtime.def.storagePolicy,
-			})
+			}
+			if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
+				resetCollectionRunTable(table)
+				resetCollectionRunTables(plan.runs)
+				return err
+			}
+			plan.runs = append(plan.runs, run)
 			runStats.Build = time.Since(runStart)
 			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
 			plan.stats.SecondaryEntries += entryCount
@@ -1566,16 +1575,23 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 
 		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, runtime.def.valueType, documentIDOrder, entryCount, keyBytes); err != nil {
+			resetCollectionRunTables(plan.runs)
 			return err
 		} else if ok {
-			plan.runs = append(plan.runs, collectionRootRun{
+			run := collectionRootRun{
 				name:           p.collection + "/index/" + runtime.def.name,
 				kind:           collectionRootSecondary,
 				indexName:      runtime.def.name,
 				indexValueType: runtime.def.valueType,
 				table:          table,
 				storagePolicy:  runtime.def.storagePolicy,
-			})
+			}
+			if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
+				resetCollectionRunTable(table)
+				resetCollectionRunTables(plan.runs)
+				return err
+			}
+			plan.runs = append(plan.runs, run)
 			runStats.Build = time.Since(runStart)
 			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
 			plan.stats.SecondaryEntries += entryCount
@@ -1592,6 +1608,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 				var key []byte
 				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, runtime.def.valueType, encoded, items[idx].id)
 				if err != nil {
+					resetCollectionRunTables(plan.runs)
 					return err
 				}
 				keys = append(keys, key)
@@ -1607,17 +1624,25 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		if err := applyCollectionRunEntries(table, len(keys), func(i int) (key, value []byte, err error) {
 			return keys[i], nil, nil
 		}); err != nil {
+			resetCollectionRunTable(table)
+			resetCollectionRunTables(plan.runs)
 			return err
 		}
 		table.Freeze()
-		plan.runs = append(plan.runs, collectionRootRun{
+		run := collectionRootRun{
 			name:           p.collection + "/index/" + runtime.def.name,
 			kind:           collectionRootSecondary,
 			indexName:      runtime.def.name,
 			indexValueType: runtime.def.valueType,
 			table:          table,
 			storagePolicy:  runtime.def.storagePolicy,
-		})
+		}
+		if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
+			resetCollectionRunTable(table)
+			resetCollectionRunTables(plan.runs)
+			return err
+		}
+		plan.runs = append(plan.runs, run)
 		runStats.Build = time.Since(runStart)
 		plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
 		plan.stats.SecondaryEntries += entryCount
@@ -1727,9 +1752,25 @@ func newCollectionRunTable(entries int) memtable.Table {
 	return memtable.NewAppendOnlyWithEntryCapacity(entries)
 }
 
+func (p insertBatchPlanner) maybePrebuildUniqueValueRun(run *collectionRootRun, unique bool) error {
+	if !p.prebuildUniqueValueRuns || !unique || run == nil || run.table == nil {
+		return nil
+	}
+	uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(run.table, run.indexValueType)
+	if err != nil {
+		return err
+	}
+	run.uniqueValueTable = uniqueValueTable
+	run.uniquePrefixes = uniquePrefixes
+	return nil
+}
+
 func resetCollectionRunTables(runs []collectionRootRun) {
-	for _, run := range runs {
-		resetCollectionRunTable(run.table)
+	for i := range runs {
+		resetCollectionRunTable(runs[i].table)
+		runs[i].table = nil
+		resetCollectionRunTable(runs[i].uniqueValueTable)
+		runs[i].uniqueValueTable = nil
 	}
 }
 
