@@ -93,7 +93,11 @@ func (domain *collectionWriteDomain) reserveCommandWALCoordinatorOwnerLocked() {
 		return
 	}
 	coord.mu.Lock()
+	if prev := coord.owner; prev != nil && prev != domain {
+		prev.commandWALCoordinatorOwned.Store(false)
+	}
 	coord.owner = domain
+	domain.commandWALCoordinatorOwned.Store(true)
 	if cond := coord.condLocked(); cond != nil {
 		cond.Broadcast()
 	}
@@ -115,6 +119,7 @@ func (domain *collectionWriteDomain) clearCommandWALCoordinatorOwnerIfNoPendingL
 	}
 	if coord.owner == domain {
 		coord.owner = nil
+		domain.commandWALCoordinatorOwned.Store(false)
 		if cond := coord.condLocked(); cond != nil {
 			cond.Broadcast()
 		}
@@ -154,6 +159,7 @@ func (c *Collection) lockCommandWALStageCoordinatorWithRawPublishState(rawPublis
 		if owner == nil || owner == domain {
 			domain.commandWALStageReservations.Add(1)
 			coord.owner = domain
+			domain.commandWALCoordinatorOwned.Store(true)
 			if cond := coord.condLocked(); cond != nil {
 				cond.Broadcast()
 			}

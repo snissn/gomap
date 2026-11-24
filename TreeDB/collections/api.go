@@ -1628,6 +1628,8 @@ type collectionWriteDomain struct {
 	rawDocumentBytes              int64
 	publicationBytes              int64
 	commandWALStageReservations   atomic.Int32
+	hasNoIndexTableWrites         atomic.Bool
+	commandWALCoordinatorOwned    atomic.Bool
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -5314,6 +5316,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte, admission *co
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
 	resultID := bytes.Clone(id)
 	domain.table.SetEntry(resultID, document, page.ValuePtr{}, node.FlagInline)
+	domain.hasNoIndexTableWrites.Store(true)
 	domain.count++
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked([][]byte{resultID}, domain.writeGeneration)
@@ -5534,6 +5537,9 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	for _, entry := range entries {
 		domain.table.SetEntry(entry.id, entry.document, page.ValuePtr{}, node.FlagInline)
 	}
+	if len(entries) > 0 {
+		domain.hasNoIndexTableWrites.Store(true)
+	}
 	domain.count += len(entries)
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
@@ -5753,6 +5759,9 @@ func (c *Collection) flushBufferedNoIndexWithVectorAdmissionLocked() error {
 func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool) error {
 	domain := c.writeDomain
 	if domain == nil {
+		return nil
+	}
+	if !domain.hasNoIndexTableWrites.Load() && !domain.commandWALCoordinatorOwned.Load() {
 		return nil
 	}
 	var unlockAdmission func()
@@ -5985,6 +5994,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain, r
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
+	domain.hasNoIndexTableWrites.Store(false)
 	domain.count = 0
 	domain.bufferedBytes = 0
 	domain.indexedDeletesOnly = false
@@ -20686,6 +20696,9 @@ func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWrite
 			}
 		}
 		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
+	}
+	if len(direct.primaryEntries) > 0 {
+		domain.hasNoIndexTableWrites.Store(true)
 	}
 	domain.loaded = true
 	domain.meta = plan.meta
