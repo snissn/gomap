@@ -1649,20 +1649,20 @@ func (r *COWRoot) OrderedCounts() (logicalKeys, physicalVersions int) {
 	return r.ordered.keys.Len(), r.ordered.len()
 }
 func (r *COWRoot) Get(key []byte) (COWRecord, bool) {
-	if r.hasDelta() {
-		if len(r.delta) > 0 {
-			if idx, ok := cowDeltaFind(r.delta, key); ok {
-				e := r.delta[idx]
-				return e.value.record(e.key), true
-			}
+	if len(r.delta) > 0 {
+		if idx, ok := cowDeltaFind(r.delta, key); ok {
+			e := r.delta[idx]
+			return e.value.record(e.key), true
 		}
-		if r.l1 != nil {
-			if e, ok := r.l1.get(key); ok {
-				return e.value.record(e.key), true
-			}
+	}
+	if r.l1 != nil {
+		if e, ok := r.l1.get(key); ok {
+			return e.value.record(e.key), true
 		}
-		k, v, found := cowLookupGE(r.tree, key)
-		if !found || cowKeyCompare(k, key) != 0 {
+	}
+	if r.ordered == nil {
+		k, v, found := btree.GetEntryBytes(r.tree, key)
+		if !found {
 			return COWRecord{}, false
 		}
 		return v.record(k), true

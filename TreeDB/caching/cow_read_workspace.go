@@ -975,10 +975,11 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 			return nil, noProof, workspaceErr
 		}
 		data, err := shared.readPinnedLeaf(record, dst, independent)
+		var state tree.LeafLogPageReadState
 		if err == nil {
 			// Publish before the next queued decoder checks. Admission keeps
 			// the existing bounded cache, probation and nonblocking slot locks.
-			err = record.AdmitVerifiedPage(data)
+			state, err = record.AdmitVerifiedPageWithState(data)
 		}
 		c.physicalMu.Unlock()
 		if err != nil {
@@ -987,7 +988,7 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 			}
 			return nil, noProof, err
 		}
-		return data, noProof, nil
+		return data, state, nil
 	}
 	data, err := w.readPinnedLeaf(record, dst, nil)
 	if err != nil {
@@ -996,10 +997,11 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 		}
 		return nil, noProof, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), record.FileName(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
 	}
-	if err = record.AdmitVerifiedPage(data); err != nil {
+	state, err := record.AdmitVerifiedPageWithState(data)
+	if err != nil {
 		return nil, noProof, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), record.FileName(), err)
 	}
-	return data, noProof, nil
+	return data, state, nil
 }
 
 // Physical entries borrow this snapshot's admitted page scratch. cowReadMu

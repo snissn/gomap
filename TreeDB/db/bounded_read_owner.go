@@ -79,11 +79,12 @@ func (s *Snapshot) InspectPinnedCOWLeafRecord(ptr page.ValuePtr, limits valuelog
 // during a WithPinnedCOWLeafRecord or GetEntryExactWithPinnedCOWLeaf callback.
 // The caller must not retain it.
 type PinnedCOWLeafRead struct {
-	file   *valuelog.File
-	cache  *leafPageReadCache
-	ptr    page.LeafLogPtr
-	limits valuelog.COWReadLimits
-	shape  valuelog.COWRecordShape
+	file        *valuelog.File
+	cache       *leafPageReadCache
+	ptr         page.LeafLogPtr
+	limits      valuelog.COWReadLimits
+	shape       valuelog.COWRecordShape
+	mappedInput []byte
 }
 
 // WithPinnedCOWLeafRecord holds one snapshot read pin from live metadata
@@ -108,11 +109,11 @@ func (s *Snapshot) inspectPinnedCOWLeafRecord(ptr page.LeafLogPtr, limits valuel
 	if err != nil {
 		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
-	shape, err := f.InspectCOWLeafRecord(ptr.ValuePtr(), limits)
+	shape, mappedInput, err := f.InspectCOWLeafRecordPinned(ptr.ValuePtr(), limits)
 	if err != nil {
 		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.File.Name(), identity, err)
 	}
-	return PinnedCOWLeafRead{file: f, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape}, nil
+	return PinnedCOWLeafRead{file: f, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape, mappedInput: mappedInput}, nil
 }
 
 func (r *PinnedCOWLeafRead) FileName() string { return r.file.File.Name() }
@@ -121,6 +122,9 @@ func (r *PinnedCOWLeafRead) FileName() string { return r.file.File.Name() }
 func (r *PinnedCOWLeafRead) Shape() valuelog.COWRecordShape { return r.shape }
 
 func (r *PinnedCOWLeafRead) ReadPage(input, raw, dst []byte, decode valuelog.COWDecodeFunc) ([]byte, error) {
+	if r.mappedInput != nil {
+		return r.file.ReadCOWLeafPageMapped(r.ptr.ValuePtr(), r.shape, r.mappedInput, input, raw, dst, decode)
+	}
 	return r.file.ReadCOWLeafPage(r.ptr.ValuePtr(), r.shape, input, raw, dst, decode)
 }
 
@@ -134,7 +138,24 @@ func (r *PinnedCOWLeafRead) CopyVerifiedPage(dst []byte) ([]byte, tree.LeafLogPa
 // AdmitVerifiedPage is valid only after ReadPage completed successfully on
 // this borrow. The cache retains neither the borrow nor the page scratch.
 func (r *PinnedCOWLeafRead) AdmitVerifiedPage(data []byte) error {
-	return admitVerifiedCachedLeafPage(r.cache, r.ptr, data, r.shape.DictID != 0, r.limits)
+	_, err := r.AdmitVerifiedPageWithState(data)
+	return err
+}
+
+// AdmitVerifiedPageWithState admits the verified decoded page into the bounded
+// leaf cache and returns the resulting proof state so non-dictionary callers
+// can mark the page checksum verified immediately after their first page
+// validation. Dictionary leaves never carry a reusable page proof.
+func (r *PinnedCOWLeafRead) AdmitVerifiedPageWithState(data []byte) (tree.LeafLogPageReadState, error) {
+	dictionary := r.shape.DictID != 0
+	admitted, err := admitVerifiedCachedLeafPage(r.cache, r.ptr, data, dictionary, r.limits)
+	if err != nil || dictionary || !admitted {
+		return tree.LeafLogPageReadState{}, err
+	}
+	return tree.LeafLogPageReadState{
+		RecordChecksumVerified: true,
+		CacheEntryPresent:      true,
+	}, nil
 }
 
 // The caller holds a snapshot read.
@@ -259,7 +280,8 @@ func (s *Snapshot) AdmitVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *o
 	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
 		return err
 	}
-	return admitVerifiedCachedLeafPage(s.reader.leafPageCache, ptr, verifiedPage, false, valuelog.COWReadLimits{})
+	_, err := admitVerifiedCachedLeafPage(s.reader.leafPageCache, ptr, verifiedPage, false, valuelog.COWReadLimits{})
+	return err
 }
 
 // AdmitVerifiedCachedLeafPageWithCOWPolicy follows a successful full CRC-
@@ -275,20 +297,22 @@ func (s *Snapshot) AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr page.LeafLogPtr,
 	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
 		return err
 	}
-	return admitVerifiedCachedLeafPage(s.reader.leafPageCache, ptr, verifiedPage, true, limits)
+	_, err := admitVerifiedCachedLeafPage(s.reader.leafPageCache, ptr, verifiedPage, true, limits)
+	return err
 }
 
-func admitVerifiedCachedLeafPage(cache *leafPageReadCache, ptr page.LeafLogPtr, verifiedPage []byte, dictionary bool, limits valuelog.COWReadLimits) error {
+func admitVerifiedCachedLeafPage(cache *leafPageReadCache, ptr page.LeafLogPtr, verifiedPage []byte, dictionary bool, limits valuelog.COWReadLimits) (bool, error) {
 	if dictionary && !cowReadPolicyAllows(limits, limits) {
-		return valuelog.ErrCOWReadUnsupported
+		return false, valuelog.ErrCOWReadUnsupported
 	}
-	if !cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true) {
-		cache.storeReadMiss(ptr, verifiedPage, true)
+	admitted := cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true)
+	if !admitted {
+		admitted = cache.storeReadMiss(ptr, verifiedPage, true)
 	}
 	if dictionary {
 		cache.markCOWReadPolicy(ptr, verifiedPage, limits)
 	}
-	return nil
+	return admitted, nil
 }
 
 // The caller holds beginRead, so the captured Set and reader cannot detach.

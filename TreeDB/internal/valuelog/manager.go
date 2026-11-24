@@ -157,6 +157,7 @@ type File struct {
 	sealedLazyMmapDeniedCountCap atomic.Int64
 	sealedLazyMmapDeniedBytesCap atomic.Int64
 	mmapReadHits                 atomic.Uint64
+	mmapReadHitShards            [16]mmapReadHitShard
 	mmapReadMissNoMapping        atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
 	// range is not currently covered by the active mmap.
@@ -3259,7 +3260,7 @@ func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesN
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
-		hits += f.mmapReadHits.Load()
+		hits += f.totalMmapReadHits()
 		missesOutOfRange += f.mmapReadMissOutOfRange.Load()
 		missesNoMapping += f.mmapReadMissNoMapping.Load()
 		missesDeadMappingCap += f.mmapReadMissDeadMappingCap.Load()

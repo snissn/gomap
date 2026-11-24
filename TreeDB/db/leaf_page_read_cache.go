@@ -423,8 +423,9 @@ func (c *leafPageReadCache) storeReadMissWithAllocationPolicy(ptr page.LeafLogPt
 		}
 		if slot.valid && slot.key == key {
 			slot.recent.Store(true)
+			ok := !recordChecksumVerified || slot.recordChecksumVerified
 			slot.mu.RUnlock()
-			return true
+			return ok
 		}
 		slot.mu.RUnlock()
 	}
