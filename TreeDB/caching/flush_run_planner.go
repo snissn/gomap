@@ -999,8 +999,16 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 }
 
 func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode) error {
+	backendBatch, commandPublishAttached, err := db.stageCanonicalFlushRunOpsChunk(ops, commandPublish, publicationGroup, last, mode)
+	if err != nil || backendBatch == nil {
+		return err
+	}
+	return db.writeStagedCanonicalFlushRunChunk(backendBatch, last && syncFlush, commandPublish, commandPublishAttached)
+}
+
+func (db *DB) stageCanonicalFlushRunOpsChunk(ops []batch.Entry, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode) (batch.Interface, bool, error) {
 	if db == nil || (len(ops) == 0 && (publicationGroup == nil || !last)) {
-		return nil
+		return nil, false, nil
 	}
 	backendBatch := db.newBackendBatchWithSize(len(ops))
 	attachesCommandPublish := last && commandPublish != nil && commandPublish.appliedLSN != 0 && !commandPublish.consumed
@@ -1009,26 +1017,30 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	reserveBackendBatchOps(backendBatch, len(ops))
 	if err := appendCanonicalFlushRunChunkToBackendBatch(backendBatch, ops); err != nil {
 		_ = backendBatch.Close()
-		return err
+		return nil, false, err
 	}
 	commandPublishAttached := false
 	if last && commandPublish != nil {
 		attached, attachErr := commandPublish.attach(backendBatch)
 		if attachErr != nil {
 			_ = backendBatch.Close()
-			return attachErr
+			return nil, false, attachErr
 		}
 		commandPublishAttached = attached
 	}
 	if err := attachBackendRootPublicationBuildGroup(backendBatch, publicationGroup, last); err != nil {
 		_ = backendBatch.Close()
-		return err
+		return nil, false, err
 	}
+	return backendBatch, commandPublishAttached, nil
+}
+
+func (db *DB) writeStagedCanonicalFlushRunChunk(backendBatch batch.Interface, syncFlush bool, commandPublish *checkpointCommandWALPublish, commandPublishAttached bool) error {
 	db.backendWriteBatchesTotal.Add(1)
 	db.observeFlushSpanRunBackendChunks(1)
 	var err error
 	batchWriteStart := time.Now()
-	if last && syncFlush {
+	if syncFlush {
 		err = backendBatch.WriteSync()
 	} else {
 		err = backendBatch.Write()

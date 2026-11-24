@@ -500,71 +500,13 @@ func (db *DB) flushCOWFrozen(syncFlush bool, publish *checkpointCommandWALPublis
 // authoritative; all are bounded by 25% of maintenance MaxInFlightBytes.
 const cowFlushDefaultMaxChunkEntries = 65536
 
-func cowFrozenFlushChunkCap(db *DB, maintenance *memtable.COWBudget, totalEntries int, syncFlush bool) int {
-	_ = syncFlush
+func (db *DB) cowFrozenFlushChunkLimit(maintenance *memtable.COWBudget) int {
 	limit := cowFlushDefaultMaxChunkEntries
-	if db != nil && db.flushBackendMaxEntries > 0 {
+	if db.flushBackendMaxEntries > 0 {
 		limit = db.flushBackendMaxEntries
 	}
-	if maintenance != nil {
-		entryBytes := uint64(unsafe.Sizeof(batch.Entry{}))
-		if entryBytes > 0 {
-			maxByBudget := (maintenance.Limits().MaxInFlightBytes / 4) / entryBytes
-			if maxByBudget < 1 {
-				maxByBudget = 1
-			}
-			if maxByBudget < uint64(limit) {
-				limit = int(maxByBudget)
-			}
-		}
-	}
-	if limit < 1 {
-		limit = 1
-	}
-	if totalEntries <= 0 {
-		return 1
-	}
-	if totalEntries < limit {
-		return totalEntries
-	}
-	return limit
-}
-
-func cowFlushBasisReserveBytes(basis *cowBackendBasis, maxResources int) uint64 {
-	files := 16
-	if basis != nil {
-		files += len(basis.pins)
-	}
-	if maxResources > 0 && files > maxResources {
-		files = maxResources
-	}
-	return (16 << 10) + uint64(files)*512 + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-}
-
-func cowMaintenanceAvailableBytes(maintenance *memtable.COWBudget) uint64 {
-	if maintenance == nil {
-		return 0
-	}
-	stats := maintenance.Stats()
-	limits := maintenance.Limits()
-	var avail uint64
-	if limits.MaxInFlightBytes > stats.ReservedBytes {
-		avail = limits.MaxInFlightBytes - stats.ReservedBytes
-	}
-	if limits.MaxTotalBytes <= stats.TotalBytes {
-		return 0
-	}
-	if rem := limits.MaxTotalBytes - stats.TotalBytes; rem < avail {
-		avail = rem
-	}
-	retiredUsed := stats.HistoryBytes + stats.ReservedBytes + stats.DeferredBytes
-	if limits.MaxRetiredBytes <= retiredUsed {
-		return 0
-	}
-	if rem := limits.MaxRetiredBytes - retiredUsed; rem < avail {
-		avail = rem
-	}
-	return avail
+	maxByBudget := (maintenance.Limits().MaxInFlightBytes / 4) / uint64(unsafe.Sizeof(batch.Entry{}))
+	return int(min(uint64(limit), max(1, maxByBudget)))
 }
 
 // flushCOWFrozenCut consumes the one original retained source cut. Explicit
@@ -597,7 +539,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
 		return c.releaseCut(cut)
 	}
-	maxCap := cowFrozenFlushChunkCap(db, c.maintenance, int(^uint(0)>>1), syncFlush)
+	maxCap := db.cowFrozenFlushChunkLimit(c.maintenance)
 	totalEntries := 0
 	for _, source := range cut.frozen {
 		if sourceLen := source.Len(); sourceLen > 0 {
@@ -607,7 +549,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			}
 		}
 	}
-	chunkCap := cowFrozenFlushChunkCap(db, c.maintenance, totalEntries, syncFlush)
+	chunkCap := max(1, totalEntries)
 	fixedCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFlushHandoff{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.StableResourceCaptureLease{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(checkpointCommandWALPublish{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof([1]backenddb.CommandWALLSNRange{})))
 	lease, err := c.maintenance.AcquireExternal(fixedCharge)
 	if err != nil {
@@ -772,21 +714,6 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if cut.frozenSemanticRootSet == nil && operation != nil {
 		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
 	}
-	// PrepareAcceptedSnapshot registers the basis-admission callback that runs
-	// during the final writeCOWFrozenRawChunks call while this chunk lease is
-	// still held. Keep sufficient maintenance headroom for that successor basis.
-	avail := cowMaintenanceAvailableBytes(c.maintenance)
-	basisReserve := cowFlushBasisReserveBytes(cut.basis, c.budget.Limits().MaxResources)
-	var maxChunkBytes uint64
-	if avail > basisReserve {
-		maxChunkBytes = avail - basisReserve
-	}
-	for chunkCap > 1 && memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{}))) > maxChunkBytes {
-		chunkCap /= 2
-		if chunkCap < 1 {
-			chunkCap = 1
-		}
-	}
 	for {
 		charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
 		err = lease.Resize(charge)
@@ -794,18 +721,30 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			break
 		}
 		chunkCap /= 2
-		if chunkCap < 1 {
-			chunkCap = 1
-		}
 	}
 	if err != nil {
 		return errors.Join(cowGenerationAdmissionError(generationPressure, err), group.Close())
 	}
-	err = writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry, last bool) error {
-		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground)
+	tail, err := writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry) error {
+		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, false, flushCollectionBackground)
 	})
-	// Only the captured prefix and handoff controls can outlive this build.
+	var finalBatch batch.Interface
+	var commandPublishAttached bool
+	if err == nil {
+		finalBatch, commandPublishAttached, err = db.stageCanonicalFlushRunOpsChunk(tail, publish, group, true, flushCollectionBackground)
+	}
+	// The staged batch owns its entry metadata and borrows key/value bytes from
+	// the captured cut. Refund the raw backing before Write admits the successor
+	// snapshot. Only the captured prefix and handoff controls outlive the build.
+	tail = nil
 	err = joinCOWCleanupError(err, lease.Resize(fixedCharge))
+	if finalBatch != nil {
+		if err == nil {
+			err = db.writeStagedCanonicalFlushRunChunk(finalBatch, syncFlush, publish, commandPublishAttached)
+		} else {
+			err = joinCOWCleanupError(err, finalBatch.Close())
+		}
+	}
 	err = errors.Join(err, group.Close())
 	// End local coverage accesses before completeCOWHandoff can refund this
 	// original control tranche. Only scalar completion escapes, never ranges.
