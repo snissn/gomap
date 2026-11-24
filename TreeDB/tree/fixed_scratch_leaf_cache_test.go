@@ -184,14 +184,28 @@ func TestFixedScratchLeafCacheParityAndInterLeafGaps(t *testing.T) {
 				if !cache.valid {
 					t.Fatal("expected FixedScratchLeafCache to be valid after normal lookup")
 				}
-				// Verify rootPageID change invalidates cache safely.
+				// Verify rootPageID change invalidates cache safely: probe keys[len(keys)-1],
+				// which falls inside the cached rightmost leaf's [low, high) interval.
 				otherTree := New(tr.pager, nil, tr.rootPageID+999)
-				_, err := otherTree.GetEntryWithFixedScratchLeafCache(keys[0], keyScratch[:], leafScratch[:], &cache, nil)
+				_, err := otherTree.GetEntryWithFixedScratchLeafCache(keys[len(keys)-1], keyScratch[:], leafScratch[:], &cache, nil)
 				if err == nil {
 					t.Fatal("expected invalid root lookup to miss cache and fail")
 				}
 				if cache.valid {
 					t.Fatal("cache remained valid after root mismatch error")
+				}
+				// Verify VerifyOnRead bypasses cache reuse and population.
+				tr.pager.SetVerifyOnRead(true)
+				got, err := tr.GetEntryWithFixedScratchLeafCache(keys[len(keys)-1], keyScratch[:], leafScratch[:], &cache, nil)
+				tr.pager.SetVerifyOnRead(false)
+				if err != nil {
+					t.Fatalf("VerifyOnRead lookup failed: %v", err)
+				}
+				if !bytes.Equal(got.Value, vals[len(keys)-1]) {
+					t.Fatalf("VerifyOnRead value mismatch: got %q want %q", got.Value, vals[len(keys)-1])
+				}
+				if cache.valid {
+					t.Fatal("VerifyOnRead populated FixedScratchLeafCache")
 				}
 			}
 		})

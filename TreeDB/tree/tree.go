@@ -727,7 +727,11 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
-	if cache != nil && cache.valid && cache.rootPageID == t.rootPageID && len(cache.leafData) > 0 &&
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+	if cache != nil && !verifyAlways && cache.valid && cache.rootPageID == t.rootPageID && len(cache.leafData) > 0 &&
 		(!cache.hasLow || compareTreeKey(key, cache.lowBuf[:cache.lowLen]) >= 0) &&
 		(!cache.hasHigh || compareTreeKey(key, cache.highBuf[:cache.highLen]) < 0) {
 		n := node.NewNodeView(cache.leafData)
@@ -760,10 +764,6 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 	}
 
 	currRef := page.PageChildRef(t.rootPageID)
-	verifyAlways := false
-	if t.pager != nil {
-		verifyAlways = t.pager.VerifyOnRead()
-	}
 	if copyLeaf != nil {
 		// PRIMARY selects and loads operands with the ordinary byte reader.
 		// Set up its adapter outside the traversal loop so it stays on the stack.
@@ -774,7 +774,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 		}
 	}
 
-	canCache := cache != nil
+	canCache := cache != nil && !verifyAlways
 	var (
 		hasLow, hasHigh bool
 		lowLen, highLen uint8

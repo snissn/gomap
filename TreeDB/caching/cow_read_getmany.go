@@ -43,6 +43,16 @@ func cowGetManyWorkerCount(keyCount int) (workers int, parallel bool) {
 	return workers, true
 }
 
+func refundFreshOwners(owners []cowFreshReadOwner) bool {
+	refunded := false
+	for i := range owners {
+		if owners[i].refund() {
+			refunded = true
+		}
+	}
+	return refunded
+}
+
 type cowGetManyProbe struct {
 	origIdx int
 	key     []byte
@@ -94,6 +104,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 		misses = append(misses, cowGetManyProbe{origIdx: i, key: key})
 	}
 
+	var workerFreshOwners []cowFreshReadOwner
 	if len(misses) > 0 {
 		if len(misses) >= cowGetManySortMinKeys {
 			slices.SortFunc(misses, func(a, b cowGetManyProbe) int {
@@ -103,6 +114,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 		workers, _ := cowGetManyWorkerCount(len(misses))
 		workerFallbacks := make([][]int, workers)
 		workerErrs := make([]error, workers)
+		workerFreshOwners = make([]cowFreshReadOwner, workers)
 		basis := s.cowCut.basis
 		independent := db.cowPhysicalDictionary(s.cowCache)
 
@@ -193,7 +205,7 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 			if handoffErr == nil {
 				handoffErr = readErr
 			}
-			cowReadHandoffLocked(mu, slotReader, fresh, len(fb) > 0, handoffErr)
+			workerFreshOwners[workerID] = cowReadHandoffLocked(mu, slotReader, fresh, true, handoffErr)
 			mu.Unlock()
 			workerFallbacks[workerID] = fb
 			if pinErr != nil {
@@ -235,6 +247,9 @@ func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
 
 	for _, origIdx := range fallbackIdx {
 		v, gerr := s.Get(keys[origIdx])
+		if errors.Is(gerr, memtable.ErrCOWCapacity) && refundFreshOwners(workerFreshOwners) {
+			v, gerr = s.Get(keys[origIdx])
+		}
 		if gerr == tree.ErrKeyNotFound {
 			continue
 		}
@@ -333,6 +348,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 	}
 	memResult.close()
 
+	var workerFreshOwners []cowFreshReadOwner
 	if len(misses) > 0 {
 		if len(misses) >= cowGetManySortMinKeys {
 			slices.SortFunc(misses, func(a, b cowGetManyProbe) int {
@@ -341,6 +357,7 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 		}
 		workers, _ := cowGetManyWorkerCount(len(misses))
 		workerFallbacks := make([][]int, workers)
+		workerFreshOwners = make([]cowFreshReadOwner, workers)
 		var (
 			cancel   atomic.Bool
 			errMu    sync.Mutex
@@ -391,18 +408,30 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 					newCap = curCap * 2
 				}
 				charge := memtable.COWAllocationCharge(uint64(newCap))
-				if arenaLease == nil {
+				if len(arena) == 0 {
+					// Empty arena: release old backing before admitting/allocating replacement.
+					releaseArena()
 					l, err := s.cowCache.budget.AcquireExternal(charge)
 					if err != nil {
 						return err
 					}
 					arenaLease = l
-				} else if err := arenaLease.Resize(charge); err != nil {
+					arena = make([]byte, 0, newCap)
+					return nil
+				}
+				// Non-empty arena: admit replacement while retaining old charge across copy.
+				newLease, err := s.cowCache.budget.AcquireExternal(charge)
+				if err != nil {
 					return err
 				}
 				grown := make([]byte, len(arena), newCap)
 				copy(grown, arena)
+				oldLease := arenaLease
 				arena = grown
+				arenaLease = newLease
+				if oldLease != nil {
+					oldLease.Close()
+				}
 				return nil
 			}
 
@@ -512,7 +541,9 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 				if handoffErr == nil {
 					handoffErr = fatalErr
 				}
-				cowReadHandoffLocked(mu, slotReader, fresh, len(fb) > 0 || capacityExhaustedAt >= 0, handoffErr)
+				if owner := cowReadHandoffLocked(mu, slotReader, fresh, true, handoffErr); owner.reader != nil {
+					workerFreshOwners[workerID] = owner
+				}
 				mu.Unlock()
 				s.endReadStripe(stripe)
 
@@ -592,9 +623,18 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 		for _, origIdx := range fallbackIdx {
 			key := keys[origIdx]
 			found, err := s.cowViewCopy(key, &result)
-			if err != nil && result.lease != nil && errors.Is(err, memtable.ErrCOWCapacity) {
-				result.close()
-				found, err = s.cowViewCopy(key, &result)
+			if errors.Is(err, memtable.ErrCOWCapacity) {
+				retried := false
+				if result.lease != nil {
+					result.close()
+					retried = true
+				}
+				if refundFreshOwners(workerFreshOwners) {
+					retried = true
+				}
+				if retried {
+					found, err = s.cowViewCopy(key, &result)
+				}
 			}
 			if err != nil {
 				return err
