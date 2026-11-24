@@ -58,6 +58,13 @@ func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
 }
 
 func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection) (*backenddb.CommandWALIntent, error) {
+	if c == nil {
+		return replay, nil
+	}
+	return c.newCollectionInsertCommandWALIntentForMeta(c.meta, docs, replay, projection)
+}
+
+func (c *Collection) newCollectionInsertCommandWALIntentForMeta(meta CollectionMeta, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection) (*backenddb.CommandWALIntent, error) {
 	if replay != nil {
 		return replay, nil
 	}
@@ -65,7 +72,7 @@ func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.Collec
 		return nil, nil
 	}
 	if projection != nil {
-		p, err := typedCommandPayload(c.meta, docs, projection)
+		p, err := typedCommandPayload(meta, docs, projection)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +82,7 @@ func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.Collec
 		}
 		return c.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionTypedBatchByIDV1, payload)
 	}
-	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(c.meta.Name, docs)
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(meta.Name, docs)
 	if err != nil {
 		return nil, err
 	}
