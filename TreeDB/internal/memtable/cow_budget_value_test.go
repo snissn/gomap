@@ -167,3 +167,51 @@ func TestCOWSortedNonDeleteReplacementArenaBudgetGuard(t *testing.T) {
 		t.Fatalf("leaked budget stats after sorted replacement: %+v", got)
 	}
 }
+
+func TestCOWSortedNonDeleteArenaRespectsPerValueSlice(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+
+	// 17 new 512-byte keys with 487-byte values:
+	// perValAdmitted = 17*512 = 8704, perKeyAdmitted = 17*512 = 8704, admittedPayload = 17408.
+	// Contiguous valCharge = cowAllocation(17*488) = 16384 > perValAdmitted, so value arena
+	// must NOT steal from perKeyAdmitted when key arena cannot fit.
+	const n = 17
+	entries := make([]COWMutation, n)
+	valPad := make([]byte, 487)
+	for i := range valPad {
+		valPad[i] = byte('a' + (i % 26))
+	}
+	for i := 0; i < n; i++ {
+		key := make([]byte, 512)
+		copy(key, fmt.Sprintf("k%04d-", i))
+		val := make([]byte, 487)
+		copy(val, valPad)
+		val[0] = byte('0' + (i % 10))
+		entries[i] = COWMutation{Key: key, Value: val, Flags: node.FlagInline}
+	}
+
+	est, err := w.Estimate(entries, COWPrepareOptions{})
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	if est.Payload != 17408 {
+		t.Fatalf("Estimate.Payload=%d, want 17408", est.Payload)
+	}
+	r := cowTestPublish(t, w, entries)
+	for i := 0; i < n; i++ {
+		got, ok := r.Get(entries[i].Key)
+		if !ok {
+			t.Fatalf("missing key %d", i)
+		}
+		if got.Value != string(entries[i].Value) {
+			t.Fatalf("value mismatch for key %d", i)
+		}
+	}
+
+	cowTestClose(w)
+	cowTestRelease(r)
+	b.Close()
+	if got := b.Stats(); got.TotalBytes != 0 || got.Views != 0 || got.Generations != 0 {
+		t.Fatalf("leaked budget stats: %+v", got)
+	}
+}
