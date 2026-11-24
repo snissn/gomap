@@ -9,7 +9,7 @@ import "unsafe"
 // Eviction uses scalar charges under budget.mu, with no callbacks or I/O.
 type cowIdleReadScratch struct {
 	value   any
-	charges [3]uint64 // payload only; no external lease wrappers remain idle
+	charges [3]uint32 // payload only (bounded by cowIdleReadMaxBytes); no external lease wrappers remain idle
 }
 
 // The caller drops its receipt pointers before transferring storage. On failure
@@ -42,12 +42,16 @@ func (b *COWBudget) putIdleReadScratch3Locked(value any, leases [3]*COWExternalL
 		if l.embedded || l.budget != b || l.closed || l.charge <= header {
 			return false
 		}
-		charges[i] = l.charge - header
+		payload := l.charge - header
+		if payload > cowIdleReadMaxBytes {
+			return false
+		}
+		charges[i] = payload
 		receipts++
 	}
 	charge := charges[0] + charges[1] + charges[2]
 	for _, e := range b.idleRead[:b.idleReadCount] {
-		charge += e.charges[0] + e.charges[1] + e.charges[2]
+		charge += uint64(e.charges[0]) + uint64(e.charges[1]) + uint64(e.charges[2])
 	}
 	if b.idleReadCount == len(b.idleRead) || charge > cowIdleReadMaxBytes {
 		return false
@@ -63,7 +67,10 @@ func (b *COWBudget) putIdleReadScratch3Locked(value any, leases [3]*COWExternalL
 	b.stats.ReservedBytes -= receipts * header
 	b.stats.ExternalBytes -= receipts * header
 	b.stats.ExternalLeases -= int(receipts)
-	b.idleRead[b.idleReadCount] = cowIdleReadScratch{value: value, charges: charges}
+	b.idleRead[b.idleReadCount] = cowIdleReadScratch{
+		value:   value,
+		charges: [3]uint32{uint32(charges[0]), uint32(charges[1]), uint32(charges[2])},
+	}
 	b.idleReadCount++
 	return true
 }
@@ -133,7 +140,7 @@ func (b *COWBudget) reserveIdleReadLeasesLocked(e cowIdleReadScratch) (header ui
 
 // allocateIdleReadLeases allocates the admitted fresh lease handles outside b.mu
 // using a single heap allocation sized to the exact receipt count.
-func (b *COWBudget) allocateIdleReadLeases(charges [3]uint64, header uint64, receipts int) [3]*COWExternalLease {
+func (b *COWBudget) allocateIdleReadLeases(charges [3]uint32, header uint64, receipts int) [3]*COWExternalLease {
 	var leases [3]*COWExternalLease
 	var backing []COWExternalLease
 	switch receipts {
@@ -149,7 +156,7 @@ func (b *COWBudget) allocateIdleReadLeases(charges [3]uint64, header uint64, rec
 	slot := 0
 	for i, c := range charges {
 		if c != 0 {
-			backing[slot] = COWExternalLease{budget: b, charge: c + header}
+			backing[slot] = COWExternalLease{budget: b, charge: uint64(c) + header}
 			leases[i] = &backing[slot]
 			slot++
 		}
@@ -172,7 +179,7 @@ func (l *COWExternalLease) closeLocked() {
 	}
 }
 func (b *COWBudget) refundIdleReadLocked(e cowIdleReadScratch) {
-	charge := e.charges[0] + e.charges[1] + e.charges[2]
+	charge := uint64(e.charges[0]) + uint64(e.charges[1]) + uint64(e.charges[2])
 	b.stats.TotalBytes -= charge
 	b.stats.ReservedBytes -= charge
 	b.stats.ExternalBytes -= charge
