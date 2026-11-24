@@ -55,7 +55,7 @@ type cowReadWorkspace struct {
 	lease         *memtable.COWExternalLease
 	allocations   *cowReadAllocation
 	codecs        []*cowReadCodec
-	inlineCodecs  [2]*cowReadCodec
+	inlineCodecs  [1]*cowReadCodec
 	parkedCodec   *cowReadCodec
 	input, output []byte
 	point         *cowPointScratch
@@ -194,11 +194,6 @@ func (w *cowReadWorkspace) addCodecSlot() (int, error) {
 		return 0, memtable.ErrCOWCapacity
 	}
 	if len(w.codecs) == cap(w.codecs) {
-		if cap(w.codecs) == 0 {
-			limitCap := min(len(w.inlineCodecs), limit)
-			w.codecs = w.inlineCodecs[:1:limitCap]
-			return 0, nil
-		}
 		capacity := min(max(1, 2*cap(w.codecs)), limit)
 		bytes := memtable.COWAllocationCharge(uint64(capacity)*uint64(unsafe.Sizeof((*cowReadCodec)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{})))
 		lease, err := w.budget.AcquireExternal(bytes)
@@ -492,7 +487,7 @@ func (w *cowReadWorkspace) releaseSnapshotScratchWithView(view *memtable.COWView
 			c.close()
 		}
 		w.codecs = nil
-		w.inlineCodecs = [2]*cowReadCodec{}
+		w.inlineCodecs = [1]*cowReadCodec{}
 		w.closeValueScratch()
 		var leases [3]*memtable.COWExternalLease
 		leases[0], w.lease = w.lease, nil
@@ -559,7 +554,7 @@ func (w *cowReadWorkspace) closeValueScratch() {
 		}
 	}
 	w.codecs = nil
-	w.inlineCodecs = [2]*cowReadCodec{}
+	w.inlineCodecs = [1]*cowReadCodec{}
 	w.input = nil
 	w.output = nil
 	for w.allocations != nil {
