@@ -18,8 +18,10 @@ to `cowDeltaL0MaxEntries` entries, backed by a chunked sorted `L1` of up to
 source generation. `Prepare` first validates and reserves the complete
 allocation charge. For single-op raw non-remove, resource-free updates while
 `L0` has capacity (or overwrites a key in `L0`), `Prepare` shares the sealed
-`cowbtree` and `L1` headers and allocates only an exact-capacity immutable `L0`
-slice and `COWRoot`. When `L0` fills on a new key and the deterministic budget
+`cowbtree` and `L1` headers and allocates only a `COWRoot` plus either a
+pre-charged write-once append-tail `L0` backing (shared with `[:k:k]`
+full-slice-expression isolation on strictly-ascending inserts) or an
+exact-capacity immutable `L0` slice. When `L0` fills on a new key and the deterministic budget
 gate permits, `Prepare` merges `L0` and the new entry into a new immutable `L1`
 copying only the outer chunk slice and touched/split chunks, resetting `L0` to
 `nil` while still sharing `cowbtree`. When `L1` reaches its cap or budget gate,

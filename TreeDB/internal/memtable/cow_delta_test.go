@@ -1308,3 +1308,137 @@ func TestCOWNonDeleteNodeBoundExactnessAndTightness(t *testing.T) {
 		})
 	}
 }
+
+func TestCOWDeltaAppendTailImmutabilityAndCancel(t *testing.T) {
+	budget, writer := cowTestWriter(t, DefaultCOWLimits())
+	defer func() {
+		cowTestClose(writer)
+		budget.Close()
+		if got := budget.Stats(); got.TotalBytes != 0 {
+			t.Fatalf("leaked budget bytes: %+v", got)
+		}
+	}()
+
+	expected := make(map[string]string)
+	var pinned []*COWRoot
+	var pinnedMaps []map[string]string
+	defer func() {
+		for _, r := range pinned {
+			cowTestRelease(r)
+		}
+	}()
+
+	cloneMap := func(src map[string]string) map[string]string {
+		dst := make(map[string]string, len(src))
+		for k, v := range src {
+			dst[k] = v
+		}
+		return dst
+	}
+
+	// Step 0..cowDeltaL0MaxEntries-1: verify append-tail sharing of the backing
+	// array, exact Estimate == Prepare, RawPointPredictionUpperBound >= Estimate,
+	// and snapshot immutability for every earlier published COWRoot.
+	var firstData *cowDeltaEntry
+	for i := 0; i < cowDeltaL0MaxEntries; i++ {
+		k := fmt.Sprintf("seq-%04d", i)
+		v := fmt.Sprintf("val-%04d", i)
+		m := []COWMutation{{Key: []byte(k), Value: []byte(v), Flags: node.FlagInline}}
+		est, err := writer.Estimate(m, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("step %d Estimate: %v", i, err)
+		}
+		if bound, ok := writer.RawPointPredictionUpperBound(m[0]); ok {
+			if bound.History() < est.History() {
+				t.Fatalf("step %d RawPointPredictionUpperBound history %d < Estimate %d", i, bound.History(), est.History())
+			}
+		}
+		if i > 0 && est.Nodes != 0 {
+			t.Fatalf("step %d append-tail Estimate.Nodes=%d, want 0", i, est.Nodes)
+		}
+		prep, err := writer.Prepare(m, COWPrepareOptions{})
+		if err != nil {
+			t.Fatalf("step %d Prepare: %v", i, err)
+		}
+		if prep.Charge() != est {
+			t.Fatalf("step %d Prepare charge %+v != Estimate %+v", i, prep.Charge(), est)
+		}
+		root := prep.Publish()
+		if len(root.delta) != i+1 {
+			t.Fatalf("step %d len(root.delta)=%d, want %d", i, len(root.delta), i+1)
+		}
+		if i == 0 {
+			firstData = unsafe.SliceData(root.delta)
+		} else if unsafe.SliceData(root.delta) != firstData {
+			t.Fatalf("step %d did not reuse append-tail backing array", i)
+		}
+		expected[k] = v
+		pinned = append(pinned, root)
+		pinnedMaps = append(pinnedMaps, cloneMap(expected))
+
+		// Every earlier snapshot must remain completely unchanged.
+		for j, snap := range pinned {
+			verifyRootMatchesMap(t, snap, pinnedMaps[j])
+		}
+	}
+
+	// Fork from an intermediate snapshot (with len < cap in the shared backing
+	// array) and publish a write on the fork: it MUST NOT overwrite pinned
+	// sibling snapshots from the original writer.
+	mid := pinned[3]
+	forked, err := ForkCOWWriter(mid)
+	if err != nil {
+		t.Fatalf("ForkCOWWriter: %v", err)
+	}
+	forkRoot := cowTestPublish(t, forked, []COWMutation{{
+		Key:   []byte("fork-divergent"),
+		Value: []byte("fork-val"),
+		Flags: node.FlagInline,
+	}})
+	forkWant := cloneMap(pinnedMaps[3])
+	forkWant["fork-divergent"] = "fork-val"
+	verifyRootMatchesMap(t, forkRoot, forkWant)
+	for j, snap := range pinned {
+		verifyRootMatchesMap(t, snap, pinnedMaps[j])
+	}
+	cowTestRelease(forkRoot)
+	cowTestClose(forked)
+
+	// Next write flushes L0 -> L1 and starts a fresh L0 tail on the subsequent write.
+	flushKey := "seq-flush-l1"
+	flushVal := "val-flush-l1"
+	flushed := cowTestPublish(t, writer, []COWMutation{{Key: []byte(flushKey), Value: []byte(flushVal), Flags: node.FlagInline}})
+	expected[flushKey] = flushVal
+	pinned = append(pinned, flushed)
+	pinnedMaps = append(pinnedMaps, cloneMap(expected))
+	if len(flushed.delta) != 0 || flushed.l1 == nil {
+		t.Fatalf("expected L0->L1 merge, got l0=%d l1=%v", len(flushed.delta), flushed.l1 != nil)
+	}
+
+	// Start a new L0 tail, then Prepare + Cancel an append-tail write, and verify
+	// the cancelled entry is cleared and cannot corrupt the next Publish.
+	r1 := cowTestPublish(t, writer, []COWMutation{{Key: []byte("tail-a"), Value: []byte("va"), Flags: node.FlagInline}})
+	expected["tail-a"] = "va"
+	pinned = append(pinned, r1)
+	pinnedMaps = append(pinnedMaps, cloneMap(expected))
+
+	cancelPrep, err := writer.Prepare([]COWMutation{{Key: []byte("tail-cancelled"), Value: []byte("vc"), Flags: node.FlagInline}}, COWPrepareOptions{})
+	if err != nil {
+		t.Fatalf("cancel Prepare: %v", err)
+	}
+	ret := cancelPrep.Cancel()
+	ret.Drain()
+	verifyRootMatchesMap(t, r1, pinnedMaps[len(pinnedMaps)-1])
+
+	r2 := cowTestPublish(t, writer, []COWMutation{{Key: []byte("tail-b"), Value: []byte("vb"), Flags: node.FlagInline}})
+	expected["tail-b"] = "vb"
+	pinned = append(pinned, r2)
+	pinnedMaps = append(pinnedMaps, cloneMap(expected))
+	verifyRootMatchesMap(t, r2, expected)
+	if _, ok := r2.Get([]byte("tail-cancelled")); ok {
+		t.Fatalf("cancelled key visible after publish")
+	}
+	for j, snap := range pinned {
+		verifyRootMatchesMap(t, snap, pinnedMaps[j])
+	}
+}

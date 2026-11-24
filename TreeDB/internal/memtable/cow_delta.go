@@ -23,7 +23,7 @@ import (
 const (
 	cowDeltaL0MaxEntries = 16
 	cowDeltaChunkMax     = 32
-	cowDeltaL1MaxEntries = 512
+	cowDeltaL1MaxEntries = 1024
 )
 
 type cowDeltaEntry struct {

@@ -40,12 +40,11 @@ func wakeSemanticCleanup(wake chan struct{}) {
 	}
 }
 
-func (cut *cowReadCut) releaseSemanticState() {
-	c := cut.cache
+func (cut *cowReadCut) detachSemanticState() (c *cowCache, semantic, frozen, projection *rootpublication.SemanticCleanup) {
+	c = cut.cache
 	cut.cache = nil
 	// Native Release only detaches one original record. It cannot traverse
 	// catalogs, invoke destructors, block, or allocate.
-	var semantic, frozen, projection *rootpublication.SemanticCleanup
 	// No capture remains at last-cut retirement, so no initializer can hold
 	// this slot. Detach before Release; enqueue on the original cleanup owner.
 	if cut.catalogProjection.state != nil {
@@ -61,6 +60,10 @@ func (cut *cowReadCut) releaseSemanticState() {
 		frozen = cut.frozenSemanticRootSet.Release()
 		cut.frozenSemanticRootSet = nil
 	}
+	return c, semantic, frozen, projection
+}
+
+func (c *cowCache) finishSemanticStateRelease(semantic, frozen, projection *rootpublication.SemanticCleanup) {
 	var refund *memtable.COWExternalLease
 	c.semanticMu.Lock()
 	c.enqueueSemanticLocked(semantic)
@@ -83,8 +86,16 @@ func (cut *cowReadCut) releaseSemanticState() {
 	wakeSemanticCleanup(wake)
 	if refund != nil {
 		c.closePhysicalReader()
+		c.clearRecycledCut()
 	}
 	refund.Close()
+}
+
+func (cut *cowReadCut) releaseSemanticState() {
+	c, semantic, frozen, projection := cut.detachSemanticState()
+	if c != nil {
+		c.finishSemanticStateRelease(semantic, frozen, projection)
+	}
 }
 
 func retainCOWSemanticState(cut *cowReadCut) {
@@ -225,6 +236,7 @@ func (db *DB) semanticCleanupTerminal() bool {
 	c.semanticMu.Unlock()
 	if refund != nil {
 		c.closePhysicalReader()
+		c.clearRecycledCut()
 	}
 	refund.Close()
 	return true

@@ -354,8 +354,16 @@ func (c *cowReadCut) drain() error {
 		lease = &embeddedLease
 	}
 	c.lease = nil
-	c.releaseSemanticState()
+	cache, semantic, frozenSemantic, projection := c.detachSemanticState()
+	c.visibleCommandLSN = 0
+	c.logicalSeq = 0
+	c.frozenLogicalSeq = 0
+	c.frozenCommandLSN = 0
 	lease.Close()
+	if cache != nil {
+		cache.recycleCut(c)
+		cache.finishSemanticStateRelease(semantic, frozenSemantic, projection)
+	}
 	return err
 }
 
@@ -467,6 +475,7 @@ type cowCache struct {
 	cutMu                                                                                          sync.Mutex
 	cut                                                                                            *cowReadCut
 	liveCut                                                                                        atomic.Pointer[cowReadCut]
+	recycledCut                                                                                    atomic.Pointer[cowReadCut]
 	writers                                                                                        []*memtable.COWWriter
 	successors                                                                                     []cowRawSuccessor
 	budget                                                                                         *memtable.COWBudget
@@ -927,8 +936,19 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 			return p, memtable.ErrCOWCapacity
 		}
 	}
-	next := &cowReadCut{visibleCommandLSN: old.visibleCommandLSN, logicalSeq: old.logicalSeq, frozenLogicalSeq: old.frozenLogicalSeq, frozenCommandLSN: old.frozenCommandLSN, frozenSemanticRootSet: old.frozenSemanticRootSet, semanticRootSet: old.semanticRootSet, basis: old.basis, lease: lease, cache: c}
-	next.refs.Store(1)
+	next := c.takeRecycledCut()
+	if next == nil {
+		next = &cowReadCut{}
+	}
+	next.visibleCommandLSN = old.visibleCommandLSN
+	next.logicalSeq = old.logicalSeq
+	next.frozenLogicalSeq = old.frozenLogicalSeq
+	next.frozenCommandLSN = old.frozenCommandLSN
+	next.frozenSemanticRootSet = old.frozenSemanticRootSet
+	next.semanticRootSet = old.semanticRootSet
+	next.basis = old.basis
+	next.lease = lease
+	next.cache = c
 	next.initShards(len(groups))
 	next.basis.retain()
 	retainCOWSemanticState(next)
@@ -1132,6 +1152,7 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 		}
 	}
 	c.activeCuts.Add(1)
+	p.next.refs.Store(1)
 	c.liveCut.Store(p.next)
 	p.opening = nil
 	last := old.refs.Add(-2) == 0
@@ -1159,6 +1180,26 @@ func (c *cowCache) beginReadStripe(stripe uint32) bool {
 func (c *cowCache) endReadStripe(stripe uint32) {
 	c.readGate.rUnlockStripe(stripe)
 }
+func (c *cowCache) takeRecycledCut() *cowReadCut {
+	if c == nil {
+		return nil
+	}
+	return c.recycledCut.Swap(nil)
+}
+
+func (c *cowCache) recycleCut(cut *cowReadCut) {
+	if c == nil || cut == nil || c.readClosed.Load() {
+		return
+	}
+	c.recycledCut.CompareAndSwap(nil, cut)
+}
+
+func (c *cowCache) clearRecycledCut() {
+	if c != nil {
+		c.recycledCut.Swap(nil)
+	}
+}
+
 func (c *cowCache) close() error { return c.closeWithBudget(true) }
 
 // The DB shutdown path keeps the producer budget open through its final backend
@@ -1234,6 +1275,7 @@ func (c *cowCache) closeWithBudget(closeBudget bool) error {
 	c.semanticMu.Unlock()
 	if refund != nil {
 		c.closePhysicalReader()
+		c.clearRecycledCut()
 		if c.pointStaging != nil {
 			c.pointStaging.clearAll()
 			c.pointStaging = nil
