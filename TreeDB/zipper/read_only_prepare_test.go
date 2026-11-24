@@ -494,6 +494,63 @@ func TestReadOnlyPrepareResultReuseOptionsClearsFullLeafSpanCapacity(t *testing.
 	}
 }
 
+func TestReadOnlyPrepareResultResetForReuseOptions(t *testing.T) {
+	var nilResult *ReadOnlyPrepareResult
+	if opts := nilResult.ResetForReuseOptions(); opts.leafSpans != nil || opts.keyArena != nil || opts.OmitKeys || opts.OmitOpKeys {
+		t.Fatalf("nil ResetForReuseOptions returned unexpected non-zero options: %+v", opts)
+	}
+
+	arena := []byte("previous-key-arena")
+	spans := make([]ReadOnlyLeafSpan, 1, 4)
+	spans[0].LowKey = arena[:4]
+	spans = spans[:cap(spans)]
+	spans[3].LastOpKey = arena[4:]
+	spans = spans[:1]
+
+	bounded := ReadOnlyPrepareResult{
+		LeafSpans: spans,
+		keyArena:  make([]byte, 5, readOnlyPrepareResultReuseKeyArenaKeepCap),
+	}
+	opts := bounded.ResetForReuseOptions()
+	if len(opts.leafSpans) != 0 || cap(opts.leafSpans) != cap(spans) {
+		t.Fatalf("bounded leaf spans len/cap=%d/%d", len(opts.leafSpans), cap(opts.leafSpans))
+	}
+	if len(opts.keyArena) != 0 || cap(opts.keyArena) != readOnlyPrepareResultReuseKeyArenaKeepCap {
+		t.Fatalf("bounded key arena len/cap=%d/%d", len(opts.keyArena), cap(opts.keyArena))
+	}
+	for i, span := range opts.leafSpans[:cap(opts.leafSpans)] {
+		if span.LowKey != nil || span.HighKey != nil || span.FirstOpKey != nil || span.LastOpKey != nil {
+			t.Fatalf("span %d retained key refs after ResetForReuseOptions: %+v", i, span)
+		}
+	}
+
+	oversized := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:  make([]byte, 1, readOnlyPrepareResultReuseKeyArenaKeepCap+1),
+	}
+	oversizedOpts := oversized.ResetForReuseOptions()
+	if oversizedOpts.leafSpans != nil || oversizedOpts.keyArena != nil {
+		t.Fatalf("oversized buffers retained: leaf cap=%d key cap=%d", cap(oversizedOpts.leafSpans), cap(oversizedOpts.keyArena))
+	}
+
+	omitKeys := ReadOnlyPrepareResult{
+		OmitKeys:   true,
+		OmitOpKeys: true,
+		LeafSpans:  make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:   make([]byte, 1, 32),
+	}
+	omitOpts := omitKeys.ResetForReuseOptions()
+	if !omitOpts.OmitKeys || !omitOpts.OmitOpKeys {
+		t.Fatalf("omit-keys flags not preserved: %+v", omitOpts)
+	}
+	if len(omitOpts.leafSpans) != 0 || cap(omitOpts.leafSpans) != readOnlyPrepareResultReuseLeafSpanKeepCap+1 {
+		t.Fatalf("omit-keys leaf spans len/cap=%d/%d", len(omitOpts.leafSpans), cap(omitOpts.leafSpans))
+	}
+	if omitOpts.keyArena != nil {
+		t.Fatalf("omit-keys retained key arena cap=%d", cap(omitOpts.keyArena))
+	}
+}
+
 func TestReadOnlyPrepareResultEnsureInitialCapacityPresizesBoundedBuffers(t *testing.T) {
 	ops := make([]batch.Entry, 128)
 	var r ReadOnlyPrepareResult

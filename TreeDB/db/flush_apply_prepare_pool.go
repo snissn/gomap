@@ -58,8 +58,7 @@ func (db *DB) releaseFlushApplyReadOnlyPreparePlanBuffer(buf *flushApplyReadOnly
 	if prepared == nil {
 		buf.opts = zipper.ReadOnlyPrepareOptions{}
 	} else {
-		prepared.ResetForReuse()
-		buf.opts = prepared.ReuseOptions()
+		buf.opts = prepared.ResetForReuseOptions()
 		*prepared = zipper.ReadOnlyPrepareResult{}
 	}
 	db.flushApplyReadOnlyPrepareMu.Lock()

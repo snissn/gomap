@@ -540,6 +540,22 @@ func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	}
 }
 
+// ResetForReuseOptions resets r in place (retaining bounded buffers) and
+// returns ReuseOptions without clearing the LeafSpans backing array twice.
+func (r *ReadOnlyPrepareResult) ResetForReuseOptions() ReadOnlyPrepareOptions {
+	if r == nil {
+		return ReadOnlyPrepareOptions{}
+	}
+	r.ResetForReuse()
+	return ReadOnlyPrepareOptions{
+		OmitKeys:               r.OmitKeys,
+		OmitOpKeys:             r.OmitOpKeys,
+		CountTouchedOldEntries: r.countTouchedOldEntries,
+		leafSpans:              r.LeafSpans,
+		keyArena:               r.keyArena[:0],
+	}
+}
+
 func clearReadOnlyLeafSpanBuffer(spans []ReadOnlyLeafSpan) []ReadOnlyLeafSpan {
 	if cap(spans) == 0 {
 		return nil

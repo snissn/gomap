@@ -409,9 +409,26 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 			continue
 		}
 		docs := make([]commitlog.CollectionDocument, 0, len(plan.resultIDs))
+		it := run.table.NewIterator(nil, nil)
+		linear := true
 		for _, id := range plan.resultIDs {
-			value, _, flags, ok := run.table.GetEntry(id)
+			var value []byte
+			var flags byte
+			var ok bool
+			if linear {
+				if it.Valid() && bytes.Equal(it.UnsafeKey(), id) {
+					value, _, flags = it.UnsafeEntry()
+					ok = true
+					it.Next()
+				} else {
+					linear = false
+				}
+			}
+			if !linear {
+				value, _, flags, ok = run.table.GetEntry(id)
+			}
 			if !ok || flags&node.FlagTombstone != 0 {
+				_ = it.Close()
 				return nil, fmt.Errorf("collections: insert plan missing primary document for command wal")
 			}
 			docs = append(docs, commitlog.CollectionDocument{
@@ -419,6 +436,11 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 				Document: value,
 			})
 		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		_ = it.Close()
 		return docs, nil
 	}
 	return nil, fmt.Errorf("collections: insert plan missing primary root for command wal")
