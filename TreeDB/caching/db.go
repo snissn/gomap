@@ -31602,6 +31602,9 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 	if keyCount <= 0 {
 		return 1, false
 	}
+	if db.cow != nil {
+		return cowGetManyWorkerCount(keyCount)
+	}
 	if planner, ok := db.backend.(backendManyPlanner); ok {
 		return planner.GetManyParallelPlan(keyCount)
 	}
@@ -31857,13 +31860,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // found=false and value=nil.
 func (db *DB) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 	if db.cow != nil {
-		s, err := db.acquireCOWSnapshotWithError()
-		if err != nil {
-			return err
-		}
-		defer s.Close() // retain original panic unwind; actual outcome joins below
-		err = s.GetManyView(keys, fn)
-		return joinCOWCleanupError(err, s.Close())
+		return db.cowGetManyView(keys, fn)
 	}
 	keys = normalizeRawKVPointKeys(keys)
 	if fn == nil {

@@ -648,7 +648,33 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
-	return t.getEntry(key, nil, nil, nil, nil, false)
+	return t.getEntry(key, nil, nil, nil, nil, false, nil)
+}
+
+const fixedScratchLeafCacheMaxSepLen = 128
+
+// FixedScratchLeafCache is caller-owned stack-local storage that caches the
+// most recently visited leaf page view and its exact parent-separator key
+// interval [low, high) for a single immutable tree root. It allocates no heap
+// memory and borrows the caller's already-admitted leafScratch or mmap page.
+type FixedScratchLeafCache struct {
+	valid      bool
+	hasLow     bool
+	hasHigh    bool
+	lowLen     uint8
+	highLen    uint8
+	rootPageID uint64
+	leafData   []byte
+	lowBuf     [fixedScratchLeafCacheMaxSepLen]byte
+	highBuf    [fixedScratchLeafCacheMaxSepLen]byte
+}
+
+// Reset invalidates any cached leaf view.
+func (c *FixedScratchLeafCache) Reset() {
+	if c != nil {
+		c.valid = false
+		c.leafData = nil
+	}
 }
 
 // GetEntryWithFixedScratch borrows admitted fixed-page scratch and returns an
@@ -658,7 +684,17 @@ func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, rea
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
-	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true)
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, nil)
+}
+
+// GetEntryWithFixedScratchLeafCache behaves like GetEntryWithFixedScratch and
+// reuses cache when key falls within the cached leaf's exact parent-separator
+// interval on the same immutable root.
+func (t *Tree) GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch []byte, cache *FixedScratchLeafCache, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
+	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
+		return node.LeafEntry{}, node.ErrCorruptedNode
+	}
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, cache)
 }
 
 type fixedLeafLogPointCopy struct {
@@ -670,25 +706,64 @@ type fixedLeafLogPointCopy struct {
 // ordinary point lookup's exact copied page. An optional mark follows successful page
 // checksum and type validation of an unmarked cached copy.
 func (t *Tree) GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error), mark func(page.LeafLogPtr, []byte)) (node.LeafEntry, error) {
+	return t.GetEntryWithFixedScratchLeafProofCached(key, keyScratch, leafScratch, nil, readLeaf, mark)
+}
+
+// GetEntryWithFixedScratchLeafProofCached behaves like
+// GetEntryWithFixedScratchLeafProof and reuses cache across lookups on the same
+// immutable root when key falls within the cached leaf's exact separator bounds.
+func (t *Tree) GetEntryWithFixedScratchLeafProofCached(key, keyScratch, leafScratch []byte, cache *FixedScratchLeafCache, readLeaf func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error), mark func(page.LeafLogPtr, []byte)) (node.LeafEntry, error) {
 	if readLeaf == nil {
-		return t.GetEntryWithFixedScratch(key, keyScratch, leafScratch, nil)
+		return t.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, cache, nil)
 	}
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
 	copyLeaf := fixedLeafLogPointCopy{read: readLeaf, mark: mark}
-	return t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true)
+	return t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true, cache)
 }
 
-func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), copyLeaf *fixedLeafLogPointCopy, bounded bool) (node.LeafEntry, error) {
+func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), copyLeaf *fixedLeafLogPointCopy, bounded bool, cache *FixedScratchLeafCache) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
-	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
+	if cache != nil && !verifyAlways && cache.valid && cache.rootPageID == t.rootPageID && len(cache.leafData) > 0 &&
+		(!cache.hasLow || compareTreeKey(key, cache.lowBuf[:cache.lowLen]) >= 0) &&
+		(!cache.hasHigh || compareTreeKey(key, cache.highBuf[:cache.highLen]) < 0) {
+		n := node.NewNodeView(cache.leafData)
+		if bounded {
+			n.SetFixedKeyScratch(keyScratch)
+		}
+		idx, found, err := n.SearchLeaf(key)
+		if err != nil {
+			cache.Reset()
+			return node.LeafEntry{}, err
+		}
+		if !found {
+			return node.LeafEntry{}, ErrKeyNotFound
+		}
+		k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
+		if err != nil {
+			cache.Reset()
+			return node.LeafEntry{}, err
+		}
+		return node.LeafEntry{
+			Key:      k,
+			Value:    v,
+			ValuePtr: ptr,
+			Flags:    flags,
+			Revision: revision,
+		}, nil
+	}
+	if cache != nil {
+		cache.Reset()
+	}
+
+	currRef := page.PageChildRef(t.rootPageID)
 	if copyLeaf != nil {
 		// PRIMARY selects and loads operands with the ordinary byte reader.
 		// Set up its adapter outside the traversal loop so it stays on the stack.
@@ -698,6 +773,13 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			return data, err
 		}
 	}
+
+	canCache := cache != nil && !verifyAlways
+	var (
+		hasLow, hasHigh bool
+		lowLen, highLen uint8
+		lowBuf, highBuf [fixedScratchLeafCacheMaxSepLen]byte
+	)
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
@@ -718,6 +800,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			if depth != 0 {
 				return node.LeafEntry{}, node.ErrPrimaryDirectory
 			}
+			canCache = false
 			copyLeaf = nil
 			var err error
 			var inline node.PrimaryDirectoryEntry
@@ -740,9 +823,64 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
 						return node.LeafEntry{}, ErrKeyNotFound
 					}
+					if canCache {
+						if len(low) > 0 {
+							if len(low) > fixedScratchLeafCacheMaxSepLen {
+								canCache = false
+							} else {
+								copy(lowBuf[:], low)
+								lowLen = uint8(len(low))
+								hasLow = true
+							}
+						}
+						if canCache && len(high) > 0 {
+							if len(high) > fixedScratchLeafCacheMaxSepLen {
+								canCache = false
+							} else {
+								copy(highBuf[:], high)
+								highLen = uint8(len(high))
+								hasHigh = true
+							}
+						}
+					}
 				}
 			}
-			if n.InternalLeafLogRefsEnabled() {
+			if canCache {
+				idx, _ := n.SearchInternal(key)
+				// Copy sepLow before fetching sepHigh because base-delta internal
+				// pages decode both keys into n's shared keyScratch.
+				if idx > 0 {
+					sepLow, _, err := n.GetInternalEntryRefView(idx)
+					if err != nil {
+						return node.LeafEntry{}, err
+					}
+					if len(sepLow) > fixedScratchLeafCacheMaxSepLen {
+						canCache = false
+					} else {
+						copy(lowBuf[:], sepLow)
+						lowLen = uint8(len(sepLow))
+						hasLow = true
+					}
+				}
+				if canCache && idx+1 < n.Count() {
+					sepHigh, _, err := n.GetInternalEntryRefView(idx + 1)
+					if err != nil {
+						return node.LeafEntry{}, err
+					}
+					if len(sepHigh) > fixedScratchLeafCacheMaxSepLen {
+						canCache = false
+					} else {
+						copy(highBuf[:], sepHigh)
+						highLen = uint8(len(sepHigh))
+						hasHigh = true
+					}
+				}
+				childRef, err := n.GetInternalChildRef(idx)
+				if err != nil {
+					return node.LeafEntry{}, err
+				}
+				currRef = childRef
+			} else if n.InternalLeafLogRefsEnabled() {
 				childRef, _, err := n.SearchInternalChildRef(key)
 				if err != nil {
 					return node.LeafEntry{}, err
@@ -757,8 +895,26 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			}
 
 		case page.PageTypeLeaf:
+			if canCache {
+				cache.valid = true
+				cache.hasLow = hasLow
+				cache.hasHigh = hasHigh
+				cache.lowLen = lowLen
+				cache.highLen = highLen
+				cache.rootPageID = t.rootPageID
+				cache.leafData = n.Data()
+				if hasLow {
+					copy(cache.lowBuf[:lowLen], lowBuf[:lowLen])
+				}
+				if hasHigh {
+					copy(cache.highBuf[:highLen], highBuf[:highLen])
+				}
+			}
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
+				if cache != nil {
+					cache.Reset()
+				}
 				return node.LeafEntry{}, err
 			}
 			if !found {
@@ -768,6 +924,9 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			// Zero-copy view
 			k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
 			if err != nil {
+				if cache != nil {
+					cache.Reset()
+				}
 				return node.LeafEntry{}, err
 			}
 

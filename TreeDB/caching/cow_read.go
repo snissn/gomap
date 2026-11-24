@@ -137,26 +137,6 @@ func (s *Snapshot) cowSeekGEMergeAdmitted(start, end []byte) (key, value []byte,
 	return key, value, true, nil
 }
 
-func (db *DB) cowGetMany(keys [][]byte) ([][]byte, error) {
-	s, err := db.acquireCOWSnapshotWithError()
-	if err != nil {
-		return nil, err
-	}
-	defer s.Close() // original panic unwind; synchronous outcomes join below
-	values := make([][]byte, len(keys))
-	for i, key := range keys {
-		v, err := s.Get(key)
-		if err == tree.ErrKeyNotFound {
-			continue
-		}
-		if err != nil {
-			return nil, joinCOWCleanupError(err, s.Close())
-		}
-		values[i] = v
-	}
-	return values, s.Close()
-}
-
 type cowOwnedIterator struct {
 	merging.Iterator
 	snapshot *Snapshot
@@ -479,6 +459,7 @@ func (s *Snapshot) cowDictionarySuccessorLocked(start, end []byte) (pointSuccess
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	point.leafGen++
 	disk, found, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readOwnedSuccessorLeaf)
 	if err != nil {
 		return pointSuccessorCandidate{}, err
@@ -635,6 +616,7 @@ func (s *Snapshot) cowWorkspacePhysicalSuccessorLocked(w *cowReadWorkspace, star
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	point.leafGen++
 	var independent *cowCacheDictionaryRead
 	if provider, ok := s.db.dictStore.(cowDictionaryReadProvider); ok {
 		definition := cowCacheDictionaryRead{provider: provider, cache: s.cowCache}
@@ -674,6 +656,7 @@ func (s *Snapshot) cowCutPhysicalSuccessorLocked(start, end []byte) (pointSucces
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	point.leafGen++
 	disk, found, err := basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, s.cowPhysicalLeafLocked)
 	if err != nil {
 		return pointSuccessorCandidate{}, err
