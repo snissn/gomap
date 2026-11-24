@@ -5,9 +5,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -393,6 +395,133 @@ func TestCOWGetManyViewCallbackCanCloseDB(t *testing.T) {
 	}
 }
 
+func TestCOWGetManyViewCallbackPanicJoinsWorkers(t *testing.T) {
+	db, keys, vals := cowGetManyTestFixtureWithAutoClose(t, 1024, 512, false)
+	budget := db.cow.budget
+	workers, parallel := cowGetManyWorkerCount(len(keys))
+	perWorker := (len(keys) + workers - 1) / workers
+
+	siblingReady := make(chan struct{})
+	var (
+		siblingOnce         sync.Once
+		panicStarted        atomic.Bool
+		recovered           atomic.Bool
+		activeSiblings      atomic.Int32
+		postRecoverCallback atomic.Int32
+	)
+
+	var panicVal any
+	func() {
+		defer func() {
+			panicVal = recover()
+			recovered.Store(true)
+			if n := activeSiblings.Load(); n != 0 {
+				t.Errorf("sibling workers still active after panic unwind: %d", n)
+			}
+		}()
+		_ = db.GetManyView(keys, func(index int, key, value []byte, found bool) error {
+			if recovered.Load() {
+				postRecoverCallback.Add(1)
+				return nil
+			}
+			// keys is sorted ascending, so index 0 is always processed by inline worker 0
+			// and indices >= perWorker are processed by spawned sibling workers when parallel.
+			if index == 0 {
+				if parallel {
+					select {
+					case <-siblingReady:
+					case <-time.After(2 * time.Second):
+						t.Errorf("timed out waiting for sibling worker to enter callback")
+					}
+				}
+				panicStarted.Store(true)
+				panic("cowGetManyView callback panic on worker 0")
+			}
+			if parallel && index >= perWorker {
+				activeSiblings.Add(1)
+				defer activeSiblings.Add(-1)
+				siblingOnce.Do(func() { close(siblingReady) })
+				deadline := time.Now().Add(2 * time.Second)
+				for !panicStarted.Load() && time.Now().Before(deadline) {
+					runtime.Gosched()
+				}
+				// Hold sibling briefly while worker 0 unwinds so wg.Wait() must join us.
+				time.Sleep(10 * time.Millisecond)
+				if recovered.Load() {
+					postRecoverCallback.Add(1)
+				}
+			}
+			return nil
+		})
+	}()
+
+	if panicVal != "cowGetManyView callback panic on worker 0" {
+		t.Fatalf("unexpected panic value: %v", panicVal)
+	}
+	if n := activeSiblings.Load(); n != 0 {
+		t.Fatalf("sibling workers remained active after recover: %d", n)
+	}
+	if n := postRecoverCallback.Load(); n != 0 {
+		t.Fatalf("callbacks ran after panic recovery: %d", n)
+	}
+
+	// Verify pooled buffers and snapshot state remain clean on subsequent calls.
+	seen := make([]atomic.Int32, len(keys))
+	if err := db.GetManyView(keys, func(index int, key, value []byte, found bool) error {
+		if c := seen[index].Add(1); c != 1 {
+			return fmt.Errorf("duplicate callback index=%d count=%d", index, c)
+		}
+		if !found || !bytes.Equal(value, vals[index]) {
+			return fmt.Errorf("index=%d value mismatch found=%t", index, found)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("post-panic GetManyView: %v", err)
+	}
+	for i := range keys {
+		if seen[i].Load() != 1 {
+			t.Fatalf("post-panic index %d seen=%d want 1", i, seen[i].Load())
+		}
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := budget.Stats(); after.TotalBytes != 0 || after.ExternalLeases != 0 || after.Views != 0 {
+		t.Fatalf("callback panic leaked budget state after Close: %+v", after)
+	}
+}
+
+func TestCOWGetManyProbePoolClearsAndBounds(t *testing.T) {
+	if got := unsafe.Sizeof(cowGetManyViewStaged{}); got > 32 {
+		t.Fatalf("cowGetManyViewStaged size=%d want <= 32", got)
+	}
+
+	// Populate a probe slice with caller key slices, shrink len, and release.
+	backing := make([]cowGetManyProbe, 8, 16)
+	for i := range backing {
+		backing[i] = cowGetManyProbe{origIdx: i + 1, key: []byte(fmt.Sprintf("secret-%d", i))}
+	}
+	sub := backing[:2]
+	releaseCOWGetManyProbes(sub)
+	full := backing[:cap(backing)]
+	for i, p := range full {
+		if p.origIdx != 0 || p.key != nil {
+			t.Fatalf("probe slot %d not cleared after release: %+v", i, p)
+		}
+	}
+
+	// Oversized slices (> cowGetManyProbePoolMaxCap) must not be pooled.
+	for cowGetManyProbePool.Get() != nil {
+	}
+	oversized := make([]cowGetManyProbe, 1, cowGetManyProbePoolMaxCap+1)
+	oversized[0] = cowGetManyProbe{origIdx: 42, key: []byte("big")}
+	releaseCOWGetManyProbes(oversized)
+	if raw := cowGetManyProbePool.Get(); raw != nil {
+		t.Fatalf("oversized probe slice unexpectedly pooled: %T", raw)
+	}
+}
+
 func BenchmarkCOWGetMany(b *testing.B) {
 	db, keys, _ := cowGetManyTestFixture(b, 8000, 512)
 	// Shuffle query keys deterministically to mirror random_read_batch.
@@ -406,6 +535,31 @@ func BenchmarkCOWGetMany(b *testing.B) {
 		vals, err := db.GetMany(query)
 		if err != nil || len(vals) != len(query) {
 			b.Fatalf("GetMany: len=%d err=%v", len(vals), err)
+		}
+	}
+}
+
+func BenchmarkCOWGetManyViewParallel(b *testing.B) {
+	db, keys, _ := cowGetManyTestFixture(b, 8000, 512)
+	// Shuffle query keys deterministically to mirror random_read_batch.
+	query := make([][]byte, len(keys))
+	for i := range keys {
+		query[i] = keys[(i*48271)%len(keys)]
+	}
+	fn := func(index int, _ []byte, value []byte, found bool) error {
+		if index < 0 || index >= len(query) {
+			return fmt.Errorf("out of range index %d", index)
+		}
+		if !found || len(value) != 128 {
+			return fmt.Errorf("unexpected view at %d: found=%t len=%d", index, found, len(value))
+		}
+		return nil
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := db.GetManyView(query, fn); err != nil {
+			b.Fatalf("GetManyView: %v", err)
 		}
 	}
 }
