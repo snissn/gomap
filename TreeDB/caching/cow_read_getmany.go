@@ -433,13 +433,15 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 				sharedArena = make([]byte, totalShared)
 			}
 		}
-		defer func() {
+		releaseSharedArena := func() {
 			sharedArena = nil
 			if sharedArenaLease != nil {
-				sharedArenaLease.Close()
+				l := sharedArenaLease
 				sharedArenaLease = nil
+				l.Close()
 			}
-		}()
+		}
+		defer releaseSharedArena()
 
 		runWorker := func(workerID, lo, hi int) {
 			chunk := misses[lo:hi]
@@ -714,6 +716,10 @@ func (s *Snapshot) cowGetManyViewParallel(keys [][]byte, fn tree.GetManyViewFunc
 				done = true
 			}()
 		}
+
+		// Release the shared worker arena immediately after all workers have
+		// joined so scalar fallback has the full remaining COW budget available.
+		releaseSharedArena()
 
 		if firstErr != nil {
 			return firstErr

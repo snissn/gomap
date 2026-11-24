@@ -260,119 +260,121 @@ func TestCOWGetManyViewParallelTightBudgetNoDuplicateCallbacks(t *testing.T) {
 func TestCOWGetManyAndViewTightBudgetPointerFallback(t *testing.T) {
 	// Reproduces tight COW budget with persisted value-log pointers where sequential
 	// Snapshot.Get fits on a single workspace, ensuring DB.GetMany and DB.GetManyView
-	// refund freshly admitted basis lane scratch when scalar fallback needs capacity.
+	// refund freshly admitted basis lane scratch and release the shared worker arena
+	// before scalar fallback needs capacity.
 	for _, mode := range []string{"GetMany", "GetManyView"} {
-		t.Run(mode, func(t *testing.T) {
-			db, keys, vals := cowGetManyTestFixtureWithAutoClose(t, 200, 128, false)
-			// Persist 200 pointer values (1024B > 128B pointer threshold) into backend.
-			for i := range keys {
-				vals[i] = bytes.Repeat([]byte{byte('A' + i%26)}, 1024)
-				if err := db.Set(keys[i], vals[i]); err != nil {
+		for _, headroom := range []uint64{32 << 10, 48 << 10} {
+			t.Run(fmt.Sprintf("%s/headroom=%d", mode, headroom), func(t *testing.T) {
+				db, keys, vals := cowGetManyTestFixtureWithAutoClose(t, 200, 128, false)
+				// Persist 200 pointer values (1024B > 128B pointer threshold) into backend.
+				for i := range keys {
+					vals[i] = bytes.Repeat([]byte{byte('A' + i%26)}, 1024)
+					if err := db.Set(keys[i], vals[i]); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := db.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if err := db.Checkpoint(); err != nil {
-				t.Fatal(err)
-			}
-			budget := db.cow.budget
-			cowPressureEvictIdleReadScratch(t, budget)
-			before := budget.Stats()
+				budget := db.cow.budget
+				cowPressureEvictIdleReadScratch(t, budget)
+				before := budget.Stats()
 
-			// Leave tight headroom where sequential Snapshot.Get / Snapshot.GetManyView fits
-			// on a single workspace (~32 KiB) while keeping a fresh basis lane workspace charged
-			// (~20 KiB) would starve the cut-local fallback workspace if not refunded.
-			const headroom = uint64(32 << 10)
-			header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-			avail := budget.Limits().MaxInFlightBytes - before.ReservedBytes - header
-			if avail <= headroom+(4<<10) {
-				t.Fatalf("unexpectedly small available budget: %d", avail)
-			}
-			pressure, err := budget.AcquireExternal(avail - headroom)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() {
-				if pressure != nil {
-					pressure.Close()
+				// Leave tight headroom where sequential Snapshot.Get / Snapshot.GetManyView fits
+				// on a single workspace (~32 KiB) while keeping a fresh basis lane workspace or
+				// shared worker arena charged would starve scalar fallback if not released.
+				header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+				avail := budget.Limits().MaxInFlightBytes - before.ReservedBytes - header
+				if avail <= headroom+(4<<10) {
+					t.Fatalf("unexpectedly small available budget: %d", avail)
 				}
-			}()
-
-			// Verify the sequential baseline succeeds under this exact pressure.
-			snap := db.AcquireSnapshot()
-			if mode == "GetMany" {
-				gotSeq, gerr := snap.Get(keys[0])
-				snapCloseErr := snap.Close()
-				if gerr != nil || snapCloseErr != nil {
-					t.Fatalf("baseline sequential Snapshot.Get failed under %d headroom: get=%v close=%v", headroom, gerr, snapCloseErr)
-				}
-				if !bytes.Equal(gotSeq, vals[0]) {
-					t.Fatalf("baseline sequential value mismatch")
-				}
-			} else {
-				gerr := snap.GetManyView(keys[:4], func(index int, key, value []byte, found bool) error {
-					if !found || !bytes.Equal(value, vals[index]) {
-						return fmt.Errorf("baseline view mismatch at %d", index)
-					}
-					return nil
-				})
-				snapCloseErr := snap.Close()
-				if gerr != nil || snapCloseErr != nil {
-					t.Fatalf("baseline sequential Snapshot.GetManyView failed under %d headroom: get=%v close=%v", headroom, gerr, snapCloseErr)
-				}
-			}
-			// Evict idle scratch so the parallel lane starts cold (fresh=true).
-			pressure.Close()
-			pressure = nil
-			cowPressureEvictIdleReadScratch(t, budget)
-			before2 := budget.Stats()
-			avail2 := budget.Limits().MaxInFlightBytes - before2.ReservedBytes - header
-			pressure, err = budget.AcquireExternal(avail2 - headroom)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if mode == "GetMany" {
-				got, err := db.GetMany(keys)
+				pressure, err := budget.AcquireExternal(avail - headroom)
 				if err != nil {
-					t.Fatalf("DB.GetMany failed under tight pointer-fallback budget: %v", err)
+					t.Fatal(err)
 				}
-				if len(got) != len(keys) {
-					t.Fatalf("GetMany len=%d want %d", len(got), len(keys))
-				}
-				for i := range keys {
-					if !bytes.Equal(got[i], vals[i]) {
-						t.Fatalf("GetMany[%d] mismatch", i)
+				defer func() {
+					if pressure != nil {
+						pressure.Close()
+					}
+				}()
+
+				// Verify the sequential baseline succeeds under this exact pressure.
+				snap := db.AcquireSnapshot()
+				if mode == "GetMany" {
+					gotSeq, gerr := snap.Get(keys[0])
+					snapCloseErr := snap.Close()
+					if gerr != nil || snapCloseErr != nil {
+						t.Fatalf("baseline sequential Snapshot.Get failed under %d headroom: get=%v close=%v", headroom, gerr, snapCloseErr)
+					}
+					if !bytes.Equal(gotSeq, vals[0]) {
+						t.Fatalf("baseline sequential value mismatch")
+					}
+				} else {
+					gerr := snap.GetManyView(keys[:4], func(index int, key, value []byte, found bool) error {
+						if !found || !bytes.Equal(value, vals[index]) {
+							return fmt.Errorf("baseline view mismatch at %d", index)
+						}
+						return nil
+					})
+					snapCloseErr := snap.Close()
+					if gerr != nil || snapCloseErr != nil {
+						t.Fatalf("baseline sequential Snapshot.GetManyView failed under %d headroom: get=%v close=%v", headroom, gerr, snapCloseErr)
 					}
 				}
-			} else {
-				seen := make([]atomic.Int32, len(keys))
-				err := db.GetManyView(keys, func(index int, key, value []byte, found bool) error {
-					if c := seen[index].Add(1); c != 1 {
-						return fmt.Errorf("duplicate callback index=%d count=%d", index, c)
-					}
-					if !found || !bytes.Equal(value, vals[index]) {
-						return fmt.Errorf("index=%d value mismatch found=%t", index, found)
-					}
-					return nil
-				})
+				// Evict idle scratch so the parallel lane starts cold (fresh=true).
+				pressure.Close()
+				pressure = nil
+				cowPressureEvictIdleReadScratch(t, budget)
+				before2 := budget.Stats()
+				avail2 := budget.Limits().MaxInFlightBytes - before2.ReservedBytes - header
+				pressure, err = budget.AcquireExternal(avail2 - headroom)
 				if err != nil {
-					t.Fatalf("DB.GetManyView failed under tight pointer-fallback budget: %v", err)
+					t.Fatal(err)
 				}
-				for i := range keys {
-					if seen[i].Load() != 1 {
-						t.Fatalf("index %d seen=%d want 1", i, seen[i].Load())
+
+				if mode == "GetMany" {
+					got, err := db.GetMany(keys)
+					if err != nil {
+						t.Fatalf("DB.GetMany failed under tight pointer-fallback budget (headroom=%d): %v", headroom, err)
+					}
+					if len(got) != len(keys) {
+						t.Fatalf("GetMany len=%d want %d", len(got), len(keys))
+					}
+					for i := range keys {
+						if !bytes.Equal(got[i], vals[i]) {
+							t.Fatalf("GetMany[%d] mismatch", i)
+						}
+					}
+				} else {
+					seen := make([]atomic.Int32, len(keys))
+					err := db.GetManyView(keys, func(index int, key, value []byte, found bool) error {
+						if c := seen[index].Add(1); c != 1 {
+							return fmt.Errorf("duplicate callback index=%d count=%d", index, c)
+						}
+						if !found || !bytes.Equal(value, vals[index]) {
+							return fmt.Errorf("index=%d value mismatch found=%t", index, found)
+						}
+						return nil
+					})
+					if err != nil {
+						t.Fatalf("DB.GetManyView failed under tight pointer-fallback budget (headroom=%d): %v", headroom, err)
+					}
+					for i := range keys {
+						if seen[i].Load() != 1 {
+							t.Fatalf("index %d seen=%d want 1", i, seen[i].Load())
+						}
 					}
 				}
-			}
-			pressure.Close()
-			pressure = nil
-			if err := db.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if after := budget.Stats(); after.TotalBytes != 0 || after.ExternalLeases != 0 || after.Views != 0 {
-				t.Fatalf("pointer fallback leaked budget state: %+v", after)
-			}
-		})
+				pressure.Close()
+				pressure = nil
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if after := budget.Stats(); after.TotalBytes != 0 || after.ExternalLeases != 0 || after.Views != 0 {
+					t.Fatalf("pointer fallback leaked budget state: %+v", after)
+				}
+			})
+		}
 	}
 }
 
