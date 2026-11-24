@@ -1348,10 +1348,17 @@ func TestInspectCOWLeafRecordPinnedParityAndFaultInjection(t *testing.T) {
 				t.Fatalf("InspectCOWLeafRecordPinned totalMmapReadHits=%d, want %d", f.totalMmapReadHits(), totalHitsBefore+1)
 			}
 			// All non-digest fields must match InspectCOWLeafRecord exactly.
+			// Mapped borrows omit the metadata digest; unmapped fallbacks (e.g., Windows)
+			// delegate to inspectCOWLeafReadAt which retains the digest.
+			if mapped != nil && pinnedShape.metadata != (cowMetadataDigest{}) {
+				t.Fatalf("mapped InspectCOWLeafRecordPinned unexpectedly populated metadata digest: %+v", pinnedShape.metadata)
+			}
 			wantNoDigest := wantShape
 			wantNoDigest.metadata = cowMetadataDigest{}
-			if pinnedShape != wantNoDigest {
-				t.Fatalf("pinned shape mismatch:\n got=%+v\nwant=%+v", pinnedShape, wantNoDigest)
+			gotNoDigest := pinnedShape
+			gotNoDigest.metadata = cowMetadataDigest{}
+			if gotNoDigest != wantNoDigest {
+				t.Fatalf("pinned shape mismatch:\n got=%+v\nwant=%+v", gotNoDigest, wantNoDigest)
 			}
 
 			input := make([]byte, pinnedShape.PayloadBytes())
