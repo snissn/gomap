@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -525,6 +526,212 @@ func TestUpdateCoalescerFastPathZeroValueStructSafe(t *testing.T) {
 	if !coalescer.stoppedFlag.Load() {
 		t.Fatal("stoppedFlag was not set after stop()")
 	}
+}
+
+func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
+	t.Run("DeterministicNonStealing", func(t *testing.T) {
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = s.Close() }()
+
+		if s.Server.UpdateCoalescingMaxDelay != 0 {
+			t.Fatalf("expected default UpdateCoalescingMaxDelay=0, got %v", s.Server.UpdateCoalescingMaxDelay)
+		}
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			t.Fatal("expected coalescer")
+		}
+		ctx := context.Background()
+
+		// Case 1: inFlight >= 2 (incoming caller sees active >= 3) must skip inline
+		// even when execMu is unlocked and the queue is empty.
+		coalescer.inFlight.Add(2)
+		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, 101), nil, 0)
+		coalescer.inFlight.Add(-2)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("inFlight>=2 update: resp=%s err=%v", resp, err)
+		}
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("inFlight>=2 inlineExecs=%d want 0", got)
+		}
+		if got := coalescer.workerBatches.Load(); got != 1 {
+			t.Fatalf("inFlight>=2 workerBatches=%d want 1", got)
+		}
+		if got := findDocN(t, s.Server, collName, 0); got != 101 {
+			t.Fatalf("doc 0 n=%d want 101", got)
+		}
+
+		// Synchronize with worker unlock from Case 1, then set workerBusy=true while
+		// leaving execMu unlocked and inFlight==0 (so incoming active==1).
+		coalescer.execMu.Lock()
+		select {
+		case <-coalescer.wakeCh:
+		default:
+		}
+		coalescer.workerBusy.Store(true)
+		coalescer.execMu.Unlock()
+
+		// Case 2: workerBusy == true must skip inline even when active == 1 and execMu is unlocked.
+		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 1, 202), nil, 0)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("workerBusy update: resp=%s err=%v", resp, err)
+		}
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("workerBusy inlineExecs=%d want 0", got)
+		}
+		if got := coalescer.workerBatches.Load(); got != 2 {
+			t.Fatalf("workerBusy workerBatches=%d want 2", got)
+		}
+		if got := findDocN(t, s.Server, collName, 1); got != 202 {
+			t.Fatalf("doc 1 n=%d want 202", got)
+		}
+
+		// Ensure worker cleared workerBusy before unlocking execMu.
+		coalescer.execMu.Lock()
+		busyAfter := coalescer.workerBusy.Load()
+		coalescer.execMu.Unlock()
+		if busyAfter {
+			t.Fatal("workerBusy remained true after worker unlocked execMu")
+		}
+	})
+
+	t.Run("ContinuousMultiBatchDrainUnderExecMu", func(t *testing.T) {
+		const (
+			maxBatch = 4
+			writers  = maxBatch*2 + 2
+		)
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, writers)
+		defer func() { _ = s.Close() }()
+
+		s.Server.UpdateCoalescingMaxBatch = maxBatch
+		s.Server.UpdateCoalescingMaxDelay = 0
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			t.Fatal("expected coalescer")
+		}
+
+		ctx := context.Background()
+		coalescer.execMu.Lock()
+		errCh := make(chan error, writers)
+		var wg sync.WaitGroup
+		wg.Add(writers)
+		for w := 0; w < writers; w++ {
+			w := w
+			go func() {
+				defer wg.Done()
+				resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), int64(300+w)), nil, 0)
+				if err != nil {
+					errCh <- fmt.Errorf("writer %d: %w", w, err)
+					return
+				}
+				if !mongoCommandResponseOK(resp) {
+					errCh <- fmt.Errorf("writer %d not ok: %s", w, resp)
+				}
+			}()
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && len(coalescer.requests) < writers {
+			time.Sleep(time.Millisecond)
+		}
+		queued := len(coalescer.requests)
+		coalescer.execMu.Unlock()
+		coalescer.signalWake()
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatal(err)
+		}
+		if queued != writers {
+			t.Fatalf("queued=%d want %d while execMu held", queued, writers)
+		}
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("inlineExecs=%d want 0 during queued multi-batch drain", got)
+		}
+		if got := coalescer.workerBatches.Load(); got < 3 {
+			t.Fatalf("workerBatches=%d want >= 3 for %d queued updates with maxBatch=%d", got, writers, maxBatch)
+		}
+		for w := 0; w < writers; w++ {
+			if got := findDocN(t, s.Server, collName, int64(w)); got != int64(300+w) {
+				t.Fatalf("doc[%d] n=%d want %d", w, got, 300+w)
+			}
+		}
+	})
+
+	t.Run("FreeRunningW16Reopen", func(t *testing.T) {
+		const (
+			writers      = 16
+			opsPerWriter = 64
+			docCount     = writers
+		)
+		dir := t.TempDir()
+		s, collName := openUpdateCoalescerBenchServer(t, dir, treedb.ProfileCommandWALRelaxed, docCount)
+
+		if s.Server.UpdateCoalescingMaxDelay != 0 {
+			_ = s.Close()
+			t.Fatalf("expected default UpdateCoalescingMaxDelay=0, got %v", s.Server.UpdateCoalescingMaxDelay)
+		}
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			_ = s.Close()
+			t.Fatal("expected coalescer")
+		}
+
+		ctx := context.Background()
+		start := make(chan struct{})
+		errCh := make(chan error, writers)
+		var wg sync.WaitGroup
+		wg.Add(writers)
+		for w := 0; w < writers; w++ {
+			w := w
+			go func() {
+				defer wg.Done()
+				<-start
+				for step := 1; step <= opsPerWriter; step++ {
+					cmd := buildUpdateOneCommand(t, collName, int64(w), int64(step))
+					resp, err := s.Server.commandResponse(ctx, "update", cmd, nil, 0)
+					if err != nil {
+						errCh <- fmt.Errorf("writer %d step %d: %w", w, step, err)
+						return
+					}
+					if !mongoCommandResponseOK(resp) {
+						errCh <- fmt.Errorf("writer %d step %d not ok: %s", w, step, resp)
+						return
+					}
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			_ = s.Close()
+			t.Fatal(err)
+		}
+
+		if runtime.GOMAXPROCS(0) > 1 {
+			if got := coalescer.workerBatches.Load(); got == 0 {
+				_ = s.Close()
+				t.Fatalf("expected workerBatches > 0 under free-running w%d, got 0 (inlineExecs=%d)", writers, coalescer.inlineExecs.Load())
+			}
+		}
+
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		reopened, err := OpenStandaloneServer(StandaloneOptions{
+			Dir:     dir,
+			Profile: treedb.ProfileCommandWALRelaxed,
+		})
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		defer func() { _ = reopened.Close() }()
+		for w := 0; w < writers; w++ {
+			if got := findDocN(t, reopened.Server, collName, int64(w)); got != opsPerWriter {
+				t.Fatalf("reopen doc[%d] n=%d want %d", w, got, opsPerWriter)
+			}
+		}
+	})
 }
 
 var updateCoalescerBenchSink wire.Document
