@@ -861,14 +861,17 @@ func TestCOWNativePhysicalReadContendedFallbackAndIdleScratch(t *testing.T) {
 	db.cow.physicalMu.Unlock()
 	basis.readMu.Unlock()
 
-	// 2. Hold ALL basis read lanes AND physicalMu: reads must spill to
-	// bounded per-call admitted temporary workspaces and complete immediately,
-	// releasing all temporary reservations upon return.
+	// 2. Hold ALL basis read lanes AND all physical lanes (lane 0 + physicalSlots):
+	// reads must spill to bounded per-call admitted temporary workspaces and
+	// complete immediately, releasing all temporary reservations upon return.
 	basis.readMu.Lock()
 	for i := range basis.readSlots {
 		basis.readSlots[i].mu.Lock()
 	}
 	db.cow.physicalMu.Lock()
+	for i := range db.cow.physicalSlots {
+		db.cow.physicalSlots[i].mu.Lock()
+	}
 	beforeTemp := budget.Stats()
 	runWithTimeout("all lanes held NativeEntryAtRoot", func() error {
 		e, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("k000"), true)
@@ -929,6 +932,9 @@ func TestCOWNativePhysicalReadContendedFallbackAndIdleScratch(t *testing.T) {
 	})
 	pressure.Close()
 
+	for i := range db.cow.physicalSlots {
+		db.cow.physicalSlots[i].mu.Unlock()
+	}
 	db.cow.physicalMu.Unlock()
 	for i := range basis.readSlots {
 		basis.readSlots[i].mu.Unlock()

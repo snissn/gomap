@@ -315,10 +315,12 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDict
 func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
 	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
+	// Try Lane 0 first: its workspace already admits cowReadWorkspaceInspectionCharge()
+	// and serves both dictionary and non-dictionary values without extra admission.
 	if cache.physicalMu.TryLock() {
 		defer cache.physicalMu.Unlock()
 		fresh := cache.physicalReader == nil
-		w, err := cache.physicalWorkspaceLocked(limits)
+		w, err := cache.physicalWorkspaceSlotLocked(&cache.physicalReader, limits)
 		if err != nil {
 			return nil, err
 		}
@@ -329,14 +331,61 @@ func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cow
 		}
 		return owned, err
 	}
-	// Lane 0 (physicalMu) is busy: admit a bounded per-call temporary decoder
-	// workspace so concurrent value reads never serialize or retain overflow leases.
-	w, err := admitCOWReadWorkspace(cache.budget, limits)
+	// Lane 0 is busy: admit the inspection envelope BEFORE InspectCOWRecord
+	// (covering positional-read fallback metadata on Windows / -race builds).
+	inspectLease, err := cache.budget.AcquireExternalValue(cowReadWorkspaceInspectionCharge())
 	if err != nil {
 		return nil, err
 	}
-	defer w.close()
-	return b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
+	f, _, err := b.snapshot.PinnedValueLogSegment(ptr.FileID)
+	if err != nil {
+		inspectLease.Close()
+		return nil, err
+	}
+	shape, err := f.InspectCOWRecord(ptr, limits)
+	if err != nil {
+		inspectLease.Close()
+		return nil, err
+	}
+	// Multi-lane spillover slots are reserved for dictionary-compressed values
+	// so concurrent uncompressed/block value reads never retain extra leases.
+	if shape.Compressed && shape.DictID != 0 {
+		// Release the temporary inspection lease before acquiring a pooled
+		// lane (which owns its own admitted workspace envelope) so we never
+		// double-charge or block lane admission under tight budgets.
+		inspectLease.Close()
+		if mu, slotReader, ok := cache.tryLockPhysicalLane(cache.physicalLaneSeed.Add(1)); ok {
+			defer mu.Unlock()
+			fresh := *slotReader == nil
+			w, err := cache.physicalWorkspaceSlotLocked(slotReader, limits)
+			if err != nil {
+				return nil, err
+			}
+			owned, err := b.readInspectedNativeValueWithWorkspace(cache, w, provider, f, ptr, shape, dst, useDst, admitOutput)
+			if err != nil && fresh && *slotReader == w && len(w.codecs) == 0 && w.allocations == nil {
+				*slotReader = nil
+				w.close()
+			}
+			return owned, err
+		}
+		// All eligible lanes are busy (or budget headroom is tight for
+		// admitting a new spillover slot): fall back to a bounded per-call
+		// stack workspace.
+		inspectLease, err = cache.budget.AcquireExternalValue(cowReadWorkspaceInspectionCharge())
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Non-dictionary contended read or all-lanes-busy fallback: reuse the
+	// already-admitted stack workspace and refund its lease immediately after
+	// copy-out so concurrent value reads never serialize or retain overflow leases.
+	w := cowReadWorkspace{budget: cache.budget, limits: limits}
+	defer func() {
+		w.closeValueScratch()
+		w.budget = nil
+		inspectLease.Close()
+	}()
+	return b.readInspectedNativeValueWithWorkspace(cache, &w, provider, f, ptr, shape, dst, useDst, admitOutput)
 }
 
 func (b *cowBackendBasis) readNativeValueWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
@@ -348,6 +397,10 @@ func (b *cowBackendBasis) readNativeValueWithWorkspace(cache *cowCache, w *cowRe
 	if err != nil {
 		return nil, err
 	}
+	return b.readInspectedNativeValueWithWorkspace(cache, w, provider, f, ptr, shape, dst, useDst, admitOutput)
+}
+
+func (b *cowBackendBasis) readInspectedNativeValueWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	var definition *cowCacheDictionaryRead
 	if shape.Compressed && shape.DictID != 0 {
 		if provider == nil {

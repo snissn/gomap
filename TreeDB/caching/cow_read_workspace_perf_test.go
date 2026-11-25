@@ -2,17 +2,25 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"unsafe"
 
+	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -511,4 +519,646 @@ func BenchmarkCOWGetManyViewWithMisses(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+type cowPerfDictionaryLeafLifecycle interface {
+	backenddb.LeafPageLog
+	backenddb.LeafPageLogCreatedSegmentProvider
+	backenddb.LeafPageLogCurrentSegmentProvider
+	backenddb.LeafPageLogSegmentRegistrationObserver
+	backenddb.LeafPageLogCachedWrapperOwner
+	backenddb.LeafPageLogSequenceReserver
+	backenddb.LeafPageLogPrivateCOWPackHandoff
+	CurrentValueLogSegment() (string, uint32, bool)
+	ProtectedLeafGenerationRootIDs() []uint64
+	ProtectedLeafGenerationSystemRootIDs() []uint64
+	ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64)
+	ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64)
+}
+
+// cowPerfDictionaryLeafLog is a cross-platform copy of the dictionary leaf
+// appender helper so cow_read_workspace_perf_test.go compiles on Windows too.
+type cowPerfDictionaryLeafLog struct {
+	cowPerfDictionaryLeafLifecycle
+	db         *DB
+	dictID     uint64
+	dictionary []byte
+}
+
+func (l *cowPerfDictionaryLeafLog) LeafPageLogLane(workerIndex int) (backenddb.LeafPageLog, bool) {
+	if l == nil || workerIndex != 0 {
+		return nil, false
+	}
+	return l, true
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPage(leaf []byte) (page.LeafLogPtr, error) {
+	ptr, resources, err := l.AppendLeafPageWithStableResources(leaf)
+	resources.Release()
+	return ptr, err
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPages(leaves [][]byte) ([]page.LeafLogPtr, error) {
+	ptrs, resources, err := l.AppendLeafPagesWithStableResources(leaves)
+	resources.Release()
+	return ptrs, err
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPageWithStableResources(leaf []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	ptrs, resources, err := l.AppendLeafPagesWithStableResources([][]byte{leaf})
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	return ptrs[0], resources, nil
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPagesWithStableResources(leaves [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if len(leaves) == 0 {
+		return nil, nil, nil
+	}
+	start, err := l.db.ReserveValueLogRIDs(len(leaves))
+	if err != nil {
+		return nil, nil, err
+	}
+	records := make([]valuelog.Record, len(leaves))
+	for i, leaf := range leaves {
+		payload, _, err := valuelog.MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			return nil, nil, err
+		}
+		records[i] = valuelog.Record{RID: start + uint64(i), Value: payload}
+	}
+	ptrs, resources, err := l.db.appendValueLogWithStableResources(&l.db.leafLog, l.dictID, l.dictionary, records, journalDurabilityNone)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer putValueLogPtrs(ptrs)
+	if len(ptrs) != len(leaves) {
+		resources.Release()
+		return nil, nil, fmt.Errorf("dictionary leaf append returned %d pointers for %d pages", len(ptrs), len(leaves))
+	}
+	refs := make([]page.LeafLogPtr, len(ptrs))
+	for i, ptr := range ptrs {
+		refs[i], err = page.LeafLogPtrFromValuePtr(ptr)
+		if err != nil {
+			resources.Release()
+			return nil, nil, err
+		}
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return refs, resources, nil
+}
+
+type cowCountingDictProvider struct {
+	*dictdb.Store
+	prepareCalls atomic.Int64
+}
+
+func (p *cowCountingDictProvider) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, resources int, admit func(dictdb.DictionaryReadAllocationSizes) (func(), error)) (*dictdb.DictionaryReadDefinition, error) {
+	p.prepareCalls.Add(1)
+	return p.Store.PrepareDictionaryReadDefinition(id, limits, resources, admit)
+}
+
+func cowStandaloneLimitsForTest() memtable.COWLimits {
+	limits := memtable.DefaultCOWLimits()
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes = 1 << 30
+	limits.MaxRetiredBytes = 1 << 30
+	return limits
+}
+
+type cowDictLeafReadFixture struct {
+	db      *DB
+	backend *backenddb.DB
+	capture *NativeSemanticCapture
+	store   *cowCountingDictProvider
+	rootID  uint64
+	keys    [][]byte
+	want    []byte
+	valPtr  page.ValuePtr
+	valWant []byte
+	dictID  uint64
+}
+
+func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLimits, numKeys int) *cowDictLeafReadFixture {
+	tb.Helper()
+	if runtime.GOOS == "windows" {
+		tb.Skip("outer-leaf dictionary value-log persistence unsupported on Windows")
+	}
+	dir := tb.TempDir()
+	var store *dictdb.Store
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        filepath.Join(dir, "backend"),
+		Durability:                 backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPageReadCacheEntries:   -1, // disable verified leaf cache so every read exercises physical dictionary decode
+		ValueLog: backenddb.ValueLogOptions{
+			DictLookup: func(id uint64) ([]byte, error) {
+				if store == nil {
+					return nil, valuelog.ErrMissingDict
+				}
+				return store.GetDictBytes(context.Background(), id)
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		_ = backend.Close()
+		tb.Fatal(err)
+	}
+	opts := Options{
+		TransactionOwner:                    owner,
+		DisableWAL:                          true,
+		AllowUnsafe:                         true,
+		MemtableMode:                        "cow_btree",
+		COWMemtableLimits:                   limits,
+		MemtableShards:                      4,
+		FlushThreshold:                      1 << 30,
+		IndexOuterLeavesInValueLog:          true,
+		ValueLogPointerThreshold:            256,
+		ValueLogCompression:                 uint8(vlogCompressionDict),
+		ValueLogAutoPolicy:                  uint8(vlogAutoSize),
+		ValueLogCompressionAutotune:         valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+		ValueLogDictIncompressibleHoldBytes: -1,
+	}
+	opts.ValueLogDictTrain.TrainBytes = -1
+	db, err := Open(dir, backend, opts)
+	if err != nil {
+		_ = backend.Close()
+		tb.Fatal(err)
+	}
+	db.valueLogDictMaxK = 1
+	tb.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				tb.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		tb.Fatal(err)
+	}
+
+	want := bytes.Repeat([]byte("secondary-index-email-leaf-val|"), 4)
+	valWant := bytes.Repeat([]byte("secondary-index-dict-value-ptr|"), 128)
+	samples := make([][]byte, 8)
+	var history []byte
+	for sample := range samples {
+		leaf := make([]byte, page.PageSize)
+		builder := node.NewBuilderWithOptions(leaf, page.PageTypeLeaf, node.BuilderOptions{})
+		for i := 0; i < 16; i++ {
+			k := []byte(fmt.Sprintf("email-%06d", sample*16+i))
+			if err := builder.AddLeafEntry(k, want, node.FlagInline, page.ValuePtr{}); err != nil {
+				tb.Fatal(err)
+			}
+		}
+		builder.FinishNoNode()
+		samples[sample], _, err = valuelog.MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		history = append(history, samples[sample]...)
+	}
+	// Build a realistic ~112 KiB dictionary matching production outer-leaf dicts.
+	for len(history) < 112<<10 {
+		history = append(history, samples[len(history)%len(samples)]...)
+	}
+	if len(history) > 112<<10 {
+		history = history[:112<<10]
+	}
+	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       73,
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	store, err = dictdb.Open(filepath.Join(dir, "dictdb"), backenddb.Options{ChunkSize: 64 << 10})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	dictID, err := store.PutDictBytes(context.Background(), dictionary)
+	if err == nil {
+		err = store.SetCurrent(context.Background(), dictID)
+	}
+	if err == nil {
+		err = store.SetK(context.Background(), dictID, 1)
+	}
+	if err != nil {
+		_ = store.Close()
+		tb.Fatal(err)
+	}
+	counting := &cowCountingDictProvider{Store: store}
+	db.SetDictStore(counting)
+	backend.SetLeafPageLog(&cowPerfDictionaryLeafLog{
+		cowPerfDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog},
+		db:                             db,
+		dictID:                         dictID,
+		dictionary:                     dictionary,
+	})
+
+	keys := make([][]byte, numKeys)
+	batch := db.NewBatch()
+	for i := 0; i < numKeys; i++ {
+		k := []byte(fmt.Sprintf("email-%06d", i))
+		keys[i] = k
+		if err := batch.Set(k, want); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	if err := batch.Set([]byte("dict-value-ptr"), valWant); err != nil {
+		tb.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		tb.Fatal(err)
+	}
+	capRaw, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() {
+		_ = capRaw.Close()
+	})
+	capture := capRaw.(*NativeSemanticCapture)
+	token, ok := capture.Snapshot().StateToken()
+	if !ok {
+		tb.Fatal("missing basis state token")
+	}
+
+	// Verify real dictionary-compressed outer leaf provenance.
+	var ks, ls [page.PageSize]byte
+	var leafPtr page.LeafLogPtr
+	stop := errors.New("stop")
+	_, err = capture.Snapshot().GetEntryExactWithFixedScratch(keys[0], ks[:], ls[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) {
+		leafPtr = p
+		return nil, stop
+	})
+	if !errors.Is(err, stop) || leafPtr.FileID == 0 {
+		tb.Fatalf("expected outer leaf ptr, got %+v err=%v", leafPtr, err)
+	}
+	f, _, err := capture.Snapshot().PinnedValueLogFile(leafPtr.ValueLogFileID())
+	if err != nil {
+		tb.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, leafPtr.ValuePtr(), db.cow.readLimits())
+	if err != nil || !shape.Compressed || shape.DictID != dictID {
+		tb.Fatalf("expected dictionary leaf shape dictID=%d, got %+v err=%v", dictID, shape, err)
+	}
+
+	ptrEntry, err := capture.Snapshot().GetEntryAtRoot(token.RootPageID, []byte("dict-value-ptr"))
+	if err != nil || ptrEntry.Flags&node.FlagPointer == 0 {
+		tb.Fatalf("expected value pointer entry, got %+v err=%v", ptrEntry, err)
+	}
+	vf, _, err := capture.Snapshot().PinnedValueLogFile(ptrEntry.ValuePtr.FileID)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	vshape, err := valuelog.InspectCOWRecord(vf, ptrEntry.ValuePtr, db.cow.readLimits())
+	if err != nil || !vshape.Compressed || vshape.DictID != dictID {
+		tb.Fatalf("expected dictionary value shape dictID=%d, got %+v err=%v", dictID, vshape, err)
+	}
+
+	return &cowDictLeafReadFixture{
+		db:      db,
+		backend: backend,
+		capture: capture,
+		store:   counting,
+		rootID:  token.RootPageID,
+		keys:    keys,
+		want:    want,
+		valPtr:  ptrEntry.ValuePtr,
+		valWant: valWant,
+		dictID:  dictID,
+	}
+}
+
+func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
+	fix := newCOWConcurrentDictionaryLeafFixture(t, cowStandaloneLimitsForTest(), 512)
+	budget := fix.db.cow.budget
+
+	// 1. 16 concurrent readers (matching the 16 physical decoder lanes) performing
+	// 64 dictionary-compressed leaf reads each = 1024 decodes. With 16 cached lanes,
+	// dictionary preparation must be bounded to ~1 per lane rather than per-read churn.
+	const laneReaders = 16
+	const readsPerLane = 64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, laneReaders)
+	for g := 0; g < laneReaders; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			<-start
+			dst := make([]byte, 0, len(fix.want))
+			for j := 0; j < readsPerLane; j++ {
+				k := fix.keys[(id*31+j*7)%len(fix.keys)]
+				e, err := fix.capture.NativeEntryAtRootInto(fix.rootID, k, dst[:0])
+				if err != nil {
+					errs <- fmt.Errorf("g=%d j=%d leaf err=%v", id, j, err)
+					return
+				}
+				if !bytes.Equal(e.Value, fix.want) {
+					errs <- fmt.Errorf("g=%d j=%d leaf value mismatch len=%d", id, j, len(e.Value))
+					return
+				}
+				dst = e.Value[:0]
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	prepAfter16 := fix.store.prepareCalls.Load()
+	t.Logf("16 readers x %d dict leaf reads: PrepareDictionaryReadDefinition calls = %d", readsPerLane, prepAfter16)
+	if prepAfter16 == 0 || prepAfter16 > 64 {
+		t.Fatalf("excessive per-read dictionary preparation churn under 16 readers: calls=%d (want 1..64 for %d reads)", prepAfter16, laneReaders*readsPerLane)
+	}
+
+	// 2. 32 concurrent readers (> 16 lanes) exercising both dictionary-compressed
+	// outer leaves and dictionary-compressed value pointers simultaneously.
+	const readers32 = 32
+	const readsPer32 = 64
+	prepBefore32 := fix.store.prepareCalls.Load()
+	start32 := make(chan struct{})
+	errs32 := make(chan error, readers32)
+	for g := 0; g < readers32; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			<-start32
+			dst := make([]byte, 0, len(fix.want))
+			vdst := make([]byte, 0, len(fix.valWant))
+			for j := 0; j < readsPer32; j++ {
+				k := fix.keys[(id*37+j*11)%len(fix.keys)]
+				e, err := fix.capture.NativeEntryAtRootInto(fix.rootID, k, dst[:0])
+				if err != nil || !bytes.Equal(e.Value, fix.want) {
+					errs32 <- fmt.Errorf("r32 g=%d j=%d leaf err=%v len=%d", id, j, err, len(e.Value))
+					return
+				}
+				dst = e.Value[:0]
+				if j%8 == 0 {
+					v, err := fix.capture.NativeValueAtPointerInto(fix.valPtr, vdst[:0], nil)
+					if err != nil || !bytes.Equal(v, fix.valWant) {
+						errs32 <- fmt.Errorf("r32 g=%d j=%d value err=%v len=%d", id, j, err, len(v))
+						return
+					}
+					vdst = v[:0]
+				}
+			}
+		}(g)
+	}
+	close(start32)
+	wg.Wait()
+	close(errs32)
+	for err := range errs32 {
+		t.Fatal(err)
+	}
+	prepDelta32 := fix.store.prepareCalls.Load() - prepBefore32
+	t.Logf("32 readers x %d dict leaf+value reads: additional PrepareDictionaryReadDefinition calls = %d", readsPer32, prepDelta32)
+	if prepDelta32 > 512 {
+		t.Fatalf("excessive dictionary preparation churn under 32 readers: delta=%d (want <= 512 for %d+ reads)", prepDelta32, readers32*readsPer32)
+	}
+
+	// 3. Deterministically force lane-0 contention before asserting spillover
+	// slot population (so single-CPU / GOMAXPROCS=1 runners never flake), and
+	// verify holding Lane 0 (physicalMu) does NOT block
+	// tryReleaseIdleGenericReadScratch() from draining cached dictionary codecs
+	// in idle spillover lanes.
+	if got := fix.db.cow.maxRetainedPhysicalSlots(); got != len(fix.db.cow.physicalSlots) {
+		t.Fatalf("Standalone maxRetainedPhysicalSlots=%d want %d", got, len(fix.db.cow.physicalSlots))
+	}
+	fix.db.cow.physicalMu.Lock()
+	var spillDone sync.WaitGroup
+	spillDone.Add(1)
+	var spillErr error
+	go func() {
+		defer spillDone.Done()
+		_, spillErr = fix.capture.NativeEntryAtRoot(fix.rootID, fix.keys[0], true)
+	}()
+	spillDone.Wait()
+	if spillErr != nil {
+		fix.db.cow.physicalMu.Unlock()
+		t.Fatalf("spillover read while lane 0 held: %v", spillErr)
+	}
+	warmSpillSlots := 0
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Lock()
+		if fix.db.cow.physicalSlots[i].reader != nil {
+			warmSpillSlots++
+		}
+		fix.db.cow.physicalSlots[i].mu.Unlock()
+	}
+	if warmSpillSlots == 0 {
+		fix.db.cow.physicalMu.Unlock()
+		t.Fatal("expected at least one physicalSlots spillover lane to be populated while lane 0 held")
+	}
+	if !fix.capture.TryReleaseIdleNativeReadScratch() {
+		fix.db.cow.physicalMu.Unlock()
+		t.Fatal("TryReleaseIdleNativeReadScratch returned false while idle spillover lane held dictionary codec")
+	}
+	// Lane 0's cached dictionary codec must still be intact because physicalMu was held.
+	lane0HasDict := false
+	if fix.db.cow.physicalReader != nil {
+		for _, c := range fix.db.cow.physicalReader.codecs {
+			if c != nil && c.id == fix.dictID {
+				lane0HasDict = true
+			}
+		}
+	}
+	fix.db.cow.physicalMu.Unlock()
+	if !lane0HasDict {
+		t.Fatal("TryReleaseIdleNativeReadScratch disturbed busy lane-0 dictionary codec")
+	}
+
+	// Now Lane 0 itself is idle and must also be releasable.
+	if !fix.capture.TryReleaseIdleNativeReadScratch() {
+		t.Fatal("TryReleaseIdleNativeReadScratch did not release idle lane-0 dictionary codec")
+	}
+	if fix.capture.TryReleaseIdleNativeReadScratch() {
+		t.Fatal("TryReleaseIdleNativeReadScratch reported release when all lanes were already drained")
+	}
+
+	// 4. Headroom guard: when non-maintenance ReservedBytes reaches half of the
+	// usable (non-maintenance) in-flight budget, cold spillover slots must NOT be
+	// lazily admitted; reads spill to ephemeral temp workspaces and refund 100% of
+	// temporary reservations on return.
+	fix.db.cow.closePhysicalReader()
+	beforeGuard := budget.Stats()
+	maxInFlight := budget.Limits().MaxInFlightBytes
+	maintBytes := fix.db.cow.maintenance.Limits().MaxInFlightBytes
+	guardThreshold := maintBytes + (maxInFlight-maintBytes)/2
+	var headroomPressure *memtable.COWExternalLease
+	if beforeGuard.ReservedBytes < guardThreshold {
+		var err error
+		headroomPressure, err = budget.AcquireExternal(guardThreshold - beforeGuard.ReservedBytes + (1 << 20))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fix.db.cow.physicalMu.Lock()
+	beforeTemp := budget.Stats()
+	if _, err := fix.capture.NativeEntryAtRoot(fix.rootID, fix.keys[0], true); err != nil {
+		fix.db.cow.physicalMu.Unlock()
+		headroomPressure.Close()
+		t.Fatalf("headroom-guarded temp spill read: %v", err)
+	}
+	afterTemp := budget.Stats()
+	fix.db.cow.physicalMu.Unlock()
+	headroomPressure.Close()
+	if afterTemp.ReservedBytes != beforeTemp.ReservedBytes || afterTemp.ExternalLeases != beforeTemp.ExternalLeases {
+		t.Fatalf("headroom-guarded read retained spillover slot instead of temp spill: before=%+v after=%+v", beforeTemp, afterTemp)
+	}
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Lock()
+		r := fix.db.cow.physicalSlots[i].reader
+		fix.db.cow.physicalSlots[i].mu.Unlock()
+		if r != nil {
+			t.Fatalf("physicalSlots[%d] was lazily admitted despite ReservedBytes >= MaxInFlightBytes/2", i)
+		}
+	}
+
+	// 5. Shared-lane ErrCOWCapacity reclamation (:408): warm Lane 0 and Slot 0
+	// with dictionary codecs, then fill the remaining budget so Slot 1 cannot
+	// admit its dictionary decoder without reclaiming idle codecs on other lanes.
+	if _, err := fix.capture.NativeEntryAtRoot(fix.rootID, fix.keys[0], true); err != nil {
+		t.Fatal(err)
+	}
+	fix.db.cow.physicalMu.Lock()
+	if _, err := fix.capture.NativeEntryAtRoot(fix.rootID, fix.keys[1], true); err != nil {
+		fix.db.cow.physicalMu.Unlock()
+		t.Fatal(err)
+	}
+	// Pre-admit Slot 1's workspace (without codec) while headroom exists.
+	slot1Idx := -1
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Lock()
+		if fix.db.cow.physicalSlots[i].reader == nil && slot1Idx < 0 {
+			w, err := fix.db.cow.physicalWorkspaceSlotLocked(&fix.db.cow.physicalSlots[i].reader, fix.db.cow.readLimits())
+			if err != nil {
+				fix.db.cow.physicalSlots[i].mu.Unlock()
+				fix.db.cow.physicalMu.Unlock()
+				t.Fatal(err)
+			}
+			_ = w
+			slot1Idx = i
+		}
+		fix.db.cow.physicalSlots[i].mu.Unlock()
+	}
+	fix.db.cow.physicalMu.Unlock()
+	if slot1Idx < 0 {
+		t.Fatal("failed to prepare empty spillover slot for ErrCOWCapacity reclamation test")
+	}
+	// Leave enough room for dictionary definition (~112 KiB) + overhead, but NOT
+	// enough for a second ~500+ KiB bounded decoder without reclaiming idle lanes.
+	beforeReclaim := budget.Stats()
+	headroom := uint64(256 << 10)
+	leaseOverhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	if budget.Limits().MaxInFlightBytes > beforeReclaim.ReservedBytes+headroom+leaseOverhead {
+		reclaimPressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - beforeReclaim.ReservedBytes - headroom - leaseOverhead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Lock all lanes except slot1Idx so the read lands on slot1Idx and triggers
+		// :408 idle reclamation, wait—leave Lane 0 unlocked so slot1Idx can reclaim
+		// Lane 0's idle dictionary codec! Lock all OTHER slots that aren't Lane 0 or slot1Idx,
+		// and acquire slot1Idx directly through readInspectedPhysicalLeaf? Simpler: hold
+		// every slot except Lane 0 and slot1Idx, hold Lane 0? No, if Lane 0 is unlocked,
+		// tryLockPhysicalLane picks Lane 0! So to test slot1Idx reclaiming idle Lane 0:
+		// directly invoke codecWithDictionary via readNativeValueWithWorkspace on slot1Idx
+		// while holding slot1Idx.mu (Lane 0 unlocked and idle with cached dict codec).
+		slot1 := &fix.db.cow.physicalSlots[slot1Idx]
+		slot1.mu.Lock()
+		gotVal, err := fix.capture.cut.basis.readNativeValueWithWorkspace(fix.db.cow, slot1.reader, fix.store, fix.valPtr, nil, false, nil)
+		slot1.mu.Unlock()
+		reclaimPressure.Close()
+		if err != nil || !bytes.Equal(gotVal, fix.valWant) {
+			t.Fatalf("shared physical lane failed to reclaim idle codecs on ErrCOWCapacity: len=%d err=%v", len(gotVal), err)
+		}
+	}
+
+	// 5b. Contended NativeValueAtPointer with Lane 0 held and exhausted budget
+	// must refuse inspection admission cleanly with ErrCOWCapacity and zero leaks.
+	beforeExhaust := budget.Stats()
+	exhaustPressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - beforeExhaust.ReservedBytes - leaseOverhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix.db.cow.physicalMu.Lock()
+	_, exhaustErr := fix.capture.NativeValueAtPointer(fix.valPtr, nil)
+	fix.db.cow.physicalMu.Unlock()
+	exhaustPressure.Close()
+	if !errors.Is(exhaustErr, memtable.ErrCOWCapacity) {
+		t.Fatalf("contended NativeValueAtPointer under exhausted budget err=%v want ErrCOWCapacity", exhaustErr)
+	}
+	if afterExhaust := budget.Stats(); afterExhaust.ReservedBytes != beforeExhaust.ReservedBytes || afterExhaust.ExternalLeases != beforeExhaust.ExternalLeases {
+		t.Fatalf("contended exhausted NativeValueAtPointer leaked budget: before=%+v after=%+v", beforeExhaust, afterExhaust)
+	}
+
+	// 6. Close capture and DB: 100% of lane 0 + spillover leases must be refunded.
+	if err := fix.capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fix.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ReservedBytes != 0 || stats.ExternalLeases != 0 {
+		t.Fatalf("close leaked physical lane budget: %+v", stats)
+	}
+
+	// 7. Dynamic slot cap under DefaultCOWLimits (64 MiB -> 3 extra slots = 4 lanes).
+	defFix := newCOWConcurrentDictionaryLeafFixture(t, memtable.DefaultCOWLimits(), 64)
+	if got := defFix.db.cow.maxRetainedPhysicalSlots(); got != 3 {
+		t.Fatalf("DefaultCOWLimits maxRetainedPhysicalSlots=%d want 3", got)
+	}
+}
+
+func BenchmarkCOWConcurrentDictionaryLeafRead32(b *testing.B) {
+	fix := newCOWConcurrentDictionaryLeafFixture(b, cowStandaloneLimitsForTest(), 512)
+	if p := runtime.GOMAXPROCS(0); p < 32 {
+		b.SetParallelism((32 + p - 1) / p)
+	}
+	// Warm lane 0 once outside timer.
+	if _, err := fix.capture.NativeEntryAtRoot(fix.rootID, fix.keys[0], true); err != nil {
+		b.Fatal(err)
+	}
+	var workerSeq atomic.Uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		idx := workerSeq.Add(1) * 2654435761
+		dst := make([]byte, 0, len(fix.want))
+		for pb.Next() {
+			idx = idx*6364136223846793005 + 1442695040888963407
+			k := fix.keys[idx%uint64(len(fix.keys))]
+			e, err := fix.capture.NativeEntryAtRootInto(fix.rootID, k, dst[:0])
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			if len(e.Value) != len(fix.want) {
+				b.Errorf("len=%d want=%d", len(e.Value), len(fix.want))
+				return
+			}
+			dst = e.Value[:0]
+		}
+	})
 }

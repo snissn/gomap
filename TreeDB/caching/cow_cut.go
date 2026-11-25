@@ -454,14 +454,24 @@ func cowReadStripe(key []byte) uint32 {
 	return h & cowReadGateMask
 }
 
+type cowPhysicalReadSlot struct {
+	mu     sync.Mutex
+	reader *cowReadWorkspace
+	_      [64 - unsafe.Sizeof(sync.Mutex{}) - unsafe.Sizeof(uintptr(0))]byte
+}
+
 // cowCache serializes private preparation separately from the brief read latch.
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
 	ordered bool
-	// Lock order is scope/caller -> basis.readMu/readSlot.mu -> physicalMu -> budget.mu.
+	// Lock order is scope/caller -> basis.readMu/readSlot.mu -> physicalMu/physicalSlot.mu -> budget.mu.
 	// Pure decoder scratch never acquires a basis, scope or publication lock.
 	physicalMu                                                                                     sync.Mutex
 	physicalReader                                                                                 *cowReadWorkspace
+	_                                                                                              [64 - unsafe.Sizeof(sync.Mutex{}) - unsafe.Sizeof(uintptr(0))]byte
+	physicalSlots                                                                                  [15]cowPhysicalReadSlot // bounded, opportunistic 64B-padded parallel physical decoder owners
+	physicalLaneSeed                                                                               atomic.Uint32
+	_                                                                                              [64 - unsafe.Sizeof(atomic.Uint32{})]byte
 	journalBarrierActive                                                                           atomic.Bool
 	journalBarrierEffects, journalBarrierBytes, journalBarrierReplacement, journalBarrierConflicts atomic.Uint64
 	commitWaitNs, commitHoldNs, validationNs, tooOld                                               atomic.Uint64
@@ -512,6 +522,97 @@ type cowCache struct {
 // Backend wrapper capture uses a separate lease: a basis can outlive every
 // generation that existed when it was captured. Cache and cut allocations also
 // have independent lifetimes rather than attaching them to an arbitrary shard.
+func (c *cowCache) maxRetainedPhysicalSlots() int {
+	if c == nil || c.budget == nil {
+		return 0
+	}
+	units := c.budget.Limits().MaxInFlightBytes / (16 << 20)
+	if units <= 1 {
+		return 0
+	}
+	extra := units - 1
+	if extra > uint64(len(c.physicalSlots)) {
+		return len(c.physicalSlots)
+	}
+	return int(extra)
+}
+
+// canAdmitPhysicalSpillSlot returns true when non-maintenance in-flight
+// reservations are below half of the usable (non-maintenance) in-flight budget.
+// newCOWCacheMode reserves half of MaxInFlightBytes up front for c.maintenance,
+// so subtracting c.maintenance's fixed reservation yields the exact usable
+// headroom (equivalent to ReservedBytes < 3/4*MaxInFlightBytes under normal
+// startup, matching reservationSoftPressure).
+func (c *cowCache) canAdmitPhysicalSpillSlot() bool {
+	if c == nil || c.budget == nil {
+		return false
+	}
+	maxInFlight := c.budget.Limits().MaxInFlightBytes
+	reserved := c.budget.Stats().ReservedBytes
+	var maintenance uint64
+	if c.maintenance != nil {
+		maintenance = c.maintenance.Limits().MaxInFlightBytes
+	}
+	if maintenance >= maxInFlight {
+		return false
+	}
+	usable := maxInFlight - maintenance
+	if reserved <= maintenance {
+		return true
+	}
+	return reserved-maintenance < usable/2
+}
+
+// tryLockPhysicalLane acquires lane 0 first (preserving single-goroutine lane-0
+// affinity) and otherwise probes up to maxRetainedPhysicalSlots() spillover
+// slots. Cold spillover slots are admitted only when canAdmitPhysicalSpillSlot()
+// reports sufficient headroom; already-warm slots remain reusable.
+func (c *cowCache) tryLockPhysicalLane(seed uint32) (*sync.Mutex, **cowReadWorkspace, bool) {
+	if c.physicalMu.TryLock() {
+		return &c.physicalMu, &c.physicalReader, true
+	}
+	maxExtra := c.maxRetainedPhysicalSlots()
+	if maxExtra <= 0 {
+		return nil, nil, false
+	}
+	n := uint32(maxExtra)
+	start := seed % n
+	checkedHeadroom := false
+	canAdmit := false
+	for i := uint32(0); i < n; i++ {
+		slot := &c.physicalSlots[(start+i)%n]
+		if slot.mu.TryLock() {
+			if slot.reader != nil {
+				return &slot.mu, &slot.reader, true
+			}
+			if !checkedHeadroom {
+				canAdmit = c.canAdmitPhysicalSpillSlot()
+				checkedHeadroom = true
+			}
+			if canAdmit {
+				return &slot.mu, &slot.reader, true
+			}
+			slot.mu.Unlock()
+		}
+	}
+	return nil, nil, false
+}
+
+// physicalWorkspaceSlotLocked requires the owning lane mutex (physicalMu or
+// physicalSlots[i].mu). Only the original cache owns this admitted scratch;
+// snapshot/basis remain nil even across physical handoffs.
+func (c *cowCache) physicalWorkspaceSlotLocked(reader **cowReadWorkspace, limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
+	if *reader == nil {
+		w, err := admitCOWReadWorkspace(c.budget, limits)
+		if err != nil {
+			return nil, err
+		}
+		*reader = w
+	}
+	(*reader).limits = limits
+	return *reader, nil
+}
+
 func (c *cowCache) newWriter(maintenance bool) (*memtable.COWWriter, error) {
 	if maintenance {
 		if c.ordered {
