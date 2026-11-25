@@ -43,15 +43,31 @@ func (g *OwnedCallbackCloseGuard) Enter() error {
 	return nil
 }
 
+// CurrentGoroutineID returns the caller's immutable runtime goroutine ID.
+// Dedicated long-lived worker goroutines can capture it once at startup and
+// pass it to EnterCleanupWithGoroutineID to avoid repeated runtime.Stack calls.
+func CurrentGoroutineID() uint64 {
+	return currentGoroutineID()
+}
+
 // EnterCleanup marks only the existing flush worker lane. Each fixed lane owns
 // its marker; nested callbacks on either lane refuse without a mutex or wait.
 func (g *OwnedCallbackCloseGuard) EnterCleanup() error {
+	return g.EnterCleanupWithGoroutineID(0)
+}
+
+// EnterCleanupWithGoroutineID marks only the existing flush worker lane using
+// a caller-cached goroutine ID when non-zero, falling back to
+// currentGoroutineID() when caller is zero.
+func (g *OwnedCallbackCloseGuard) EnterCleanupWithGoroutineID(caller uint64) error {
 	if g == nil {
 		return rootpublication.ErrPublisherProtocol
 	}
-	caller := currentGoroutineID()
 	if caller == 0 {
-		return rootpublication.ErrPublisherProtocol
+		caller = currentGoroutineID()
+		if caller == 0 {
+			return rootpublication.ErrPublisherProtocol
+		}
 	}
 	if g.caller.Load() == caller || !g.cleanup.CompareAndSwap(0, caller) {
 		return rootpublication.ErrDurableRootOwnership

@@ -3836,7 +3836,7 @@ func currentGoroutineID() uint64 {
 	for end < n && buf[end] >= '0' && buf[end] <= '9' {
 		end++
 	}
-	if end == len(prefix) {
+	if end == len(prefix) || end >= n || buf[end] != ' ' {
 		return 0
 	}
 	id, err := strconv.ParseUint(string(buf[len(prefix):end]), 10, 64)

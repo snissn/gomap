@@ -108,6 +108,10 @@ func retainCOWSemanticState(cut *cowReadCut) {
 }
 
 func (db *DB) drainSemanticCleanup() {
+	db.drainSemanticCleanupWithGID(0)
+}
+
+func (db *DB) drainSemanticCleanupWithGID(workerGID uint64) {
 	c := db.cow
 	if c == nil {
 		return
@@ -141,7 +145,7 @@ func (db *DB) drainSemanticCleanup() {
 		var completion rootpublication.SemanticCleanupCompletion
 		var err error
 		if !entered {
-			err = guard.EnterCleanup()
+			err = guard.EnterCleanupWithGoroutineID(workerGID)
 			if err == nil {
 				entered = true
 			}
