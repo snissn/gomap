@@ -187,18 +187,22 @@ func (opts *finalizeCommitOptions) releaseRootConstruction() {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false, false)
+	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false, false, false, nil)
 }
 
 func (db *DB) publishCurrentCommandWALRoots(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, false)
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, false, false, nil)
 }
 
 func (db *DB) publishCurrentCommandWALRootsTeardownPinned(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, true)
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, true, false, nil)
 }
 
-func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool, teardownPinned bool) error {
+func (db *DB) publishCurrentCommandWALRootsExactTeardownPinned(appliedLSN uint64, covered []CommandWALLSNRange, sync bool, owner *transactionowner.Owner) error {
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, true, true, owner)
+}
+
+func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool, teardownPinned bool, forceExactDependencyScan bool, owner *transactionowner.Owner) error {
 	if db == nil {
 		return ErrClosed
 	}
@@ -260,7 +264,7 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		db.mu.RUnlock()
 	}
 	var vlogRefDelta *valueLogRefDelta
-	if rootsUnchanged {
+	if rootsUnchanged && !forceExactDependencyScan {
 		vlogRefDelta = db.newNoopValueLogRefDeltaForRootsIfTrackable(idx, baseSeq, newRootID)
 	}
 	db.writeMu.Unlock()
@@ -275,7 +279,7 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 
 	finalizeOpts := finalizeCommitOptions{
 		negativeCoverage:         negativeCoverage,
-		commandWALPublish:        true,
+		commandWALPublish:        owner == nil,
 		appliedCommandLSN:        appliedLSN,
 		appliedRanges:            covered,
 		skipPrePublishFlush:      true,
@@ -286,6 +290,11 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		releaseRootSerialization: func() {},
 		expectedBaseCommitSeq:    baseSeq,
 		hasExpectedBaseCommitSeq: true,
+	}
+	if owner != nil {
+		finalizeOpts.privateCOWRewrite = newPrivateCOWRewriteFinalization(owner, nil)
+		finalizeOpts.appliedCommandLSN = 0
+		finalizeOpts.appliedRanges = nil
 	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
@@ -478,6 +487,128 @@ func (db *DB) refreshDurableRootFallback() error {
 		return fmt.Errorf("command WAL checkpoint fallback refresh did not converge: selected_lsn=%d fallback_lsn=%d want_lsn=%d selected_roots=%d/%d fallback_roots=%d/%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN, selected.UserRootPageID, selected.SystemRootPageID, fallback.UserRootPageID, fallback.SystemRootPageID)
 	}
 	return nil
+}
+
+// refreshDurableRootSlotsForDeletedOuterLeafFiles converges durable meta slots
+// whose on-disk dependency closures still conservatively pin raw outer-leaf
+// segments that LeafGenerationGC has already proved unreachable from both live
+// and recoverable roots (State == deleted). Each refresh is a same-root,
+// same-LSN metadata publication using an exact dependency scan so both durable
+// slots drop those dead raw-leaf identity pins safely on disk before GC unlinks
+// the files.
+func (db *DB) refreshDurableRootSlotsForDeletedOuterLeafFiles(owner *transactionowner.Owner) (bool, error) {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog {
+		return false, nil
+	}
+	if db.nativeSemanticActive.Load() && owner != db.privateCOWOwner {
+		return false, nil
+	}
+	var unlockCommandWALPublish func()
+	if db.commandWAL && owner == nil {
+		unlockCommandWALPublish = db.lockCommandWALRawPublishWithTeardown()
+	} else {
+		db.teardownMu.RLock()
+		unlockCommandWALPublish = db.teardownMu.RUnlock
+	}
+	defer unlockCommandWALPublish()
+
+	refreshedAny := false
+	for pass := 0; pass < 2; pass++ {
+		db.writeMu.RLock()
+		db.mu.RLock()
+		runtime := db.rootPublication
+		visible := db.state.Load()
+		manifest := db.leafGenerationManifest
+		db.mu.RUnlock()
+		if visible == nil {
+			db.writeMu.RUnlock()
+			return refreshedAny, ErrClosed
+		}
+		if manifest == nil {
+			db.writeMu.RUnlock()
+			return refreshedAny, nil
+		}
+		activeFileRefs := leafGenerationActiveFileRefCounts(manifest)
+		deletedRaw := make(map[uint32]struct{})
+		for _, gen := range manifest.Generations {
+			if gen.State != leafGenerationStateDeleted {
+				continue
+			}
+			for _, rawFileID := range gen.FileIDs {
+				if rawFileID == 0 || activeFileRefs[rawFileID] > 0 {
+					continue
+				}
+				deletedRaw[rawFileID] = struct{}{}
+			}
+		}
+		if len(deletedRaw) == 0 {
+			db.writeMu.RUnlock()
+			return refreshedAny, nil
+		}
+		if runtime != nil && runtime.coordinator != nil {
+			if err := runtime.coordinator.WaitThrough(context.Background(), visible.CommitSeq); err != nil {
+				db.writeMu.RUnlock()
+				return refreshedAny, publicRootPublicationErrorV1(err)
+			}
+		}
+
+		needsRefresh := false
+		checkSet := func(resources *rootpublication.StableResourceSet) {
+			if needsRefresh || resources == nil {
+				return
+			}
+			kinds := [...]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafLog}
+			_ = resources.WalkPhysicalResourceIdentities(kinds[:], func(_ rootpublication.ResourceKind, generation uint64, _ rootpublication.StableIdentity, _ [32]byte) error {
+				if generation == 0 || generation > uint64(^uint32(0)) {
+					return nil
+				}
+				if rawFileID, ok := rawLeafGenerationFileID(uint32(generation)); ok {
+					if _, deleted := deletedRaw[rawFileID]; deleted {
+						needsRefresh = true
+					}
+				}
+				return nil
+			})
+		}
+		db.durablePublishMu.Lock()
+		checkSet(db.durableRoot.slotResources[0])
+		checkSet(db.durableRoot.slotResources[1])
+		db.durablePublishMu.Unlock()
+		if !needsRefresh && runtime != nil {
+			runtime.mu.Lock()
+			if runtime.poison == nil {
+				checkSet(runtime.visibleResources)
+			}
+			runtime.mu.Unlock()
+		}
+		appliedLSN := visible.AppliedCommandLSN
+		db.writeMu.RUnlock()
+		if !needsRefresh {
+			return refreshedAny, nil
+		}
+
+		if err := db.publishCurrentCommandWALRootsExactTeardownPinned(appliedLSN, nil, true, owner); err != nil {
+			return refreshedAny, err
+		}
+		refreshedAny = true
+
+		// Wait for the refreshed root to complete durable activation so the
+		// superseded slot's StableResourceSet (and its identity pins) are
+		// released before checking the remaining slot or returning to GC.
+		db.writeMu.RLock()
+		db.mu.RLock()
+		runtime = db.rootPublication
+		after := db.state.Load()
+		db.mu.RUnlock()
+		if after != nil && runtime != nil && runtime.coordinator != nil {
+			if err := runtime.coordinator.WaitThrough(context.Background(), after.CommitSeq); err != nil {
+				db.writeMu.RUnlock()
+				return refreshedAny, publicRootPublicationErrorV1(err)
+			}
+		}
+		db.writeMu.RUnlock()
+	}
+	return refreshedAny, nil
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

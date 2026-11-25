@@ -65,20 +65,21 @@ type nativeOrderedRootTransition struct {
 type RootPublicationBuildGroup struct {
 	// Only the four newest current outputs can be borrowed synchronously.
 	// This is a read-capability window, never a construction limit or registry.
-	nativeBuiltRoots           [4]uint64
-	nativeBuiltRootCount       uint8
-	nativeRootTransitions      []nativeOrderedRootTransition
-	startLeafSegments          []LeafPageLogSegment
-	startLeafSegmentsErr       error
-	outerLeafSegmentsAdded     bool
-	vlogRefDeltaUncovered      bool
-	nativeResources            *rootpublication.StableResourceSet
-	nativeRequirements         rootpublication.StableLogicalObligationRequirements
-	nativeAppend               rootpublication.StableLogicalObligationMutation
-	nativeRequirementWork      rootpublication.StableResourceClosureWork
-	nativeRequirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
-	negativeCoverage           *negativeRootCoverage
-	mu                         sync.Mutex
+	nativeBuiltRoots             [4]uint64
+	nativeBuiltRootCount         uint8
+	nativeRootTransitions        []nativeOrderedRootTransition
+	startLeafSegments            []LeafPageLogSegment
+	startLeafSegmentsErr         error
+	leafSegmentObservationActive bool
+	outerLeafSegmentsAdded       bool
+	vlogRefDeltaUncovered        bool
+	nativeResources              *rootpublication.StableResourceSet
+	nativeRequirements           rootpublication.StableLogicalObligationRequirements
+	nativeAppend                 rootpublication.StableLogicalObligationMutation
+	nativeRequirementWork        rootpublication.StableResourceClosureWork
+	nativeRequirementsFallback   func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	negativeCoverage             *negativeRootCoverage
+	mu                           sync.Mutex
 
 	db                *DB
 	coordinator       *rootpublication.Coordinator
@@ -248,6 +249,8 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot, lease *StableResou
 	}
 	db.durablePublishMu.Lock()
 	group.durablePublishLocked = true
+	db.beginBuildGroupLeafSegmentObservation()
+	group.leafSegmentObservationActive = true
 	if err := db.commandWALPoisonedError(); err != nil {
 		return nil, err
 	}
@@ -459,6 +462,17 @@ func (group *RootPublicationBuildGroup) releaseWriteLocked() {
 	group.db.writeMu.Unlock()
 }
 
+func (group *RootPublicationBuildGroup) finishLeafSegmentObservationLocked() []uint32 {
+	if group == nil || !group.leafSegmentObservationActive {
+		return nil
+	}
+	group.leafSegmentObservationActive = false
+	if group.db == nil {
+		return nil
+	}
+	return group.db.finishBuildGroupLeafSegmentObservation()
+}
+
 func (group *RootPublicationBuildGroup) releaseDurablePublishLocked() {
 	if group == nil || !group.durablePublishLocked {
 		return
@@ -522,33 +536,75 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		releaseValueLogRefDelta(group.vlogRefDelta)
 		group.vlogRefDelta = nil
 	}
-	if !group.outerLeafSegmentsAdded && group.vlogRefDelta != nil && group.vlogRefDelta.outerLeafDependencyReuse && !group.vlogRefDelta.ordinaryRawProducer {
-		if db.leafPageLog != nil {
-			endLeafSegments, err := leafPageLogCurrentSegments(db.leafPageLog)
-			if err != nil {
-				return err
-			}
-			createdLeafSegments, err := leafPageLogCreatedSegments(db.leafPageLog)
-			if err != nil {
-				return err
-			}
-			if group.startLeafSegmentsErr != nil ||
-				len(group.startLeafSegments) == 0 ||
-				!leafPageLogSegmentsSameFileIDs(group.startLeafSegments, endLeafSegments) ||
-				!leafPageLogSegmentsSubsetOf(createdLeafSegments, group.startLeafSegments) {
-				// One or more leaf-log segments were opened or rotated during this
-				// build group. In COW mode, intermediate rotations are registered
-				// directly without being retained in createdSegments, so fail closed
-				// to the exact candidate scanner to capture every new segment.
-				group.vlogRefDelta.requiresCandidateProjection = true
-				group.vlogRefDelta.allowEmptyDependencyReuse = false
-			} else {
-				if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, group.vlogRefDelta); err != nil {
-					return err
-				}
-				group.outerLeafSegmentsAdded = true
+	if !group.outerLeafSegmentsAdded && group.vlogRefDelta != nil && group.vlogRefDelta.outerLeafDependencyReuse && !group.vlogRefDelta.ordinaryRawProducer && db.leafPageLog != nil {
+		endLeafSegments, err := leafPageLogCurrentSegments(db.leafPageLog)
+		if err != nil {
+			return err
+		}
+		createdLeafSegments, err := leafPageLogCreatedSegments(db.leafPageLog)
+		if err != nil {
+			return err
+		}
+		observedLeafSegmentIDs := group.finishLeafSegmentObservationLocked()
+		knownLeafSegmentIDs := make(map[uint32]struct{}, len(group.startLeafSegments)+len(observedLeafSegmentIDs)+len(createdLeafSegments))
+		for _, seg := range group.startLeafSegments {
+			if seg.FileID != 0 {
+				knownLeafSegmentIDs[seg.FileID] = struct{}{}
 			}
 		}
+		for _, fileID := range observedLeafSegmentIDs {
+			if fileID != 0 {
+				knownLeafSegmentIDs[fileID] = struct{}{}
+			}
+		}
+		for _, seg := range createdLeafSegments {
+			if seg.FileID != 0 {
+				knownLeafSegmentIDs[seg.FileID] = struct{}{}
+			}
+		}
+		allEndCovered := group.startLeafSegmentsErr == nil
+		if allEndCovered {
+			for _, seg := range endLeafSegments {
+				if seg.FileID == 0 {
+					continue
+				}
+				if _, ok := knownLeafSegmentIDs[seg.FileID]; !ok {
+					allEndCovered = false
+					break
+				}
+			}
+		}
+		var allIDs []uint32
+		if allEndCovered {
+			for _, seg := range endLeafSegments {
+				if seg.FileID != 0 {
+					knownLeafSegmentIDs[seg.FileID] = struct{}{}
+				}
+			}
+			if len(knownLeafSegmentIDs) > 0 {
+				allIDs = make([]uint32, 0, len(knownLeafSegmentIDs))
+				for fileID := range knownLeafSegmentIDs {
+					allIDs = append(allIDs, fileID)
+				}
+			}
+			allEndCovered = db.outerLeafReuseDependenciesActive(allIDs)
+		}
+		if !allEndCovered {
+			// One or more end leaf-log segments were not accounted for by
+			// startLeafSegments ∪ observedLeafSegmentIDs ∪ createdLeafSegments,
+			// or a carried-forward / candidate outer-leaf segment was retired
+			// or unregistered by GC. Fail closed to the exact candidate scanner
+			// to capture only live reachable segments.
+			group.vlogRefDelta.requiresCandidateProjection = true
+			group.vlogRefDelta.allowEmptyDependencyReuse = false
+		} else {
+			if len(allIDs) > 0 {
+				addOuterLeafSegmentIDsToValueLogRefDelta(group.vlogRefDelta, allIDs)
+			}
+			group.outerLeafSegmentsAdded = true
+		}
+	} else {
+		group.finishLeafSegmentObservationLocked()
 	}
 
 	intent := b.commandWALPublishIntent
@@ -728,6 +784,7 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	if group.closed {
 		return group.cleanupErr
 	}
+	group.finishLeafSegmentObservationLocked()
 	var primaryErr error
 	if group.primaryCurrentAbortErr != nil {
 		// A sealed successor still owns genuine edges into this failed predecessor.
@@ -965,52 +1022,4 @@ func (group *RootPublicationBuildGroup) BindAcceptedPrefixCut(cut rootpublicatio
 	}
 	group.acceptedPrefixCut = cut
 	return nil
-}
-
-func leafPageLogSegmentsSameFileIDs(a, b []LeafPageLogSegment) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	if len(a) == 0 {
-		return true
-	}
-	if len(a) == 1 {
-		return a[0].FileID != 0 && a[0].FileID == b[0].FileID
-	}
-	seen := make(map[uint32]struct{}, len(a))
-	for _, seg := range a {
-		if seg.FileID == 0 {
-			return false
-		}
-		seen[seg.FileID] = struct{}{}
-	}
-	if len(seen) != len(a) {
-		return false
-	}
-	for _, seg := range b {
-		if _, ok := seen[seg.FileID]; !ok {
-			return false
-		}
-		delete(seen, seg.FileID)
-	}
-	return len(seen) == 0
-}
-
-func leafPageLogSegmentsSubsetOf(subset, superset []LeafPageLogSegment) bool {
-	for _, seg := range subset {
-		if seg.FileID == 0 {
-			continue
-		}
-		found := false
-		for _, allowed := range superset {
-			if allowed.FileID == seg.FileID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
 }

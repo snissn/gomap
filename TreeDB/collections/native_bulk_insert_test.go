@@ -368,3 +368,310 @@ func TestNativeBulkInsertCapacityDrainRunsOutsideVectorGate(t *testing.T) {
 		}
 	}
 }
+
+func buildNativeBulkBSONIdx2Batch(tb testing.TB, producer, count, padBytes int) ([][]byte, [][]byte) {
+	tb.Helper()
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	cities := []string{"austin", "boston", "chicago", "denver", "seattle", "miami", "portland", "atlanta"}
+	pad := string(bytes.Repeat([]byte("z"), padBytes))
+	for i := 0; i < count; i++ {
+		idStr := fmt.Sprintf("p%02d-doc-%07d", producer, i)
+		ids[i] = []byte(idStr)
+		doc, err := bson.Marshal(bson.D{
+			{Key: "_id", Value: idStr},
+			{Key: "age", Value: int64(20 + ((producer*count + i) % 60))},
+			{Key: "city", Value: cities[(producer+i)%len(cities)]},
+			{Key: "payload", Value: pad},
+		})
+		if err != nil {
+			tb.Fatalf("marshal bson doc %d: %v", i, err)
+		}
+		docs[i] = doc
+	}
+	return ids, docs
+}
+
+func TestNativeBulkInsertParallelStandaloneCOWIdx2DurabilityAndTightLimits(t *testing.T) {
+	if nativeBulkPreimageMaxConcurrent < 4 {
+		t.Fatalf("nativeBulkPreimageMaxConcurrent=%d want >= 4", nativeBulkPreimageMaxConcurrent)
+	}
+	cases := []struct {
+		name      string
+		limits    treedb.COWMemtableLimits
+		producers int
+		batchSize int
+		padBytes  int
+	}{
+		{
+			name:      "standalone_default_p8_idx2",
+			limits:    treedb.StandaloneCOWMemtableLimits(),
+			producers: 8,
+			batchSize: 2000,
+			padBytes:  64,
+		},
+		{
+			name: "tight_limits_p8_idx2",
+			limits: func() treedb.COWMemtableLimits {
+				l := treedb.DefaultCOWMemtableLimits()
+				l.MaxInFlightBytes = 32 << 20
+				l.MaxTotalBytes = 64 << 20
+				l.MaxRetiredBytes = 64 << 20
+				l.MaxGenerationBytes = 8 << 20
+				return l
+			}(),
+			producers: 8,
+			batchSize: 500,
+			padBytes:  64,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+			opts.MemtableMode = "cow_btree"
+			opts.COWMemtableLimits = tc.limits
+
+			owner, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("open treedb: %v", err)
+			}
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				_ = owner.Close()
+				t.Fatalf("native semantic backend: %v", err)
+			}
+			manager := NewCollectionManager(backend)
+			meta := &CollectionMeta{
+				Name: "bulk_idx2",
+				Options: CollectionOptions{
+					DocumentFormat: DocumentFormatBSON,
+				},
+				Indexes: []IndexDefinition{
+					{Name: "age_1", Field: "age", ValueType: IndexValueInt64},
+					{Name: "city_1", Field: "city", ValueType: IndexValueString},
+				},
+			}
+			if _, err := manager.CreateCollection(meta); err != nil {
+				_ = manager.Close()
+				_ = owner.Close()
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := manager.OpenCollection("bulk_idx2")
+			if err != nil {
+				_ = manager.Close()
+				_ = owner.Close()
+				t.Fatalf("open collection: %v", err)
+			}
+
+			if err := owner.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint before: %v", err)
+			}
+			if err := backend.JoinNativeSemanticCleanupForTest(); err != nil {
+				t.Fatalf("join cleanup before: %v", err)
+			}
+			beforeExt := parseStatUint64(t, owner.Stats(), "treedb.cache.cow.external_bytes")
+
+			batchIDs := make([][][]byte, tc.producers)
+			batchDocs := make([][][]byte, tc.producers)
+			for p := 0; p < tc.producers; p++ {
+				batchIDs[p], batchDocs[p] = buildNativeBulkBSONIdx2Batch(t, p, tc.batchSize, tc.padBytes)
+			}
+
+			start := make(chan struct{})
+			errs := make([]error, tc.producers)
+			var wg sync.WaitGroup
+			for p := 0; p < tc.producers; p++ {
+				wg.Add(1)
+				go func(pid int) {
+					defer wg.Done()
+					<-start
+					_, errs[pid] = col.InsertBatchValidatedBSON(batchIDs[pid], batchDocs[pid])
+				}(p)
+			}
+			close(start)
+			wg.Wait()
+
+			for p, err := range errs {
+				if err != nil {
+					t.Errorf("producer %d failed: %v", p, err)
+				}
+			}
+			if t.Failed() {
+				t.FailNow()
+			}
+
+			if err := owner.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint: %v", err)
+			}
+			if err := backend.JoinNativeSemanticCleanupForTest(); err != nil {
+				t.Fatalf("join cleanup after: %v", err)
+			}
+			afterObs, err := backend.ObserveNativeProducer()
+			if err != nil {
+				t.Fatalf("observe after: %v", err)
+			}
+			if afterObs.UnderPressure {
+				t.Fatalf("unexpected residual pressure after checkpoint+cleanup: %+v", afterObs)
+			}
+			afterExt := parseStatUint64(t, owner.Stats(), "treedb.cache.cow.external_bytes")
+			// Bounded txnhistory retention for newly committed keys accounts for
+			// ~1 MiB under standalone limits; any leaked bulk preimage lease
+			// would retain multiple MiB per batch.
+			if afterExt > beforeExt+(2<<20) {
+				t.Fatalf("leaked COW external lease bytes: before=%d after=%d (delta=%d)", beforeExt, afterExt, afterExt-beforeExt)
+			}
+
+			if err := manager.Close(); err != nil {
+				t.Fatalf("close manager: %v", err)
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatalf("close owner: %v", err)
+			}
+
+			// Reopen and verify 100% document and secondary-index durability.
+			reopened, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("reopen treedb: %v", err)
+			}
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Errorf("close reopened: %v", err)
+				}
+			}()
+			reBackend, err := reopened.NativeSemanticBackend()
+			if err != nil {
+				t.Fatalf("reopened backend: %v", err)
+			}
+			reManager := NewCollectionManager(reBackend)
+			defer func() {
+				if err := reManager.Close(); err != nil {
+					t.Errorf("close reManager: %v", err)
+				}
+			}()
+			reCol, err := reManager.OpenCollection("bulk_idx2")
+			if err != nil {
+				t.Fatalf("reopen collection: %v", err)
+			}
+
+			totalDocs := tc.producers * tc.batchSize
+			for p := 0; p < tc.producers; p++ {
+				for i := 0; i < tc.batchSize; i++ {
+					got, err := reCol.Get(batchIDs[p][i])
+					if err != nil || !bytes.Equal(got, batchDocs[p][i]) {
+						t.Fatalf("reopened p=%d doc=%d mismatch: gotLen=%d wantLen=%d err=%v", p, i, len(got), len(batchDocs[p][i]), err)
+					}
+				}
+			}
+
+			// Verify every secondary index entry across both indexes.
+			cities := []string{"austin", "boston", "chicago", "denver", "seattle", "miami", "portland", "atlanta"}
+			cityTotal := 0
+			for _, city := range cities {
+				gotIDs, err := reCol.FindByIndex("city_1", city)
+				if err != nil {
+					t.Fatalf("FindByIndex(city_1, %q): %v", city, err)
+				}
+				cityTotal += len(gotIDs)
+			}
+			if cityTotal != totalDocs {
+				t.Fatalf("city_1 total indexed docs=%d want %d", cityTotal, totalDocs)
+			}
+			ageTotal := 0
+			for age := int64(20); age < 80; age++ {
+				gotIDs, err := reCol.FindByIndexValue("age_1", age)
+				if err != nil {
+					t.Fatalf("FindByIndexValue(age_1, %d): %v", age, err)
+				}
+				ageTotal += len(gotIDs)
+			}
+			if ageTotal != totalDocs {
+				t.Fatalf("age_1 total indexed docs=%d want %d", ageTotal, totalDocs)
+			}
+		})
+	}
+}
+
+func BenchmarkBulkInsertParallelStandaloneCOW(b *testing.B) {
+	const (
+		producers = 8
+		batchSize = 2500
+	)
+	batchIDs := make([][][]byte, producers)
+	batchDocs := make([][][]byte, producers)
+	for p := 0; p < producers; p++ {
+		batchIDs[p], batchDocs[p] = buildNativeBulkBSONIdx2Batch(b, p, batchSize, 64)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iter := 0; iter < b.N; iter++ {
+		b.StopTimer()
+		opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, b.TempDir())
+		opts.MemtableMode = "cow_btree"
+		opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+		owner, err := treedb.Open(opts)
+		if err != nil {
+			b.Fatalf("open treedb: %v", err)
+		}
+		backend, err := owner.NativeSemanticBackend()
+		if err != nil {
+			_ = owner.Close()
+			b.Fatalf("native semantic backend: %v", err)
+		}
+		manager := NewCollectionManager(backend)
+		meta := &CollectionMeta{
+			Name: "bench_bulk_idx2",
+			Options: CollectionOptions{
+				DocumentFormat: DocumentFormatBSON,
+			},
+			Indexes: []IndexDefinition{
+				{Name: "age_1", Field: "age", ValueType: IndexValueInt64},
+				{Name: "city_1", Field: "city", ValueType: IndexValueString},
+			},
+		}
+		if _, err := manager.CreateCollection(meta); err != nil {
+			_ = manager.Close()
+			_ = owner.Close()
+			b.Fatalf("create collection: %v", err)
+		}
+		col, err := manager.OpenCollection("bench_bulk_idx2")
+		if err != nil {
+			_ = manager.Close()
+			_ = owner.Close()
+			b.Fatalf("open collection: %v", err)
+		}
+		b.StartTimer()
+
+		start := make(chan struct{})
+		errs := make([]error, producers)
+		var wg sync.WaitGroup
+		for p := 0; p < producers; p++ {
+			wg.Add(1)
+			go func(pid int) {
+				defer wg.Done()
+				<-start
+				_, errs[pid] = col.InsertBatchValidatedBSON(batchIDs[pid], batchDocs[pid])
+			}(p)
+		}
+		close(start)
+		wg.Wait()
+		if err := owner.Checkpoint(); err != nil {
+			b.Fatalf("checkpoint: %v", err)
+		}
+
+		b.StopTimer()
+		for p, err := range errs {
+			if err != nil {
+				b.Fatalf("producer %d failed: %v", p, err)
+			}
+		}
+		if err := manager.Close(); err != nil {
+			b.Fatalf("close manager: %v", err)
+		}
+		if err := owner.Close(); err != nil {
+			b.Fatalf("close owner: %v", err)
+		}
+	}
+}

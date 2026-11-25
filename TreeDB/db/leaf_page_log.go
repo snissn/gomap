@@ -1064,6 +1064,7 @@ func (db *DB) RegisterValueLogSegmentReplacing(path string, fileID, previousFile
 	if err := db.valueLogManager.PromoteCurrentWritableReplacing(fileID, previousFileID); err != nil {
 		return err
 	}
+	db.recordObservedLeafSegmentRegistration(fileID, previousFileID)
 	if db.isLeafGenerationSegmentPath(path) {
 		db.queueLeafGenerationWritableFileID(fileID)
 	}
@@ -1111,6 +1112,7 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 				return false, err
 			}
 		}
+		db.recordObservedLeafSegmentRegistration(seg.FileID, 0)
 		registeredSegments = append(registeredSegments, seg)
 		if db.isLeafGenerationSegmentPath(seg.Path) {
 			db.queueLeafGenerationWritableFileID(seg.FileID)
@@ -1139,6 +1141,7 @@ func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, c
 		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 			return false, err
 		}
+		db.recordObservedLeafSegmentRegistration(fileID, 0)
 		if commitSeq > 0 {
 			db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
 		}
@@ -1155,6 +1158,7 @@ func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, c
 	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
 		return false, err
 	}
+	db.recordObservedLeafSegmentRegistration(fileID, 0)
 	if commitSeq > 0 {
 		db.queueLeafGenerationWritableFileIDAtCommit(fileID, commitSeq)
 	}

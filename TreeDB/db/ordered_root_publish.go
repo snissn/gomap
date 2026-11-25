@@ -1236,6 +1236,29 @@ func addOuterLeafSegmentsToValueLogRefDelta(log LeafPageLog, delta *valueLogRefD
 	return nil
 }
 
+func addOuterLeafSegmentIDsToValueLogRefDelta(delta *valueLogRefDelta, fileIDs []uint32) {
+	if delta == nil || !delta.outerLeafDependencyReuse || len(fileIDs) == 0 {
+		return
+	}
+	if len(fileIDs) == 1 {
+		if fileIDs[0] != 0 {
+			delta.addPositive(fileIDs[0], 1)
+		}
+		return
+	}
+	seen := make(map[uint32]struct{}, len(fileIDs))
+	for _, fileID := range fileIDs {
+		if fileID == 0 {
+			continue
+		}
+		if _, dup := seen[fileID]; dup {
+			continue
+		}
+		seen[fileID] = struct{}{}
+		delta.addPositive(fileID, 1)
+	}
+}
+
 func orderedRootDeltaMayChangeCollectionRootDescriptors(delta *batch.Batch) bool {
 	if delta == nil {
 		return false

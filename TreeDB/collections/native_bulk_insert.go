@@ -31,6 +31,7 @@ type nativeBulkInsertPreimage struct {
 	primary       []memtable.COWMutation
 	additional    []nativeJSONDomainChange
 	effects       []txnhistory.Effect
+	dependencies  []txnhistory.Dependency
 	payload       []byte
 	direct        *directBufferedInsertPlan
 	hasUnique     bool
@@ -178,12 +179,14 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		uint64(unsafe.Sizeof(preparedBatchUpdate{})) +
 		uint64(unsafe.Sizeof(commitlog.CollectionDocument{})) +
 		uint64(unsafe.Sizeof(memtable.COWMutation{})) +
-		uint64(unsafe.Sizeof(txnhistory.Effect{}))
+		uint64(unsafe.Sizeof(txnhistory.Effect{})) +
+		uint64(unsafe.Sizeof(txnhistory.Dependency{}))
 	if uint64(n) > ^uint64(0)/perRow {
 		return nil, memtable.ErrCOWCapacity
 	}
 	initialCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBulkInsertPreimage{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONLogicalInsert{}))) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(txnhistory.Dependency{}))+uint64(len(name))) +
 		fixedHeaderCharge +
 		memtable.COWAllocationCharge(uint64(n)*perRow) +
 		memtable.COWAllocationCharge(totalIDBytes) +
@@ -389,6 +392,26 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		return nil, err
 	}
 
+	dependencies := make([]txnhistory.Dependency, 1+len(primary))
+	dependencies[0] = txnhistory.Dependency{
+		Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace},
+		Kind:      txnhistory.PointEffect,
+		Key:       []byte(name),
+	}
+	primaryNS := txnhistory.Namespace{
+		Kind:           txnhistory.CollectionNamespace,
+		Collection:     incarnation,
+		Domain:         1,
+		Interpretation: 1,
+	}
+	for i := range primary {
+		dependencies[1+i] = txnhistory.Dependency{
+			Namespace: primaryNS,
+			Kind:      txnhistory.PointEffect,
+			Key:       primary[i].Key,
+		}
+	}
+
 	// Admit and encode the canonical Command WAL payload.
 	payloadSize := uint64(10 + len(name))
 	for _, doc := range docs {
@@ -418,6 +441,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	p.primary = primary
 	p.additional = additional
 	p.effects = effects
+	p.dependencies = dependencies[:len(dependencies):len(dependencies)]
 	p.payload = payload
 	p.hasUnique = hasUnique
 	if hasUnique {
@@ -530,33 +554,44 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 		}
 	}
 
-	// Batch-admit all primary point dependencies in one Resize instead of N calls.
-	depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
-	needCap := len(t.dependencies) + n
-	if needCap > cap(t.dependencies) {
-		if uint64(needCap) > ^uint64(0)/depSize {
-			return true, memtable.ErrCOWCapacity
+	// Reuse off-gate prebuilt primary point dependencies when the transaction
+	// holds only the initial catalog dependency (avoiding COWBudget.mu and slice
+	// allocation inside coord.nativeBulkInsertMu). pre.Close runs after tx.Close.
+	if len(pre.dependencies) == 1+n &&
+		len(t.dependencies) == 1 &&
+		t.dependencies[0].Namespace.Kind == txnhistory.CatalogNamespace &&
+		t.dependencies[0].Kind == txnhistory.PointEffect &&
+		bytes.Equal(t.dependencies[0].Key, pre.dependencies[0].Key) {
+		t.dependencies = pre.dependencies
+	} else {
+		// Batch-admit all primary point dependencies in one Resize instead of N calls.
+		depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
+		needCap := len(t.dependencies) + n
+		if needCap > cap(t.dependencies) {
+			if uint64(needCap) > ^uint64(0)/depSize {
+				return true, memtable.ErrCOWCapacity
+			}
+			backing := memtable.COWAllocationCharge(uint64(needCap) * depSize)
+			if backing > ^uint64(0)-t.charge {
+				return true, memtable.ErrCOWCapacity
+			}
+			if err := t.lease.Resize(t.charge + backing); err != nil {
+				return true, err
+			}
+			t.charge += backing
+			next := make([]txnhistory.Dependency, len(t.dependencies), needCap)
+			copy(next, t.dependencies)
+			t.dependencies = next
 		}
-		backing := memtable.COWAllocationCharge(uint64(needCap) * depSize)
-		if backing > ^uint64(0)-t.charge {
-			return true, memtable.ErrCOWCapacity
+		ns := g.namespace()
+		for i := 0; i < n; i++ {
+			// Key slices belong to pre.idArena which stays live and admitted until after tx.Close().
+			t.dependencies = append(t.dependencies, txnhistory.Dependency{
+				Namespace: ns,
+				Kind:      txnhistory.PointEffect,
+				Key:       pre.primary[i].Key,
+			})
 		}
-		if err := t.lease.Resize(t.charge + backing); err != nil {
-			return true, err
-		}
-		t.charge += backing
-		next := make([]txnhistory.Dependency, len(t.dependencies), needCap)
-		copy(next, t.dependencies)
-		t.dependencies = next
-	}
-	ns := g.namespace()
-	for i := 0; i < n; i++ {
-		// Key slices belong to pre.idArena which stays live and admitted until after tx.Close().
-		t.dependencies = append(t.dependencies, txnhistory.Dependency{
-			Namespace: ns,
-			Kind:      txnhistory.PointEffect,
-			Key:       pre.primary[i].Key,
-		})
 	}
 
 	if pre.hasUnique {
@@ -623,7 +658,7 @@ func (m *NativeJSONManager) insertBulkBatchOnce(coord *collectionSchemaCoordinat
 			return false, isRetryableBulkCapacityRefusal(preErr, nil), preErr
 		}
 	}
-	_, retry, err = m.commitBulkInsertAttempt(name, ids, documents, pre, 0, nil, false, nil, nil, nil)
+	_, retry, err = m.commitBulkInsertAttempt(coord, name, ids, documents, pre, 0, nil, false, nil, nil, nil)
 	if err != nil && !retry && isRetryableBulkCapacityRefusal(err, nil) {
 		capacityRetry = true
 	}
@@ -631,6 +666,7 @@ func (m *NativeJSONManager) insertBulkBatchOnce(coord *collectionSchemaCoordinat
 }
 
 func (m *NativeJSONManager) commitBulkInsertAttempt(
+	coord *collectionSchemaCoordinator,
 	name string,
 	ids, documents [][]byte,
 	pre *nativeBulkInsertPreimage,
@@ -641,13 +677,20 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 	projected **nativeInsertProjectedRefusal,
 	journal *nativeOperationJournal,
 ) (bool, bool, error) {
-	coord := collectionSchemaCoordinatorForDBCollection(m.db, name)
+	// Register pre.Close BEFORE acquiring coord.nativeBulkInsertMu so LIFO
+	// defer order releases nativeBulkInsertMu first, then releases pre's
+	// admitted COW lease, and only after commitBulkInsertAttempt returns does
+	// the caller's deferred releaseSlot() return the bulk preimage concurrency
+	// token.
+	if pre != nil {
+		defer pre.Close()
+	}
+	if coord == nil {
+		coord = collectionSchemaCoordinatorForDBCollection(m.db, name)
+	}
 	if coord != nil {
 		coord.nativeBulkInsertMu.Lock()
 		defer coord.nativeBulkInsertMu.Unlock()
-	}
-	if pre != nil {
-		defer pre.Close()
 	}
 	tx, err := m.beginPrepared(name)
 	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
