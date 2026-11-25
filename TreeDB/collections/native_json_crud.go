@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -337,59 +338,166 @@ func (t *NativeJSONTxn) checkNativeUpdateUnique(g *nativeJSONTxnBinding, runtime
 	return nil
 }
 
+func uniquePrefixEndLen(prefix []byte) int {
+	for i := len(prefix) - 1; i >= 0; i-- {
+		if prefix[i] != 0xff {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 func (t *NativeJSONTxn) scanNativeUpdateUnique(g *nativeJSONTxnBinding, runtimes []indexRuntime, changed []preparedBatchUpdate, replacements batchUniqueReplacementSet) error {
 	var cursor [page.PageSize + 1]byte
+	depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
+	const maxInt = int(^uint(0) >> 1)
+
 	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
 		}
-		domain, hasDomain := g.probe.collection.domains.Get("index/" + runtime.def.name)
+
+		// Pre-count and validate every encoded unique key before any COW
+		// admission or allocation so invalid keys fail cleanly without mutating
+		// transaction leases or dependencies.
+		var (
+			depCount   int
+			arenaBytes uint64
+		)
 		for _, item := range changed {
 			if !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
 				continue
 			}
 			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-				_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
-				if err != nil {
-					return err
+				if len(encoded) > 65535 {
+					return errors.New("collections: index key too large")
 				}
-				end := prefixEnd(prefix)
-				ns := g.namespace()
-				ns.Domain = nativeJSONSecondaryDomainNumber(g.probe.meta, runtimeIdx)
-				if err = t.trackDependency(ns, txnhistory.RangeEffect, prefix, end); err != nil {
-					return err
+				if depCount == maxInt {
+					return memtable.ErrCOWCapacity
 				}
-				if !hasDomain {
+				depCount++
+				entryBytes := uint64(len(encoded)) + uint64(uniquePrefixEndLen(encoded))
+				if entryBytes > ^uint64(0)-arenaBytes {
+					return memtable.ErrCOWCapacity
+				}
+				arenaBytes += entryBytes
+			}
+		}
+		if depCount == 0 {
+			continue
+		}
+
+		// Batch-admit dependency slice growth and the single packed prefix/end
+		// arena in one COW lease Resize per unique index.
+		if depCount > maxInt-len(t.dependencies) {
+			return memtable.ErrCOWCapacity
+		}
+		needCap := len(t.dependencies) + depCount
+		var depBacking uint64
+		if needCap > cap(t.dependencies) {
+			if uint64(needCap) > ^uint64(0)/depSize {
+				return memtable.ErrCOWCapacity
+			}
+			depBacking = memtable.COWAllocationCharge(uint64(needCap) * depSize)
+		}
+		if arenaBytes > uint64(maxInt) {
+			return memtable.ErrCOWCapacity
+		}
+		arenaCharge := memtable.COWAllocationCharge(arenaBytes)
+		if arenaCharge > ^uint64(0)-depBacking || depBacking+arenaCharge > ^uint64(0)-t.charge {
+			return memtable.ErrCOWCapacity
+		}
+		totalCharge := depBacking + arenaCharge
+		if totalCharge > 0 {
+			if err := t.lease.Resize(t.charge + totalCharge); err != nil {
+				return err
+			}
+			t.charge += totalCharge
+		}
+		if needCap > cap(t.dependencies) {
+			next := make([]txnhistory.Dependency, len(t.dependencies), needCap)
+			copy(next, t.dependencies)
+			t.dependencies = next
+		}
+		arena := make([]byte, 0, arenaBytes)
+
+		domain, hasDomain := g.probe.collection.domains.Get("index/" + runtime.def.name)
+		ns := g.namespace()
+		ns.Domain = nativeJSONSecondaryDomainNumber(g.probe.meta, runtimeIdx)
+
+		var (
+			read        nativeDomainRead
+			canSkipSeek = true
+		)
+		if hasDomain {
+			var err error
+			read, err = newNativeDomainRead(domain, t.core.Snapshot())
+			if err != nil {
+				return err
+			}
+			canSkipSeek = domain.baseRoot == 0 && domain.captured == nil && domain.pending == nil
+		}
+
+		var scanErr error
+	itemLoop:
+		for _, item := range changed {
+			if !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+				continue
+			}
+			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+				pStart := len(arena)
+				arena = append(arena, encoded...)
+				prefix := arena[pStart:len(arena):len(arena)]
+
+				var end []byte
+				if endLen := uniquePrefixEndLen(encoded); endLen > 0 {
+					eStart := len(arena)
+					arena = append(arena, prefix[:endLen]...)
+					arena[len(arena)-1]++
+					end = arena[eStart:len(arena):len(arena)]
+				}
+
+				t.dependencies = append(t.dependencies, txnhistory.Dependency{
+					Namespace: ns,
+					Kind:      txnhistory.RangeEffect,
+					Key:       prefix,
+					End:       end,
+				})
+				if canSkipSeek {
 					continue
-				}
-				read, err := newNativeDomainRead(domain, t.core.Snapshot())
-				if err != nil {
-					return err
 				}
 				start := prefix
 				for {
 					entry, found, err := nativeJSONSeekLive(&read, &g.probe, start, end, cursor[:])
 					if err != nil {
-						return err
+						scanErr = err
+						break itemLoop
 					}
 					if !found {
 						break
 					}
 					owner, err := indexKeyDocumentID(runtime.def.valueType, entry.Key)
 					if err != nil {
-						return err
+						scanErr = err
+						break itemLoop
 					}
 					if batchUpdateUniqueOwnerConflicts(runtime.def.name, encoded, owner, item.documentID, replacements) {
-						return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+						scanErr = fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+						break itemLoop
 					}
 					if len(entry.Key) >= len(cursor) {
-						return memtable.ErrCOWCapacity
+						scanErr = memtable.ErrCOWCapacity
+						break itemLoop
 					}
 					n := copy(cursor[:], entry.Key)
 					cursor[n] = 0
 					start = cursor[:n+1]
 				}
 			}
+		}
+		read = nativeDomainRead{}
+		if scanErr != nil {
+			return scanErr
 		}
 	}
 	return nil
