@@ -1125,8 +1125,27 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
+	view, err := col.OpenCollectionReadView()
+	if errors.Is(err, collections.ErrCollectionNotFound) {
+		if plan.hint.present {
+			doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway find hint does not name an existing index")
+			return findResponsePayload{document: doc}, err
+		}
+		doc, err := marshalCursorResponse(db, collection, bson.A{})
+		return findResponsePayload{document: doc}, err
+	}
+	if err != nil {
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
+	}
+	defer func() { _ = view.Close() }()
+	meta, err := view.Meta()
+	if err != nil {
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
+	}
 	if !plan.hint.present {
-		if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayload(col, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
+		if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayload(col, meta, view, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
 			if err != nil {
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err
@@ -1135,7 +1154,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		}
 	}
 	if !plan.projection.present && !plan.hint.present {
-		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.MetaView(), plan, s.maxFindScanDocuments())
+		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(meta, plan, s.maxFindScanDocuments())
 		if err != nil {
 			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 			return findResponsePayload{document: doc}, err
@@ -1158,6 +1177,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 					kind: findResponsePayloadIndexedRange,
 					indexedRange: indexedRangeCursorResponse{
 						col:           col,
+						format:        meta.Options.DocumentFormat,
 						server:        s,
 						ns:            ns,
 						indexName:     idx.Name,
@@ -1174,13 +1194,13 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	// The V2 compound path retains primary keys, not BSON documents. It is used
 	// only when every predicate is encoded by the index and its order satisfies
 	// the requested sort; all other shapes use the conservative executor below.
-	if !singleBatch && compoundIDCursorEligible(col.MetaView(), plan) {
+	if !singleBatch && compoundIDCursorEligible(meta, plan) {
 		cursorIDBudget := s.maxCursorRetainedBytes() - findPlanCursorRetainedBytes(plan)
 		if cursorIDBudget <= 0 {
 			doc, err := commandError(commandCodeBadValue, "BadValue", fmt.Errorf("%w: Mongo gateway compound cursor plan exceeds retained-byte cap", errMongoFindScanCapExceeded).Error())
 			return findResponsePayload{document: doc}, err
 		}
-		if ids, compound, ok, err := s.compoundIndexPlanIDs(col, plan, cursorIDBudget); ok || err != nil {
+		if ids, compound, ok, err := s.compoundIndexPlanIDsWithMeta(col, meta, plan, cursorIDBudget); ok || err != nil {
 			if err != nil {
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err
@@ -1206,7 +1226,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 			}
 		}
 	}
-	results, err := s.executeFind(col, plan)
+	results, err := s.executeFindWithView(col, meta, view, plan)
 	if err != nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 		return findResponsePayload{document: doc}, err
@@ -1265,7 +1285,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	return findResponsePayload{document: doc}, err
 }
 
-func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Collection, ns string, plan findPlan, batchSize int, batchSizeSet bool) (findResponsePayload, bool, error) {
+func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Collection, meta collections.CollectionMeta, view *collections.CollectionReadView, ns string, plan findPlan, batchSize int, batchSizeSet bool) (findResponsePayload, bool, error) {
 	if !plan.projection.present {
 		return findResponsePayload{}, false, nil
 	}
@@ -1284,9 +1304,22 @@ func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Coll
 	if err != nil {
 		return findResponsePayload{}, true, err
 	}
-	stored, err := col.Get(key)
-	if err != nil {
-		return findResponsePayload{}, true, err
+	var stored []byte
+	if view != nil {
+		var keyBuf [1][]byte
+		keyBuf[0] = key
+		resp, err := view.FetchDocumentsByID(keyBuf[:], collections.DocumentFetchOptions{})
+		if err != nil {
+			return findResponsePayload{}, true, err
+		}
+		if len(resp.Results) == 1 && resp.Results[0].Found {
+			stored = resp.Results[0].Document
+		}
+	} else {
+		stored, err = col.Get(key)
+		if err != nil {
+			return findResponsePayload{}, true, err
+		}
 	}
 	if len(stored) == 0 {
 		return findResponsePayload{
@@ -1294,12 +1327,12 @@ func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Coll
 			raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
 		}, true, nil
 	}
-	materializer, err := storedDocumentMaterializerForCollection(col)
+	decoder, err := newFindDocumentDecoder(col, meta.Options.DocumentFormat)
 	if err != nil {
 		return findResponsePayload{}, true, err
 	}
-	defer func() { _ = materializer.Close() }()
-	doc, err := storedDocumentToBSON(col, materializer, stored)
+	defer func() { _ = decoder.Close() }()
+	doc, err := decoder.decode(stored)
 	if err != nil {
 		return findResponsePayload{}, true, err
 	}
@@ -4094,6 +4127,7 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 
 type indexedRangeCursorResponse struct {
 	col           *collections.Collection
+	format        collections.DocumentFormat
 	server        *Server
 	ns            string
 	indexName     string
@@ -4106,54 +4140,74 @@ type indexedRangeCursorResponse struct {
 
 var errBorrowedRangeMaterialization = errors.New("mongo gateway: borrowed range materialization")
 
+func (r *indexedRangeCursorResponse) documentFormat() collections.DocumentFormat {
+	if r.format != "" || r.col == nil {
+		return r.format
+	}
+	return r.col.MetaView().Options.DocumentFormat
+}
+
 func (r *indexedRangeCursorResponse) marshalDocument() (wire.Document, error) {
-	materializer, err := storedDocumentMaterializerForCollection(r.col)
+	format := r.documentFormat()
+	decoder, err := newFindDocumentDecoder(r.col, format)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := marshalIndexedRangeCursorDocument(r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
-	retry := shouldRetryBorrowedRangeMaterialization(materializer, err)
-	_ = materializer.Close()
+	doc, err := marshalIndexedRangeCursorDocumentWithDecoder(r.server, r.cursorOwner, r.singleBatch, r.col, decoder, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	retry := shouldRetryBorrowedRangeMaterialization(format, err)
+	_ = decoder.Close()
 	if !retry {
 		return doc, err
 	}
-	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
-	if materializerErr != nil {
-		return nil, materializerErr
+	decoder, decoderErr := newFindDocumentDecoder(r.col, format)
+	if decoderErr != nil {
+		return nil, decoderErr
 	}
-	defer func() { _ = materializer.Close() }()
-	return marshalIndexedRangeCursorDocument(r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	defer func() { _ = decoder.Close() }()
+	return marshalIndexedRangeCursorDocumentWithDecoder(r.server, r.cursorOwner, r.singleBatch, r.col, decoder, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
 }
 
 func (r *indexedRangeCursorResponse) marshalMsgIntoWithMaxLength(dst []byte, requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
-	materializer, err := storedDocumentMaterializerForCollection(r.col)
+	format := r.documentFormat()
+	decoder, err := newFindDocumentDecoder(r.col, format)
 	if err != nil {
 		return nil, err
 	}
-	msg, err := marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
-	retry := shouldRetryBorrowedRangeMaterialization(materializer, err)
-	_ = materializer.Close()
+	msg, err := marshalIndexedRangeCursorMsgIntoWithDecoder(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, decoder, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
+	retry := shouldRetryBorrowedRangeMaterialization(format, err)
+	_ = decoder.Close()
 	if !retry {
 		return msg, err
 	}
-	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
-	if materializerErr != nil {
-		return nil, materializerErr
+	decoder, decoderErr := newFindDocumentDecoder(r.col, format)
+	if decoderErr != nil {
+		return nil, decoderErr
 	}
-	defer func() { _ = materializer.Close() }()
-	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
+	defer func() { _ = decoder.Close() }()
+	return marshalIndexedRangeCursorMsgIntoWithDecoder(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, decoder, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
 }
 
-func shouldRetryBorrowedRangeMaterialization(materializer *collections.StoredDocumentJSONMaterializer, err error) bool {
+func shouldRetryBorrowedRangeMaterialization(format collections.DocumentFormat, err error) bool {
 	return err != nil &&
 		errors.Is(err, errBorrowedRangeMaterialization) &&
-		materializer != nil &&
-		materializer.DocumentFormat() == collections.DocumentFormatTemplateV1
+		format == collections.DocumentFormatTemplateV1
+}
+
+func findDocumentDecoderFromMaterializer(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer) findDocumentDecoder {
+	var format collections.DocumentFormat
+	if materializer != nil {
+		format = materializer.DocumentFormat()
+	}
+	return findDocumentDecoder{col: col, format: format, materializer: materializer}
 }
 
 func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) (wire.Document, error) {
+	return marshalIndexedRangeCursorDocumentWithDecoder(server, cursorOwner, singleBatch, col, findDocumentDecoderFromMaterializer(col, materializer), ns, indexName, opts, batchKey, maxBatchBytes)
+}
+
+func marshalIndexedRangeCursorDocumentWithDecoder(server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, decoder findDocumentDecoder, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) (wire.Document, error) {
 	builder := newRawCursorDocumentBuilder(make([]byte, 0, rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)), ns, batchKey, maxBatchBytes)
-	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, &builder, singleBatch)
+	retainedDocs, err := collectIndexedRangeCursorDocs(col, decoder, indexName, opts, &builder, singleBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -4172,6 +4226,10 @@ func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, single
 }
 
 func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int, maxMessageLength int) ([]byte, error) {
+	return marshalIndexedRangeCursorMsgIntoWithDecoder(dst, requestID, responseTo, server, cursorOwner, singleBatch, col, findDocumentDecoderFromMaterializer(col, materializer), ns, indexName, opts, batchKey, maxBatchBytes, maxMessageLength)
+}
+
+func marshalIndexedRangeCursorMsgIntoWithDecoder(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, decoder findDocumentDecoder, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int, maxMessageLength int) ([]byte, error) {
 	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
 		maxMessageLength = int(server.maxMessageLength())
 	}
@@ -4195,7 +4253,7 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	msg = appendWireInt32(msg, 0)
 	msg = append(msg, wire.MsgSectionBody)
 	builder := newRawCursorDocumentBuilder(msg, ns, batchKey, maxBatchBytes)
-	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, &builder, singleBatch)
+	retainedDocs, err := collectIndexedRangeCursorDocs(col, decoder, indexName, opts, &builder, singleBatch)
 	if err != nil {
 		return msg[:base], err
 	}
@@ -4229,14 +4287,14 @@ func cursorDocumentsMsgResponseLength(ns, batchKey string, batchBytes int) int {
 	return messageHeaderAndMsgBodyBytes + responseDocumentFixedBytes + len(ns) + len(batchKey) + batchBytes
 }
 
-func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, indexName string, opts collections.IndexRangeOptions, builder *rawCursorDocumentBuilder, singleBatch bool) ([]wire.Document, error) {
+func collectIndexedRangeCursorDocs(col *collections.Collection, decoder findDocumentDecoder, indexName string, opts collections.IndexRangeOptions, builder *rawCursorDocumentBuilder, singleBatch bool) ([]wire.Document, error) {
 	var retainedDocs []wire.Document
 	retainOnly := false
 	_, err := col.ScanBorrowedDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		if len(record.Document) == 0 {
 			return true, nil
 		}
-		doc, err := borrowedStoredDocumentToBSON(materializer, record.Document)
+		doc, err := decoder.decodeBorrowed(record.Document)
 		if err != nil {
 			return false, fmt.Errorf("%w: %w", errBorrowedRangeMaterialization, err)
 		}
@@ -5429,6 +5487,60 @@ func storedDocumentToBSON(col *collections.Collection, materializer *collections
 		return nil, err
 	}
 	return wire.Document(raw), nil
+}
+
+// findDocumentDecoder decodes stored collection documents using a previously
+// captured DocumentFormat so BSON collections skip allocating a
+// StoredDocumentJSONMaterializer (and its redundant MetaView/snapshot cut).
+type findDocumentDecoder struct {
+	col          *collections.Collection
+	format       collections.DocumentFormat
+	materializer *collections.StoredDocumentJSONMaterializer
+}
+
+func newFindDocumentDecoder(col *collections.Collection, format collections.DocumentFormat) (findDocumentDecoder, error) {
+	if col == nil {
+		return findDocumentDecoder{format: format}, nil
+	}
+	switch format {
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON, collections.DocumentFormatBSON:
+		return findDocumentDecoder{col: col, format: format}, nil
+	default:
+		materializer, err := col.NewStoredDocumentJSONMaterializer()
+		if err != nil {
+			return findDocumentDecoder{}, err
+		}
+		return findDocumentDecoder{col: col, format: format, materializer: materializer}, nil
+	}
+}
+
+func (d *findDocumentDecoder) Close() error {
+	if d == nil || d.materializer == nil {
+		return nil
+	}
+	err := d.materializer.Close()
+	d.materializer = nil
+	return err
+}
+
+func (d findDocumentDecoder) decode(stored []byte) (wire.Document, error) {
+	return storedDocumentToBSONWithFormat(d.col, d.format, d.materializer, stored)
+}
+
+func (d findDocumentDecoder) decodeBorrowed(stored []byte) (wire.Document, error) {
+	// Borrowed scan callbacks already run under the collection's captured read
+	// state. Do not call back into Collection here.
+	return storedDocumentToBSONWithFormat(nil, d.format, d.materializer, stored)
+}
+
+func storedDocumentToBSONWithFormat(col *collections.Collection, format collections.DocumentFormat, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
+	if format == collections.DocumentFormatBSON {
+		if err := validateStoredBSONFrame(stored); err != nil {
+			return nil, err
+		}
+		return wire.Document(stored), nil
+	}
+	return storedDocumentToBSON(col, materializer, stored)
 }
 
 func validateStoredBSONFrame(doc []byte) error {
