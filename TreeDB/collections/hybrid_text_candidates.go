@@ -57,6 +57,7 @@ func (c *Collection) searchHybridTextCandidatesWithScanBudgetAtReadView(query Hy
 	textOpts := TextSearchOptions{
 		IndexName:          query.IndexName,
 		Query:              query.Query,
+		Phrase:             query.Phrase,
 		QueryMode:          query.QueryMode,
 		Operator:           query.Operator,
 		TopK:               requested,
@@ -105,6 +106,17 @@ func validateHybridTextCandidateQuery(query HybridTextQuery) error {
 	if query.MaxPostingsScanned < 0 {
 		return fmt.Errorf("%w: text max_postings_scanned must be non-negative", ErrHybridSearchUnsupported)
 	}
+	if query.Phrase != nil {
+		if err := validateTextSearchPhraseOptions(TextSearchOptions{
+			Query:     query.Query,
+			Phrase:    query.Phrase,
+			Operator:  query.Operator,
+			QueryMode: query.QueryMode,
+		}); err != nil {
+			return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
+		}
+		return nil
+	}
 	mode, err := normalizeTextSearchQueryMode(query.QueryMode)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHybridSearchUnsupported, err)
@@ -136,6 +148,9 @@ func (c *Collection) validateHybridTextCandidateQueryAtReadView(query HybridText
 			// query/definition scratch remains admitted through this operation.
 			unit := uint64(unsafe.Sizeof(TextToken{})) + uint64(unsafe.Sizeof(textV2SearchCandidate{})) + uint64(unsafe.Sizeof(TextSearchResult{}))
 			size := uint64(len(query.Query)) + 1
+			if query.Phrase != nil {
+				size += uint64(len(query.Phrase.Query))
+			}
 			if size > ^uint64(0)/unit/2 {
 				return memtable.ErrCOWCapacity
 			}
@@ -170,6 +185,15 @@ func validateHybridTextCandidateQueryAgainstCatalog(query HybridTextQuery, catal
 	index, ok := findTextIndex(catalog.meta.TextIndexes, query.IndexName)
 	if !ok {
 		return hybridTextCandidateError(ErrIndexNotFound, query.IndexName)
+	}
+	if query.Phrase != nil {
+		if index.Version != TextIndexVersionV2 || !index.StorePositions {
+			return hybridTextCandidateError(fmt.Errorf("%w: phrase search requires text-v2 with store_positions", ErrTextIndexUnavailable), query.IndexName)
+		}
+		if _, err := parseTextSearchPhraseQuery(index, *query.Phrase); err != nil {
+			return hybridTextCandidateError(err, query.IndexName)
+		}
+		return nil
 	}
 	_, _, err := parseTextSearchQueryWithModeAndOptions(index.Analyzer, index.AnalyzerOptions, query.Query, query.Operator, query.QueryMode)
 	if err != nil {
