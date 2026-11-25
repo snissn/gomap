@@ -301,21 +301,17 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 	}
 	p := next.preparation
 	defer p.sealPrivateBuilders(next)
-	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return base.allocator.AdmitNativeBytes(n) }
+	allocator := base.allocator
+	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return allocator.AdmitNativeBytes(n) }
 	if base.catalog != nil {
 		(nativeDomainLifetime{}).Retain(base.catalog)
 		next.catalog = base.catalog
 	}
-	p.names, err = cowbtree.NewOwnedMapBuilder(base.names, count, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
-	}
-	p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, count, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
-	}
 	sharePending := base.pending == base.collections
-	if !sharePending && count == 1 && base.collections.Len() == 1 {
+	var singleCurrent *nativeCollectionState
+	var singleCurrentChecked bool
+	var singleCurrentExists bool
+	if count == 1 {
 		var target *nativeCollectionState
 		if len(changes) != 0 {
 			target = changes[0].collection
@@ -323,7 +319,9 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 			target = named[0].collection
 		}
 		if target != nil {
-			if _, ok := base.collections.Get(target.incarnation); ok {
+			singleCurrent, singleCurrentExists = base.collections.Get(target.incarnation)
+			singleCurrentChecked = true
+			if !sharePending && singleCurrentExists && base.collections.Len() == 1 {
 				if base.pending.Len() == 0 {
 					sharePending = true
 				} else if base.pending.Len() == 1 {
@@ -331,11 +329,20 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				}
 			}
 		}
-	}
-	if !sharePending {
-		p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, count, nativeCollectionLifetime{}, admit)
+	} else {
+		p.names, err = cowbtree.NewOwnedMapBuilder(base.names, count, nativeCollectionLifetime{}, admit)
 		if err != nil {
 			return next, err
+		}
+		p.collections, err = cowbtree.NewOwnedMapBuilder(base.collections, count, nativeCollectionLifetime{}, admit)
+		if err != nil {
+			return next, err
+		}
+		if !sharePending {
+			p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, count, nativeCollectionLifetime{}, admit)
+			if err != nil {
+				return next, err
+			}
 		}
 	}
 	for changeIndex := 0; changeIndex < count; changeIndex++ {
@@ -352,7 +359,13 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		if c == nil {
 			return next, backenddb.ErrNativeSemanticUnsupported
 		}
-		current, exists := base.collections.Get(c.incarnation)
+		var current *nativeCollectionState
+		var exists bool
+		if singleCurrentChecked {
+			current, exists = singleCurrent, singleCurrentExists
+		} else {
+			current, exists = base.collections.Get(c.incarnation)
+		}
 		if !exists || (primary && current != c) || (!primary && current.schema != c.schema) {
 			return next, backenddb.ErrConcurrentModification
 		}
@@ -373,28 +386,34 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		if !primary {
 			domainCount = len(namedChange.domains)
 		}
-		p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, domainCount, nativeDomainLifetime{}, admit)
-		if err != nil {
-			return next, err
-		}
 		shareDomains := c.pending == c.domains || (c.domains.Len() == 0 && c.pending.Len() == 0)
-		if !shareDomains && domainCount == 1 && c.domains.Len() == 1 {
+		var singleOldDomain *nativeDomainState
+		var singleOldDomainChecked bool
+		if domainCount == 1 {
 			targetDomain := "primary"
 			if !primary {
 				targetDomain = namedChange.domains[0].name
 			}
-			if _, ok := c.domains.Get(targetDomain); ok {
+			var ok bool
+			singleOldDomain, ok = c.domains.Get(targetDomain)
+			singleOldDomainChecked = true
+			if !shareDomains && ok && c.domains.Len() == 1 {
 				if c.pending.Len() == 0 {
 					shareDomains = true
 				} else if c.pending.Len() == 1 {
 					_, shareDomains = c.pending.Get(targetDomain)
 				}
 			}
-		}
-		if !shareDomains {
-			p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, domainCount, nativeDomainLifetime{}, admit)
+		} else {
+			p.domainBuilder, err = cowbtree.NewOwnedMapBuilder(c.domains, domainCount, nativeDomainLifetime{}, admit)
 			if err != nil {
 				return next, err
+			}
+			if !shareDomains {
+				p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, domainCount, nativeDomainLifetime{}, admit)
+				if err != nil {
+					return next, err
+				}
 			}
 		}
 		for i := 0; i < domainCount; i++ {
@@ -411,7 +430,12 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 					return next, backenddb.ErrNativeSemanticUnsupported
 				}
 			}
-			old, _ := c.domains.Get(name)
+			var old *nativeDomainState
+			if singleOldDomainChecked {
+				old = singleOldDomain
+			} else {
+				old, _ = c.domains.Get(name)
+			}
 			root, catalogRoot := uint64(0), uint64(0)
 			if old != nil {
 				catalogRoot = old.catalogRoot
@@ -444,7 +468,7 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 					old, root = nil, 0
 				}
 			}
-			domain, err := prepareNativeDomainUpdateObserved(old, name, root, interpretation, policy, rows, base.allocator, reportProjection)
+			domain, err := prepareNativeDomainUpdateObservedWithAdmit(old, name, root, interpretation, policy, rows, allocator, admit, reportProjection)
 			if domain != nil {
 				p.ownedDomains = append(p.ownedDomains, domain)
 			}
@@ -477,24 +501,42 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 					return next, cloneErr
 				}
 			}
-			if err = p.domainBuilder.Set(name, domain); err != nil {
-				return next, err
-			}
-			if !shareDomains {
-				if err = p.pendingDomainBuilder.Set(name, domain); err != nil {
+			if domainCount == 1 {
+				p.domains, err = c.domains.SetSingle(name, domain, nativeDomainLifetime{}, admit)
+				if err != nil {
 					return next, err
+				}
+				if shareDomains {
+					p.domains.Retain()
+					p.pendingDomains = p.domains
+				} else {
+					p.pendingDomains, err = c.pending.SetSingle(name, domain, nativeDomainLifetime{}, admit)
+					if err != nil {
+						return next, err
+					}
+				}
+			} else {
+				if err = p.domainBuilder.Set(name, domain); err != nil {
+					return next, err
+				}
+				if !shareDomains {
+					if err = p.pendingDomainBuilder.Set(name, domain); err != nil {
+						return next, err
+					}
 				}
 			}
 		}
-		if shareDomains {
-			domains := p.domainBuilder.Seal()
-			p.domainBuilder = nil
-			domains.Retain()
-			p.domains = domains
-			p.pendingDomains = domains
-		} else {
-			p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
-			p.domainBuilder, p.pendingDomainBuilder = nil, nil
+		if domainCount != 1 {
+			if shareDomains {
+				domains := p.domainBuilder.Seal()
+				p.domainBuilder = nil
+				domains.Retain()
+				p.domains = domains
+				p.pendingDomains = domains
+			} else {
+				p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
+				p.domainBuilder, p.pendingDomainBuilder = nil, nil
+			}
 		}
 		c.schema.retain()
 		p.schema = c.schema
@@ -504,19 +546,39 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		}
 		p.schema, p.domains, p.pendingDomains = nil, nil, nil
 		p.ownedCollections = append(p.ownedCollections, replacement)
-		if err = p.names.Set(c.schema.meta.Name, replacement); err != nil {
-			return next, err
-		}
-		if err = p.collections.Set(c.incarnation, replacement); err != nil {
-			return next, err
-		}
-		if !sharePending {
-			if err = p.pending.Set(c.incarnation, replacement); err != nil {
+		if count == 1 {
+			next.names, err = base.names.SetSingle(c.schema.meta.Name, replacement, nativeCollectionLifetime{}, admit)
+			if err != nil {
 				return next, err
+			}
+			next.collections, err = base.collections.SetSingle(c.incarnation, replacement, nativeCollectionLifetime{}, admit)
+			if err != nil {
+				return next, err
+			}
+			if sharePending {
+				next.collections.Retain()
+				next.pending = next.collections
+			} else {
+				next.pending, err = base.pending.SetSingle(c.incarnation, replacement, nativeCollectionLifetime{}, admit)
+				if err != nil {
+					return next, err
+				}
+			}
+		} else {
+			if err = p.names.Set(c.schema.meta.Name, replacement); err != nil {
+				return next, err
+			}
+			if err = p.collections.Set(c.incarnation, replacement); err != nil {
+				return next, err
+			}
+			if !sharePending {
+				if err = p.pending.Set(c.incarnation, replacement); err != nil {
+					return next, err
+				}
 			}
 		}
 	}
-	if sharePending {
+	if count != 1 && sharePending {
 		sealed := p.collections.Seal()
 		p.collections = nil
 		sealed.Retain()
