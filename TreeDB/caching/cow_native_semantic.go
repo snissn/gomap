@@ -144,15 +144,16 @@ func (s *Snapshot) NativeSemanticState() backenddb.NativeSemanticState {
 // cowNativeOwner is independently admitted before assignment, never reused with
 // Batch storage. Accepted custody retains only sparse native plans/assets.
 type cowNativeOwner struct {
-	cache        *cowCache
-	plan         *backenddb.NativePreparedPublication
-	custody      backenddb.NativeSemanticCustody
-	opening      *cowReadCut
-	lease        *memtable.COWExternalLease
-	failed       error
-	failedResult backenddb.NativeFinalizedPublication
-	sealTarget   rootpublication.PhysicalSealTarget
-	sealReceipt  *backenddb.NativeSealReceipt
+	cache            *cowCache
+	plan             *backenddb.NativePreparedPublication
+	custody          backenddb.NativeSemanticCustody
+	opening          *cowReadCut
+	lease            *memtable.COWExternalLease
+	failed           error
+	failedResult     backenddb.NativeFinalizedPublication
+	sealTarget       rootpublication.PhysicalSealTarget
+	sealReceipt      *backenddb.NativeSealReceipt
+	barrierSpareSlot *rootpublication.AcceptedTicket
 }
 
 // The generic callback cannot carry containing-owner refunds safely. The
@@ -475,7 +476,21 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		return result, completionErr
 	}
 	r := &cowNativeCommandWALRequest{batch: b, backend: backend, native: native, intent: intent, owner: owner, bridge: bridge, durable: effectiveDurable}
+	cancelUnconsumedSpare := func() {
+		if b.cowState != nil && b.cowState.native != nil {
+			b.cowState.native.barrierSpareSlot = nil
+		}
+		if r.barrierSpare.Valid() {
+			spare := r.barrierSpare
+			r.barrierSpare = rootpublication.AcceptedTicket{}
+			if cancelErr := spare.CancelAccepted(); cancelErr != nil {
+				db.reportError(cancelErr)
+				err = joinCOWCleanupError(err, cancelErr)
+			}
+		}
+	}
 	defer func() {
+		cancelUnconsumedSpare()
 		if r.completion != nil {
 			r.completion.ReleaseNativeCommandWAL()
 		}
@@ -488,8 +503,14 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		if err != nil {
 			return result, err
 		}
+		if effectiveDurable {
+			if _, ok := r.completion.(backenddb.NativeCommandWALSpareCompletion); ok {
+				b.cowState.native.barrierSpareSlot = &r.barrierSpare
+			}
+		}
 	}
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
+	cancelUnconsumedSpare()
 	if r.completion != nil {
 		r.result, err = r.completion.CompleteNativeCommandWAL(err)
 		r.completion = nil
@@ -517,21 +538,40 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 // All escaping callback carriers and the public registration are admitted from
 // the original native budget before assignment, and scrubbed only after ACK.
 type cowNativeCommandWALRequest struct {
-	batch      *Batch
-	backend    *backenddb.DB
-	native     *backenddb.NativePreparedPublication
-	intent     *backenddb.CommandWALIntent
-	owner      *transactionowner.Owner
-	bridge     backenddb.NativeCommandWALCompletionBridge
-	completion backenddb.NativeCommandWALCompletion
-	result     backenddb.NativeCommandWALCompletionResult
-	durable    bool
+	batch        *Batch
+	backend      *backenddb.DB
+	native       *backenddb.NativePreparedPublication
+	intent       *backenddb.CommandWALIntent
+	owner        *transactionowner.Owner
+	bridge       backenddb.NativeCommandWALCompletionBridge
+	completion   backenddb.NativeCommandWALCompletion
+	result       backenddb.NativeCommandWALCompletionResult
+	barrierSpare rootpublication.AcceptedTicket
+	durable      bool
 }
 
 func (r *cowNativeCommandWALRequest) register() error {
+	if r.batch != nil && r.batch.cowState != nil && r.batch.cowState.native != nil {
+		r.batch.cowState.native.barrierSpareSlot = nil
+	}
+	spare := r.barrierSpare
+	r.barrierSpare = rootpublication.AcceptedTicket{}
 	if r.bridge == nil {
+		if spare.Valid() {
+			if cancelErr := spare.CancelAccepted(); cancelErr != nil {
+				return cancelErr
+			}
+		}
 		_, err := r.append(r.durable)
 		return err
+	}
+	if spare.Valid() {
+		if spareReg, ok := r.completion.(backenddb.NativeCommandWALSpareCompletion); ok {
+			return spareReg.RegisterNativeCommandWALWithSpare(r.append, spare)
+		}
+		if cancelErr := spare.CancelAccepted(); cancelErr != nil {
+			return cancelErr
+		}
 	}
 	return r.completion.RegisterNativeCommandWAL(r.append)
 }

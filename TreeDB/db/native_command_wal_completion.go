@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -13,6 +14,13 @@ type NativeCommandWALCompletion interface {
 	RegisterNativeCommandWAL(func(bool) (uint64, error)) error
 	CompleteNativeCommandWAL(error) (NativeCommandWALCompletionResult, error)
 	ReleaseNativeCommandWAL()
+}
+
+// NativeCommandWALSpareCompletion optionally accepts a pre-reserved ordinary
+// accepted-prefix spare ticket so durable native commits can supply the group
+// barrier without reserving a second ticket under held publication/writer gates.
+type NativeCommandWALSpareCompletion interface {
+	RegisterNativeCommandWALWithSpare(func(bool) (uint64, error), rootpublication.AcceptedTicket) error
 }
 
 // NativeCommandWALCompletionResult reports the assignment and wait of this

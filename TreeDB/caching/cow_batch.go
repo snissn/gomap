@@ -869,8 +869,12 @@ func (b *Batch) admitCOWAccepted() error {
 		return nil
 	}
 	pair := b.rawTxnPairAdmission()
+	var nativeSpare *rootpublication.AcceptedTicket
+	if pair == nil && b.cowState.native != nil {
+		nativeSpare = b.cowState.native.barrierSpareSlot
+	}
 	var ticket, spare rootpublication.AcceptedTicket
-	if pair != nil {
+	if pair != nil || nativeSpare != nil {
 		var denied rootpublication.AcceptedOrdinaryPairRefusal
 		var err error
 		ticket, spare, denied, err = c.prefix.ReserveAcceptedOrdinaryPairWithRefusal()
@@ -878,7 +882,10 @@ func (b *Batch) admitCOWAccepted() error {
 			if !denied.Valid() {
 				return err
 			}
-			return b.admitCOWAcceptedAfterRawRefusal(pair, denied)
+			if pair != nil {
+				return b.admitCOWAcceptedAfterRawRefusal(pair, denied)
+			}
+			return b.admitCOWAcceptedAfterNativeRefusal(nativeSpare, denied)
 		}
 	} else {
 		var err error
@@ -890,6 +897,8 @@ func (b *Batch) admitCOWAccepted() error {
 	b.cowState.accepted = ticket
 	if pair != nil {
 		pair.barrierSpare = spare
+	} else if nativeSpare != nil {
+		*nativeSpare = spare
 	}
 	return nil
 }
@@ -918,5 +927,16 @@ func (b *Batch) admitCOWAcceptedAfterRawRefusal(pair *cowTxnState, denied rootpu
 	}
 	b.cowState.accepted = ticket
 	pair.barrierSpare = spare
+	return nil
+}
+
+//go:noinline
+func (b *Batch) admitCOWAcceptedAfterNativeRefusal(spareSlot *rootpublication.AcceptedTicket, denied rootpublication.AcceptedOrdinaryPairRefusal) error {
+	ticket, spare, err := b.db.reserveRawTxnPairAfterPressure(denied)
+	if err != nil {
+		return err
+	}
+	b.cowState.accepted = ticket
+	*spareSlot = spare
 	return nil
 }
