@@ -147,7 +147,25 @@ func (db *DB) CompactStorage(ctx context.Context, opts backenddb.CompactStorageO
 				return fallbackErr
 			}
 		}
-		if settle != nil {
+		if settle == nil {
+			return nil
+		}
+		if settleErr := settle(&stats); settleErr != nil {
+			return settleErr
+		}
+		// If the first post-refresh GC pass newly transitioned packed or
+		// retiring leaf generations to deleted/zombie, the live COW read basis
+		// captured before that GC pass still retains the pre-GC ValueLogSet.
+		// Refresh and drain that basis so zombie files unlink immediately, then
+		// run one final settle pass to prune deleted manifest records and
+		// refresh stats.After / FilesDeleted.
+		needsSecondSettle := stats.LeafGenerationGC.GenerationsRetiring > 0 ||
+			(stats.LeafGenerationGC.BytesDeleted > 0 && stats.LeafGenerationGC.FilesDeleted == 0) ||
+			stats.LeafGenerationGC.GenerationsEligible > stats.LeafGenerationGC.GenerationsDeleted
+		if needsSecondSettle {
+			if refreshErr := db.finishCOWBackendMaintenance(nil); refreshErr != nil {
+				return refreshErr
+			}
 			return settle(&stats)
 		}
 		return nil

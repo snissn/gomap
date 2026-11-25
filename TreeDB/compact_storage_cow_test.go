@@ -627,6 +627,49 @@ func TestCompactStorageForPrivateCOWRejectsNilAndWrongOwner(t *testing.T) {
 	}
 }
 
+func TestSettleCompactStorageAfterReadBasisRefreshRunsWhenLeafPackRan(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	dir := t.TempDir()
+	database, backend, manager := openStandaloneCOWBSONFixtureWithLeafTarget(t, ProfileCommandWALRelaxed, dir, 16<<10, true)
+	defer func() {
+		_ = manager.Close()
+		_ = database.Close()
+	}()
+
+	col := createStandaloneCOWBSONCollection(t, manager, "settle_pack")
+	populateStandaloneCOWBSONChurn(t, database, col, 32, 24)
+
+	// Simulate the state immediately after a Linux leaf-generation-pack where
+	// in-loop LeafGenerationGC ran while the old COW cut / fallback still
+	// protected the pre-pack generations (so GenerationsRetiring==0 and
+	// BytesDeleted==0), while LeafGenerationPacks records a real pack pass.
+	stats := treedbdb.CompactStorageStats{
+		Mode: treedbdb.CompactStorageFull,
+		LeafGenerationPacks: []treedbdb.LeafGenerationPackRunOnceStats{
+			{
+				Ran: true,
+				Pack: treedbdb.LeafGenerationPackStats{
+					BytesCopied:     4096,
+					LeafPagesCopied: 1,
+				},
+			},
+		},
+	}
+	ctx := context.Background()
+	if err := backend.SettleCompactStorageAfterReadBasisRefresh(ctx, treedbdb.CompactStorageOptions{Mode: treedbdb.CompactStorageFull}, &stats); err != nil {
+		t.Fatalf("SettleCompactStorageAfterReadBasisRefresh: %v", err)
+	}
+	if _, ok := compactStoragePhaseByName(stats.Phases, "leaf-generation-gc-after-read-basis-refresh"); !ok {
+		t.Fatalf("expected leaf-generation-gc-after-read-basis-refresh phase when leaf pack ran, phases=%+v", stats.Phases)
+	}
+	if stats.LeafGenerationGC.BytesDeleted == 0 && stats.LeafGenerationGC.FilesDeleted == 0 {
+		t.Fatalf("expected post-refresh settle GC to delete dead leaf generations, gc=%+v", stats.LeafGenerationGC)
+	}
+	if len(stats.After) == 0 {
+		t.Fatalf("expected stats.After to be refreshed after settle, got %+v", stats.After)
+	}
+}
+
 func BenchmarkCompactStorageFullStandaloneCOW(b *testing.B) {
 	b.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	const (

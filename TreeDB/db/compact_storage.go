@@ -434,6 +434,18 @@ func (db *DB) LeafGenerationSealedDebt() (generations int, bytes int64) {
 	return m.generationsSealed, m.bytesSealed
 }
 
+func compactStorageRanLeafGenerationPack(stats *CompactStorageStats) bool {
+	if stats == nil {
+		return false
+	}
+	for _, p := range stats.LeafGenerationPacks {
+		if p.Ran && (p.Pack.BytesCopied > 0 || p.Pack.LeafPagesCopied > 0 || len(p.Selection.GenerationIDs) > 0 || len(p.Pack.SourceGenerationIDs) > 0) {
+			return true
+		}
+	}
+	return false
+}
+
 // SettleCompactStorageAfterReadBasisRefresh retries leaf retirement held by a
 // cached caller's previous read basis. The caller keeps its writer fence across
 // the original compaction, basis refresh, and this settle operation. Ordinary
@@ -444,8 +456,10 @@ func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opt
 		return nil
 	}
 	hasRetiring := stats.LeafGenerationGC.GenerationsRetiring > 0
-	hasUnprunedDeleted := stats.LeafGenerationGC.BytesDeleted > 0 && stats.LeafGenerationGC.FilesDeleted == 0
-	if !hasRetiring && !hasUnprunedDeleted {
+	hasUnprunedDeleted := (stats.LeafGenerationGC.BytesDeleted > 0 && stats.LeafGenerationGC.FilesDeleted == 0) ||
+		stats.LeafGenerationGC.GenerationsEligible > stats.LeafGenerationGC.GenerationsDeleted
+	hasPackedLeafGenerations := compactStorageRanLeafGenerationPack(stats)
+	if !hasRetiring && !hasUnprunedDeleted && !hasPackedLeafGenerations {
 		return nil
 	}
 	opts = normalizeCompactStorageOptions(opts)
@@ -453,17 +467,15 @@ func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opt
 	priorBytesEligible := stats.LeafGenerationGC.BytesEligible
 	priorFilesDeleted := stats.LeafGenerationGC.FilesDeleted
 	priorGenerationsDeleted := stats.LeafGenerationGC.GenerationsDeleted
+	priorGenerationsEligible := stats.LeafGenerationGC.GenerationsEligible
 	if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-read-basis-refresh", func() error {
 		roots, systems := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{ProtectedRootIDs: roots, ProtectedSystemRootIDs: systems})
-		if gc.BytesDeleted == 0 && priorBytesDeleted > 0 && gc.FilesDeleted > 0 {
-			gc.BytesDeleted = priorBytesDeleted
-		}
-		if gc.BytesEligible == 0 && priorBytesEligible > 0 && gc.FilesDeleted > 0 {
-			gc.BytesEligible = priorBytesEligible
-		}
+		gc.BytesDeleted += priorBytesDeleted
+		gc.BytesEligible += priorBytesEligible
 		gc.FilesDeleted += priorFilesDeleted
 		gc.GenerationsDeleted += priorGenerationsDeleted
+		gc.GenerationsEligible += priorGenerationsEligible
 		stats.LeafGenerationGC = gc
 		return err
 	}); err != nil {
