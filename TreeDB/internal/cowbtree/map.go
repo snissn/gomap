@@ -57,6 +57,7 @@ type Map[K ordered, V any] struct {
 	copyValues       bool
 	isoCopyValues    bool
 	sealed           bool
+	ownedNodes       bool
 	allocationCharge uint64 // node/backing allocations through this private header
 }
 
@@ -80,6 +81,20 @@ type mapNode[K ordered, V any] struct {
 type mapInternalNode[K ordered, V any] struct {
 	node     mapNode[K, V]
 	children []*mapNode[K, V]
+}
+
+// OwnedMap nodes allocate ownership metadata in the same heap object as the
+// node so sealing requires no separate ownedMapNode allocation. Non-owned
+// Maps keep mapNode / mapInternalNode unchanged with zero extra bytes.
+type mapOwnedLeafNode[K ordered, V any] struct {
+	node      mapNode[K, V]
+	ownership ownedMapNode[K, V]
+}
+
+type mapOwnedInternalNode[K ordered, V any] struct {
+	node      mapNode[K, V]
+	children  []*mapNode[K, V]
+	ownership ownedMapNode[K, V]
 }
 
 // Copy the node for safe isolation.
@@ -202,7 +217,20 @@ func (tr *Map[K, V]) IsoCopy() *Map[K, V] {
 
 func (tr *Map[K, V]) newNode(leaf bool) *mapNode[K, V] {
 	var n *mapNode[K, V]
-	if leaf {
+	if tr.ownedNodes {
+		if leaf {
+			owned := new(mapOwnedLeafNode[K, V])
+			tr.recordAllocation(uint64(unsafe.Sizeof(*owned)))
+			n = &owned.node
+			n.ownership = &owned.ownership
+		} else {
+			owned := new(mapOwnedInternalNode[K, V])
+			tr.recordAllocation(uint64(unsafe.Sizeof(*owned)))
+			n = &owned.node
+			n.children = &owned.children
+			n.ownership = &owned.ownership
+		}
+	} else if leaf {
 		n = new(mapNode[K, V])
 		tr.recordAllocation(uint64(unsafe.Sizeof(*n)))
 	} else {
