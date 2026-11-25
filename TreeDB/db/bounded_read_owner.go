@@ -305,14 +305,10 @@ func admitVerifiedCachedLeafPage(cache *leafPageReadCache, ptr page.LeafLogPtr, 
 	if dictionary && !cowReadPolicyAllows(limits, limits) {
 		return false, valuelog.ErrCOWReadUnsupported
 	}
-	admitted := cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true)
-	if !admitted {
-		admitted = cache.storeReadMiss(ptr, verifiedPage, true)
+	if cache.markRecordChecksumVerifiedAndCOWPolicyWithLockPolicy(ptr, verifiedPage, true, dictionary, limits) {
+		return true, nil
 	}
-	if dictionary {
-		cache.markCOWReadPolicy(ptr, verifiedPage, limits)
-	}
-	return admitted, nil
+	return cache.storeReadMissWithCOWPolicy(ptr, verifiedPage, true, dictionary, limits), nil
 }
 
 // The caller holds beginRead, so the captured Set and reader cannot detach.

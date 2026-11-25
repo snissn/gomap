@@ -377,17 +377,32 @@ func (c *leafPageReadCache) shouldAdmitWriteStoreAdaptive() bool {
 // copying 4KiB pages into the cache and evicting leaves that are likely to be
 // reused during publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
-	return c.storeReadMissWithAllocationPolicy(ptr, leafPage, recordChecksumVerified, true)
+	return c.storeReadMissWithAllocationPolicyAndCOWPolicy(ptr, leafPage, recordChecksumVerified, true, false, valuelog.COWReadLimits{})
+}
+
+// storeReadMissWithCOWPolicy admits a read-miss page after repeated-miss
+// probation and, when dictionary is true and recordChecksumVerified is true,
+// publishes its COWReadLimits certificate under the same slot write lock as
+// the copied bytes and recordChecksumVerified flag.
+func (c *leafPageReadCache) storeReadMissWithCOWPolicy(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified, dictionary bool, limits valuelog.COWReadLimits) bool {
+	return c.storeReadMissWithAllocationPolicyAndCOWPolicy(ptr, leafPage, recordChecksumVerified, true, dictionary, limits)
 }
 
 // storeReadMissNoAlloc follows the same probation, epoch and victim policy,
 // but can only reuse page backing that already belongs to the selected slot.
 func (c *leafPageReadCache) storeReadMissNoAlloc(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified bool) bool {
-	return c.storeReadMissWithAllocationPolicy(ptr, leafPage, recordChecksumVerified, false)
+	return c.storeReadMissWithAllocationPolicyAndCOWPolicy(ptr, leafPage, recordChecksumVerified, false, false, valuelog.COWReadLimits{})
 }
 
 func (c *leafPageReadCache) storeReadMissWithAllocationPolicy(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified, allowAllocation bool) bool {
+	return c.storeReadMissWithAllocationPolicyAndCOWPolicy(ptr, leafPage, recordChecksumVerified, allowAllocation, false, valuelog.COWReadLimits{})
+}
+
+func (c *leafPageReadCache) storeReadMissWithAllocationPolicyAndCOWPolicy(ptr page.LeafLogPtr, leafPage []byte, recordChecksumVerified, allowAllocation, dictionary bool, limits valuelog.COWReadLimits) bool {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(leafPage) != page.PageSize {
+		return false
+	}
+	if dictionary && !cowReadPolicyAllows(limits, limits) {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -422,10 +437,39 @@ func (c *leafPageReadCache) storeReadMissWithAllocationPolicy(ptr page.LeafLogPt
 			return false
 		}
 		if slot.valid && slot.key == key {
-			slot.recent.Store(true)
-			ok := !recordChecksumVerified || slot.recordChecksumVerified
+			if !dictionary {
+				slot.recent.Store(true)
+				ok := !recordChecksumVerified || slot.recordChecksumVerified
+				slot.mu.RUnlock()
+				return ok
+			}
+			if slot.recordChecksumVerified && cowReadPolicyAllows(slot.cowReadPolicy, limits) {
+				slot.recent.Store(true)
+				slot.mu.RUnlock()
+				return true
+			}
 			slot.mu.RUnlock()
-			return ok
+			if !slot.mu.TryLock() {
+				c.recordReadMissAdmissionLockSkip()
+				return false
+			}
+			if slot.valid && slot.key == key {
+				if !c.disabled.Load() && bytes.Equal(slot.data, leafPage) && (recordChecksumVerified || slot.recordChecksumVerified) {
+					if recordChecksumVerified {
+						slot.recordChecksumVerified = true
+					}
+					if !cowReadPolicyAllows(slot.cowReadPolicy, limits) {
+						slot.cowReadPolicy = limits
+					}
+					slot.recent.Store(true)
+					slot.mu.Unlock()
+					return true
+				}
+				slot.mu.Unlock()
+				return false
+			}
+			slot.mu.Unlock()
+			continue
 		}
 		slot.mu.RUnlock()
 	}
@@ -437,7 +481,10 @@ func (c *leafPageReadCache) storeReadMissWithAllocationPolicy(ptr page.LeafLogPt
 		c.readMissAdmissionCandidateSkips.Add(1)
 		return false
 	}
-	result, ok := c.storeInBucketWithAllocationPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, true, allowAllocation)
+	if c.disabled.Load() {
+		return false
+	}
+	result, ok := c.storeInBucketWithAllocationPolicyAndCOWPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, true, allowAllocation, dictionary, limits)
 	if !ok {
 		if result.backingUnavailable {
 			c.readMissAdmissionSkips.Add(1)
@@ -459,10 +506,14 @@ type leafPageReadCacheStoreResult struct {
 }
 
 func (c *leafPageReadCache) storeInBucketLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking bool) (leafPageReadCacheStoreResult, bool) {
-	return c.storeInBucketWithAllocationPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, nonBlocking, true)
+	return c.storeInBucketWithAllocationPolicyAndCOWPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, nonBlocking, true, false, valuelog.COWReadLimits{})
 }
 
 func (c *leafPageReadCache) storeInBucketWithAllocationPolicyLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking, allowAllocation bool) (leafPageReadCacheStoreResult, bool) {
+	return c.storeInBucketWithAllocationPolicyAndCOWPolicyLocked(bucketIndex, key, leafPage, recordChecksumVerified, nonBlocking, allowAllocation, false, valuelog.COWReadLimits{})
+}
+
+func (c *leafPageReadCache) storeInBucketWithAllocationPolicyAndCOWPolicyLocked(bucketIndex int, key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, nonBlocking, allowAllocation, dictionary bool, limits valuelog.COWReadLimits) (leafPageReadCacheStoreResult, bool) {
 	keyFP := leafPageReadCacheKeyFingerprint(key)
 	start, end := c.bucketRange(bucketIndex)
 	for i := start; i < end; i++ {
@@ -474,7 +525,7 @@ func (c *leafPageReadCache) storeInBucketWithAllocationPolicyLocked(bucketIndex 
 			return leafPageReadCacheStoreResult{}, false
 		}
 		if slot.valid && slot.key == key {
-			result, ok := slot.storeWithAllocationPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation)
+			result, ok := slot.storeWithAllocationPolicyAndCOWPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation, dictionary, limits)
 			slot.mu.Unlock()
 			return result, ok
 		}
@@ -485,7 +536,7 @@ func (c *leafPageReadCache) storeInBucketWithAllocationPolicyLocked(bucketIndex 
 	if !ok {
 		return leafPageReadCacheStoreResult{}, false
 	}
-	result, ok := slot.storeWithAllocationPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation)
+	result, ok := slot.storeWithAllocationPolicyAndCOWPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation, dictionary, limits)
 	slot.mu.Unlock()
 	return result, ok
 }
@@ -561,28 +612,40 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 }
 
 func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
+	return s.storeLockedWithRecordChecksumAndCOWPolicy(key, leafPage, recordChecksumVerified, false, valuelog.COWReadLimits{})
+}
+
+func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumAndCOWPolicy(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, dictionary bool, limits valuelog.COWReadLimits) leafPageReadCacheStoreResult {
 	if cap(s.data) < page.PageSize {
 		s.data = make([]byte, page.PageSize)
 		if s.owner != nil {
 			s.owner.backingBytes.Add(page.PageSize)
 		}
 	}
-	return s.storeIntoBackingLocked(key, leafPage, recordChecksumVerified)
+	return s.storeIntoBackingWithCOWPolicyLocked(key, leafPage, recordChecksumVerified, dictionary, limits)
 }
 
 func (s *leafPageReadCacheSlot) storeWithAllocationPolicyLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, allowAllocation bool) (leafPageReadCacheStoreResult, bool) {
+	return s.storeWithAllocationPolicyAndCOWPolicyLocked(key, leafPage, recordChecksumVerified, allowAllocation, false, valuelog.COWReadLimits{})
+}
+
+func (s *leafPageReadCacheSlot) storeWithAllocationPolicyAndCOWPolicyLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, allowAllocation, dictionary bool, limits valuelog.COWReadLimits) (leafPageReadCacheStoreResult, bool) {
 	if allowAllocation {
-		return s.storeLockedWithRecordChecksumState(key, leafPage, recordChecksumVerified), true
+		return s.storeLockedWithRecordChecksumAndCOWPolicy(key, leafPage, recordChecksumVerified, dictionary, limits), true
 	}
 	if cap(s.data) < page.PageSize {
 		return leafPageReadCacheStoreResult{backingUnavailable: true}, false
 	}
-	return s.storeIntoBackingLocked(key, leafPage, recordChecksumVerified), true
+	return s.storeIntoBackingWithCOWPolicyLocked(key, leafPage, recordChecksumVerified, dictionary, limits), true
 }
 
 // The caller holds the slot lock and has established sufficient existing
 // backing. Keep the no-allocation copy separate from the allocating wrapper.
 func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified bool) leafPageReadCacheStoreResult {
+	return s.storeIntoBackingWithCOWPolicyLocked(key, leafPage, recordChecksumVerified, false, valuelog.COWReadLimits{})
+}
+
+func (s *leafPageReadCacheSlot) storeIntoBackingWithCOWPolicyLocked(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, dictionary bool, limits valuelog.COWReadLimits) leafPageReadCacheStoreResult {
 	result := leafPageReadCacheStoreResult{
 		wasValid: s.valid,
 		prevKey:  s.key,
@@ -592,7 +655,11 @@ func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey,
 	s.key = key
 	s.valid = true
 	s.recordChecksumVerified = recordChecksumVerified
-	s.cowReadPolicy = valuelog.COWReadLimits{}
+	if dictionary && recordChecksumVerified && (s.owner == nil || !s.owner.disabled.Load()) && cowReadPolicyAllows(limits, limits) {
+		s.cowReadPolicy = limits
+	} else {
+		s.cowReadPolicy = valuelog.COWReadLimits{}
+	}
 	s.pageChecksumVerified.Store(false)
 	s.copiedPageChecksumVerified.Store(false)
 	s.recent.Store(true)
@@ -945,7 +1012,18 @@ func (c *leafPageReadCache) markRecordChecksumVerified(ptr page.LeafLogPtr, veri
 }
 
 func (c *leafPageReadCache) markRecordChecksumVerifiedWithLockPolicy(ptr page.LeafLogPtr, verifiedPage []byte, nonBlocking bool) bool {
+	return c.markRecordChecksumVerifiedAndCOWPolicyWithLockPolicy(ptr, verifiedPage, nonBlocking, false, valuelog.COWReadLimits{})
+}
+
+// markRecordChecksumVerifiedAndCOWPolicyWithLockPolicy upgrades an existing
+// byte-identical entry under a single slot write lock and bytes.Equal check,
+// setting recordChecksumVerified and (when dictionary is true) crediting
+// limits unless the slot already holds a stricter certificate.
+func (c *leafPageReadCache) markRecordChecksumVerifiedAndCOWPolicyWithLockPolicy(ptr page.LeafLogPtr, verifiedPage []byte, nonBlocking, dictionary bool, limits valuelog.COWReadLimits) bool {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(verifiedPage) != page.PageSize {
+		return false
+	}
+	if dictionary && !cowReadPolicyAllows(limits, limits) {
 		return false
 	}
 	key := newLeafPageReadCacheKey(ptr)
@@ -961,6 +1039,9 @@ func (c *leafPageReadCache) markRecordChecksumVerifiedWithLockPolicy(ptr page.Le
 		}
 		if slot.valid && slot.key == key && !c.disabled.Load() && bytes.Equal(slot.data, verifiedPage) {
 			slot.recordChecksumVerified = true
+			if dictionary && !cowReadPolicyAllows(slot.cowReadPolicy, limits) {
+				slot.cowReadPolicy = limits
+			}
 			slot.mu.Unlock()
 			return true
 		}
@@ -1108,6 +1189,14 @@ func leafPageReadCacheHash(key leafPageReadCacheKey) uint64 {
 	h := uint64(key.fileID)
 	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	h ^= uint64(key.subIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
+	// Avalanche high bits into low bits so aligned offsets (e.g. 4 KiB pages
+	// or fixed-stride leaf-log records within one file) distribute uniformly
+	// across power-of-2 buckets.
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	h *= 0x94d049bb133111eb
+	h ^= h >> 31
 	return h
 }
 

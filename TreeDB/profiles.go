@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -90,6 +91,12 @@ const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, or no_wal_fas
 const BenchmarkProfileFlagHelp = "command_wal_durable, command_wal_relaxed, no_wal_fast, or bench_unsafe"
 
 const fastProfileChunkSize = 4 << 20
+
+// defaultSemanticLeafPageReadCacheEntries sizes the standalone semantic/collection
+// outer-leaf read cache ceiling at 32768 entries (128 MiB of 4 KiB pages).
+// Page backing buffers are lazily allocated per populated slot, so small
+// databases only pay fixed slot metadata overhead until leaves are cached.
+const defaultSemanticLeafPageReadCacheEntries = 32768
 
 // ParseProfile parses a profile name using TreeDB's standard profile vocabulary.
 // Empty input returns fallback. The bool reports whether a known name or empty
@@ -286,11 +293,19 @@ func OptionsFor(profile Profile, dir string) Options {
 // (MemtableWorkloadSemantic -> "cow_btree" + StandaloneCOWMemtableLimits when
 // MemtableMode is empty or "auto" on writable, non-backend-only opens).
 //
+// It also sets LeafPageReadCacheEntries to 32768 (128 MiB ceiling, lazily
+// allocated per populated 4 KiB slot so small DBs do not preallocate 128 MiB)
+// when TREEDB_LEAF_PAGE_CACHE_ENTRIES is unset. Callers may still disable the
+// cache with LeafPageReadCacheEntries = -1 or set any explicit positive value.
+//
 // Like OptionsFor, OptionsForSemantic rejects bench_unsafe and panics for
 // unknown profiles.
 func OptionsForSemantic(profile Profile, dir string) Options {
 	opts := OptionsFor(profile, dir)
 	opts.MemtableWorkload = MemtableWorkloadSemantic
+	if opts.LeafPageReadCacheEntries == 0 && strings.TrimSpace(os.Getenv(db.LeafPageReadCacheEntriesEnvKey)) == "" {
+		opts.LeafPageReadCacheEntries = defaultSemanticLeafPageReadCacheEntries
+	}
 	return opts
 }
 
