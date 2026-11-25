@@ -340,9 +340,15 @@ func TestScanNativeUpdateUniqueParityAndConflicts(t *testing.T) {
 		}
 		badDomains := builder.Seal()
 		origCol := g.probe.collection
-		badCol := *origCol
-		badCol.domains = badDomains
-		g.probe.collection = &badCol
+		badCol := &nativeCollectionState{
+			incarnation:        origCol.incarnation,
+			documentGeneration: origCol.documentGeneration,
+			schema:             origCol.schema,
+			domains:            badDomains,
+			pending:            origCol.pending,
+		}
+		badCol.refs.Store(1)
+		g.probe.collection = badCol
 		defer func() {
 			g.probe.collection = origCol
 		}()
