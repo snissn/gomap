@@ -335,7 +335,11 @@ func TestNativeEnginePreparationFusedLifecycleAndCleanup(t *testing.T) {
 				t.Fatalf("expected inline backing cleared after clean finish: domain=%v collection=%v", p.inlineDomains[0], p.inlineCollections[0])
 			}
 			after := budget.Stats()
-			if after != before {
+			// PeakBytes is a monotonic high-water mark across subtests sharing the same
+			// DB budget; verify monotonicity and strict equality on all live counters.
+			want := before
+			want.PeakBytes = after.PeakBytes
+			if after.PeakBytes < before.PeakBytes || after != want {
 				t.Fatalf("COW budget mismatch after clean finish: before=%+v after=%+v", before, after)
 			}
 		})

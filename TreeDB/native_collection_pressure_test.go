@@ -255,11 +255,19 @@ func TestNativeProducerPressurePreservesCollectionReads(t *testing.T) {
 
 // Tiny semantic writes used to exhaust the default reservation budget at about
 // 444 rows even though an ordinary checkpoint reclaimed most of that debt.
-// Keep all background triggers disabled so only producer pressure can help.
+// OwnedMap.SetSingle reduced per-commit single-leaf reservation overhead by
+// over an order of magnitude, so bound the COW reservation budget explicitly
+// here to exercise multiple automatic producer-pressure handoffs within 1,500
+// tiny rows while keeping all background triggers disabled.
 func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	opts := OptionsFor(ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
+	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxGenerationBytes = 4 << 20
+	opts.COWMemtableLimits.MaxInFlightBytes = 4 << 20
+	opts.COWMemtableLimits.MaxTotalBytes = 16 << 20
+	opts.COWMemtableLimits.MaxRetiredBytes = 16 << 20
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

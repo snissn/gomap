@@ -24,6 +24,10 @@ func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, i
 }
 
 func prepareNativeDomainUpdateObserved(base *nativeDomainState, name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, entries []memtable.COWMutation, allocator nativeDomainAllocator, reportProjection bool) (*nativeDomainState, error) {
+	return prepareNativeDomainUpdateObservedWithAdmit(base, name, baseRoot, interpretation, policy, entries, allocator, nil, reportProjection)
+}
+
+func prepareNativeDomainUpdateObservedWithAdmit(base *nativeDomainState, name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, entries []memtable.COWMutation, allocator nativeDomainAllocator, admit cowbtree.OwnedMapAdmit, reportProjection bool) (*nativeDomainState, error) {
 	if allocator == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -63,7 +67,9 @@ func prepareNativeDomainUpdateObserved(base *nativeDomainState, name string, bas
 	retirement := writer.Close()
 	writer = nil
 	retirement.Drain()
-	admit := func(bytes uint64) (cowbtree.OwnedMapLease, error) { return allocator.AdmitNativeBytes(bytes) }
+	if admit == nil {
+		admit = func(bytes uint64) (cowbtree.OwnedMapLease, error) { return allocator.AdmitNativeBytes(bytes) }
+	}
 	domain, err := newNativeDomainState(name, baseRoot, interpretation, policy, root, admit)
 	if err != nil {
 		retirement = root.Release()

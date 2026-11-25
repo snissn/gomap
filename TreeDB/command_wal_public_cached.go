@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -1847,6 +1848,19 @@ func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame 
 	c.registered = true
 	defer c.withdrawIntent()
 	registration, err := c.db.registerPublicCommandWALPolicy(c.bytes, nil, c.durable, nil, appendFrame, c.announced)
+	c.registration = registration
+	return err
+}
+func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWALWithSpare(appendFrame func(bool) (uint64, error), spare rootpublication.AcceptedTicket) error {
+	if c.db == nil || c.registered {
+		if spare.Valid() {
+			return errors.Join(ErrClosed, spare.CancelAccepted())
+		}
+		return ErrClosed
+	}
+	c.registered = true
+	defer c.withdrawIntent()
+	registration, err := c.db.registerPublicCommandWALCollectedWithSpare(c.bytes, nil, c.durable, c.announced, false, nil, appendFrame, spare)
 	c.registration = registration
 	return err
 }

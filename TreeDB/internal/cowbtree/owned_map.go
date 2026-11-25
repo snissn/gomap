@@ -244,6 +244,101 @@ func ownedMapBuilderCharge[K ordered, V any](maxItems, degreeMax, mutations int)
 	return baseBytes + nodes*nodeBytes, nil
 }
 
+func ownedMapSingleLeafCharge[K ordered, V any](newLen int) (uint64, error) {
+	if newLen < 0 {
+		return 0, ErrOwnedMap
+	}
+	baseBytes := uint64(unsafe.Sizeof(OwnedMap[K, V]{})) +
+		uint64(unsafe.Sizeof(ownedMapAllocation{})) +
+		uint64(unsafe.Sizeof(mapOwnedLeafNode[K, V]{})) + 256
+	pairBytes := uint64(unsafe.Sizeof(mapPair[K, V]{}))
+	if pairBytes != 0 && uint64(newLen) > (^uint64(0)-baseBytes)/pairBytes {
+		return 0, ErrOwnedMap
+	}
+	return baseBytes + uint64(newLen)*pairBytes, nil
+}
+
+// SetSingle produces a new sealed OwnedMap with a single key/value insert or
+// replacement. When the base map is a single-leaf tree that does not require a
+// split or opaque value copy, it admits a tighter single-leaf charge and builds
+// the sealed successor directly without allocating an OwnedMapBuilder. All
+// other cases delegate to NewOwnedMapBuilder + Set + Seal.
+func (m *OwnedMap[K, V]) SetSingle(key K, value V, lifetime OwnedValueLifetime[V], admit OwnedMapAdmit) (*OwnedMap[K, V], error) {
+	if lifetime == nil || admit == nil {
+		return nil, ErrOwnedMap
+	}
+	if m != nil && (m.refs.Load() <= 0 || !m.tree.sealed) {
+		return nil, ErrOwnedMap
+	}
+	if m != nil && m.tree.root != nil && m.tree.root.leaf() && !m.tree.copyValues && !m.tree.isoCopyValues {
+		src := m.tree.root.items
+		idx, found := m.tree.search(m.tree.root, key)
+		if found || len(src) < m.tree.max {
+			newLen := len(src)
+			if !found {
+				newLen++
+			}
+			charge, err := ownedMapSingleLeafCharge[K, V](newLen)
+			if err != nil {
+				return nil, err
+			}
+			lease, err := admit(charge)
+			if err != nil {
+				return nil, err
+			}
+			alloc := &ownedMapAllocation{}
+			alloc.refund.Init(lease)
+			alloc.refs.Store(2) // 1 for OwnedMap header + 1 for the single mapOwnedLeafNode
+			out := &OwnedMap[K, V]{allocation: alloc, lifetime: lifetime}
+			out.refs.Store(1)
+			owned := &mapOwnedLeafNode[K, V]{}
+			owned.ownership.refs.Store(1)
+			owned.ownership.allocation = alloc
+			owned.ownership.lifetime = lifetime
+
+			items := make([]mapPair[K, V], newLen)
+			if found {
+				if newLen > 1 {
+					copy(items, src)
+				}
+				items[idx] = mapPair[K, V]{key: key, value: value}
+			} else {
+				copy(items[:idx], src[:idx])
+				items[idx] = mapPair[K, V]{key: key, value: value}
+				copy(items[idx+1:], src[idx:])
+			}
+			for i := range items {
+				lifetime.Retain(items[i].value)
+			}
+
+			iso := newIsoID()
+			owned.node = mapNode[K, V]{
+				ownership: &owned.ownership,
+				isoid:     iso,
+				count:     newLen,
+				items:     items,
+			}
+			out.tree = m.tree
+			out.tree.isoid = iso
+			out.tree.root = &owned.node
+			out.tree.count = newLen
+			out.tree.sealed = true
+			out.tree.ownedNodes = true
+			out.tree.allocationCharge = 0
+			return out, nil
+		}
+	}
+	b, err := NewOwnedMapBuilder(m, 1, lifetime, admit)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Set(key, value); err != nil {
+		b.Cancel().Complete()
+		return nil, err
+	}
+	return b.Seal(), nil
+}
+
 func (b *OwnedMapBuilder[K, V]) Set(key K, value V) error {
 	if b == nil || b.out == nil || b.remaining <= 0 {
 		return ErrOwnedMap
