@@ -17,6 +17,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -520,6 +521,94 @@ func BenchmarkCOWGetManyViewWithMisses(b *testing.B) {
 	}
 }
 
+type cowPerfDictionaryLeafLifecycle interface {
+	backenddb.LeafPageLog
+	backenddb.LeafPageLogCreatedSegmentProvider
+	backenddb.LeafPageLogCurrentSegmentProvider
+	backenddb.LeafPageLogSegmentRegistrationObserver
+	backenddb.LeafPageLogCachedWrapperOwner
+	backenddb.LeafPageLogSequenceReserver
+	backenddb.LeafPageLogPrivateCOWPackHandoff
+	CurrentValueLogSegment() (string, uint32, bool)
+	ProtectedLeafGenerationRootIDs() []uint64
+	ProtectedLeafGenerationSystemRootIDs() []uint64
+	ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64)
+	ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64)
+}
+
+// cowPerfDictionaryLeafLog is a cross-platform copy of the dictionary leaf
+// appender helper so cow_read_workspace_perf_test.go compiles on Windows too.
+type cowPerfDictionaryLeafLog struct {
+	cowPerfDictionaryLeafLifecycle
+	db         *DB
+	dictID     uint64
+	dictionary []byte
+}
+
+func (l *cowPerfDictionaryLeafLog) LeafPageLogLane(workerIndex int) (backenddb.LeafPageLog, bool) {
+	if l == nil || workerIndex != 0 {
+		return nil, false
+	}
+	return l, true
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPage(leaf []byte) (page.LeafLogPtr, error) {
+	ptr, resources, err := l.AppendLeafPageWithStableResources(leaf)
+	resources.Release()
+	return ptr, err
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPages(leaves [][]byte) ([]page.LeafLogPtr, error) {
+	ptrs, resources, err := l.AppendLeafPagesWithStableResources(leaves)
+	resources.Release()
+	return ptrs, err
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPageWithStableResources(leaf []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	ptrs, resources, err := l.AppendLeafPagesWithStableResources([][]byte{leaf})
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	return ptrs[0], resources, nil
+}
+
+func (l *cowPerfDictionaryLeafLog) AppendLeafPagesWithStableResources(leaves [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if len(leaves) == 0 {
+		return nil, nil, nil
+	}
+	start, err := l.db.ReserveValueLogRIDs(len(leaves))
+	if err != nil {
+		return nil, nil, err
+	}
+	records := make([]valuelog.Record, len(leaves))
+	for i, leaf := range leaves {
+		payload, _, err := valuelog.MaybeCompactLeafLogPayload(leaf)
+		if err != nil {
+			return nil, nil, err
+		}
+		records[i] = valuelog.Record{RID: start + uint64(i), Value: payload}
+	}
+	ptrs, resources, err := l.db.appendValueLogWithStableResources(&l.db.leafLog, l.dictID, l.dictionary, records, journalDurabilityNone)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer putValueLogPtrs(ptrs)
+	if len(ptrs) != len(leaves) {
+		resources.Release()
+		return nil, nil, fmt.Errorf("dictionary leaf append returned %d pointers for %d pages", len(ptrs), len(leaves))
+	}
+	refs := make([]page.LeafLogPtr, len(ptrs))
+	for i, ptr := range ptrs {
+		refs[i], err = page.LeafLogPtrFromValuePtr(ptr)
+		if err != nil {
+			resources.Release()
+			return nil, nil, err
+		}
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return refs, resources, nil
+}
+
 type cowCountingDictProvider struct {
 	*dictdb.Store
 	prepareCalls atomic.Int64
@@ -665,11 +754,11 @@ func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLim
 	}
 	counting := &cowCountingDictProvider{Store: store}
 	db.SetDictStore(counting)
-	backend.SetLeafPageLog(&cowDictionaryLeafLog{
-		cowDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog},
-		db:                         db,
-		dictID:                     dictID,
-		dictionary:                 dictionary,
+	backend.SetLeafPageLog(&cowPerfDictionaryLeafLog{
+		cowPerfDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog},
+		db:                             db,
+		dictID:                         dictID,
+		dictionary:                     dictionary,
 	})
 
 	keys := make([][]byte, numKeys)
@@ -846,25 +935,14 @@ func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
 		t.Fatalf("excessive dictionary preparation churn under 32 readers: delta=%d (want <= 512 for %d+ reads)", prepDelta32, readers32*readsPer32)
 	}
 
-	// 3. Holding Lane 0 (physicalMu) must NOT block tryReleaseIdleGenericReadScratch()
-	// from draining cached dictionary codecs in idle spillover lanes.
-	// First verify multiple physicalSlots were actually populated under Standalone limits.
+	// 3. Deterministically force lane-0 contention before asserting spillover
+	// slot population (so single-CPU / GOMAXPROCS=1 runners never flake), and
+	// verify holding Lane 0 (physicalMu) does NOT block
+	// tryReleaseIdleGenericReadScratch() from draining cached dictionary codecs
+	// in idle spillover lanes.
 	if got := fix.db.cow.maxRetainedPhysicalSlots(); got != len(fix.db.cow.physicalSlots) {
 		t.Fatalf("Standalone maxRetainedPhysicalSlots=%d want %d", got, len(fix.db.cow.physicalSlots))
 	}
-	warmSpillSlots := 0
-	for i := range fix.db.cow.physicalSlots {
-		fix.db.cow.physicalSlots[i].mu.Lock()
-		if fix.db.cow.physicalSlots[i].reader != nil {
-			warmSpillSlots++
-		}
-		fix.db.cow.physicalSlots[i].mu.Unlock()
-	}
-	if warmSpillSlots == 0 {
-		t.Fatal("expected at least one physicalSlots spillover lane to be populated under 16/32 readers")
-	}
-
-	// Ensure at least one spillover lane holds a dictionary codec while Lane 0 is locked.
 	fix.db.cow.physicalMu.Lock()
 	var spillDone sync.WaitGroup
 	spillDone.Add(1)
@@ -877,6 +955,18 @@ func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
 	if spillErr != nil {
 		fix.db.cow.physicalMu.Unlock()
 		t.Fatalf("spillover read while lane 0 held: %v", spillErr)
+	}
+	warmSpillSlots := 0
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Lock()
+		if fix.db.cow.physicalSlots[i].reader != nil {
+			warmSpillSlots++
+		}
+		fix.db.cow.physicalSlots[i].mu.Unlock()
+	}
+	if warmSpillSlots == 0 {
+		fix.db.cow.physicalMu.Unlock()
+		t.Fatal("expected at least one physicalSlots spillover lane to be populated while lane 0 held")
 	}
 	if !fix.capture.TryReleaseIdleNativeReadScratch() {
 		fix.db.cow.physicalMu.Unlock()
