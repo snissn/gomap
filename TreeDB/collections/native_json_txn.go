@@ -23,41 +23,51 @@ import (
 // Get observes that opening plus its own ordered staged row operations. Commit never reruns the
 // body; only the original immutable mutations are composed after validation.
 type nativeJSONTxnBinding struct {
-	name              string
-	incarnation       uint64
-	probe             NativeJSONRead
-	plan              *nativeJSONLogicalInsert
-	typed             *nativeTypedDelta
-	projection        *trustedFloat32Projection
-	effects           []txnhistory.Effect
-	rows              nativeJSONRows
-	stageCharge       uint64
-	validation        indexEncodeArena
-	retainedScalar    indexEncodeArena
-	validationLease   *memtable.COWExternalLease
-	validationCharge  uint64
-	resolvedFinal     nativeJSONResolvedFinalRows
-	templates         templateV1Resolver
-	templateRecords   []templateV1Record
-	templateLearned   []templateV1LearnedTemplate
-	allowSourceImport bool
-	allowStored       bool
-	learnTemplates    bool
+	name               string
+	incarnation        uint64
+	probe              NativeJSONRead
+	plan               *nativeJSONLogicalInsert
+	typed              *nativeTypedDelta
+	projection         *trustedFloat32Projection
+	effects            []txnhistory.Effect
+	rows               nativeJSONRows
+	stageCharge        uint64
+	validation         indexEncodeArena
+	retainedScalar     indexEncodeArena
+	validationLease    *memtable.COWExternalLease
+	validationCharge   uint64
+	resolvedFinal      nativeJSONResolvedFinalRows
+	templates          templateV1Resolver
+	templateRecords    []templateV1Record
+	templateLearned    []templateV1LearnedTemplate
+	allowSourceImport  bool
+	allowStored        bool
+	learnTemplates     bool
+	primaryOnlyBSONSet bool
+	singlePlan         nativeJSONLogicalInsert
+	singleMutation     [1]memtable.COWMutation
+	singleEffect       [1]txnhistory.Effect
 }
 type NativeJSONTxn struct {
 	mu                   sync.Mutex
 	db                   *backenddb.DB
 	core                 backenddb.NativeConditionalTxn
 	bindings             []nativeJSONTxnBinding
+	singleBinding        [1]nativeJSONTxnBinding
 	members              []commitlog.CompositeMutationMember
+	singleMember         [1]commitlog.CompositeMutationMember
 	count                int
 	imported             *nativeEngineVersion
 	dependencies         []txnhistory.Dependency
+	inlineDeps           [2]txnhistory.Dependency
 	custody              *nativeMutationCustody
 	rawStaged            bool
 	structuredBSONUpdate bool
 	lease                *memtable.COWExternalLease
 	stageLeases          []*memtable.COWExternalLease
+	singleStageLease     [1]*memtable.COWExternalLease
+	logicalGroup         nativeJSONLogicalGroup
+	preparedPub          backenddb.NativePreparedPublication
 	charge               uint64
 	failure              error
 }
@@ -120,7 +130,17 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 	if err != nil {
 		return nil, errors.Join(err, core.Close())
 	}
-	t := &NativeJSONTxn{db: m.db, core: core, count: count, lease: lease, charge: charge, dependencies: make([]txnhistory.Dependency, 0, count), bindings: make([]nativeJSONTxnBinding, count), stageLeases: make([]*memtable.COWExternalLease, count)}
+	t := &NativeJSONTxn{db: m.db, core: core, count: count, lease: lease, charge: charge}
+	if count == 1 {
+		t.bindings = t.singleBinding[:1]
+		t.stageLeases = t.singleStageLease[:1]
+		t.dependencies = t.inlineDeps[:0]
+		t.members = t.singleMember[:0]
+	} else {
+		t.dependencies = make([]txnhistory.Dependency, 0, count)
+		t.bindings = make([]nativeJSONTxnBinding, count)
+		t.stageLeases = make([]*memtable.COWExternalLease, count)
+	}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, t.Close())
@@ -146,19 +166,22 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 	}
 	for i := 0; i < count; i++ {
 		g := &t.bindings[i]
-		g.name = string(bytes.Clone([]byte(nameAt(i))))
+		nameKey := nameAt(i)
 		g.probe.capture = core
 		g.probe.database = m.db
-		c, ok := base.names.Get(g.name)
+		c, ok := base.names.Get(nameKey)
 		if !ok {
 			return nil, tree.ErrKeyNotFound
 		}
 		if err = nativeTypedProfile(m.db, *c.schema.meta); err != nil {
 			return nil, err
 		}
-		if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
-			return nil, err
+		if !isCanonicalNativeBSONMeta(c.schema.meta) {
+			if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
+				return nil, err
+			}
 		}
+		g.name = c.schema.meta.Name
 		g.incarnation = c.incarnation
 		g.probe.collection = c
 		g.probe.meta = *c.schema.meta
@@ -171,6 +194,43 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 		}
 	}
 	return t, nil
+}
+
+func isCanonicalNativeBSONMeta(meta *CollectionMeta) bool {
+	if meta == nil || !nativeBSONSetMeta(meta) ||
+		len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 ||
+		meta.Options.DocumentFormat != DocumentFormatBSON {
+		return false
+	}
+	if ValidateCollectionName(meta.Name) != nil {
+		return false
+	}
+	if _, err := backendRootStoragePolicy(meta.Options.DataRootStoragePolicy); err != nil {
+		return false
+	}
+	if _, err := backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy); err != nil {
+		return false
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments < 0 ||
+		meta.Options.BufferedIndexedWriteMaxBytes < 0 ||
+		meta.Options.BufferedIndexedWriteMaxRootRuns < 0 ||
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 ||
+		(meta.Options.DisableBufferedIndexedAsyncFlush && (meta.Options.BufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0)) {
+		return false
+	}
+	for i := range meta.Indexes {
+		idx := &meta.Indexes[i]
+		if len(idx.Components) != 0 || idx.ValueType != IndexValueBSONOrderedV2 {
+			return false
+		}
+		if i > 0 && meta.Indexes[i-1].Name >= idx.Name {
+			return false
+		}
+		if ValidateIndexName(idx.Name) != nil || ValidateIndexPath(idx.Field) != nil {
+			return false
+		}
+	}
+	return true
 }
 func (g *nativeJSONTxnBinding) namespace() txnhistory.Namespace {
 	return txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: g.incarnation, Domain: 1, Interpretation: 1}
@@ -304,6 +364,7 @@ type nativeJSONLogicalInsert struct {
 type nativeJSONLogicalGroup struct {
 	bindings                  []nativeJSONTxnBinding
 	changes                   []nativeJSONPrimaryChange
+	singleChange              [1]nativeJSONPrimaryChange
 	count                     int
 	bootstrap                 *nativeEngineVersion
 	opening                   backenddb.NativeSemanticCapture
@@ -587,17 +648,27 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 		t.charge += charge
 		return nil
 	}
-	for _, bytes := range []uint64{
+	var commitCharge uint64
+	for _, bytes := range [...]uint64{
 		uint64(unsafe.Sizeof(nativeJSONLogicalGroup{})),
 		uint64(len(t.members)+1) * uint64(unsafe.Sizeof(commitlog.CompositeMutationMember{})),
 		uint64(t.count) * uint64(unsafe.Sizeof(nativeJSONPrimaryChange{})),
 		uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})),
 		uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})),
 	} {
-		if err := admit(bytes); err != nil {
-			return err
+		n := memtable.COWAllocationCharge(bytes)
+		if n > ^uint64(0)-commitCharge {
+			return memtable.ErrCOWCapacity
 		}
+		commitCharge += n
 	}
+	if commitCharge > ^uint64(0)-t.charge {
+		return memtable.ErrCOWCapacity
+	}
+	if err := t.lease.Resize(t.charge + commitCharge); err != nil {
+		return err
+	}
+	t.charge += commitCharge
 	// A singleton's original binding receipt stays live through synchronous
 	// CommitNative, including cancellation and assigned/installed errors. Borrow
 	// that final image; the journal still takes its own retained key ownership.
@@ -618,7 +689,13 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 		}
 	}
 	var rawGrowth int
-	members := make([]commitlog.CompositeMutationMember, len(t.members)+1)
+	var memberBuf [2]commitlog.CompositeMutationMember
+	var members []commitlog.CompositeMutationMember
+	if len(t.members)+1 <= len(memberBuf) {
+		members = memberBuf[:len(t.members)+1]
+	} else {
+		members = make([]commitlog.CompositeMutationMember, len(t.members)+1)
+	}
 	memberCount := 0
 	if t.rawStaged {
 		if len(rawEntries) != 1 {
@@ -681,7 +758,13 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 			return err
 		}
 	}
-	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged, returnCustodyOnInstall: returnCustodyOnInstall, reportProjectedGeneration: projected != nil}
+	t.logicalGroup = nativeJSONLogicalGroup{bindings: t.bindings, count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged, returnCustodyOnInstall: returnCustodyOnInstall, reportProjectedGeneration: projected != nil}
+	plan := &t.logicalGroup
+	if t.count <= len(plan.singleChange) {
+		plan.changes = plan.singleChange[:t.count]
+	} else {
+		plan.changes = make([]nativeJSONPrimaryChange, t.count)
+	}
 	defer func(p *nativeJSONLogicalGroup) {
 		// CommitNative and its finalizer are synchronous. Accepted sparse
 		// custody owns its replacement descriptors; this temporary ancestor
@@ -698,7 +781,8 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
 	}(plan)
-	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall}
+	t.preparedPub = backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall}
+	native := &t.preparedPub
 	if retry != nil && len(t.dependencies) >= 2 {
 		// The singleton's original catalog dependency precedes the point read
 		// recorded by touchNativeRow. Later unique-key dependencies still apply.
@@ -870,7 +954,10 @@ func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *mem
 	}
 	t.bindings = nil
 	t.members = nil
+	clear(t.singleMember[:])
 	t.dependencies = nil
+	clear(t.inlineDeps[:])
+	t.preparedPub = backenddb.NativePreparedPublication{}
 
 	if t.custody != nil {
 		record := t.custody.ReleaseNativeCustody()

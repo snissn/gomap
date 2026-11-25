@@ -10,6 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -24,7 +25,10 @@ type nativeJSONRow struct {
 	// captured schema and original stage receipt. Replay/array rows leave it nil.
 	currentState orderedDocumentIndexState
 }
-type nativeJSONRows struct{ rows []nativeJSONRow }
+type nativeJSONRows struct {
+	rows      []nativeJSONRow
+	singleRow [1]nativeJSONRow
+}
 
 func (p *nativeJSONRows) find(id []byte) *nativeJSONRow {
 	i := sort.Search(len(p.rows), func(i int) bool { return bytes.Compare(p.rows[i].id, id) >= 0 })
@@ -43,21 +47,40 @@ func (p *nativeJSONRows) touch(id []byte, read func([]byte) ([]byte, error), adm
 	} else if err != nil {
 		return nil, err
 	}
-	if err = admit(memtable.COWAllocationCharge(uint64(len(id))) + memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
+	return p.insertTouched(id, value, admit)
+}
+
+func (p *nativeJSONRows) insertTouched(id, value []byte, admit func(uint64) error) (*nativeJSONRow, error) {
+	charge := memtable.COWAllocationCharge(uint64(len(id)))
+	valCharge := memtable.COWAllocationCharge(uint64(len(value)))
+	if valCharge > ^uint64(0)-charge {
+		return nil, memtable.ErrCOWCapacity
+	}
+	charge += valCharge
+	growCapacity := 0
+	useInline := false
+	if len(p.rows) == cap(p.rows) {
+		if cap(p.rows) == 0 {
+			useInline = true
+		} else {
+			growCapacity = 2 * cap(p.rows)
+			if growCapacity < 0 || uint64(growCapacity) > ^uint64(0)/uint64(unsafe.Sizeof(nativeJSONRow{})) {
+				return nil, memtable.ErrCOWCapacity
+			}
+			growCharge := memtable.COWAllocationCharge(uint64(growCapacity) * uint64(unsafe.Sizeof(nativeJSONRow{})))
+			if growCharge > ^uint64(0)-charge {
+				return nil, memtable.ErrCOWCapacity
+			}
+			charge += growCharge
+		}
+	}
+	if err := admit(charge); err != nil {
 		return nil, err
 	}
-	if len(p.rows) == cap(p.rows) {
-		capacity := 2 * cap(p.rows)
-		if capacity == 0 {
-			capacity = 1
-		}
-		if capacity < 0 || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof(nativeJSONRow{})) {
-			return nil, memtable.ErrCOWCapacity
-		}
-		if err = admit(memtable.COWAllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(nativeJSONRow{})))); err != nil {
-			return nil, err
-		}
-		next := make([]nativeJSONRow, len(p.rows), capacity)
+	if useInline {
+		p.rows = p.singleRow[:0]
+	} else if growCapacity != 0 {
+		next := make([]nativeJSONRow, len(p.rows), growCapacity)
 		copy(next, p.rows)
 		p.rows = next
 	}
@@ -579,6 +602,10 @@ func (t *NativeJSONTxn) admitMemberPayload(g *nativeJSONTxnBinding, docs []commi
 // Admit aggregate staging headers before the maintained planner/callback adapter.
 // Old grown backings coexist until the original transaction receipt terminates.
 func (t *NativeJSONTxn) admitRowControls(g *nativeJSONTxnBinding, count int) error {
+	return t.admitRowControlsAndExtra(g, count, 0)
+}
+
+func (t *NativeJSONTxn) admitRowControlsAndExtra(g *nativeJSONTxnBinding, count int, extra uint64) error {
 	perItem := uint64(unsafe.Sizeof(insertBatchItem{})) + uint64(unsafe.Sizeof(int(0))) + uint64(unsafe.Sizeof(preparedBatchUpdate{})) + uint64(unsafe.Sizeof(updateBatchItem{})) + uint64(unsafe.Sizeof(UpdateBatchResult{})) + uint64(unsafe.Sizeof(commitlog.CollectionDocument{})) + 8*uint64(unsafe.Sizeof([]byte{})) + 256
 	if uint64(count) > ^uint64(0)/perItem {
 		return memtable.ErrCOWCapacity
@@ -597,7 +624,11 @@ func (t *NativeJSONTxn) admitRowControls(g *nativeJSONTxnBinding, count int) err
 	if rows > ^uint64(0)-fixed-indexed {
 		return memtable.ErrCOWCapacity
 	}
-	return t.admitStage(g, fixed+indexed+rows)
+	total := fixed + indexed + rows
+	if extra > ^uint64(0)-total {
+		return memtable.ErrCOWCapacity
+	}
+	return t.admitStage(g, total+extra)
 }
 func (t *NativeJSONTxn) touchNativeRow(g *nativeJSONTxnBinding, id []byte) (*nativeJSONRow, error) {
 	return t.touchNativeRowWithInsertProbe(g, id, false)
@@ -614,47 +645,57 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 	if err := t.trackRead(g, id); err != nil {
 		return nil, err
 	}
-	admit := func(n uint64) error { return t.admitStage(g, n) }
+	if row := g.rows.find(id); row != nil {
+		return row, nil
+	}
+	var (
+		value []byte
+		err   error
+	)
 	// The transaction mutex excludes every use of this private probe. Borrow the
 	// exact captured domain/scratch until touch copies it; public Get's output is
 	// caller-owned and must not become an unadmitted internal temporary.
-	read := func(id []byte) ([]byte, error) {
-		// Create publishes catalog identity before any primary domain exists.
-		// Match NativeJSONRead.Get's captured-empty semantics while retaining
-		// the original point dependency registered above.
-		if g.probe.domain.domain == nil {
-			return nil, tree.ErrKeyNotFound
-		}
-		entry, resolved, err := g.probe.domain.memoryEntry(id)
+	if g.probe.domain.domain == nil {
+		err = tree.ErrKeyNotFound
+	} else {
+		entry, resolved, memErr := g.probe.domain.memoryEntry(id)
+		err = memErr
 		if !resolved {
 			if insert {
 				if physical, ok := g.probe.capture.(backenddb.NativePhysicalReader); ok {
 					// Reuse the original cut's admitted physical workspace for a
 					// negative INSERT probe. A hit returns no inline bytes: retain
 					// the full read below, including pointer errors and ownership.
-					if _, err := physical.NativeEntryAtRoot(g.probe.domain.domain.baseRoot, id, false); err != nil {
-						return nil, err
+					if _, probeErr := physical.NativeEntryAtRoot(g.probe.domain.domain.baseRoot, id, false); probeErr != nil {
+						err = probeErr
 					}
 				}
 			}
-			scratch, scratchErr := g.probe.physicalScratch()
-			if scratchErr != nil {
-				return nil, scratchErr
+			if err == nil {
+				scratch, scratchErr := g.probe.physicalScratch()
+				if scratchErr != nil {
+					err = scratchErr
+				} else {
+					entry, err = g.probe.domain.baseEntry(id, scratch, g.probe.readLeaf)
+				}
 			}
-			entry, err = g.probe.domain.baseEntry(id, scratch, g.probe.readLeaf)
 		}
-		if err != nil {
-			return nil, err
+		if err == nil {
+			if entry.Flags&node.FlagTombstone != 0 {
+				err = tree.ErrKeyNotFound
+			} else if entry.Flags&node.FlagPointer != 0 {
+				value, err = g.probe.readValue(entry.ValuePtr, func(n uint64) error { return t.admitStage(g, n) })
+			} else {
+				value = entry.Value
+			}
 		}
-		if entry.Flags&node.FlagTombstone != 0 {
-			return nil, tree.ErrKeyNotFound
-		}
-		if entry.Flags&node.FlagPointer != 0 {
-			return g.probe.readValue(entry.ValuePtr, admit)
-		}
-		return entry.Value, nil
 	}
-	return g.rows.touch(id, read, admit)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		value = nil
+	} else if err != nil {
+		return nil, err
+	}
+	return g.rows.insertTouched(id, value, func(n uint64) error { return t.admitStage(g, n) })
 }
 func (t *NativeJSONTxn) appendNativeMember(g *nativeJSONTxnBinding, kind commitlog.CommandKind, format commitlog.PayloadFormat, payload []byte) error {
 	limit := commitlog.MaxCompositeMutationMembersV1
@@ -692,6 +733,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	g.resolvedFinal = nativeJSONResolvedFinalRows{}
+	g.primaryOnlyBSONSet = false
 	if err := t.admitRowControls(g, len(ids)); err != nil {
 		return err
 	}
@@ -769,6 +811,10 @@ func (t *NativeJSONTxn) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResul
 	return t.UpdateBatchInto("", items)
 }
 func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (result []UpdateBatchResult, resultErr error) {
+	return t.updateBatchInto(name, items, false)
+}
+
+func (t *NativeJSONTxn) updateBatchInto(name string, items []UpdateBatchItem, primaryOnlyBSONSet bool) (result []UpdateBatchResult, resultErr error) {
 	if t == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -790,35 +836,69 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
+		g.primaryOnlyBSONSet = false
 		return t.stageNativeTypedUpdate(g, items)
 	}
 	if len(items) == 0 {
 		return nil, nil
 	}
 	g.resolvedFinal = nativeJSONResolvedFinalRows{}
-	if err := t.admitRowControls(g, len(items)); err != nil {
+	g.primaryOnlyBSONSet = false
+	primaryOnlyBSONSet = primaryOnlyBSONSet &&
+		len(g.rows.rows) == 0 &&
+		len(t.members) == 0 &&
+		nativeBSONSetMeta(&g.probe.meta) &&
+		len(g.probe.meta.TextIndexes) == 0 &&
+		len(g.probe.meta.VectorIndexes) == 0 &&
+		g.typed == nil &&
+		g.projection == nil &&
+		len(g.templateRecords) == 0
+	var docIDCharge uint64
+	for _, item := range items {
+		ids := memtable.COWAllocationCharge(uint64(len(item.DocumentID)))
+		if ids > (^uint64(0)-docIDCharge)/2 {
+			return nil, memtable.ErrCOWCapacity
+		}
+		docIDCharge += 2 * ids
+	}
+	if err := t.admitRowControlsAndExtra(g, len(items), docIDCharge); err != nil {
 		return nil, err
 	}
-	for _, item := range items {
-		if err := t.admitRowDocument(g, item.DocumentID, nil); err != nil {
+	var (
+		owned []updateBatchItem
+		err   error
+	)
+	if !primaryOnlyBSONSet {
+		owned, err = prepareUpdateBatchItems(items)
+		if err != nil {
 			return nil, err
 		}
 	}
-	owned, err := prepareUpdateBatchItems(items)
-	if err != nil {
-		return nil, err
-	}
 	result = make([]UpdateBatchResult, len(items))
-	docs := make([]commitlog.CollectionDocument, 0, len(items))
-	planner, err := nativeJSONInsertPlanner(g.probe.meta)
-	if err != nil {
-		return nil, err
+	var singleDoc [1]commitlog.CollectionDocument
+	var docs []commitlog.CollectionDocument
+	if len(items) <= len(singleDoc) {
+		docs = singleDoc[:0]
+	} else {
+		docs = make([]commitlog.CollectionDocument, 0, len(items))
 	}
-	runtimes, err := planner.indexRuntimes()
-	if err != nil {
-		return nil, err
+	var (
+		planner  insertBatchPlanner
+		runtimes []indexRuntime
+	)
+	if primaryOnlyBSONSet {
+		planner.options = collectionOptions{documentFormat: DocumentFormatBSON}
+	} else {
+		planner, err = nativeJSONInsertPlanner(g.probe.meta)
+		if err != nil {
+			return nil, err
+		}
+		runtimes, err = planner.indexRuntimes()
+		if err != nil {
+			return nil, err
+		}
 	}
-	templateBatch := normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1
+	templateBatch := !primaryOnlyBSONSet && normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1
 	var changedIndices []int
 	if templateBatch {
 		for _, size := range [2]uint64{uint64(unsafe.Sizeof(int(0))), uint64(unsafe.Sizeof([]byte{}))} {
@@ -828,7 +908,13 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		changedIndices = make([]int, 0, len(items))
 	}
-	for i, item := range owned {
+	for i := range items {
+		var item UpdateBatchItem
+		if primaryOnlyBSONSet {
+			item = items[i]
+		} else {
+			item = owned[i].UpdateBatchItem
+		}
 		row, err := t.touchNativeRow(g, item.DocumentID)
 		if err != nil {
 			return nil, err
@@ -837,11 +923,21 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 			continue
 		}
 		result[i].Matched = true
-		// A callback may mutate its input. It never receives the retained overlay.
-		if err = t.admitRowDocument(g, row.id, row.current); err != nil {
-			return nil, err
+		var (
+			document []byte
+			modified bool
+		)
+		if primaryOnlyBSONSet {
+			// prepareNativeBSONSetItems callbacks only read current and write into
+			// a freshly admitted replacement slice, so no defensive clone is needed.
+			document, modified, err = callCollectionUpdateCallback(item.Update, row.current)
+		} else {
+			// A callback may mutate its input. It never receives the retained overlay.
+			if err = t.admitRowDocument(g, row.id, row.current); err != nil {
+				return nil, err
+			}
+			document, modified, err = callCollectionUpdateCallback(item.Update, bytes.Clone(row.current))
 		}
-		document, modified, err := callCollectionUpdateCallback(item.Update, bytes.Clone(row.current))
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
@@ -853,6 +949,13 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		if err := validateBSONReplacementPreservesID(row.current, document, planner.options); err != nil {
 			return nil, updateBatchItemError(i, err)
+		}
+		if primaryOnlyBSONSet {
+			row.current = document
+			row.currentState = nil
+			result[i].Modified = true
+			docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: row.current})
+			continue
 		}
 		if err = t.admitRowDocument(g, row.id, document); err != nil {
 			return nil, err
@@ -918,7 +1021,20 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if err != nil {
 		return nil, err
 	}
-	return result, t.appendNativeMember(g, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload)
+	if err = t.appendNativeMember(g, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload); err != nil {
+		return nil, err
+	}
+	if primaryOnlyBSONSet {
+		allInPlace := len(g.rows.rows) > 0
+		for _, row := range g.rows.rows {
+			if row.opening == nil || row.current == nil {
+				allInPlace = false
+				break
+			}
+		}
+		g.primaryOnlyBSONSet = allInPlace
+	}
+	return result, nil
 }
 func (t *NativeJSONTxn) DeleteBatch(ids [][]byte) (int, error) { return t.DeleteBatchFrom("", ids) }
 func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, resultErr error) {
@@ -947,6 +1063,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	g.resolvedFinal = nativeJSONResolvedFinalRows{}
+	g.primaryOnlyBSONSet = false
 	if err := t.admitRowControls(g, len(ids)); err != nil {
 		return 0, err
 	}
@@ -984,6 +1101,22 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 	return len(removed), t.appendNativeMember(g, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
 }
 
+func (g *nativeJSONTxnBinding) canFinalizePrimaryOnlyBSONSet() bool {
+	if !g.primaryOnlyBSONSet || g.resolvedFinal.valid || g.typed != nil || g.projection != nil || len(g.templateRecords) != 0 {
+		return false
+	}
+	meta := &g.probe.meta
+	if !nativeBSONSetMeta(meta) || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 {
+		return false
+	}
+	for _, row := range g.rows.rows {
+		if row.opening == nil || row.current == nil {
+			return false
+		}
+	}
+	return len(g.rows.rows) > 0
+}
+
 func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 	return t.finalizeNativeRowsWithStats(graphSingleton, nil)
 }
@@ -1001,6 +1134,63 @@ func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *
 			continue
 		}
 		if len(g.rows.rows) == 0 {
+			continue
+		}
+		if g.canFinalizePrimaryOnlyBSONSet() {
+			opts, err := collectionPlannerOptions(g.probe.meta)
+			if err != nil {
+				return err
+			}
+			n := len(g.rows.rows)
+			mutSize := uint64(unsafe.Sizeof(memtable.COWMutation{}))
+			effSize := uint64(unsafe.Sizeof(txnhistory.Effect{}))
+			if uint64(n) > ^uint64(0)/mutSize || uint64(n) > ^uint64(0)/effSize {
+				return memtable.ErrCOWCapacity
+			}
+			charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONLogicalInsert{})))
+			mutCharge := memtable.COWAllocationCharge(uint64(n) * mutSize)
+			effCharge := memtable.COWAllocationCharge(uint64(n) * effSize)
+			if mutCharge > ^uint64(0)-charge || effCharge > ^uint64(0)-charge-mutCharge {
+				return memtable.ErrCOWCapacity
+			}
+			if err = t.admitStage(g, charge+mutCharge+effCharge); err != nil {
+				return err
+			}
+			var (
+				mutations []memtable.COWMutation
+				effects   []txnhistory.Effect
+				plan      *nativeJSONLogicalInsert
+			)
+			if n == 1 {
+				mutations = g.singleMutation[:1]
+				effects = g.singleEffect[:1]
+				plan = &g.singlePlan
+			} else {
+				mutations = make([]memtable.COWMutation, n)
+				effects = make([]txnhistory.Effect, n)
+				plan = &nativeJSONLogicalInsert{}
+			}
+			primaryNS := g.namespace()
+			for j, row := range g.rows.rows {
+				mutations[j] = memtable.COWMutation{Key: row.id, Value: row.current, Flags: node.FlagInline}
+				effects[j] = txnhistory.Effect{Namespace: primaryNS, Kind: txnhistory.PointEffect, Key: row.id}
+			}
+			*plan = nativeJSONLogicalInsert{
+				name:          g.name,
+				incarnation:   g.incarnation,
+				bootstrap:     t.imported,
+				custody:       t.custody,
+				primaryPolicy: opts.dataStoragePolicy,
+				mutations:     mutations,
+			}
+			g.plan = plan
+			g.effects = effects
+			if stats != nil {
+				var emptyDirect directBufferedInsertPlan
+				if err = t.collectNativeInsertStats(g, &emptyDirect, stats); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		admit := func(n uint64) error { return t.admitStage(g, n) }
