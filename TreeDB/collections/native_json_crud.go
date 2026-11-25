@@ -166,7 +166,13 @@ func bsonSetFieldTouchesIndexPath(fieldKey, indexPath string) bool {
 	if fieldKey == "" || indexPath == "" {
 		return true
 	}
-	return indexPath == fieldKey || (len(indexPath) > len(fieldKey) && indexPath[len(fieldKey)] == '.' && indexPath[:len(fieldKey)] == fieldKey)
+	if indexPath == fieldKey {
+		return true
+	}
+	if len(indexPath) > len(fieldKey) && indexPath[len(fieldKey)] == '.' && indexPath[:len(fieldKey)] == fieldKey {
+		return true
+	}
+	return len(fieldKey) > len(indexPath) && fieldKey[len(indexPath)] == '.' && fieldKey[:len(indexPath)] == indexPath
 }
 
 func bsonSetFieldsMayTouchSecondaryUniqueIndex(meta CollectionMeta, items []BSONSetUpdateBatchItem) bool {

@@ -78,6 +78,7 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	return nativeJSONFinalRowsResolved(name, meta, rows, admit, prepareScratch, mode, nil)
 }
+
 type nativeJSONResolvedFinalRows struct {
 	valid    bool
 	options  collectionOptions

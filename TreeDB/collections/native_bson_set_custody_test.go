@@ -461,6 +461,25 @@ func TestNativeBSONSetNoSecondaryUniqueIndexChangesEdges(t *testing.T) {
 	if err != nil || !batched || len(res) != 1 || !res[0].Modified {
 		t.Fatalf("callback unchanged-unique batch: res=%+v batched=%t err=%v", res, batched, err)
 	}
+
+	// 6. Direct path-overlap predicate checks (exact, ancestor, descendant, disjoint, empty).
+	for _, tc := range []struct {
+		field, index string
+		want         bool
+	}{
+		{field: "email", index: "email", want: true},
+		{field: "addr", index: "addr.code", want: true},
+		{field: "user.name", index: "user", want: true},
+		{field: "score", index: "email", want: false},
+		{field: "user2", index: "user", want: false},
+		{field: "user", index: "user2", want: false},
+		{field: "", index: "user", want: true},
+		{field: "user", index: "", want: true},
+	} {
+		if got := bsonSetFieldTouchesIndexPath(tc.field, tc.index); got != tc.want {
+			t.Fatalf("bsonSetFieldTouchesIndexPath(%q, %q) = %t, want %t", tc.field, tc.index, got, tc.want)
+		}
+	}
 }
 
 func BenchmarkUpdateBSONSetIndexed(b *testing.B) {
