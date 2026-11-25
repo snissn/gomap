@@ -265,9 +265,11 @@ and has no production durability guarantee.
 The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
 same leaf-vlog path as the optimized collection benchmarks. The default `full`
-maintenance mode runs the high-level `CompactStorage` path first, then closes
-the benchmark gateway and runs offline index vacuum with the same benchmark
-profile to shrink `index.db` for final-footprint reporting. Use
+maintenance mode runs the high-level online `CompactStorage(Full)` path first
+(reclaiming dead `leaf_vlog` and `value_vlog` segments live while open, including
+on `-treedb-open-mode standalone` `cow_btree` databases), then closes the
+benchmark gateway and runs post-close `VacuumIndexOffline` with the same
+benchmark profile to shrink `index.db` for final-footprint reporting. Use
 `-treedb-maintenance checkpoint` for the older checkpoint-only disk metric,
 or `none` to skip final TreeDB disk reporting. No-index YCSB-style command-WAL comparisons are covered by
 `scripts/ycsb_compare_mongodb_treedb.sh`; this indexed benchmark default should
@@ -991,7 +993,10 @@ qualification. These ordinary Go rows are not benchprof artifact inputs.
   It requires a COW production profile (`command_wal_relaxed`,
   `command_wal_durable`, or `no_wal_fast`), routes `Checkpoint`,
   `CompactStorage`, settled-read phase drains, and `Stats` through the owning
-  `*treedb.DB`, and rejects `bench_unsafe` and `-route-mode production`.
+  `*treedb.DB`, supports `-treedb-maintenance full` (online owner-authenticated
+  `CompactStorage(Full)` to reclaim dead `leaf_vlog`/`value_vlog` segments
+  followed by post-close `VacuumIndexOffline` to compact `index.db`), and
+  rejects `bench_unsafe` and `-route-mode production`.
 
 The comparison and deep-benchmark wrappers accept `--treedb-open-mode`,
 `--treedb-memtable-mode`, and `--treedb-profile` (or `TREEDB_OPEN_MODE`,
@@ -1008,7 +1013,7 @@ Example head-to-head run against MongoDB 8:
   --indexes "0 2" \
   --treedb-open-mode standalone \
   --treedb-profile command_wal_relaxed \
-  --treedb-maintenance checkpoint \
+  --treedb-maintenance full \
   --treedb-document-format bson \
   --treedb-client-mode driver-command-raw \
   --mongo-client-mode driver-command-raw \

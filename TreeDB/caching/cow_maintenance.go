@@ -110,3 +110,90 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLog
 	})
 	return stats, err
 }
+
+func (db *DB) hasActiveTypedColumnGraph() (bool, error) {
+	if db == nil || db.cow == nil {
+		return false, nil
+	}
+	cut := db.cow.retainCut()
+	if cut == nil {
+		return false, backenddb.ErrClosed
+	}
+	active := false
+	if obs, ok := cut.semanticRootSet.(backenddb.NativeSemanticTypedColumnGraphObserver); ok && obs.HasActiveTypedColumnGraph() {
+		active = true
+	}
+	if !active {
+		if obs, ok := cut.frozenSemanticRootSet.(backenddb.NativeSemanticTypedColumnGraphObserver); ok && obs.HasActiveTypedColumnGraph() {
+			active = true
+		}
+	}
+	return active, db.cow.releaseCut(cut)
+}
+
+// CompactStorage fences owner-authenticated storage compaction under the
+// existing private-COW maintenance fence. It inspects semantic state under
+// flushMu before mutating storage and fails closed when active typed
+// column-graph collections exist, refreshes the COW backend basis after
+// compaction, converges the command-WAL fallback slot when applicable, and
+// invokes settle under the SAME writer fence.
+func (db *DB) CompactStorage(ctx context.Context, opts backenddb.CompactStorageOptions, settle func(*backenddb.CompactStorageStats) error) (stats backenddb.CompactStorageStats, err error) {
+	if db == nil || db.cow == nil {
+		return stats, backenddb.ErrNativeSemanticUnsupported
+	}
+	postRefresh := func() error {
+		if db.externalCommandWAL {
+			if fallbackErr := db.refreshCOWCheckpointFallback(); fallbackErr != nil {
+				return fallbackErr
+			}
+		}
+		if settle == nil {
+			return nil
+		}
+		if settleErr := settle(&stats); settleErr != nil {
+			return settleErr
+		}
+		// If the first post-refresh GC pass newly transitioned packed or
+		// retiring leaf generations to deleted/zombie, the live COW read basis
+		// captured before that GC pass still retains the pre-GC ValueLogSet.
+		// Refresh and drain that basis so zombie files unlink immediately, then
+		// run one final settle pass to prune deleted manifest records and
+		// refresh stats.After / FilesDeleted.
+		needsSecondSettle := stats.LeafGenerationGC.GenerationsRetiring > 0 ||
+			(stats.LeafGenerationGC.BytesDeleted > 0 && stats.LeafGenerationGC.FilesDeleted == 0) ||
+			stats.LeafGenerationGC.GenerationsEligible > stats.LeafGenerationGC.GenerationsDeleted
+		if needsSecondSettle {
+			if refreshErr := db.finishCOWBackendMaintenance(nil); refreshErr != nil {
+				return refreshErr
+			}
+			return settle(&stats)
+		}
+		return nil
+	}
+	err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+		skipCheckpoint:      true,
+		completeAdmittedCOW: true,
+		afterCOWRefresh:     postRefresh,
+	}, func() error {
+		if db.cow.txnOwner == nil {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		activeTypedGraph, checkErr := db.hasActiveTypedColumnGraph()
+		if checkErr != nil {
+			return checkErr
+		}
+		if activeTypedGraph {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		compactor, ok := db.backend.(interface {
+			CompactStorageForPrivateCOW(*transactionowner.Owner, context.Context, backenddb.CompactStorageOptions) (backenddb.CompactStorageStats, error)
+		})
+		if !ok {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		var compactErr error
+		stats, compactErr = compactor.CompactStorageForPrivateCOW(db.cow.txnOwner, ctx, opts)
+		return compactErr
+	})
+	return stats, err
+}

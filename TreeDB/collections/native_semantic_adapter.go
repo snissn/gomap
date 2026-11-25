@@ -106,3 +106,29 @@ func (e *nativeEngineVersion) PrepareLeafPackBasisRefresh(before, after *backend
 }
 
 var _ backenddb.NativeSemanticLeafPackBasisRefresher = (*nativeEngineVersion)(nil)
+
+func (e *nativeEngineVersion) HasActiveTypedColumnGraph() bool {
+	if e == nil || e.collections == nil {
+		return false
+	}
+	active := false
+	e.collections.Scan(func(_ uint64, c *nativeCollectionState) bool {
+		if c == nil || c.domains == nil {
+			return true
+		}
+		if primary, ok := c.domains.Get("primary"); ok && primary != nil && primary.typed != nil {
+			active = true
+			return false
+		}
+		for _, name := range []string{"column/manifest", "column/row-locator", "retained/semantic-stream-v1"} {
+			if _, ok := c.domains.Get(name); ok {
+				active = true
+				return false
+			}
+		}
+		return true
+	})
+	return active
+}
+
+var _ backenddb.NativeSemanticTypedColumnGraphObserver = (*nativeEngineVersion)(nil)

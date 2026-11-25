@@ -147,6 +147,14 @@ type NativeSemanticLeafPackBasisRefresher interface {
 	PrepareLeafPackBasisRefresh(before, after *Snapshot, transition LeafGenerationPackTransition, leaves NativeMaintenanceLeafReader) (NativeSemanticState, error)
 }
 
+// NativeSemanticTypedColumnGraphObserver optionally reports whether a retained
+// semantic root set currently owns any active typed column-graph collection
+// state. Maintenance operations whose physical basis refresh cannot rebind
+// typed column-graph roots inspect this under flushMu before mutating storage.
+type NativeSemanticTypedColumnGraphObserver interface {
+	HasActiveTypedColumnGraph() bool
+}
+
 // NativePreparedPublication is admitted and owned before canonical assignment.
 // The native producer holds Basis through the synchronous publication and
 // transfers State plus sparse original Custody only on installation. Entries

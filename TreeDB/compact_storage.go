@@ -171,16 +171,16 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		}
 	}()
 	var stats treedbdb.CompactStorageStats
-	run := func() error {
-		var runErr error
-		stats, runErr = db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
-		return runErr
-	}
 	if db.cached != nil && db.cached.COWMode() {
-		err = db.cached.RunBackendMaintenanceWithPostRefresh(run, func() error {
-			return db.backend.SettleCompactStorageAfterReadBasisRefresh(ctx, treedbdb.CompactStorageOptions(opts), &stats)
+		stats, err = db.cached.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts), func(statsPtr *treedbdb.CompactStorageStats) error {
+			return db.backend.SettleCompactStorageAfterReadBasisRefresh(ctx, treedbdb.CompactStorageOptions(opts), statsPtr)
 		})
 	} else {
+		run := func() error {
+			var runErr error
+			stats, runErr = db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
+			return runErr
+		}
 		err = db.runCachedBackendMaintenance(run)
 	}
 	if err != nil {

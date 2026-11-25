@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -388,7 +389,61 @@ func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions
 // final audit.
 func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
 	opts.DryRun = false
-	return db.compactStorage(ctx, opts)
+	return db.compactStorageWithOwner(ctx, opts, nil)
+}
+
+// CompactStorageForPrivateCOW runs storage compaction for the cache's
+// originally bound private-COW owner. The caller keeps its maintenance fence
+// through basis refresh and post-refresh settlement; this method grants no
+// callback a publisher role and fails closed on online index vacuum while
+// private-COW or native semantic ownership is active.
+func (db *DB) CompactStorageForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return CompactStorageStats{}, ErrNativeSemanticUnsupported
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return CompactStorageStats{}, err
+	}
+	tracked := false
+	if !db.nativeSemanticActive.Load() {
+		var err error
+		tracked, err = db.beginSemanticBackendOperation(nil, false)
+		if err != nil {
+			return CompactStorageStats{}, err
+		}
+	}
+	defer db.endSemanticBackendOperation(tracked)
+	opts.DryRun = false
+	return db.compactStorageWithOwner(ctx, opts, owner)
+}
+
+// LeafGenerationSealedDebt reports the current count and best-effort byte
+// footprint of sealed leaf-log generations without scanning the index tree.
+func (db *DB) LeafGenerationSealedDebt() (generations int, bytes int64) {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return 0, 0
+	}
+	var set *valuelog.Set
+	if db.valueLogManager != nil {
+		set = db.valueLogManager.CurrentSetNoRefresh()
+		if set != nil {
+			defer func() { _ = db.valueLogManager.Release(set) }()
+		}
+	}
+	m := db.collectLeafGenerationMetrics(set, nil)
+	return m.generationsSealed, m.bytesSealed
+}
+
+func compactStorageRanLeafGenerationPack(stats *CompactStorageStats) bool {
+	if stats == nil {
+		return false
+	}
+	for _, p := range stats.LeafGenerationPacks {
+		if p.Ran && (p.Pack.BytesCopied > 0 || p.Pack.LeafPagesCopied > 0 || len(p.Selection.GenerationIDs) > 0 || len(p.Pack.SourceGenerationIDs) > 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // SettleCompactStorageAfterReadBasisRefresh retries leaf retirement held by a
@@ -397,13 +452,30 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 // root, recoverable-slot/parent, and independent reader protections still apply.
 // No checkpoint or root publication is needed merely to retire those read pins.
 func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) error {
-	if stats == nil || stats.LeafGenerationGC.GenerationsRetiring == 0 {
+	if stats == nil {
+		return nil
+	}
+	hasRetiring := stats.LeafGenerationGC.GenerationsRetiring > 0
+	hasUnprunedDeleted := (stats.LeafGenerationGC.BytesDeleted > 0 && stats.LeafGenerationGC.FilesDeleted == 0) ||
+		stats.LeafGenerationGC.GenerationsEligible > stats.LeafGenerationGC.GenerationsDeleted
+	hasPackedLeafGenerations := compactStorageRanLeafGenerationPack(stats)
+	if !hasRetiring && !hasUnprunedDeleted && !hasPackedLeafGenerations {
 		return nil
 	}
 	opts = normalizeCompactStorageOptions(opts)
+	priorBytesDeleted := stats.LeafGenerationGC.BytesDeleted
+	priorBytesEligible := stats.LeafGenerationGC.BytesEligible
+	priorFilesDeleted := stats.LeafGenerationGC.FilesDeleted
+	priorGenerationsDeleted := stats.LeafGenerationGC.GenerationsDeleted
+	priorGenerationsEligible := stats.LeafGenerationGC.GenerationsEligible
 	if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-read-basis-refresh", func() error {
 		roots, systems := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{ProtectedRootIDs: roots, ProtectedSystemRootIDs: systems})
+		gc.BytesDeleted += priorBytesDeleted
+		gc.BytesEligible += priorBytesEligible
+		gc.FilesDeleted += priorFilesDeleted
+		gc.GenerationsDeleted += priorGenerationsDeleted
+		gc.GenerationsEligible += priorGenerationsEligible
 		stats.LeafGenerationGC = gc
 		return err
 	}); err != nil {
@@ -419,9 +491,16 @@ func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opt
 	return nil
 }
 
-func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (stats CompactStorageStats, err error) {
+func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
+	return db.compactStorageWithOwner(ctx, opts, nil)
+}
+
+func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOptions, owner *transactionowner.Owner) (stats CompactStorageStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
+	}
+	if owner != nil && owner != db.privateCOWOwner {
+		return stats, ErrNativeSemanticUnsupported
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -447,6 +526,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		db.maintenanceMu.Lock()
 		maintenanceLocked = true
 		defer db.maintenanceMu.Unlock()
+		if owner != nil && owner != db.privateCOWOwner {
+			return stats, ErrNativeSemanticUnsupported
+		}
 		if err := db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
@@ -570,7 +652,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		rewriteOpts.MaxSegmentBytes = opts.ValueLogRewriteMaxSegmentBytes
 		rewriteOpts.LocalityPolicy = ValueLogRewriteLocalityGrouped
 		rewriteOpts.ReserveRIDs = opts.ReserveRIDs
-		rewrite, err := db.valueLogRewriteOnline(ctx, rewriteOpts, !maintenanceLocked)
+		rewrite, err := db.valueLogRewriteOnlineWithOwner(ctx, rewriteOpts, !maintenanceLocked, owner)
 		stats.ValueLogRewrite = rewrite
 		return err
 	}); err != nil {
@@ -620,7 +702,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
 			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-			pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked, compactLeafPackCreatedFileIDs, &compactLeafPackPlanState)
+			pack, err = db.compactStorageLeafGenerationPackRunOnceWithOwner(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked, compactLeafPackCreatedFileIDs, &compactLeafPackPlanState, owner)
 			return err
 		}); err != nil {
 			return stats, err
@@ -687,7 +769,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		})
 	} else {
 		vacuumErr := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
-			return db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
+			return db.compactStorageVacuumIndexOnlineWithOwner(ctx, !maintenanceLocked, owner)
 		})
 		phase := &stats.Phases[len(stats.Phases)-1]
 		phase.Required = true
@@ -732,7 +814,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	compactLeafPackPlanState.invalidate()
-	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
+	if err := db.settleCompactStorageGCWithOwner(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState, owner); err != nil {
 		return stats, err
 	}
 	if indexVacuumRetainedGuard && !indexDebt.IndexVacuumRequired {
@@ -789,7 +871,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 	if !indexVacuumRetainedGuard && finalDebt.IndexVacuumRequired {
 		vacuumErr := db.runCompactStoragePhase(&stats, "index-vacuum-settle", func() error {
-			return db.compactStorageVacuumIndexOnline(ctx, !maintenanceLocked)
+			return db.compactStorageVacuumIndexOnlineWithOwner(ctx, !maintenanceLocked, owner)
 		})
 		phase := &stats.Phases[len(stats.Phases)-1]
 		phase.Required = true
@@ -809,7 +891,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			// Vacuum can append system leaves and leave their source generation
 			// packable. Settle that debt within the same run-wide pass budget.
 			compactLeafPackPlanState.invalidate()
-			if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
+			if err := db.settleCompactStorageGCWithOwner(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, &leafPackPassesRemaining, auditSession, &compactLeafPackPlanState, owner); err != nil {
 				return stats, err
 			}
 			if err := refreshFinalAudit(); err != nil {
@@ -900,6 +982,17 @@ func compactStorageIndexVacuumTransient(err error) bool {
 }
 
 func (db *DB) compactStorageVacuumIndexOnline(ctx context.Context, lockMaintenance bool) error {
+	return db.compactStorageVacuumIndexOnlineWithOwner(ctx, lockMaintenance, nil)
+}
+
+func (db *DB) compactStorageVacuumIndexOnlineWithOwner(ctx context.Context, lockMaintenance bool, owner *transactionowner.Owner) error {
+	// Online index vacuum replaces rootPublication and stops the old runtime,
+	// which would destroy db.acceptedPrefix while private-COW or native semantic
+	// ownership is active. Fail closed with ErrVacuumUnsupported so CompactStorage
+	// records the unsupported disposition and preserves leaf/value reclamation.
+	if owner != nil || (db != nil && db.nativeSemanticActive.Load()) {
+		return ErrVacuumUnsupported
+	}
 	if db != nil && db.compactStorageVacuumIndexOnlineHook != nil {
 		return db.compactStorageVacuumIndexOnlineHook(ctx, lockMaintenance)
 	}
@@ -979,6 +1072,10 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 }
 
 func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining *int, auditSession *compactStorageAuditSession, leafPackPlanState *compactStorageLeafPackPlanState) error {
+	return db.settleCompactStorageGCWithOwner(ctx, opts, stats, lockMaintenance, compactLeafLog, ignoredLeafPackRawFileIDs, leafPackPassesRemaining, auditSession, leafPackPlanState, nil)
+}
+
+func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining *int, auditSession *compactStorageAuditSession, leafPackPlanState *compactStorageLeafPackPlanState, owner *transactionowner.Owner) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
@@ -1040,7 +1137,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				var err error
 				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-				pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), lockMaintenance, ignoredLeafPackRawFileIDs, leafPackPlanState)
+				pack, err = db.compactStorageLeafGenerationPackRunOnceWithOwner(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), lockMaintenance, ignoredLeafPackRawFileIDs, leafPackPlanState, owner)
 				return err
 			}); err != nil {
 				return err
@@ -1372,6 +1469,10 @@ func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGeneratio
 }
 
 func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts LeafGenerationPackFromPlanOptions, lockMaintenance bool, ignoredRawFileIDs map[uint32]struct{}, carry *compactStorageLeafPackPlanState) (LeafGenerationPackRunOnceStats, error) {
+	return db.compactStorageLeafGenerationPackRunOnceWithOwner(ctx, opts, lockMaintenance, ignoredRawFileIDs, carry, nil)
+}
+
+func (db *DB) compactStorageLeafGenerationPackRunOnceWithOwner(ctx context.Context, opts LeafGenerationPackFromPlanOptions, lockMaintenance bool, ignoredRawFileIDs map[uint32]struct{}, carry *compactStorageLeafPackPlanState, owner *transactionowner.Owner) (LeafGenerationPackRunOnceStats, error) {
 	var stats LeafGenerationPackRunOnceStats
 	plan, err := db.compactStorageLeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(opts), carry)
 	if err != nil {
@@ -1390,7 +1491,9 @@ func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts 
 	}
 	stats.Selection = selection
 	var carryResult leafGenerationPackCarryResult
-	packStats, err := db.leafGenerationPackSelectedWithCarry(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs), selectedLeafGenerationPackPlan(selection), lockMaintenance, &carryResult)
+	packOpts := leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs)
+	packOpts.privateCOWOwner = owner
+	packStats, err := db.leafGenerationPackSelectedWithCarry(ctx, packOpts, selectedLeafGenerationPackPlan(selection), lockMaintenance, &carryResult)
 	if err != nil {
 		carry.invalidate()
 		return stats, err

@@ -34,14 +34,26 @@ type privateCOWPackHeldBackend struct {
 	calls           int
 	gcCalls         int
 	last            backenddb.LeafGenerationPackRunOnceStats
+	lastOpts        backenddb.LeafGenerationPackFromPlanOptions
 	packPacket      chan (<-chan struct{})
 	gcCompleted     chan privateCOWLeafGCResult
 	forceNoop       bool
 	hideRanOnError  bool
+	overrideDebt    bool
+	debtGenerations int
+	debtBytes       int64
+}
+
+func (b *privateCOWPackHeldBackend) LeafGenerationSealedDebt() (int, int64) {
+	if b.overrideDebt {
+		return b.debtGenerations, b.debtBytes
+	}
+	return b.DB.LeafGenerationSealedDebt()
 }
 
 func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
 	b.calls++
+	b.lastOpts = opts
 	if b.forceNoop {
 		b.last = backenddb.LeafGenerationPackRunOnceStats{SkipReason: "test: no remaining pack candidate"}
 		return b.last, nil
@@ -714,5 +726,159 @@ func TestPrivateCOWLeafPackDeferredFallbackResumesOnNoop(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrivateCOWLeafPackDebtResponsivePolicyAndBackoff(t *testing.T) {
+	cache, backend := privateCOWPackFixture(t)
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	backend.forceNoop = true
+
+	// Below debt watermark: default 30s interval and 2-generation / 32 MiB limits.
+	backend.overrideDebt = true
+	backend.debtGenerations = 2
+	backend.debtBytes = 8 << 20
+	interval, maxGens, maxCopy := cache.privateCOWLeafPackPolicy()
+	if interval != privateCOWLeafPackInterval || maxGens != privateCOWLeafPackGenerations || maxCopy != privateCOWLeafPackCopyBytes {
+		t.Fatalf("default policy=(%v, %d, %d) want (%v, %d, %d)", interval, maxGens, maxCopy, privateCOWLeafPackInterval, privateCOWLeafPackGenerations, privateCOWLeafPackCopyBytes)
+	}
+
+	// Sealed-generation count crossing watermark tightens interval to 3s and
+	// expands batch limits to 6 generations / 64 MiB.
+	backend.debtGenerations = privateCOWLeafPackDebtGenerations
+	backend.debtBytes = 8 << 20
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	cache.storeVlogGenerationLeafPackLastSkipReason("")
+	interval, maxGens, maxCopy = cache.privateCOWLeafPackPolicy()
+	if interval != privateCOWLeafPackDebtInterval || maxGens != privateCOWLeafPackDebtGenerationsBatch || maxCopy != privateCOWLeafPackDebtCopyBytes {
+		t.Fatalf("generation debt policy=(%v, %d, %d) want (%v, %d, %d)", interval, maxGens, maxCopy, privateCOWLeafPackDebtInterval, privateCOWLeafPackDebtGenerationsBatch, privateCOWLeafPackDebtCopyBytes)
+	}
+
+	// Verify runPrivateCOWLeafPackSlice enters after 5s (< 30s default) and
+	// forwards the expanded batch limits to LeafGenerationPackRunOnceForPrivateCOW.
+	attempted, err := cache.runPrivateCOWLeafPackSlice()
+	if err != nil || !attempted {
+		t.Fatalf("debt-responsive slice did not enter: attempted=%v err=%v", attempted, err)
+	}
+	if backend.lastOpts.MaxGenerations != privateCOWLeafPackDebtGenerationsBatch {
+		t.Fatalf("MaxGenerations=%d want %d under debt", backend.lastOpts.MaxGenerations, privateCOWLeafPackDebtGenerationsBatch)
+	}
+	if backend.lastOpts.MaxBytesToCopy != privateCOWLeafPackDebtCopyBytes {
+		t.Fatalf("MaxBytesToCopy=%d want %d under debt", backend.lastOpts.MaxBytesToCopy, privateCOWLeafPackDebtCopyBytes)
+	}
+
+	// Verify backoff on selection skip/error is preserved even under high debt:
+	// 5s after a selection skip must NOT re-enter before 30s.
+	callsBefore := backend.calls
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	cache.vlogGenerationLeafPackGCLastDeletedGenerations.Store(0)
+	cache.storeVlogGenerationLeafPackLastSkipReason("selection:below_threshold")
+	if attempted, err := cache.runPrivateCOWLeafPackSlice(); attempted || err != nil || backend.calls != callsBefore {
+		t.Fatalf("debt cadence bypassed no-progress backoff: attempted=%v err=%v calls=%d->%d", attempted, err, callsBefore, backend.calls)
+	}
+
+	// Verify transitioning from idle/no_candidates into high debt wakes up at 3s.
+	cache.storeVlogGenerationLeafPackLastSkipReason("plan_admission:no_candidates")
+	if attempted, err := cache.runPrivateCOWLeafPackSlice(); !attempted || err != nil || backend.calls != callsBefore+1 {
+		t.Fatalf("debt cadence failed to wake from no_candidates: attempted=%v err=%v calls=%d->%d", attempted, err, callsBefore, backend.calls)
+	}
+
+	// Verify flushMu.TryLock() never blocks foreground writers under debt.
+	callsBefore = backend.calls
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	cache.storeVlogGenerationLeafPackLastSkipReason("")
+	cache.flushMu.Lock()
+	attempted, err = cache.runPrivateCOWLeafPackSlice()
+	cache.flushMu.Unlock()
+	if attempted || err != nil || backend.calls != callsBefore {
+		t.Fatalf("debt cadence blocked or entered under held flushMu: attempted=%v err=%v", attempted, err)
+	}
+
+	// Verify byte-threshold debt trigger (even with < 6 sealed generations).
+	backend.debtGenerations = 2
+	backend.debtBytes = privateCOWLeafPackDebtBytes
+	interval, maxGens, maxCopy = cache.privateCOWLeafPackPolicy()
+	if interval != privateCOWLeafPackDebtInterval || maxGens != privateCOWLeafPackDebtGenerationsBatch || maxCopy != privateCOWLeafPackDebtCopyBytes {
+		t.Fatalf("byte debt policy=(%v, %d, %d) want (%v, %d, %d)", interval, maxGens, maxCopy, privateCOWLeafPackDebtInterval, privateCOWLeafPackDebtGenerationsBatch, privateCOWLeafPackDebtCopyBytes)
+	}
+
+	// Verify explicit env disable still takes precedence.
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "0")
+	if cache.privateCOWLeafPackEnabled() {
+		t.Fatal("explicit env disable ignored under debt")
+	}
+}
+
+func TestPrivateCOWLeafPackDebtResponsiveMultiGenerationPack(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	cache, backend := privateCOWPackFixture(t)
+	writeRange := func(prefix string, start, end int, fill byte) {
+		t.Helper()
+		b := cache.NewBatchWithSize(end - start)
+		defer b.Close()
+		val := bytes.Repeat([]byte{fill}, 128)
+		for i := start; i < end; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("%s-%05d", prefix, i)), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f := &cowPressureRolloverFixture{db: cache, backend: backend.DB}
+		if err := f.write(b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotateAllLeafLanes := func() {
+		t.Helper()
+		for _, l := range cache.leafLogAppendLanesSnapshot() {
+			l.vlogMu.Lock()
+			rotateErr := cache.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if rotateErr != nil {
+				t.Fatal(rotateErr)
+			}
+		}
+	}
+
+	// Build 6 distinct sealed generations, each holding its own sorted key range
+	// (`gen-01-*` .. `gen-06-*`), then overwrite 75% of each range in a final
+	// generation so all 6 sealed generations are deterministically ~75% dead /
+	// ~25% live (~3,000,000 PPM reclaim-per-copy) and cross the debt watermark.
+	const numGenerations = 6
+	const keysPerGen = 1024
+	const overwritePerGen = 768
+	for round := 1; round <= numGenerations; round++ {
+		writeRange(fmt.Sprintf("gen-%02d", round), 0, keysPerGen, byte(round))
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		rotateAllLeafLanes()
+	}
+	for round := 1; round <= numGenerations; round++ {
+		writeRange(fmt.Sprintf("gen-%02d", round), 0, overwritePerGen, byte(0x80+round))
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+
+	sealedGens, sealedBytes := backend.DB.LeafGenerationSealedDebt()
+	if sealedGens < privateCOWLeafPackDebtGenerations {
+		t.Fatalf("expected >= %d sealed generations for debt fixture, got %d (bytes=%d)", privateCOWLeafPackDebtGenerations, sealedGens, sealedBytes)
+	}
+
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	cache.storeVlogGenerationLeafPackLastSkipReason("")
+
+	attempted, err := cache.runPrivateCOWLeafPackSlice()
+	if err != nil || !attempted || !backend.last.Ran {
+		t.Fatalf("debt-responsive slice did not run: attempted=%v stats=%+v err=%v", attempted, backend.last, err)
+	}
+	if backend.lastOpts.MaxGenerations != privateCOWLeafPackDebtGenerationsBatch {
+		t.Fatalf("MaxGenerations=%d want %d under debt", backend.lastOpts.MaxGenerations, privateCOWLeafPackDebtGenerationsBatch)
+	}
+	if len(backend.last.Selection.GenerationIDs) <= privateCOWLeafPackGenerations {
+		t.Fatalf("expected > %d generations packed under debt, got %d (%v)", privateCOWLeafPackGenerations, len(backend.last.Selection.GenerationIDs), backend.last.Selection.GenerationIDs)
 	}
 }
