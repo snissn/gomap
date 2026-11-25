@@ -405,3 +405,252 @@ func TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot(t *testing.T) {
 		t.Fatalf("post-refund admission charge/cap changed: before=%+v after=%+v", after, got)
 	}
 }
+
+func TestCOWSemanticWakeCoalescingNoLostWakeup(t *testing.T) {
+	t.Run("coalesce_and_drain_lifecycle", func(t *testing.T) {
+		var nilCache *cowCache
+		nilCache.wakeSemanticCleanup()
+		emptyCache := &cowCache{}
+		emptyCache.wakeSemanticCleanup()
+		if emptyCache.semanticWakePending.Load() {
+			t.Fatal("nil flushWake should not mark semanticWakePending")
+		}
+
+		db, c := cowCutFixture(t)
+		db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+		c.flushWake = make(chan struct{}, 1)
+
+		for i := 0; i < 16; i++ {
+			c.wakeSemanticCleanup()
+		}
+		if !c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending not set after wakeSemanticCleanup")
+		}
+		select {
+		case <-c.flushWake:
+		default:
+			t.Fatal("expected coalesced signal on flushWake")
+		}
+		select {
+		case <-c.flushWake:
+			t.Fatal("repeated wakes produced more than one signal")
+		default:
+		}
+
+		// While pending remains true, additional wakes must coalesce without sending.
+		for i := 0; i < 8; i++ {
+			c.wakeSemanticCleanup()
+		}
+		if !c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending unexpectedly cleared before drain")
+		}
+		select {
+		case <-c.flushWake:
+			t.Fatal("wake sent while semanticWakePending was already true")
+		default:
+		}
+
+		started, release, workerDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		first := newTestSemanticState(func() error {
+			close(started)
+			<-release
+			return nil
+		})
+		second := newTestSemanticState(nil)
+		c.semanticMu.Lock()
+		c.enqueueSemanticLocked(first.Release())
+		c.semanticMu.Unlock()
+
+		go func() {
+			db.drainSemanticCleanup()
+			close(workerDone)
+		}()
+		var releaseOnce sync.Once
+		defer func() {
+			releaseOnce.Do(func() { close(release) })
+			<-workerDone
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainSemanticCleanup did not start first record")
+		}
+		if !c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending cleared while drain was actively processing")
+		}
+
+		// Enqueuing and waking while drain is active stays coalesced with zero channel sends.
+		c.semanticMu.Lock()
+		c.enqueueSemanticLocked(second.Release())
+		c.semanticMu.Unlock()
+		c.wakeSemanticCleanup()
+		if !c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending cleared during active drain")
+		}
+		select {
+		case <-c.flushWake:
+			t.Fatal("unexpected flushWake signal during active drain")
+		default:
+		}
+
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-workerDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainSemanticCleanup did not finish")
+		}
+		if first.calls != 1 || second.calls != 1 || first.resource != nil || second.resource != nil {
+			t.Fatalf("active drain missed queued records: first=%+v second=%+v", first, second)
+		}
+		if c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending not cleared when queue drained empty")
+		}
+
+		// Next enqueue/wake after drain empties must deliver a fresh signal.
+		third := newTestSemanticState(nil)
+		c.semanticMu.Lock()
+		c.enqueueSemanticLocked(third.Release())
+		c.semanticMu.Unlock()
+		c.wakeSemanticCleanup()
+		if !c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending not re-armed after drain")
+		}
+		select {
+		case <-c.flushWake:
+		default:
+			t.Fatal("expected fresh flushWake signal after drain cleared semanticWakePending")
+		}
+		db.drainSemanticCleanup()
+		if third.calls != 1 || third.resource != nil || c.semanticWakePending.Load() {
+			t.Fatalf("post-rearm drain incomplete: calls=%d resource=%p pending=%v", third.calls, third.resource, c.semanticWakePending.Load())
+		}
+	})
+
+	t.Run("stress_no_lost_wakeup", func(t *testing.T) {
+		db, c := cowCutFixture(t)
+		db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+		c.flushWake = make(chan struct{}, 1)
+
+		stop := make(chan struct{})
+		workerDone := make(chan struct{})
+		go func() {
+			defer close(workerDone)
+			for {
+				select {
+				case <-c.flushWake:
+					db.drainSemanticCleanup()
+				case <-stop:
+					db.drainSemanticCleanup()
+					return
+				}
+			}
+		}()
+		var stopOnce sync.Once
+		defer func() {
+			stopOnce.Do(func() { close(stop) })
+			<-workerDone
+		}()
+
+		const (
+			producers     = 8
+			phase1PerProd = 250
+			phase2PerProd = 100
+			phase1Total   = producers * phase1PerProd
+			totalItems    = producers * (phase1PerProd + phase2PerProd)
+		)
+		var completed atomic.Int64
+		phase1Done := make(chan struct{})
+
+		// Phase 1: Pure wakeSemanticCleanup coalescing stress without joinSemanticCleanupFrontier.
+		var wg sync.WaitGroup
+		wg.Add(producers)
+		for p := 0; p < producers; p++ {
+			go func() {
+				defer wg.Done()
+				for i := 0; i < phase1PerProd; i++ {
+					s := newTestSemanticState(func() error {
+						if completed.Add(1) == phase1Total {
+							close(phase1Done)
+						}
+						return nil
+					})
+					c.semanticMu.Lock()
+					c.enqueueSemanticLocked(s.Release())
+					c.semanticMu.Unlock()
+					c.wakeSemanticCleanup()
+				}
+			}()
+		}
+		wg.Wait()
+		select {
+		case <-phase1Done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("lost wakeup in phase 1: completed=%d/%d pending=%v", completed.Load(), phase1Total, c.semanticWakePending.Load())
+		}
+
+		// Phase 2: Concurrent producers + joinSemanticCleanupFrontier.
+		errCh := make(chan error, producers)
+		wg.Add(producers)
+		for p := 0; p < producers; p++ {
+			go func() {
+				defer wg.Done()
+				for i := 0; i < phase2PerProd; i++ {
+					s := newTestSemanticState(func() error {
+						completed.Add(1)
+						return nil
+					})
+					c.semanticMu.Lock()
+					c.enqueueSemanticLocked(s.Release())
+					c.semanticMu.Unlock()
+					c.wakeSemanticCleanup()
+					if i%25 == 24 {
+						if err := db.joinSemanticCleanupFrontier(); err != nil {
+							errCh <- err
+							return
+						}
+					}
+				}
+			}()
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatalf("joinSemanticCleanupFrontier failed: %v", err)
+		}
+		if err := db.joinSemanticCleanupFrontier(); err != nil {
+			t.Fatalf("final joinSemanticCleanupFrontier failed: %v", err)
+		}
+		if got := completed.Load(); got != totalItems {
+			t.Fatalf("incomplete cleanup: got %d want %d", got, totalItems)
+		}
+		stopOnce.Do(func() { close(stop) })
+		<-workerDone
+		if c.semanticWakePending.Load() {
+			t.Fatal("semanticWakePending remained true after final drain")
+		}
+	})
+}
+
+func BenchmarkCOWWakeSemanticCleanupCoalesced(b *testing.B) {
+	b.Run("serial", func(b *testing.B) {
+		c := &cowCache{flushWake: make(chan struct{}, 1)}
+		c.wakeSemanticCleanup()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			c.wakeSemanticCleanup()
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		c := &cowCache{flushWake: make(chan struct{}, 1)}
+		c.wakeSemanticCleanup()
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				c.wakeSemanticCleanup()
+			}
+		})
+	})
+}

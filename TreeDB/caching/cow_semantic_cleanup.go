@@ -28,6 +28,15 @@ func (c *cowCache) enqueueSemanticLocked(record *rootpublication.SemanticCleanup
 	c.semanticTail = record
 }
 func (c *cowCache) wakeSemanticCleanup() {
+	if c == nil || c.flushWake == nil {
+		return
+	}
+	if c.semanticWakePending.Load() {
+		return
+	}
+	if c.semanticWakePending.Swap(true) {
+		return
+	}
 	wakeSemanticCleanup(c.flushWake)
 }
 
@@ -78,12 +87,11 @@ func (c *cowCache) finishSemanticStateRelease(semantic, frozen, projection *root
 	// Raw publications and retained semantic edges need no worker turn. The
 	// final closed cut must still wake the cleanup-only worker even without a
 	// record, so it can make the serialized terminal decision.
-	var wake chan struct{}
-	if semantic != nil || frozen != nil || projection != nil || (remaining == 0 && c.readClosed.Load()) {
-		wake = c.flushWake
-	}
+	needWake := semantic != nil || frozen != nil || projection != nil || (remaining == 0 && c.readClosed.Load())
 	c.semanticMu.Unlock()
-	wakeSemanticCleanup(wake)
+	if needWake {
+		c.wakeSemanticCleanup()
+	}
 	if refund != nil {
 		c.closePhysicalReader()
 		c.clearRecycledCut()
@@ -130,6 +138,7 @@ func (db *DB) drainSemanticCleanupWithGID(workerGID uint64) {
 		c.semanticMu.Lock()
 		record := c.semanticHead
 		if record == nil {
+			c.semanticWakePending.Store(false)
 			c.semanticMu.Unlock()
 			return
 		}
@@ -203,7 +212,7 @@ func (db *DB) joinSemanticCleanupFrontier() error {
 	c := db.cow
 	c.semanticMu.Lock()
 	target := c.semanticEnqueued
-	c.wakeSemanticCleanup()
+	wakeSemanticCleanup(c.flushWake)
 	defer c.semanticMu.Unlock()
 	for {
 		if c.semanticFailed != nil {
