@@ -2413,25 +2413,31 @@ func putMongoUpdateResultChan(done chan mongoUpdateCoalescerResult) {
 	mongoUpdateResultChanPool.Put(done)
 }
 
+const defaultUpdateCoalescingBatchHysteresis = 25 * time.Millisecond
+
 type mongoUpdateCoalescer struct {
-	maxDelay      time.Duration
-	maxBatch      int
-	idleTTL       time.Duration
-	requests      chan mongoUpdateCoalescerRequest
-	wakeCh        chan struct{}
-	stoppedCh     chan struct{}
-	done          chan struct{}
-	server        *Server
-	name          string
-	execMu        sync.Mutex
-	inFlight      atomic.Int32
-	workerBusy    atomic.Bool
-	stoppedFlag   atomic.Bool
-	inlineExecs   atomic.Uint64
-	workerBatches atomic.Uint64
-	mu            sync.RWMutex
-	stopped       bool
-	enqueueMu     sync.Mutex
+	maxDelay        time.Duration
+	maxBatch        int
+	idleTTL         time.Duration
+	batchHysteresis time.Duration
+	requests        chan mongoUpdateCoalescerRequest
+	wakeCh          chan struct{}
+	stoppedCh       chan struct{}
+	done            chan struct{}
+	server          *Server
+	name            string
+	execMu          sync.Mutex
+	inFlight        atomic.Int32
+	workerBusy      atomic.Bool
+	stoppedFlag     atomic.Bool
+	batchModeUntil  atomic.Int64
+	inlineExecs     atomic.Uint64
+	workerBatches   atomic.Uint64
+	mu              sync.RWMutex
+	stopped         bool
+	enqueueMu       sync.Mutex
+	nowNano         func() int64
+	batchBuf        []mongoUpdateCoalescerRequest
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -2460,18 +2466,21 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	active := coalescer.inFlight.Add(1)
 	defer coalescer.inFlight.Add(-1)
 
-	if coalescer.maxDelay == 0 &&
-		active <= 2 &&
-		len(coalescer.requests) == 0 &&
-		!coalescer.workerBusy.Load() &&
-		!coalescer.stoppedFlag.Load() &&
-		coalescer.execMu.TryLock() {
-		if !coalescer.stoppedFlag.Load() && len(coalescer.requests) == 0 {
-			return coalescer.runInline(col, update)
-		}
-		coalescer.execMu.Unlock()
-		if len(coalescer.requests) > 0 {
-			coalescer.signalWake()
+	if coalescer.maxDelay == 0 {
+		if active > 2 {
+			coalescer.noteBatchConcurrency()
+		} else if !coalescer.batchModeActive() &&
+			len(coalescer.requests) == 0 &&
+			!coalescer.workerBusy.Load() &&
+			!coalescer.stoppedFlag.Load() &&
+			coalescer.execMu.TryLock() {
+			if !coalescer.stoppedFlag.Load() && len(coalescer.requests) == 0 {
+				return coalescer.runInline(col, update)
+			}
+			coalescer.execMu.Unlock()
+			if len(coalescer.requests) > 0 {
+				coalescer.signalWake()
+			}
 		}
 	}
 
@@ -2488,6 +2497,45 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 		putMongoUpdateResultChan(done)
 	}
 	return result.matched, result.modified, result.err
+}
+
+func (c *mongoUpdateCoalescer) effectiveBatchHysteresis() time.Duration {
+	if c == nil || c.batchHysteresis <= 0 {
+		return 0
+	}
+	return c.batchHysteresis
+}
+
+func (c *mongoUpdateCoalescer) nowUnixNano() int64 {
+	if c != nil && c.nowNano != nil {
+		return c.nowNano()
+	}
+	return time.Now().UnixNano()
+}
+
+func (c *mongoUpdateCoalescer) noteBatchConcurrency() {
+	if h := c.effectiveBatchHysteresis(); h > 0 {
+		c.batchModeUntil.Store(c.nowUnixNano() + int64(h))
+	}
+}
+
+func (c *mongoUpdateCoalescer) batchModeActive() bool {
+	if c == nil {
+		return false
+	}
+	until := c.batchModeUntil.Load()
+	if until == 0 {
+		return false
+	}
+	now := c.nowUnixNano()
+	if now < until {
+		return true
+	}
+	if !c.batchModeUntil.CompareAndSwap(until, 0) {
+		next := c.batchModeUntil.Load()
+		return next != 0 && now < next
+	}
+	return false
 }
 
 func (c *mongoUpdateCoalescer) runInline(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
@@ -2575,15 +2623,16 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 		return coalescer
 	}
 	coalescer := &mongoUpdateCoalescer{
-		maxDelay:  maxDelay,
-		maxBatch:  maxBatch,
-		idleTTL:   idleTTL,
-		requests:  make(chan mongoUpdateCoalescerRequest, maxBatch*4),
-		wakeCh:    make(chan struct{}, 1),
-		stoppedCh: make(chan struct{}),
-		done:      make(chan struct{}),
-		server:    s,
-		name:      name,
+		maxDelay:        maxDelay,
+		maxBatch:        maxBatch,
+		idleTTL:         idleTTL,
+		batchHysteresis: defaultUpdateCoalescingBatchHysteresis,
+		requests:        make(chan mongoUpdateCoalescerRequest, maxBatch*4),
+		wakeCh:          make(chan struct{}, 1),
+		stoppedCh:       make(chan struct{}),
+		done:            make(chan struct{}),
+		server:          s,
+		name:            name,
 	}
 	s.updateCoalescers[name] = coalescer
 	go coalescer.run()
@@ -2833,7 +2882,11 @@ func (c *mongoUpdateCoalescer) run() {
 
 func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRequest) {
 	c.workerBatches.Add(1)
-	batch := []mongoUpdateCoalescerRequest{first}
+	if cap(c.batchBuf) == 0 {
+		initCap := max(1, min(c.maxBatch, 32))
+		c.batchBuf = make([]mongoUpdateCoalescerRequest, 0, initCap)
+	}
+	batch := append(c.batchBuf[:0], first)
 	if c.maxDelay > 0 {
 		timer := time.NewTimer(c.maxDelay)
 	collect:
@@ -2871,7 +2924,12 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 		}
 	}
 drained:
+	if c.maxDelay == 0 && len(batch) >= 3 {
+		c.noteBatchConcurrency()
+	}
 	c.runBatch(batch)
+	clear(batch)
+	c.batchBuf = batch[:0]
 }
 
 func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
