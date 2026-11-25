@@ -149,7 +149,7 @@ type Server struct {
 	// mongoWriteBeforeFirstCreateHook is a test-only seam between command
 	// preparation/admission and a missing-namespace catalog creation.
 	mongoWriteBeforeFirstCreateHook func(*mongoWriteBudget)
-	updateMu                        sync.Mutex
+	updateMu                        sync.RWMutex
 	updateCoalescers                map[string]*mongoUpdateCoalescer
 	insertMu                        sync.Mutex
 	insertCoalescers                map[string]*mongoInsertCoalescer
