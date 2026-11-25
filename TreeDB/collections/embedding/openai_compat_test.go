@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -301,4 +302,100 @@ func BenchmarkOpenAICompatEmbedBatch(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+type cancelOnCloseBody struct {
+	body   []byte
+	offset int
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnCloseBody) Read(p []byte) (int, error) {
+	if c.offset >= len(c.body) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.body[c.offset:])
+	c.offset += n
+	return n, nil
+}
+
+func (c *cancelOnCloseBody) Close() error {
+	c.cancel()
+	return nil
+}
+
+type cancelOnCloseTransport struct {
+	payload []byte
+	cancel  context.CancelFunc
+}
+
+func (t cancelOnCloseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       &cancelOnCloseBody{body: t.payload, cancel: t.cancel},
+		Request:    req,
+	}, nil
+}
+
+func TestOpenAICompatRejectsNullComponentsAndLateCancel(t *testing.T) {
+	t.Run("null_component_fails_closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[null,1]}]}`))
+		}))
+		defer srv.Close()
+		emb, err := NewOpenAICompatEmbedder(Config{
+			Provider:   ProviderOpenAICompat,
+			Dimensions: 2,
+			Options:    map[string]string{"base_url": srv.URL, "model": "m"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := emb.EmbedBatch(context.Background(), [][]byte{[]byte("x")}); !errors.Is(err, ErrInvalidOutput) {
+			t.Fatalf("null component err=%v want ErrInvalidOutput", err)
+		}
+	})
+
+	t.Run("missing_index_fails_closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"data":[{"embedding":[1,2]}]}`))
+		}))
+		defer srv.Close()
+		emb, err := NewOpenAICompatEmbedder(Config{
+			Provider:   ProviderOpenAICompat,
+			Dimensions: 2,
+			Options:    map[string]string{"base_url": srv.URL, "model": "m"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := emb.EmbedBatch(context.Background(), [][]byte{[]byte("x")}); !errors.Is(err, ErrInvalidOutput) {
+			t.Fatalf("missing index err=%v want ErrInvalidOutput", err)
+		}
+	})
+
+	t.Run("cancel_after_response_body_close_fails_batch", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		rawEmb, err := NewOpenAICompatEmbedder(Config{
+			Provider:   ProviderOpenAICompat,
+			Dimensions: 2,
+			Options:    map[string]string{"base_url": "http://127.0.0.1:1/v1", "model": "m"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		emb := rawEmb.(*OpenAICompatEmbedder)
+		emb.client = &http.Client{
+			Transport: cancelOnCloseTransport{
+				payload: []byte(`{"data":[{"index":0,"embedding":[1,2]}]}`),
+				cancel:  cancel,
+			},
+		}
+		vecs, err := emb.EmbedBatch(ctx, [][]byte{[]byte("x")})
+		if !errors.Is(err, context.Canceled) || vecs != nil {
+			t.Fatalf("late cancel got vecs=%v err=%v want nil, context.Canceled", vecs, err)
+		}
+	})
 }

@@ -183,10 +183,59 @@ type openAICompatRequest struct {
 	Dimensions int      `json:"dimensions,omitempty"`
 }
 
+// strictFloat32Slice decodes a JSON array of non-null finite numbers, rejecting
+// JSON null (which standard []float32 unmarshaling silently converts to 0),
+// non-numeric elements, and non-finite/overflowing values.
+type strictFloat32Slice []float32
+
+func (s *strictFloat32Slice) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return fmt.Errorf("embedding must be a JSON array: %w", ErrInvalidOutput)
+	}
+	inner := bytes.TrimSpace(trimmed[1 : len(trimmed)-1])
+	if len(inner) == 0 {
+		*s = (*s)[:0]
+		return nil
+	}
+	// Pre-size from comma count to avoid slice growth allocations.
+	count := bytes.Count(inner, []byte(",")) + 1
+	vals := make([]float32, 0, count)
+	pos := 0
+	for pos < len(inner) {
+		next := bytes.IndexByte(inner[pos:], ',')
+		var tok []byte
+		if next < 0 {
+			tok = bytes.TrimSpace(inner[pos:])
+			pos = len(inner)
+		} else {
+			tok = bytes.TrimSpace(inner[pos : pos+next])
+			pos += next + 1
+			if pos >= len(inner) {
+				return fmt.Errorf("trailing comma in embedding array: %w", ErrInvalidOutput)
+			}
+		}
+		if len(tok) == 0 {
+			return fmt.Errorf("empty element in embedding array: %w", ErrInvalidOutput)
+		}
+		// Reject JSON null, strings, booleans, objects, or nested arrays explicitly.
+		if tok[0] != '-' && (tok[0] < '0' || tok[0] > '9') {
+			return fmt.Errorf("non-numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
+		}
+		f, err := strconv.ParseFloat(string(tok), 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > math.MaxFloat32 {
+			return fmt.Errorf("invalid numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
+		}
+		vals = append(vals, float32(f))
+	}
+	*s = vals
+	return nil
+}
+
 type openAICompatResponse struct {
 	Data []struct {
-		Index     int       `json:"index"`
-		Embedding []float32 `json:"embedding"`
+		Index     *int               `json:"index"`
+		Embedding strictFloat32Slice `json:"embedding"`
 	} `json:"data"`
 	Error *struct {
 		Message string `json:"message"`
@@ -224,6 +273,9 @@ func (e *OpenAICompatEmbedder) EmbedBatch(ctx context.Context, texts [][]byte) (
 		if err := e.embedSubBatch(ctx, inputs, start, backing, out); err != nil {
 			return nil, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("embedding: openai_compat canceled before returning batch: %w", err)
 	}
 	return out, nil
 }
@@ -311,18 +363,22 @@ func (e *OpenAICompatEmbedder) embedSubBatch(ctx context.Context, inputs []strin
 
 	seen := make([]bool, len(inputs))
 	for _, item := range parsed.Data {
-		if item.Index < 0 || item.Index >= len(inputs) {
-			return fmt.Errorf("embedding: openai_compat out-of-range index %d (batch size %d): %w", item.Index, len(inputs), ErrInvalidOutput)
+		if item.Index == nil {
+			return fmt.Errorf("embedding: openai_compat response item missing index: %w", ErrInvalidOutput)
 		}
-		if seen[item.Index] {
-			return fmt.Errorf("embedding: openai_compat duplicate index %d: %w", item.Index, ErrInvalidOutput)
+		idx := *item.Index
+		if idx < 0 || idx >= len(inputs) {
+			return fmt.Errorf("embedding: openai_compat out-of-range index %d (batch size %d): %w", idx, len(inputs), ErrInvalidOutput)
 		}
-		seen[item.Index] = true
+		if seen[idx] {
+			return fmt.Errorf("embedding: openai_compat duplicate index %d: %w", idx, ErrInvalidOutput)
+		}
+		seen[idx] = true
 
 		if len(item.Embedding) != e.dims {
-			return fmt.Errorf("embedding: openai_compat item %d has %d dims, want %d: %w", globalOffset+item.Index, len(item.Embedding), e.dims, ErrDimensionMismatch)
+			return fmt.Errorf("embedding: openai_compat item %d has %d dims, want %d: %w", globalOffset+idx, len(item.Embedding), e.dims, ErrDimensionMismatch)
 		}
-		dstIdx := globalOffset + item.Index
+		dstIdx := globalOffset + idx
 		dst := backing[dstIdx*e.dims : (dstIdx+1)*e.dims : (dstIdx+1)*e.dims]
 		var normSq float64
 		for j, v := range item.Embedding {
