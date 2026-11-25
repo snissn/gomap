@@ -314,9 +314,29 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 	if err != nil {
 		return next, err
 	}
-	p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, count, nativeCollectionLifetime{}, admit)
-	if err != nil {
-		return next, err
+	sharePending := base.pending == base.collections
+	if !sharePending && count == 1 && base.collections.Len() == 1 {
+		var target *nativeCollectionState
+		if len(changes) != 0 {
+			target = changes[0].collection
+		} else {
+			target = named[0].collection
+		}
+		if target != nil {
+			if _, ok := base.collections.Get(target.incarnation); ok {
+				if base.pending.Len() == 0 {
+					sharePending = true
+				} else if base.pending.Len() == 1 {
+					_, sharePending = base.pending.Get(target.incarnation)
+				}
+			}
+		}
+	}
+	if !sharePending {
+		p.pending, err = cowbtree.NewOwnedMapBuilder(base.pending, count, nativeCollectionLifetime{}, admit)
+		if err != nil {
+			return next, err
+		}
 	}
 	for changeIndex := 0; changeIndex < count; changeIndex++ {
 		var change nativeJSONPrimaryChange
@@ -357,9 +377,25 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		if err != nil {
 			return next, err
 		}
-		p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, domainCount, nativeDomainLifetime{}, admit)
-		if err != nil {
-			return next, err
+		shareDomains := c.pending == c.domains || (c.domains.Len() == 0 && c.pending.Len() == 0)
+		if !shareDomains && domainCount == 1 && c.domains.Len() == 1 {
+			targetDomain := "primary"
+			if !primary {
+				targetDomain = namedChange.domains[0].name
+			}
+			if _, ok := c.domains.Get(targetDomain); ok {
+				if c.pending.Len() == 0 {
+					shareDomains = true
+				} else if c.pending.Len() == 1 {
+					_, shareDomains = c.pending.Get(targetDomain)
+				}
+			}
+		}
+		if !shareDomains {
+			p.pendingDomainBuilder, err = cowbtree.NewOwnedMapBuilder(c.pending, domainCount, nativeDomainLifetime{}, admit)
+			if err != nil {
+				return next, err
+			}
 		}
 		for i := 0; i < domainCount; i++ {
 			name, policy, rows := "primary", change.primaryPolicy, entries
@@ -444,12 +480,22 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return next, err
 			}
-			if err = p.pendingDomainBuilder.Set(name, domain); err != nil {
-				return next, err
+			if !shareDomains {
+				if err = p.pendingDomainBuilder.Set(name, domain); err != nil {
+					return next, err
+				}
 			}
 		}
-		p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
-		p.domainBuilder, p.pendingDomainBuilder = nil, nil
+		if shareDomains {
+			domains := p.domainBuilder.Seal()
+			p.domainBuilder = nil
+			domains.Retain()
+			p.domains = domains
+			p.pendingDomains = domains
+		} else {
+			p.domains, p.pendingDomains = p.domainBuilder.Seal(), p.pendingDomainBuilder.Seal()
+			p.domainBuilder, p.pendingDomainBuilder = nil, nil
+		}
 		c.schema.retain()
 		p.schema = c.schema
 		replacement, err := newNativeCollectionState(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, admit)
@@ -464,9 +510,18 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		if err = p.collections.Set(c.incarnation, replacement); err != nil {
 			return next, err
 		}
-		if err = p.pending.Set(c.incarnation, replacement); err != nil {
-			return next, err
+		if !sharePending {
+			if err = p.pending.Set(c.incarnation, replacement); err != nil {
+				return next, err
+			}
 		}
+	}
+	if sharePending {
+		sealed := p.collections.Seal()
+		p.collections = nil
+		sealed.Retain()
+		next.collections = sealed
+		next.pending = sealed
 	}
 	return next, nil
 }

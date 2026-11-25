@@ -111,7 +111,19 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 		}
 		return make([]UpdateBatchResult, count), false, nil
 	}
-	results, err = tx.UpdateBatch(items)
+	primaryOnlyBSONSet := bsonItems != nil &&
+		nativeBSONSetMeta(&g.probe.meta) &&
+		len(g.probe.meta.TextIndexes) == 0 &&
+		len(g.probe.meta.VectorIndexes) == 0 &&
+		g.typed == nil &&
+		g.projection == nil &&
+		len(g.templateRecords) == 0 &&
+		!bsonSetFieldsMayTouchAnyIndex(g.probe.meta, bsonItems)
+	if primaryOnlyBSONSet {
+		results, err = tx.updateBatchInto("", items, true)
+	} else {
+		results, err = tx.UpdateBatch(items)
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -173,6 +185,33 @@ func bsonSetFieldTouchesIndexPath(fieldKey, indexPath string) bool {
 		return true
 	}
 	return len(fieldKey) > len(indexPath) && fieldKey[len(indexPath)] == '.' && fieldKey[:len(indexPath)] == indexPath
+}
+
+func bsonSetFieldsMayTouchAnyIndex(meta CollectionMeta, items []BSONSetUpdateBatchItem) bool {
+	if !nativeBSONSetMeta(&meta) || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 {
+		return true
+	}
+	for _, item := range items {
+		for _, field := range item.Fields {
+			if field.Key == "" {
+				return true
+			}
+			for _, idx := range meta.Indexes {
+				if len(idx.Components) == 0 {
+					if bsonSetFieldTouchesIndexPath(field.Key, idx.Field) {
+						return true
+					}
+					continue
+				}
+				for _, component := range idx.Components {
+					if bsonSetFieldTouchesIndexPath(field.Key, component.Field) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func bsonSetFieldsMayTouchSecondaryUniqueIndex(meta CollectionMeta, items []BSONSetUpdateBatchItem) bool {
