@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -679,12 +680,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	}
 
 	samplesHash := hashSamples(validSamples)
-	type dictCandidate struct {
-		profile   *ActiveProfile
-		fromCache bool
-	}
-	ioNsPerStoredByte := math.Float64frombits(t.ioNsPerStoredByte.Load())
-	candProfiles := make([]dictCandidate, 0, len(historyCandidates)*len(dictCandidates))
+	prepared := make([]preparedDictCandidate, 0, len(historyCandidates)*len(dictCandidates))
 	for _, historyBytes := range historyCandidates {
 		if historyBytes <= 0 {
 			continue
@@ -712,20 +708,84 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			if err != nil || len(shaped) == 0 {
 				continue
 			}
-			profile := ChooseKForDictOptions(shaped, validSamples, ChooseKOptions{
-				CandidateK:         t.candidateK,
-				IoNsPerStoredByte:  ioNsPerStoredByte,
-				EncodeNsPerRawByte: t.encodeNsPerRawByte,
-				DecodeNsPerRawByte: t.decodeNsPerRawByte,
-				EncoderWorkspace:   &t.dictEncodeWS,
+			prepared = append(prepared, preparedDictCandidate{
+				shaped:       shaped,
+				historyBytes: historyBytes,
+				fromCache:    fromCache && len(shaped) == len(dict),
 			})
-			if profile == nil || len(profile.Dict) == 0 {
-				continue
-			}
-			profile.DictHash = xxhash.Sum64(shaped)
-			profile.HistoryBytes = historyBytes
-			candProfiles = append(candProfiles, dictCandidate{profile: profile, fromCache: fromCache && len(shaped) == len(dict)})
 		}
+	}
+	if len(prepared) == 0 {
+		return
+	}
+
+	const ratioSlack = 0.01
+	ioNsPerStoredByte := math.Float64frombits(t.ioNsPerStoredByte.Load())
+	ks := resolveCandidateK(t.candidateK)
+	evalCandidates := prepared
+	if len(prepared) > 1 && len(ks) > 1 {
+		if probeEval, probeRawTotal := chooseKEvalSamples(validSamples, ks); probeRawTotal > 0 {
+			probeK := selectProbeK(ks, len(probeEval))
+			used := (len(probeEval) / probeK) * probeK
+			if used > 0 {
+				var concatScratch []byte
+				var encodedScratch []byte
+				probed := make([]probedDictCandidate, 0, len(prepared))
+				for _, cand := range prepared {
+					payload, meta, raw, encodeNs := batchTotalsWithEncodeWorkspace(
+						&t.dictEncodeWS,
+						cand.shaped,
+						probeEval[:used],
+						probeK,
+						t.encodeNsPerRawByte,
+						&concatScratch,
+						&encodedScratch,
+					)
+					if raw <= 0 {
+						continue
+					}
+					totalRatio := float64(payload+meta) / float64(raw)
+					encodeNsPerRaw := float64(encodeNs) / float64(raw)
+					score := 0.0
+					if ioNsPerStoredByte > 0 && totalRatio > 0 {
+						denom := encodeNsPerRaw + ioNsPerStoredByte*totalRatio
+						if denom > 0 {
+							score = 1.0 / denom
+						}
+					}
+					probed = append(probed, probedDictCandidate{
+						cand:           cand,
+						totalRatio:     totalRatio,
+						encodeNsPerRaw: encodeNsPerRaw,
+						score:          score,
+					})
+				}
+				if len(probed) > 0 {
+					evalCandidates = shortlistProbedCandidates(probed, ioNsPerStoredByte, ratioSlack)
+				}
+			}
+		}
+	}
+
+	type dictCandidate struct {
+		profile   *ActiveProfile
+		fromCache bool
+	}
+	candProfiles := make([]dictCandidate, 0, len(evalCandidates))
+	for _, cand := range evalCandidates {
+		profile := ChooseKForDictOptions(cand.shaped, validSamples, ChooseKOptions{
+			CandidateK:         t.candidateK,
+			IoNsPerStoredByte:  ioNsPerStoredByte,
+			EncodeNsPerRawByte: t.encodeNsPerRawByte,
+			DecodeNsPerRawByte: t.decodeNsPerRawByte,
+			EncoderWorkspace:   &t.dictEncodeWS,
+		})
+		if profile == nil || len(profile.Dict) == 0 {
+			continue
+		}
+		profile.DictHash = xxhash.Sum64(cand.shaped)
+		profile.HistoryBytes = cand.historyBytes
+		candProfiles = append(candProfiles, dictCandidate{profile: profile, fromCache: cand.fromCache})
 	}
 	if len(candProfiles) == 0 {
 		return
@@ -733,7 +793,6 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 
 	// Select best dict bytes using throughput when IO cost is known; otherwise
 	// fall back to ratio-first, speed-second policy.
-	const ratioSlack = 0.01
 	bestIdx := -1
 	bestProfile := candProfiles[0].profile
 	bestFromCache := candProfiles[0].fromCache
@@ -891,6 +950,126 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	}
 	t.rollingRatioCur.Store(math.Float64bits(ratio))
 	t.maybeAcceptProfile(bestProfile)
+}
+
+type preparedDictCandidate struct {
+	shaped       []byte
+	historyBytes int
+	fromCache    bool
+}
+
+type probedDictCandidate struct {
+	cand           preparedDictCandidate
+	totalRatio     float64
+	encodeNsPerRaw float64
+	score          float64
+}
+
+func selectProbeK(ks []int, evalLen int) int {
+	if evalLen <= 1 {
+		return 1
+	}
+	valid := make([]int, 0, len(ks))
+	hasEight := false
+	for _, k := range ks {
+		if k <= 0 || k > evalLen {
+			continue
+		}
+		if k == 8 {
+			hasEight = true
+		}
+		valid = append(valid, k)
+	}
+	if hasEight {
+		return 8
+	}
+	if len(valid) == 0 {
+		return 1
+	}
+	sort.Ints(valid)
+	return valid[len(valid)/2]
+}
+
+func betterProbedTieBreak(a, b probedDictCandidate, useScore bool) bool {
+	if a.encodeNsPerRaw != b.encodeNsPerRaw {
+		if a.encodeNsPerRaw <= 0 {
+			return false
+		}
+		if b.encodeNsPerRaw <= 0 {
+			return true
+		}
+		return a.encodeNsPerRaw < b.encodeNsPerRaw
+	}
+	if a.cand.historyBytes != b.cand.historyBytes {
+		return a.cand.historyBytes < b.cand.historyBytes
+	}
+	if useScore {
+		return a.score > b.score
+	}
+	return a.totalRatio < b.totalRatio
+}
+
+func shortlistProbedCandidates(probed []probedDictCandidate, ioNsPerStoredByte, ratioSlack float64) []preparedDictCandidate {
+	if len(probed) == 0 {
+		return nil
+	}
+	if len(probed) == 1 {
+		return []preparedDictCandidate{probed[0].cand}
+	}
+
+	useScore := false
+	bestIdx := -1
+	if ioNsPerStoredByte > 0 {
+		for i := range probed {
+			if probed[i].score <= 0 {
+				continue
+			}
+			useScore = true
+			if bestIdx < 0 || probed[i].score > probed[bestIdx].score ||
+				(probed[i].score == probed[bestIdx].score && betterProbedTieBreak(probed[i], probed[bestIdx], true)) {
+				bestIdx = i
+			}
+		}
+	}
+
+	if useScore && bestIdx >= 0 {
+		cut := probed[bestIdx].score * (1.0 - ratioSlack)
+		runnerUpIdx := -1
+		for i := range probed {
+			if i == bestIdx || probed[i].score <= 0 || probed[i].score < cut {
+				continue
+			}
+			if runnerUpIdx < 0 || betterProbedTieBreak(probed[i], probed[runnerUpIdx], true) {
+				runnerUpIdx = i
+			}
+		}
+		if runnerUpIdx >= 0 {
+			return []preparedDictCandidate{probed[bestIdx].cand, probed[runnerUpIdx].cand}
+		}
+		return []preparedDictCandidate{probed[bestIdx].cand}
+	}
+
+	bestIdx = 0
+	for i := 1; i < len(probed); i++ {
+		if probed[i].totalRatio < probed[bestIdx].totalRatio ||
+			(probed[i].totalRatio == probed[bestIdx].totalRatio && betterProbedTieBreak(probed[i], probed[bestIdx], false)) {
+			bestIdx = i
+		}
+	}
+	cut := probed[bestIdx].totalRatio * (1.0 + ratioSlack)
+	runnerUpIdx := -1
+	for i := range probed {
+		if i == bestIdx || probed[i].totalRatio > cut {
+			continue
+		}
+		if runnerUpIdx < 0 || betterProbedTieBreak(probed[i], probed[runnerUpIdx], false) {
+			runnerUpIdx = i
+		}
+	}
+	if runnerUpIdx >= 0 {
+		return []preparedDictCandidate{probed[bestIdx].cand, probed[runnerUpIdx].cand}
+	}
+	return []preparedDictCandidate{probed[bestIdx].cand}
 }
 
 func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel, buildWS *zstd.BuildDictWorkspace, encodeWS *zstd.DictEncodeWorkspace) (dict []byte, err error) {
