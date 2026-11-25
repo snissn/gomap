@@ -315,22 +315,24 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDict
 func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
 	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
-	if cache.physicalMu.TryLock() {
-		defer cache.physicalMu.Unlock()
-		fresh := cache.physicalReader == nil
-		w, err := cache.physicalWorkspaceLocked(limits)
+	if mu, slotReader, ok := cache.tryLockPhysicalLane(cache.physicalLaneSeed.Add(1)); ok {
+		defer mu.Unlock()
+		fresh := *slotReader == nil
+		w, err := cache.physicalWorkspaceSlotLocked(slotReader, limits)
 		if err != nil {
 			return nil, err
 		}
 		owned, err := b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
-		if err != nil && fresh && cache.physicalReader == w && len(w.codecs) == 0 && w.allocations == nil {
-			cache.physicalReader = nil
+		if err != nil && fresh && *slotReader == w && len(w.codecs) == 0 && w.allocations == nil {
+			*slotReader = nil
 			w.close()
 		}
 		return owned, err
 	}
-	// Lane 0 (physicalMu) is busy: admit a bounded per-call temporary decoder
-	// workspace so concurrent value reads never serialize or retain overflow leases.
+	// All retained physical lanes are busy (or budget headroom is tight for
+	// admitting a new spillover slot): admit a bounded per-call temporary
+	// decoder workspace so concurrent value reads never serialize or retain
+	// overflow leases.
 	w, err := admitCOWReadWorkspace(cache.budget, limits)
 	if err != nil {
 		return nil, err

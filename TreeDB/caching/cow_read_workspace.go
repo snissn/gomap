@@ -132,15 +132,7 @@ func cowReadWorkspaceInspectionCharge() uint64 {
 // physicalWorkspaceLocked requires physicalMu. Only the original cache owns
 // this admitted scratch; snapshot/basis remain nil even across physical handoffs.
 func (c *cowCache) physicalWorkspaceLocked(limits valuelog.COWReadLimits) (*cowReadWorkspace, error) {
-	if c.physicalReader == nil {
-		w, err := admitCOWReadWorkspace(c.budget, limits)
-		if err != nil {
-			return nil, err
-		}
-		c.physicalReader = w
-	}
-	c.physicalReader.limits = limits
-	return c.physicalReader, nil
+	return c.physicalWorkspaceSlotLocked(&c.physicalReader, limits)
 }
 
 // Only the winner of an original cache refund gate calls this, after its last
@@ -154,24 +146,57 @@ func (c *cowCache) closePhysicalReader() {
 		reader = nil
 	}
 	c.physicalMu.Unlock()
+	for i := range c.physicalSlots {
+		slot := &c.physicalSlots[i]
+		slot.mu.Lock()
+		reader = slot.reader
+		slot.reader = nil
+		if reader != nil {
+			reader.close()
+			reader = nil
+		}
+		slot.mu.Unlock()
+	}
 }
 
-// Only cache-owned generic decoder scratch is disposable. TryLock excludes
-// every borrower without introducing a wait under a captured reader's locks.
-// Definitions and decoded outputs are detached before their original refund.
-func (c *cowCache) tryReleaseIdleGenericReadScratch() bool {
-	if c == nil || !c.physicalMu.TryLock() {
+func releaseIdleGenericCodecsLocked(shared *cowReadWorkspace) bool {
+	if shared == nil {
 		return false
 	}
-	defer c.physicalMu.Unlock()
 	released := false
-	if shared := c.physicalReader; shared != nil {
-		for i, codec := range shared.codecs {
-			if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
-				shared.codecs[i] = nil
-				codec.close()
+	for i, codec := range shared.codecs {
+		if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
+			shared.codecs[i] = nil
+			codec.close()
+			released = true
+		}
+	}
+	return released
+}
+
+// Only cache-owned generic decoder scratch is disposable. Independent per-lane
+// TryLock sweeps exclude every active borrower without introducing a wait under
+// a captured reader's locks or letting a busy lane prevent reclaiming idle
+// codecs on the remaining lanes. Definitions and decoded outputs are detached
+// before their original refund.
+func (c *cowCache) tryReleaseIdleGenericReadScratch() bool {
+	if c == nil {
+		return false
+	}
+	released := false
+	if c.physicalMu.TryLock() {
+		if releaseIdleGenericCodecsLocked(c.physicalReader) {
+			released = true
+		}
+		c.physicalMu.Unlock()
+	}
+	for i := range c.physicalSlots {
+		slot := &c.physicalSlots[i]
+		if slot.mu.TryLock() {
+			if releaseIdleGenericCodecsLocked(slot.reader) {
 				released = true
 			}
+			slot.mu.Unlock()
 		}
 	}
 	return released
@@ -405,11 +430,18 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		memtable.COWAllocationCharge(sizes.RawBacking) + memtable.COWAllocationCharge(sizes.InputBacking) +
 		memtable.COWAllocationCharge(sizes.SequenceBacking) + uint64(sizes.FixedAllocationCount)*memtable.COWAllocationCharge(sizes.FixedAllocationBytes)
 	lease, err := w.budget.AcquireExternal(bytes)
-	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly && w.snapshot != nil {
-		// A borrowed reader still owns its original decoder. Before refusing it,
-		// refund only idle cache scratch; physicalMu proves no decoder borrower
-		// survives, and close drops references before releasing its receipt.
-		if w.snapshot.cowCache.tryReleaseIdleGenericReadScratch() {
+	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly {
+		// A borrowed reader or active physical lane still owns its own decoder.
+		// Before refusing admission, refund only idle cache scratch across other
+		// unlocked lanes; per-lane TryLock proves no decoder borrower survives,
+		// and close drops references before releasing its receipt.
+		var scratchCache *cowCache
+		if w.snapshot != nil {
+			scratchCache = w.snapshot.cowCache
+		} else if independent != nil && independent.cache != nil {
+			scratchCache = independent.cache
+		}
+		if scratchCache != nil && scratchCache.tryReleaseIdleGenericReadScratch() {
 			lease, err = w.budget.AcquireExternal(bytes)
 		}
 	}
@@ -991,16 +1023,17 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		if native {
-			if c.physicalMu.TryLock() {
+			if laneMu, slotReader, ok := c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1)); ok {
 				// A preceding decoder may have admitted this exact inspected leaf
 				// while we raced. Preserve the original policy before copying a hit.
 				if data, state, hit, cacheErr := record.CopyVerifiedPage(dst); cacheErr != nil || hit {
-					c.physicalMu.Unlock()
+					laneMu.Unlock()
 					return data, state, cacheErr
 				}
-				shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
+				fresh := *slotReader == nil
+				shared, workspaceErr := c.physicalWorkspaceSlotLocked(slotReader, w.limits)
 				if workspaceErr != nil {
-					c.physicalMu.Unlock()
+					laneMu.Unlock()
 					if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
 						return nil, noProof, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
 					}
@@ -1011,7 +1044,11 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 				if err == nil {
 					state, err = record.AdmitVerifiedPageWithState(data)
 				}
-				c.physicalMu.Unlock()
+				if err != nil && fresh && *slotReader == shared && len(shared.codecs) == 0 && shared.allocations == nil {
+					*slotReader = nil
+					shared.close()
+				}
+				laneMu.Unlock()
 				if err != nil {
 					if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
 						return nil, noProof, &cowPhysicalDictionaryCapacity{cause: err}
@@ -1020,9 +1057,10 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 				}
 				return data, state, nil
 			}
-			// Lane 0 (physicalMu) is busy: admit a bounded per-call temporary
-			// decoder workspace and release it immediately after copy-out so
-			// concurrent readers never serialize or retain overflow leases.
+			// All retained physical lanes are busy (or budget headroom is tight
+			// for admitting a new spillover slot): admit a bounded per-call
+			// temporary decoder workspace and release it immediately after
+			// copy-out so concurrent readers never serialize or retain overflow leases.
 			temp, workspaceErr := admitCOWReadWorkspace(c.budget, w.limits)
 			if workspaceErr != nil {
 				if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
