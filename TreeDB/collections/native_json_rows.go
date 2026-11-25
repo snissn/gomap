@@ -51,12 +51,18 @@ func (p *nativeJSONRows) touch(id []byte, read func([]byte) ([]byte, error), adm
 }
 
 func (p *nativeJSONRows) insertTouched(id, value []byte, admit func(uint64) error) (*nativeJSONRow, error) {
+	return p.insertTouchedOwnedValue(id, value, false, admit)
+}
+
+func (p *nativeJSONRows) insertTouchedOwnedValue(id, value []byte, valueOwnedAndAdmitted bool, admit func(uint64) error) (*nativeJSONRow, error) {
 	charge := memtable.COWAllocationCharge(uint64(len(id)))
-	valCharge := memtable.COWAllocationCharge(uint64(len(value)))
-	if valCharge > ^uint64(0)-charge {
-		return nil, memtable.ErrCOWCapacity
+	if !(valueOwnedAndAdmitted && value != nil) {
+		valCharge := memtable.COWAllocationCharge(uint64(len(value)))
+		if valCharge > ^uint64(0)-charge {
+			return nil, memtable.ErrCOWCapacity
+		}
+		charge += valCharge
 	}
-	charge += valCharge
 	growCapacity := 0
 	useInline := false
 	if len(p.rows) == cap(p.rows) {
@@ -87,7 +93,12 @@ func (p *nativeJSONRows) insertTouched(id, value []byte, admit func(uint64) erro
 	i := sort.Search(len(p.rows), func(i int) bool { return bytes.Compare(p.rows[i].id, id) >= 0 })
 	p.rows = append(p.rows, nativeJSONRow{})
 	copy(p.rows[i+1:], p.rows[i:])
-	owned := bytes.Clone(value)
+	var owned []byte
+	if valueOwnedAndAdmitted && value != nil {
+		owned = value
+	} else {
+		owned = bytes.Clone(value)
+	}
 	p.rows[i] = nativeJSONRow{id: bytes.Clone(id), opening: owned, current: owned}
 	return &p.rows[i], nil
 }
@@ -638,6 +649,10 @@ func (t *NativeJSONTxn) touchNativeInsertRow(g *nativeJSONTxnBinding, id []byte)
 	return t.touchNativeRowWithInsertProbe(g, id, true)
 }
 
+type nativePhysicalAdmittedEntryReader interface {
+	NativeEntryAtRootAdmitted(root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error)
+}
+
 func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, id []byte, insert bool) (*nativeJSONRow, error) {
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
@@ -649,9 +664,11 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 		return row, nil
 	}
 	var (
-		value []byte
-		err   error
+		value                 []byte
+		valueOwnedAndAdmitted bool
+		err                   error
 	)
+	admitStage := func(n uint64) error { return t.admitStage(g, n) }
 	// The transaction mutex excludes every use of this private probe. Borrow the
 	// exact captured domain/scratch until touch copies it; public Get's output is
 	// caller-owned and must not become an unadmitted internal temporary.
@@ -660,6 +677,7 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 	} else {
 		entry, resolved, memErr := g.probe.domain.memoryEntry(id)
 		err = memErr
+		usedAdmittedPhysical := false
 		if !resolved {
 			if insert {
 				if physical, ok := g.probe.capture.(backenddb.NativePhysicalReader); ok {
@@ -670,8 +688,11 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 						err = probeErr
 					}
 				}
+			} else if physicalAdmitted, ok := g.probe.capture.(nativePhysicalAdmittedEntryReader); ok {
+				entry, err = physicalAdmitted.NativeEntryAtRootAdmitted(g.probe.domain.domain.baseRoot, id, admitStage)
+				usedAdmittedPhysical = true
 			}
-			if err == nil {
+			if !usedAdmittedPhysical && err == nil {
 				scratch, scratchErr := g.probe.physicalScratch()
 				if scratchErr != nil {
 					err = scratchErr
@@ -684,18 +705,25 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 			if entry.Flags&node.FlagTombstone != 0 {
 				err = tree.ErrKeyNotFound
 			} else if entry.Flags&node.FlagPointer != 0 {
-				value, err = g.probe.readValue(entry.ValuePtr, func(n uint64) error { return t.admitStage(g, n) })
+				value, err = g.probe.readValue(entry.ValuePtr, admitStage)
+				if !insert && err == nil && value != nil {
+					valueOwnedAndAdmitted = true
+				}
 			} else {
 				value = entry.Value
+				if usedAdmittedPhysical && value != nil {
+					valueOwnedAndAdmitted = true
+				}
 			}
 		}
 	}
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		value = nil
+		valueOwnedAndAdmitted = false
 	} else if err != nil {
 		return nil, err
 	}
-	return g.rows.insertTouched(id, value, func(n uint64) error { return t.admitStage(g, n) })
+	return g.rows.insertTouchedOwnedValue(id, value, valueOwnedAndAdmitted, admitStage)
 }
 func (t *NativeJSONTxn) appendNativeMember(g *nativeJSONTxnBinding, kind commitlog.CommandKind, format commitlog.PayloadFormat, payload []byte) error {
 	limit := commitlog.MaxCompositeMutationMembersV1
