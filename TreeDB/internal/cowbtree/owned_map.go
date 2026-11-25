@@ -99,9 +99,10 @@ func (a *ownedMapAllocation) release(c *OwnedMapCompletion) {
 	c.Append(a.refund.Completion())
 }
 
-// Metadata is attached only to sealed original nodes. Private copies have no
-// metadata until sealing. Children/value slots are detached after their actual
-// successful cleanup, so partial failure parks the exact remaining graph.
+// Metadata is populated only when sealing original nodes. Private copies may
+// pre-allocate composite ownership storage with allocation == nil until
+// sealing. Children/value slots are detached after their actual successful
+// cleanup, so partial failure parks the exact remaining graph.
 type ownedMapNode[K ordered, V any] struct {
 	refs       atomic.Int64
 	allocation *ownedMapAllocation
@@ -111,11 +112,12 @@ type ownedMapNode[K ordered, V any] struct {
 }
 
 // OwnedMap exposes only immutable operations. The private mutable Map header
-// cannot escape; a new builder forks a fresh header without changing the
-// published header's isolation identity. Last Release is constant work.
+// is embedded by value and cannot escape; a new builder forks a fresh header
+// without changing the published header's isolation identity. Last Release is
+// constant work.
 type OwnedMap[K ordered, V any] struct {
 	refs       atomic.Int64
-	tree       *Map[K, V]
+	tree       Map[K, V]
 	allocation *ownedMapAllocation
 	lifetime   OwnedValueLifetime[V]
 	attempted  bool
@@ -123,10 +125,8 @@ type OwnedMap[K ordered, V any] struct {
 }
 
 type OwnedMapBuilder[K ordered, V any] struct {
-	tree       *Map[K, V]
-	allocation *ownedMapAllocation
-	lifetime   OwnedValueLifetime[V]
-	remaining  int
+	out       *OwnedMap[K, V]
+	remaining int
 }
 
 // NewOwnedMapBuilder reserves a conservative finite mutation cohort before any
@@ -141,7 +141,7 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 	}
 	count, degreeMax := 0, 63
 	if base != nil {
-		if base.refs.Load() <= 0 || base.tree == nil {
+		if base.refs.Load() <= 0 || !base.tree.sealed {
 			return nil, ErrOwnedMap
 		}
 		count = base.tree.count
@@ -163,15 +163,16 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 	a := &ownedMapAllocation{}
 	a.refund.Init(lease)
 	a.refs.Store(1) // the eventual immutable header, or private cancellation
-	var tree *Map[K, V]
+	out := &OwnedMap[K, V]{allocation: a, lifetime: lifetime}
 	if base == nil {
-		tree = NewMap[K, V](32)
+		out.tree.init(32)
+		out.tree.ownedNodes = true
 	} else {
-		tree = new(Map[K, V])
-		*tree = *base.tree
-		tree.isoid, tree.sealed = newIsoID(), false
+		out.tree = base.tree
+		out.tree.isoid, out.tree.sealed, out.tree.ownedNodes = newIsoID(), false, true
+		out.tree.allocationCharge = 0
 	}
-	return &OwnedMapBuilder[K, V]{tree: tree, allocation: a, lifetime: lifetime, remaining: mutations}, nil
+	return &OwnedMapBuilder[K, V]{out: out, remaining: mutations}, nil
 }
 
 // OwnedMapBuilderMaximumCharge bounds a sparse builder against any later
@@ -244,57 +245,62 @@ func ownedMapBuilderCharge[K ordered, V any](maxItems, degreeMax, mutations int)
 }
 
 func (b *OwnedMapBuilder[K, V]) Set(key K, value V) error {
-	if b == nil || b.tree == nil || b.remaining <= 0 {
+	if b == nil || b.out == nil || b.remaining <= 0 {
 		return ErrOwnedMap
 	}
 	b.remaining--
-	b.tree.Set(key, value)
+	b.out.tree.Set(key, value)
 	return nil
 }
 func (b *OwnedMapBuilder[K, V]) Delete(key K) error {
-	if b == nil || b.tree == nil || b.remaining <= 0 {
+	if b == nil || b.out == nil || b.remaining <= 0 {
 		return ErrOwnedMap
 	}
 	b.remaining--
-	b.tree.Delete(key)
+	b.out.tree.Delete(key)
 	return nil
 }
 func (b *OwnedMapBuilder[K, V]) Get(key K) (V, bool) {
-	if b == nil || b.tree == nil {
+	if b == nil || b.out == nil {
 		var zero V
 		return zero, false
 	}
-	return b.tree.Get(key)
+	return b.out.tree.Get(key)
 }
 
 // Seal is infallible after coarse admission. It visits newly copied nodes only;
 // each unchanged child is retained by one edge. No published header is mutated.
 func (b *OwnedMapBuilder[K, V]) Seal() *OwnedMap[K, V] {
-	if b == nil || b.tree == nil {
+	if b == nil || b.out == nil {
 		return nil
 	}
-	sealOwnedNode(b.tree.root, b.allocation, b.lifetime)
-	b.tree.sealed = true
-	m := &OwnedMap[K, V]{tree: b.tree, allocation: b.allocation, lifetime: b.lifetime}
+	m := b.out
+	sealOwnedNode(m.tree.root, m.allocation, m.lifetime)
+	m.tree.sealed = true
 	m.refs.Store(1)
-	b.tree, b.allocation, b.lifetime = nil, nil, nil
+	b.out = nil
 	return m
 }
 func sealOwnedNode[K ordered, V any](n *mapNode[K, V], a *ownedMapAllocation, lifetime OwnedValueLifetime[V]) {
 	if n == nil {
 		return
 	}
-	if n.ownership != nil {
+	if n.ownership != nil && n.ownership.allocation != nil {
 		// The opening owner is still retained during private preparation.
 		if n.ownership.refs.Add(1) <= 1 {
 			panic("cowbtree: retaining dead owned node")
 		}
 		return
 	}
-	o := &ownedMapNode[K, V]{allocation: a, lifetime: lifetime}
+	o := n.ownership
+	if o == nil {
+		o = &ownedMapNode[K, V]{}
+		n.ownership = o
+	}
+	o.allocation = a
+	o.lifetime = lifetime
 	o.refs.Store(1)
 	a.retain()
-	n.ownership = o
 	if n.children != nil {
 		for _, child := range *n.children {
 			sealOwnedNode(child, a, lifetime)
@@ -308,11 +314,14 @@ func sealOwnedNode[K ordered, V any](n *mapNode[K, V], a *ownedMapAllocation, li
 // Cancel owns no value/child edges: sealing has not happened. The borrowed
 // opening cut stays live until this private successor has been discarded.
 func (b *OwnedMapBuilder[K, V]) Cancel() (completion OwnedMapCompletion) {
-	if b == nil || b.tree == nil {
+	if b == nil || b.out == nil {
 		return completion
 	}
-	a := b.allocation
-	b.tree, b.allocation, b.lifetime = nil, nil, nil
+	a := b.out.allocation
+	b.out.tree = Map[K, V]{}
+	b.out.allocation = nil
+	b.out.lifetime = nil
+	b.out = nil
 	a.release(&completion)
 	return completion
 }
@@ -355,7 +364,8 @@ func (m *OwnedMap[K, V]) Finish() (completion OwnedMapCompletion, err error) {
 		return completion, err
 	}
 	a := m.allocation
-	m.tree, m.allocation, m.lifetime = nil, nil, nil
+	m.tree = Map[K, V]{}
+	m.allocation, m.lifetime = nil, nil
 	a.release(&completion)
 	return completion, nil
 }
@@ -364,7 +374,7 @@ func releaseOwnedNode[K ordered, V any](n *mapNode[K, V], completion *OwnedMapCo
 		return nil
 	}
 	o := n.ownership
-	if o == nil {
+	if o == nil || o.allocation == nil {
 		panic("cowbtree: cleanup of unsealed node")
 	}
 	refs := o.refs.Add(-1)
