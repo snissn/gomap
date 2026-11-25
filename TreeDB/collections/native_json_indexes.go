@@ -274,6 +274,127 @@ func nativeJSONSeekLive(read *nativeDomainRead, probe *NativeJSONRead, start, en
 
 var errNativeIndexVisitComplete = errors.New("collections: native index visit complete")
 
+type nativePhysicalSeekLiveKeyReader interface {
+	NativeSeekLiveKeyAtRoot(root uint64, start, end []byte) ([]byte, bool, error)
+}
+
+func (r *NativeJSONRead) visitUniqueIndexValueIDsWarm(
+	seekPhys nativePhysicalSeekLiveKeyReader,
+	domain *nativeDomainState,
+	valueType IndexValueType,
+	value any,
+	lease *memtable.COWExternalLease,
+	charge uint64,
+	cursorCharge uint64,
+	visit func([]byte) error,
+) error {
+	encoded, err := encodeIndexScalar(valueType, value)
+	if err != nil {
+		return err
+	}
+	if domain == nil || domain.refs.Load() <= 0 {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	end := prefixEnd(encoded)
+	curStart := encoded
+	var cursor []byte
+	for {
+		if r.capture == nil || r.failure != nil || r.closing {
+			return backenddb.ErrClosed
+		}
+		if end != nil && bytes.Compare(curStart, end) >= 0 {
+			return nil
+		}
+		memEntry, memFound := domain.seekMemoryGE(curStart, end)
+
+		var physKey []byte
+		var physFound bool
+		if domain.baseRoot != 0 && (!memFound || bytes.Compare(curStart, memEntry.Key) < 0) {
+			physEnd := end
+			if memFound {
+				physEnd = memEntry.Key
+			}
+			physKey, physFound, err = seekPhys.NativeSeekLiveKeyAtRoot(domain.baseRoot, curStart, physEnd)
+			if err != nil {
+				memEntry = node.LeafEntry{}
+				return err
+			}
+		}
+
+		if physFound {
+			memEntry = node.LeafEntry{}
+			if !bytes.HasPrefix(physKey, encoded) {
+				return nil
+			}
+			id, err := indexKeyDocumentID(valueType, physKey)
+			if err != nil {
+				return err
+			}
+			// The callback receives an independent caller-owned ID. End every
+			// borrowed domain/page alias before allowing reentrant Get or Close.
+			id = bytes.Clone(id)
+			physKey = nil
+			err = func() error {
+				r.mu.Unlock()
+				defer r.mu.Lock()
+				return visit(id)
+			}()
+			id = nil
+			return err
+		}
+
+		if !memFound {
+			return nil
+		}
+
+		if !bytes.HasPrefix(memEntry.Key, encoded) {
+			memEntry = node.LeafEntry{}
+			return nil
+		}
+
+		if memEntry.Flags&node.FlagTombstone != 0 {
+			if cursor == nil {
+				if cursorCharge > ^uint64(0)-charge {
+					memEntry = node.LeafEntry{}
+					return memtable.ErrCOWCapacity
+				}
+				if err := lease.Resize(charge + cursorCharge); err != nil {
+					memEntry = node.LeafEntry{}
+					return err
+				}
+				charge += cursorCharge
+				cursor = make([]byte, page.PageSize+1)
+			}
+			if len(memEntry.Key) >= len(cursor) {
+				memEntry = node.LeafEntry{}
+				return memtable.ErrCOWCapacity
+			}
+			n := copy(cursor, memEntry.Key)
+			cursor[n] = 0
+			curStart = cursor[:n+1]
+			memEntry = node.LeafEntry{}
+			continue
+		}
+
+		id, err := indexKeyDocumentID(valueType, memEntry.Key)
+		if err != nil {
+			memEntry = node.LeafEntry{}
+			return err
+		}
+		// The callback receives an independent caller-owned ID. End every
+		// borrowed domain/page alias before allowing reentrant Get or Close.
+		id = bytes.Clone(id)
+		memEntry = node.LeafEntry{}
+		err = func() error {
+			r.mu.Unlock()
+			defer r.mu.Lock()
+			return visit(id)
+		}()
+		id = nil
+		return err
+	}
+}
+
 func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([]byte) error) (resultErr error) {
 	if r == nil {
 		return backenddb.ErrClosed
@@ -318,6 +439,19 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 	// keys. Compound unique indexes encode only a leading scalar prefix here,
 	// so multiple documents may share that prefix and must all be visited.
 	unique := index.Unique && len(index.Components) <= 1 && !orderedBSONIndexRequiresCompoundRangeAPI(index)
+	domain, hasDomain := r.collection.domains.Get("index/" + name)
+	cursorCharge := memtable.COWAllocationCharge(page.PageSize + 1)
+	if unique && hasDomain && domain != nil {
+		if seekPhys, ok := r.capture.(nativePhysicalSeekLiveKeyReader); ok {
+			lease, err := r.capture.NativeAllocator().AdmitNativeBytes(queryCharge)
+			if err != nil {
+				return err
+			}
+			err = r.visitUniqueIndexValueIDsWarm(seekPhys, domain, index.ValueType, value, lease, queryCharge, cursorCharge, visit)
+			lease.Close()
+			return err
+		}
+	}
 	charge := queryCharge
 	addCharge := func(n uint64) bool {
 		if n > ^uint64(0)-charge {
@@ -326,7 +460,6 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 		charge += n
 		return true
 	}
-	cursorCharge := memtable.COWAllocationCharge(page.PageSize + 1)
 	if !unique {
 		if !addCharge(cursorCharge) {
 			return memtable.ErrCOWCapacity
@@ -336,7 +469,6 @@ func (r *NativeJSONRead) visitIndexValueIDs(name string, value any, visit func([
 		!addCharge(memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))) {
 		return memtable.ErrCOWCapacity
 	}
-	domain, hasDomain := r.collection.domains.Get("index/" + name)
 	var preAdmitted uint64
 	if hasDomain && domain != nil && domain.baseRoot != 0 {
 		projCharge := memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())

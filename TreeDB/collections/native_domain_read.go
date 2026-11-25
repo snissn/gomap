@@ -46,6 +46,31 @@ func nativeDomainRecordEntry(row memtable.COWRecord) node.LeafEntry {
 	return node.LeafEntry{Key: nativeBorrowedStringBytes(row.Key), Value: nativeBorrowedStringBytes(row.Value), ValuePtr: row.Ptr, Flags: row.Flags, Revision: row.Revision}
 }
 
+// seekMemoryGE resolves the smallest key in [start, end) across newest-first
+// in-memory layers (pending, then captured newest-to-oldest). Equal-key
+// candidates preserve the newest layer's entry, including tombstones.
+// The returned entry borrows immutable generation-owned memory.
+func (d *nativeDomainState) seekMemoryGE(start, end []byte) (node.LeafEntry, bool) {
+	if d == nil || (start != nil && end != nil && bytes.Compare(start, end) >= 0) {
+		return node.LeafEntry{}, false
+	}
+	var best node.LeafEntry
+	found := false
+	if d.pending != nil {
+		if row, ok := d.pending.SeekGE(start, end); ok {
+			best, found = nativeDomainRecordEntry(row), true
+		}
+	}
+	for source := d.captured; source != nil; source = source.older {
+		if row, ok := source.source.root.SeekGE(start, end); ok {
+			if !found || bytes.Compare(nativeBorrowedStringBytes(row.Key), best.Key) < 0 {
+				best, found = nativeDomainRecordEntry(row), true
+			}
+		}
+	}
+	return best, found
+}
+
 // getEntry preserves tombstones and pointer metadata. Only the enclosing
 // captured merge suppresses deletions and resolves values using its exact
 // source resources. An absent newer source never suppresses an older source.
