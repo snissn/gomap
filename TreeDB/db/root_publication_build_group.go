@@ -574,23 +574,31 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 				}
 			}
 		}
-		if !allEndCovered {
-			// One or more end leaf-log segments were not accounted for by
-			// startLeafSegments ∪ observedLeafSegmentIDs ∪ createdLeafSegments.
-			// Fail closed to the exact candidate scanner to capture every segment.
-			group.vlogRefDelta.requiresCandidateProjection = true
-			group.vlogRefDelta.allowEmptyDependencyReuse = false
-		} else {
+		var allIDs []uint32
+		if allEndCovered {
 			for _, seg := range endLeafSegments {
 				if seg.FileID != 0 {
 					knownLeafSegmentIDs[seg.FileID] = struct{}{}
 				}
 			}
 			if len(knownLeafSegmentIDs) > 0 {
-				allIDs := make([]uint32, 0, len(knownLeafSegmentIDs))
+				allIDs = make([]uint32, 0, len(knownLeafSegmentIDs))
 				for fileID := range knownLeafSegmentIDs {
 					allIDs = append(allIDs, fileID)
 				}
+			}
+			allEndCovered = db.outerLeafReuseDependenciesActive(allIDs)
+		}
+		if !allEndCovered {
+			// One or more end leaf-log segments were not accounted for by
+			// startLeafSegments ∪ observedLeafSegmentIDs ∪ createdLeafSegments,
+			// or a carried-forward / candidate outer-leaf segment was retired
+			// or unregistered by GC. Fail closed to the exact candidate scanner
+			// to capture only live reachable segments.
+			group.vlogRefDelta.requiresCandidateProjection = true
+			group.vlogRefDelta.allowEmptyDependencyReuse = false
+		} else {
+			if len(allIDs) > 0 {
 				addOuterLeafSegmentIDsToValueLogRefDelta(group.vlogRefDelta, allIDs)
 			}
 			group.outerLeafSegmentsAdded = true

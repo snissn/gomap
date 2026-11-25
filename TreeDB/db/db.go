@@ -5902,3 +5902,105 @@ func (db *DB) finishBuildGroupLeafSegmentObservation() []uint32 {
 	db.leafSegmentObserverMu.Unlock()
 	return observed
 }
+
+// outerLeafReuseDependenciesActive verifies that every raw outer-leaf file
+// carried forward from the predecessor visible closure and every candidate
+// outer-leaf file produced by the current build group is still registered in
+// valueLogManager and active (or pending publication) in leafGenerationManifest.
+// If LeafGenerationGC retired or deleted an unreachable raw outer-leaf file
+// that was still conservatively retained in visibleResources, this returns
+// false so finalizeLocked fails closed to the exact candidate scanner and
+// prunes the dead file from the successor closure.
+func (db *DB) outerLeafReuseDependenciesActive(candidateFileIDs []uint32) bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	var baseLeafIDs []uint32
+	if runtime := db.rootPublication; runtime != nil {
+		runtime.mu.Lock()
+		if runtime.poison != nil {
+			runtime.mu.Unlock()
+			return false
+		}
+		kinds := [...]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafLog}
+		walkErr := runtime.visibleResources.WalkPhysicalResourceIdentities(kinds[:], func(_ rootpublication.ResourceKind, generation uint64, _ rootpublication.StableIdentity, _ [32]byte) error {
+			if generation == 0 || generation > uint64(^uint32(0)) {
+				return rootpublication.ErrResourceConflict
+			}
+			baseLeafIDs = append(baseLeafIDs, uint32(generation))
+			return nil
+		})
+		runtime.mu.Unlock()
+		if walkErr != nil {
+			return false
+		}
+	} else if base := db.durableRoot.slotResources[db.durableRoot.slot]; base != nil {
+		kinds := [...]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafLog}
+		walkErr := base.WalkPhysicalResourceIdentities(kinds[:], func(_ rootpublication.ResourceKind, generation uint64, _ rootpublication.StableIdentity, _ [32]byte) error {
+			if generation == 0 || generation > uint64(^uint32(0)) {
+				return rootpublication.ErrResourceConflict
+			}
+			baseLeafIDs = append(baseLeafIDs, uint32(generation))
+			return nil
+		})
+		if walkErr != nil {
+			return false
+		}
+	}
+
+	for _, fileID := range baseLeafIDs {
+		if !db.valueLogManager.HasSegment(fileID) {
+			return false
+		}
+	}
+	for _, fileID := range candidateFileIDs {
+		if fileID == 0 {
+			continue
+		}
+		if !db.valueLogManager.HasSegment(fileID) {
+			return false
+		}
+	}
+
+	var needPendingCheck []uint32
+	db.mu.RLock()
+	manifest := db.leafGenerationManifest
+	if manifest != nil {
+		for _, fileID := range baseLeafIDs {
+			rawFileID, ok := rawLeafGenerationFileID(fileID)
+			if !ok {
+				db.mu.RUnlock()
+				return false
+			}
+			if !leafManifestContainsActiveFile(manifest, rawFileID) {
+				needPendingCheck = append(needPendingCheck, rawFileID)
+			}
+		}
+		for _, fileID := range candidateFileIDs {
+			if fileID == 0 {
+				continue
+			}
+			rawFileID, ok := rawLeafGenerationFileID(fileID)
+			if !ok {
+				db.mu.RUnlock()
+				return false
+			}
+			if !leafManifestContainsActiveFile(manifest, rawFileID) {
+				needPendingCheck = append(needPendingCheck, rawFileID)
+			}
+		}
+	}
+	db.mu.RUnlock()
+
+	if len(needPendingCheck) > 0 {
+		db.leafGenerationPendingMu.Lock()
+		for _, rawFileID := range needPendingCheck {
+			if _, ok := db.leafGenerationPendingSet[rawFileID]; !ok {
+				db.leafGenerationPendingMu.Unlock()
+				return false
+			}
+		}
+		db.leafGenerationPendingMu.Unlock()
+	}
+	return true
+}

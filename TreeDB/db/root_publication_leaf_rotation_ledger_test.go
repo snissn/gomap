@@ -793,3 +793,189 @@ func TestRootPublicationLeafRotationLedgerPublishAndEnsurePathsRecordLeafLane(t 
 		t.Fatalf("registerLeafPageLogSegmentsForPublish observed=%v want [%d]", observed, log.fileID)
 	}
 }
+
+func TestRootPublicationLeafRotationLedgerAfterUnreachableGenerationGC(t *testing.T) {
+	dir := t.TempDir()
+	d, log := openNativeBuildProjectionTestDB(t, dir)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			closeVacuumTestLeafPageLog(t, d, log)
+			_ = d.Close()
+		}
+	})
+
+	descKey := []byte(collectionRootDescriptorPrefix + "gc-col")
+
+	// Round 0: seed root in seg1 (seq 1).
+	seg1 := log.fileID
+	seedGroup, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d0 := batch.New(nil, 1024)
+	_ = d0.Set([]byte("k/1"), bytes.Repeat([]byte("0"), 128))
+	root, err := seedGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{Delta: d0})
+	_ = d0.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys0 := batch.New(nil, 1024)
+	_ = sys0.Set(descKey, encodeMaintenanceRootID(root))
+	if err := seedGroup.BuildNativeSystemDelta(sys0); err != nil {
+		_ = sys0.Close()
+		t.Fatal(err)
+	}
+	_ = sys0.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, seedGroup)
+
+	// Rounds 1..4: rotate to a new segment on each commit and overwrite the sole
+	// key so earlier segments (including seg2) become unreachable from both live
+	// and recoverable durable slots while remaining in the conservative
+	// visibleResources closure via outerLeafDependencyReuse.
+	var seg2 uint32
+	for seq := uint32(2); seq <= 5; seq++ {
+		group, err := d.BeginRootPublicationBuildGroup()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, newID, _ := rotateLedgerTestLeafLogReplacing(t, d, log, seq)
+		if seq == 2 {
+			seg2 = newID
+		}
+		delta := batch.New(nil, 1024)
+		_ = delta.Set([]byte("k/1"), bytes.Repeat([]byte{byte('0' + seq)}, 128))
+		nextRoot, err := group.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: root, Delta: delta})
+		_ = delta.Close()
+		if err != nil {
+			_ = group.Close()
+			t.Fatal(err)
+		}
+		sysDelta := batch.New(nil, 1024)
+		_ = sysDelta.Set(descKey, encodeMaintenanceRootID(nextRoot))
+		if err := group.BuildNativeSystemDelta(sysDelta); err != nil {
+			_ = sysDelta.Close()
+			_ = group.Close()
+			t.Fatal(err)
+		}
+		_ = sysDelta.Close()
+		finalizeNativeBuildGroupEmptyCarrier(t, d, group)
+		root = nextRoot
+	}
+
+	// Confirm seg1 and seg2 were conservatively retained in visibleResources.
+	beforeGC := visibleOuterLeafFileIDs(t, d)
+	if _, ok := beforeGC[seg2]; !ok {
+		t.Fatalf("expected seg2=%d in visible closure before GC: %v", seg2, beforeGC)
+	}
+
+	// Run LeafGenerationGC to retire/delete unreachable seg1/seg2.
+	if _, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC #1: %v", err)
+	}
+	if _, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC #2: %v", err)
+	}
+	if d.valueLogManager.HasSegment(seg2) {
+		t.Fatalf("expected LeafGenerationGC to unregister unreachable seg2=%d (seg1=%d registered=%v)", seg2, seg1, d.valueLogManager.HasSegment(seg1))
+	}
+
+	var scans atomic.Int64
+	restore := d.SetScanCandidateExternalReferencesHookForTesting(func() {
+		scans.Add(1)
+	})
+	defer restore()
+
+	// Next commit after GC: must fail closed to the exact candidate scanner
+	// instead of trying to recapture unregistered seg2, pruning seg2 cleanly.
+	postGCGroup, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, seg6, _ := rotateLedgerTestLeafLogReplacing(t, d, log, 6)
+	d6 := batch.New(nil, 1024)
+	_ = d6.Set([]byte("k/1"), bytes.Repeat([]byte("6"), 128))
+	root6, err := postGCGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: root, Delta: d6})
+	_ = d6.Close()
+	if err != nil {
+		_ = postGCGroup.Close()
+		t.Fatal(err)
+	}
+	sys6 := batch.New(nil, 1024)
+	_ = sys6.Set(descKey, encodeMaintenanceRootID(root6))
+	if err := postGCGroup.BuildNativeSystemDelta(sys6); err != nil {
+		_ = sys6.Close()
+		_ = postGCGroup.Close()
+		t.Fatal(err)
+	}
+	_ = sys6.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, postGCGroup)
+
+	if got := scans.Load(); got == 0 {
+		t.Fatal("post-GC publication did not fail closed to prune unregistered segment from visible closure")
+	}
+	afterPostGC := visibleOuterLeafFileIDs(t, d)
+	if _, stale := afterPostGC[seg2]; stale {
+		t.Fatalf("unregistered seg2=%d remained in visible closure after post-GC scan: %v", seg2, afterPostGC)
+	}
+	if _, ok := afterPostGC[seg6]; !ok {
+		t.Fatalf("new seg6=%d missing from visible closure: %v", seg6, afterPostGC)
+	}
+	assertCandidateTrackerMatchesFullScan(t, d)
+
+	// Subsequent registered rotation must return to 0 candidate scans.
+	scans.Store(0)
+	steadyGroup, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, seg7, _ := rotateLedgerTestLeafLogReplacing(t, d, log, 7)
+	d7 := batch.New(nil, 1024)
+	_ = d7.Set([]byte("k/1"), bytes.Repeat([]byte("7"), 128))
+	root7, err := steadyGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: root6, Delta: d7})
+	_ = d7.Close()
+	if err != nil {
+		_ = steadyGroup.Close()
+		t.Fatal(err)
+	}
+	sys7 := batch.New(nil, 1024)
+	_ = sys7.Set(descKey, encodeMaintenanceRootID(root7))
+	if err := steadyGroup.BuildNativeSystemDelta(sys7); err != nil {
+		_ = sys7.Close()
+		_ = steadyGroup.Close()
+		t.Fatal(err)
+	}
+	_ = sys7.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, steadyGroup)
+
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("steady-state rotation after post-GC prune triggered %d scans, want 0", got)
+	}
+	if _, ok := visibleOuterLeafFileIDs(t, d)[seg7]; !ok {
+		t.Fatalf("new seg7=%d missing from visible closure", seg7)
+	}
+
+	closeVacuumTestLeafPageLog(t, d, log)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+
+	reopened, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		DisableBackgroundPrune:     true,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	snap := reopened.AcquireSnapshot()
+	defer snap.Close()
+	tr := tree.New(snap.idx.pager, &snap.reader, root7)
+	got, err := tr.Get([]byte("k/1"))
+	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte("7"), 128)) {
+		t.Fatalf("reopened key mismatch: got=%x err=%v", got, err)
+	}
+}
