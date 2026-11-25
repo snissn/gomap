@@ -79,7 +79,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	// An explicit postings cap is one request-wide guardrail. Adaptive retries
 	// would restart lower-level accounting, so capped text requests execute once
 	// with the declared source budgets.
-	if plan.text != nil && plan.text.MaxPostingsScanned > 0 {
+	if plan.text != nil && (plan.text.MaxPostingsScanned > 0 || plan.text.Phrase != nil) {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
 	}
 	// Exact top-k budget proofs do not prove enough distinct chunk parents for
@@ -93,7 +93,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	if !ok {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, fallbackReason, fallbackReason)
 	}
-	if plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+	if plan.scalarFilter != nil && (plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter || plan.scalarFilterStrategy == HybridScalarFilterStrategyIndexStatePostfilter) {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonPostfilterUnsupported, HybridCandidateBudgetStopReasonPostfilterUnsupported)
 	}
 	if defaultMode && (hybridCandidateBudgetSourceCount(plan) > 1 || plan.scalarFilter != nil) {

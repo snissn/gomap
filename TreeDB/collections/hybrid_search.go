@@ -66,6 +66,11 @@ const (
 	HybridScalarFilterStrategyTextFirst   HybridScalarFilterStrategy = "text_first"
 	HybridScalarFilterStrategyVectorFirst HybridScalarFilterStrategy = "vector_first"
 	HybridScalarFilterStrategyUnionFusion HybridScalarFilterStrategy = "union_fusion"
+	// HybridScalarFilterStrategyIndexStatePostfilter evaluates declared scalar
+	// filters against persisted per-document index state only on bounded lexical
+	// candidates, supporting arbitrarily broad filters with zero primary
+	// document scans and without materializing a bounded scalar allow-set.
+	HybridScalarFilterStrategyIndexStatePostfilter HybridScalarFilterStrategy = "index_state_postfilter"
 )
 
 // HybridConsistencyMode identifies how text, vector, scalar, and final document
@@ -125,12 +130,13 @@ const (
 // contract fixes only the candidate budget and source naming consumed by hybrid
 // planning and fusion.
 type HybridTextQuery struct {
-	IndexName          string              `json:"index_name"`
-	Query              string              `json:"query"`
-	QueryMode          TextSearchQueryMode `json:"query_mode,omitempty"`
-	Operator           TextSearchOperator  `json:"operator,omitempty"`
-	CandidateLimit     int                 `json:"candidate_limit,omitempty"`
-	MaxPostingsScanned int                 `json:"max_postings_scanned,omitempty"`
+	IndexName          string                 `json:"index_name"`
+	Query              string                 `json:"query"`
+	Phrase             *TextSearchPhraseQuery `json:"phrase,omitempty"`
+	QueryMode          TextSearchQueryMode    `json:"query_mode,omitempty"`
+	Operator           TextSearchOperator     `json:"operator,omitempty"`
+	CandidateLimit     int                    `json:"candidate_limit,omitempty"`
+	MaxPostingsScanned int                    `json:"max_postings_scanned,omitempty"`
 	// IncludeTextMatches opts into compact field/term attribution on text-source
 	// candidates. The default hybrid candidate path is score-only so candidate
 	// generation does not allocate match details for non-final candidates.

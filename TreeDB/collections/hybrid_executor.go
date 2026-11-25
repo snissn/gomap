@@ -186,27 +186,39 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var allowSet hybridScalarIDs
 	var scalarStats HybridSearchStats
-	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
-	if nativeVectorOnlyShape {
-		// Selected typed serving owns vector-only scalar preparation.
-		plan.ownerBoundVectorScalar = plan.readView != nil &&
-			!plan.nativeColumnGraph &&
-			plan.scalarFilter != nil &&
-			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
-	}
-	if !plan.ownerBoundVectorScalar {
-		if plan.readView != nil {
-			allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
-		} else {
-			allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
-		}
-		hybridMergeStats(&response.Stats, scalarStats)
+	var compiledIndexState []compiledIndexStateLeaf
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyIndexStatePostfilter {
+		compiledIndexState, err = c.compileHybridIndexStateFilterForPlan(plan)
 		if err != nil {
-			reason := HybridFailClosedReasonScalarFilterUnbounded
-			if errors.Is(err, ErrHybridSearchStaleIndex) {
-				reason = HybridFailClosedReasonSnapshotMismatch
+			reason := HybridFailClosedReasonUnsupported
+			if errors.Is(err, ErrHybridSearchIndexUnavailable) {
+				reason = HybridFailClosedReasonScalarFilterUnbounded
 			}
 			return hybridSearchFailClosed(response, reason, err)
+		}
+	} else {
+		nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
+		if nativeVectorOnlyShape {
+			// Selected typed serving owns vector-only scalar preparation.
+			plan.ownerBoundVectorScalar = plan.readView != nil &&
+				!plan.nativeColumnGraph &&
+				plan.scalarFilter != nil &&
+				plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
+		}
+		if !plan.ownerBoundVectorScalar {
+			if plan.readView != nil {
+				allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
+			} else {
+				allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
+			}
+			hybridMergeStats(&response.Stats, scalarStats)
+			if err != nil {
+				reason := HybridFailClosedReasonScalarFilterUnbounded
+				if errors.Is(err, ErrHybridSearchStaleIndex) {
+					reason = HybridFailClosedReasonSnapshotMismatch
+				}
+				return hybridSearchFailClosed(response, reason, err)
+			}
 		}
 	}
 	if err := hybridSearchCheckExecutionSnapshot(c, plan, baseState); err != nil {
@@ -240,7 +252,20 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if opts.Debug.IncludeCandidates {
 		response.Candidates = cloneHybridSearchCandidates(fusionCandidates)
 	}
-	if allowSet.present() && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyIndexStatePostfilter {
+		filterTopK := plan.topK
+		if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
+			filterTopK = len(results)
+		}
+		results, err = c.filterHybridResultsByIndexState(plan, compiledIndexState, results, filterTopK, baseState, &response.Stats)
+		if err != nil {
+			reason := HybridFailClosedReasonScalarFilterUnbounded
+			if errors.Is(err, ErrHybridSearchStaleIndex) {
+				reason = HybridFailClosedReasonSnapshotMismatch
+			}
+			return hybridSearchFailClosed(response, reason, err)
+		}
+	} else if allowSet.present() && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
 		filterTopK := plan.topK
 		if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
 			filterTopK = len(results)
@@ -411,6 +436,14 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 	if err != nil {
 		return plan, err
 	}
+	if strategy == HybridScalarFilterStrategyIndexStatePostfilter {
+		if plan.text == nil || plan.vector != nil {
+			return plan, fmt.Errorf("%w: index_state_postfilter requires a text-only hybrid query", ErrHybridSearchUnsupported)
+		}
+		if opts.ScalarFilter == nil {
+			return plan, fmt.Errorf("%w: index_state_postfilter requires a scalar filter", ErrHybridSearchUnsupported)
+		}
+	}
 	plan.scalarFilterStrategy = strategy
 	plan.public.ScalarFilterStrategy = strategy
 
@@ -473,7 +506,8 @@ func normalizeHybridScalarFilterStrategy(strategy HybridScalarFilterStrategy, ha
 			HybridScalarFilterStrategyPostfilter,
 			HybridScalarFilterStrategyTextFirst,
 			HybridScalarFilterStrategyVectorFirst,
-			HybridScalarFilterStrategyUnionFusion:
+			HybridScalarFilterStrategyUnionFusion,
+			HybridScalarFilterStrategyIndexStatePostfilter:
 			return strategy, nil
 		default:
 			return "", fmt.Errorf("%w: hybrid scalar filter strategy %q", ErrHybridSearchUnsupported, strategy)
@@ -1218,7 +1252,7 @@ func hybridParentCollapseBinding(topK, maxChunksPerParent int) bool {
 
 func hybridFusePlannedCandidates(candidates []HybridSearchCandidate, plan hybridSearchExecutionPlan) ([]HybridSearchResult, HybridSearchStats, error) {
 	topK := plan.topK
-	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) || (plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter) {
+	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) || (plan.scalarFilter != nil && (plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter || plan.scalarFilterStrategy == HybridScalarFilterStrategyIndexStatePostfilter)) {
 		topK = len(candidates)
 	}
 	if plan.nativeScratch != nil {
