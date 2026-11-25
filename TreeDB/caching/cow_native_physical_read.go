@@ -18,7 +18,15 @@ func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDiction
 	return b.nativeEntryAtRootInto(cache, provider, root, key, copyValue, nil, false)
 }
 
+func (b *cowBackendBasis) nativeEntryAtRootAdmitted(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	return b.nativeEntryAtRootWithAdmit(cache, provider, root, key, true, nil, false, admitOutput)
+}
+
 func (b *cowBackendBasis) nativeEntryAtRootInto(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool) (node.LeafEntry, error) {
+	return b.nativeEntryAtRootWithAdmit(cache, provider, root, key, copyValue, dst, useDst, nil)
+}
+
+func (b *cowBackendBasis) nativeEntryAtRootWithAdmit(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
 	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
 	if mu, owner, ok := b.tryLockReadLane(cowReadStripe(key)); ok {
@@ -28,7 +36,7 @@ func (b *cowBackendBasis) nativeEntryAtRootInto(cache *cowCache, provider cowDic
 		if err != nil {
 			return node.LeafEntry{}, err
 		}
-		entry, err := b.readNativeEntryWithWorkspace(cache, w, provider, root, key, copyValue, dst, useDst)
+		entry, err := b.readNativeEntryWithWorkspaceAdmitted(cache, w, provider, root, key, copyValue, dst, useDst, admitOutput)
 		if err != nil && fresh && *owner == w && w.point == nil && len(w.codecs) == 0 && w.allocations == nil {
 			*owner = nil
 			w.close()
@@ -43,10 +51,14 @@ func (b *cowBackendBasis) nativeEntryAtRootInto(cache *cowCache, provider cowDic
 	}
 	w.basis = b.snapshot
 	defer w.close()
-	return b.readNativeEntryWithWorkspace(cache, w, provider, root, key, copyValue, dst, useDst)
+	return b.readNativeEntryWithWorkspaceAdmitted(cache, w, provider, root, key, copyValue, dst, useDst, admitOutput)
 }
 
 func (b *cowBackendBasis) readNativeEntryWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool) (node.LeafEntry, error) {
+	return b.readNativeEntryWithWorkspaceAdmitted(cache, w, provider, root, key, copyValue, dst, useDst, nil)
+}
+
+func (b *cowBackendBasis) readNativeEntryWithWorkspaceAdmitted(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
 	point, err := w.pointScratch()
 	if err != nil {
 		return node.LeafEntry{}, err
@@ -77,6 +89,11 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspace(cache *cowCache, w *cowRe
 		if useDst {
 			entry.Value = append(dst[:0], value...)
 		} else {
+			if admitOutput != nil {
+				if err := admitOutput(memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
+					return node.LeafEntry{}, err
+				}
+			}
 			entry.Value = make([]byte, len(value))
 			copy(entry.Value, value)
 		}
@@ -89,6 +106,13 @@ func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyV
 		return node.LeafEntry{}, backenddb.ErrClosed
 	}
 	return c.cut.basis.nativeEntryAtRoot(c.cache, c.dictionary, root, key, copyValue)
+}
+
+func (c *NativeSemanticCapture) NativeEntryAtRootAdmitted(root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	if c == nil || c.cut == nil || c.cache == nil {
+		return node.LeafEntry{}, backenddb.ErrClosed
+	}
+	return c.cut.basis.nativeEntryAtRootAdmitted(c.cache, c.dictionary, root, key, admitOutput)
 }
 
 func (c *NativeSemanticCapture) NativeEntryAtRootInto(root uint64, key, dst []byte) (node.LeafEntry, error) {
@@ -107,6 +131,17 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 	}
 	provider, _ := tx.db.dictStore.(cowDictionaryReadProvider)
 	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, provider, root, key, copyValue)
+}
+
+func (tx *nativeConditionalTxn) NativeEntryAtRootAdmitted(root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error) {
+	if tx == nil || tx.ConditionalTxn == nil {
+		return node.LeafEntry{}, backenddb.ErrConditionalTxnClosed
+	}
+	if err := tx.ensureOpen(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	provider, _ := tx.db.dictStore.(cowDictionaryReadProvider)
+	return tx.snap.cowCut.basis.nativeEntryAtRootAdmitted(tx.db.cow, provider, root, key, admitOutput)
 }
 
 // nativeLeafPage uses lane 0 (basis.readMu / basis.reader) when uncontended to

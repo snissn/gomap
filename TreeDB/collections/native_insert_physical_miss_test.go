@@ -237,39 +237,64 @@ func TestNativeInsertPhysicalExistingFallback(t *testing.T) {
 }
 
 func TestNativeInsertPhysicalUnchangedUpdateDelete(t *testing.T) {
-	for _, operation := range []string{"update", "delete"} {
-		t.Run(operation, func(t *testing.T) {
-			f := newInsertPhysicalFixture(t, 1, true)
-			tx := f.begin(t)
-			requireInsertPhysicalBasis(t, tx, []byte("seed"))
-			if operation == "update" {
-				if _, err := tx.UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("seed"), Update: func(current []byte) ([]byte, bool, error) {
-					if !bytes.Equal(current, []byte(`{"value":"original"}`)) {
-						t.Fatalf("update opening=%s", current)
+	for _, tc := range []struct {
+		name      string
+		threshold int
+		fallback  bool
+	}{
+		{name: "warm_pointer", threshold: 1, fallback: false},
+		{name: "warm_inline", threshold: 1 << 20, fallback: false},
+		{name: "fallback_pointer", threshold: 1, fallback: true},
+		{name: "fallback_inline", threshold: 1 << 20, fallback: true},
+	} {
+		for _, operation := range []string{"update", "delete"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				f := newInsertPhysicalFixture(t, tc.threshold, true)
+				tx := f.begin(t)
+				requireInsertPhysicalBasis(t, tx, []byte("seed"))
+				if tc.fallback {
+					tx.bindings[0].probe.capture = insertNoPointCapture{tx.bindings[0].probe.capture}
+					if _, ok := tx.bindings[0].probe.capture.(nativePhysicalAdmittedEntryReader); ok {
+						t.Fatal("fallback capture unexpectedly retained admitted physical reader")
 					}
-					return []byte(`{"value":"updated"}`), true, nil
-				}}}); err != nil {
+				} else {
+					if _, ok := tx.bindings[0].probe.capture.(nativePhysicalAdmittedEntryReader); !ok {
+						t.Fatal("real capture lacks nativePhysicalAdmittedEntryReader")
+					}
+				}
+				if operation == "update" {
+					if _, err := tx.UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("seed"), Update: func(current []byte) ([]byte, bool, error) {
+						if !bytes.Equal(current, []byte(`{"value":"original"}`)) {
+							t.Fatalf("update opening=%s", current)
+						}
+						return []byte(`{"value":"updated"}`), true, nil
+					}}}); err != nil {
+						t.Fatal(err)
+					}
+				} else if count, err := tx.DeleteBatch([][]byte{[]byte("seed")}); err != nil || count != 1 {
+					t.Fatalf("delete count=%d err=%v", count, err)
+				}
+				if tc.fallback {
+					if tx.bindings[0].probe.scratch == nil {
+						t.Fatal("fallback UPDATE/DELETE skipped private traversal scratch")
+					}
+				} else if tx.bindings[0].probe.scratch != nil {
+					t.Fatal("warm-lane UPDATE/DELETE unexpectedly allocated private traversal scratch")
+				}
+				if err := tx.Commit(); err != nil {
 					t.Fatal(err)
 				}
-			} else if count, err := tx.DeleteBatch([][]byte{[]byte("seed")}); err != nil || count != 1 {
-				t.Fatalf("delete count=%d err=%v", count, err)
-			}
-			if tx.bindings[0].probe.scratch == nil {
-				t.Fatal("UPDATE/DELETE changed original full-value path")
-			}
-			if err := tx.Commit(); err != nil {
-				t.Fatal(err)
-			}
-			if err := tx.Close(); err != nil {
-				t.Fatal(err)
-			}
-			f.reopen(t)
-			if operation == "update" {
-				requireInsertPhysicalValue(t, f.c, []byte("seed"), []byte(`{"value":"updated"}`))
-			} else if got, err := f.c.Get([]byte("seed")); err != nil || got != nil {
-				t.Fatalf("deleted=%s err=%v", got, err)
-			}
-		})
+				if err := tx.Close(); err != nil {
+					t.Fatal(err)
+				}
+				f.reopen(t)
+				if operation == "update" {
+					requireInsertPhysicalValue(t, f.c, []byte("seed"), []byte(`{"value":"updated"}`))
+				} else if got, err := f.c.Get([]byte("seed")); err != nil || got != nil {
+					t.Fatalf("deleted=%s err=%v", got, err)
+				}
+			})
+		}
 	}
 }
 
