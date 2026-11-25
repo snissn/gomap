@@ -262,6 +262,8 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			reason := HybridFailClosedReasonScalarFilterUnbounded
 			if errors.Is(err, ErrHybridSearchStaleIndex) {
 				reason = HybridFailClosedReasonSnapshotMismatch
+			} else if errors.Is(err, memtable.ErrCOWCapacity) {
+				reason = HybridFailClosedReasonUnsupported
 			}
 			return hybridSearchFailClosed(response, reason, err)
 		}

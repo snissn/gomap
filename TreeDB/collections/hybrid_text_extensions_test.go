@@ -1,8 +1,14 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -263,5 +269,106 @@ func BenchmarkSearchHybridIndexStatePostfilter(b *testing.B) {
 		if err != nil || len(resp.Results) != 10 || resp.Stats.DocumentsFetched != 0 || resp.Stats.FullDocumentScanFallbacks != 0 {
 			b.Fatalf("resp=%+v err=%v", resp, err)
 		}
+	}
+}
+
+func TestNativeHybridIndexStatePostfilterAdmitsCompiledBounds(t *testing.T) {
+	dir := t.TempDir()
+	owner, manager, c := openNativeTextPublic(t, dir, treedb.ProfileCommandWALRelaxed, true, TextIndexVersionV2)
+	defer func() {
+		_ = manager.Close()
+		_ = owner.Close()
+	}()
+	if _, err := c.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"tenant":"a","content":"alpha beta","embedding":[1,0]}`),
+			[]byte(`{"tenant":"b","content":"alpha beta","embedding":[0,1]}`),
+			[]byte(`{"tenant":"c","content":"gamma","embedding":[1,0]}`),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify normal index_state_postfilter works on native COW collections for
+	// both equality and range filters without primary document scans.
+	eqOpts := HybridSearchOptions{
+		TopK: 4,
+		Text: &HybridTextQuery{
+			IndexName:      "content",
+			Query:          "alpha",
+			CandidateLimit: 8,
+		},
+		ScalarFilter:         &HybridScalarFilter{IndexName: "tenant", Value: "a"},
+		ScalarFilterStrategy: HybridScalarFilterStrategyIndexStatePostfilter,
+	}
+	res, err := c.SearchHybrid(eqOpts)
+	if err != nil {
+		t.Fatalf("native index_state_postfilter equality failed: %v", err)
+	}
+	if len(res.Results) != 1 || string(res.Results[0].ID) != "a" {
+		t.Fatalf("unexpected equality results: %+v", res.Results)
+	}
+	if res.Stats.FullDocumentScanFallbacks != 0 || res.Stats.DocumentsFetched != 0 {
+		t.Fatalf("expected zero doc scans/fetches: %+v", res.Stats)
+	}
+
+	rangeOpts := eqOpts
+	rangeOpts.ScalarFilter = &HybridScalarFilter{
+		IndexName: "tenant",
+		Range: &IndexRangeOptions{
+			Lower: IndexRangeBound{Value: "a", Inclusive: true},
+			Upper: IndexRangeBound{Value: "b", Inclusive: true},
+		},
+	}
+	resRange, err := c.SearchHybrid(rangeOpts)
+	if err != nil {
+		t.Fatalf("native index_state_postfilter range failed: %v", err)
+	}
+	if len(resRange.Results) != 2 {
+		t.Fatalf("expected 2 range results, got %d", len(resRange.Results))
+	}
+
+	// Verify oversized caller-supplied string bounds exceeding MaxInFlightBytes
+	// are rejected before allocating encoded buffers and leak zero budget debt.
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
+	maxBytes := budget.Limits().MaxInFlightBytes
+	read.Close()
+
+	oversized := strings.Repeat("x", int(maxBytes)+1024)
+	for name, filter := range map[string]*HybridScalarFilter{
+		"equality": {IndexName: "tenant", Value: oversized},
+		"range_lower": {
+			IndexName: "tenant",
+			Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Value: oversized, Inclusive: true},
+				Upper: IndexRangeBound{Unbounded: true},
+			},
+		},
+		"range_upper": {
+			IndexName: "tenant",
+			Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: oversized, Inclusive: true},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := budget.Stats()
+			badOpts := eqOpts
+			badOpts.ScalarFilter = filter
+			failed, err := c.SearchHybrid(badOpts)
+			after := budget.Stats()
+			if !errors.Is(err, memtable.ErrCOWCapacity) {
+				t.Fatalf("expected ErrCOWCapacity for oversized %s bound, got err=%v", name, err)
+			}
+			if len(failed.Results) != 0 || after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases {
+				t.Fatalf("budget leaked on %s refusal: before=%+v after=%+v", name, before, after)
+			}
+		})
 	}
 }
