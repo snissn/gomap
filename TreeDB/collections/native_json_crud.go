@@ -115,7 +115,8 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 	if err != nil {
 		return nil, false, err
 	}
-	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 {
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 &&
+		(bsonItems == nil || g.typed != nil || bsonSetFieldsMayTouchSecondaryUniqueIndex(g.probe.meta, bsonItems)) {
 		tx.mu.Lock()
 		if g.typed != nil {
 			var mutations []memtable.COWMutation
@@ -124,7 +125,20 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 				_, _, _, err = nativeTypedIndexFinalPlanMode(g.probe.meta, mutations, g.typed, func(id []byte) ([]byte, error) { return tx.typedOpeningIndexState(g, id) }, func(n uint64) error { return tx.admitStage(g, n) }, mode)
 			}
 		} else {
-			_, _, _, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+			var (
+				opts     collectionOptions
+				changed  []preparedBatchUpdate
+				runtimes []indexRuntime
+			)
+			opts, changed, runtimes, err = resolveNativeJSONFinalRows(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+			if err == nil {
+				g.resolvedFinal = nativeJSONResolvedFinalRows{
+					valid:    true,
+					options:  opts,
+					changed:  changed,
+					runtimes: runtimes,
+				}
+			}
 		}
 		tx.mu.Unlock()
 		if errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
@@ -146,6 +160,43 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 	}
 
 	return results, true, nil
+}
+
+func bsonSetFieldTouchesIndexPath(fieldKey, indexPath string) bool {
+	if fieldKey == "" || indexPath == "" {
+		return true
+	}
+	if indexPath == fieldKey {
+		return true
+	}
+	if len(indexPath) > len(fieldKey) && indexPath[len(fieldKey)] == '.' && indexPath[:len(fieldKey)] == fieldKey {
+		return true
+	}
+	return len(fieldKey) > len(indexPath) && fieldKey[len(indexPath)] == '.' && fieldKey[:len(indexPath)] == indexPath
+}
+
+func bsonSetFieldsMayTouchSecondaryUniqueIndex(meta CollectionMeta, items []BSONSetUpdateBatchItem) bool {
+	for _, idx := range meta.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		for _, item := range items {
+			for _, field := range item.Fields {
+				if len(idx.Components) == 0 {
+					if bsonSetFieldTouchesIndexPath(field.Key, idx.Field) {
+						return true
+					}
+					continue
+				}
+				for _, component := range idx.Components {
+					if bsonSetFieldTouchesIndexPath(field.Key, component.Field) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error) {
 	if c.manager.isClosing() {

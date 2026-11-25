@@ -779,8 +779,8 @@ Installed ordinary raw-only publications and qualifying native publications
 share coalesced FIFO coverage runs. A run's descriptor and receipt name its
 exact endpoint. The immutable COW roots still own the effects of every
 command. Native coverage is limited to an original, relaxed singleton
-structured BSON update whose complete cut owns the unindexed inline primary
-mutations. Assignment first binds the original native custody. After
+structured BSON update whose complete cut owns the inline primary-only
+mutations with no secondary-index domain changes. Assignment first binds the original native custody. After
 canonical V+1/C+1 validation and the complete logical cut swap, the accepted
 installer can return the redundant collection reference to the original
 semantic cleanup worker after dropping the publication gates. The native

@@ -51,6 +51,11 @@ type privatePrimaryConstructionV6 interface {
 	AbortPrivatePrimaryConstructionV6() error
 }
 
+type nativeOrderedRootTransition struct {
+	base uint64
+	next uint64
+}
+
 // RootPublicationBuildGroup stages a logical cached apply across bounded
 // backend batches. Intermediate batches build private COW roots only. The final
 // batch transfers one complete root into one PreparedRootCandidate.
@@ -62,6 +67,11 @@ type RootPublicationBuildGroup struct {
 	// This is a read-capability window, never a construction limit or registry.
 	nativeBuiltRoots           [4]uint64
 	nativeBuiltRootCount       uint8
+	nativeRootTransitions      []nativeOrderedRootTransition
+	startLeafSegments          []LeafPageLogSegment
+	startLeafSegmentsErr       error
+	outerLeafSegmentsAdded     bool
+	vlogRefDeltaUncovered      bool
 	nativeResources            *rootpublication.StableResourceSet
 	nativeRequirements         rootpublication.StableLogicalObligationRequirements
 	nativeAppend               rootpublication.StableLogicalObligationMutation
@@ -280,6 +290,9 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot, lease *StableResou
 	group.negativeCoverage = db.prepareNegativeCoverage(idx, group.baseSeq, group.baseRoot, group.baseRoot, nil)
 	db.mu.RUnlock()
 	db.rootReuseMu.RUnlock()
+	if db.leafPageLog != nil {
+		group.startLeafSegments, group.startLeafSegmentsErr = leafPageLogCurrentSegments(db.leafPageLog)
+	}
 	return group, nil
 }
 
@@ -413,6 +426,9 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
+	if delta != nil && (len(entries) != 0 || len(ranges) != 0 || newRoot != rootID) && delta.outerLeafDependencyReuse {
+		group.outerLeafSegmentsAdded = true
+	}
 	group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)
 	group.recordVacuumMutationLocked(entries, ranges)
@@ -495,6 +511,46 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	}
 	defer publishPrepareGuard.Release()
 
+	for _, transition := range group.nativeRootTransitions {
+		if transition.base != transition.next {
+			group.vlogRefDeltaUncovered = true
+			break
+		}
+	}
+	group.nativeRootTransitions = nil
+	if group.vlogRefDeltaUncovered && group.vlogRefDelta != nil && (db.indexOuterLeavesInValueLog || group.vlogRefDelta.outerLeafDependencyReuse) {
+		releaseValueLogRefDelta(group.vlogRefDelta)
+		group.vlogRefDelta = nil
+	}
+	if !group.outerLeafSegmentsAdded && group.vlogRefDelta != nil && group.vlogRefDelta.outerLeafDependencyReuse && !group.vlogRefDelta.ordinaryRawProducer {
+		if db.leafPageLog != nil {
+			endLeafSegments, err := leafPageLogCurrentSegments(db.leafPageLog)
+			if err != nil {
+				return err
+			}
+			createdLeafSegments, err := leafPageLogCreatedSegments(db.leafPageLog)
+			if err != nil {
+				return err
+			}
+			if group.startLeafSegmentsErr != nil ||
+				len(group.startLeafSegments) == 0 ||
+				!leafPageLogSegmentsSameFileIDs(group.startLeafSegments, endLeafSegments) ||
+				!leafPageLogSegmentsSubsetOf(createdLeafSegments, group.startLeafSegments) {
+				// One or more leaf-log segments were opened or rotated during this
+				// build group. In COW mode, intermediate rotations are registered
+				// directly without being retained in createdSegments, so fail closed
+				// to the exact candidate scanner to capture every new segment.
+				group.vlogRefDelta.requiresCandidateProjection = true
+				group.vlogRefDelta.allowEmptyDependencyReuse = false
+			} else {
+				if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, group.vlogRefDelta); err != nil {
+					return err
+				}
+				group.outerLeafSegmentsAdded = true
+			}
+		}
+	}
+
 	intent := b.commandWALPublishIntent
 	group.retrySnapshotAdmission = group.retrySnapshotAdmission && group.hasExactCapturedCoverage(intent)
 	commandAppended := false
@@ -563,6 +619,11 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	group.nativeResources = nil // finalize owns the original closure on every exit
 	clear(group.nativeBuiltRoots[:])
 	group.nativeBuiltRootCount = 0
+	group.nativeRootTransitions = nil
+	group.startLeafSegments = nil
+	group.startLeafSegmentsErr = nil
+	group.outerLeafSegmentsAdded = false
+	group.vlogRefDeltaUncovered = false
 	group.nativeRequirementsFallback = nil // finalize borrows the original captured fallback only synchronously
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
@@ -651,6 +712,11 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		// synchronous finalize. Drop all aliases before endRead on every exit.
 		clear(group.nativeBuiltRoots[:])
 		group.nativeBuiltRootCount = 0
+		group.nativeRootTransitions = nil
+		group.startLeafSegments = nil
+		group.startLeafSegmentsErr = nil
+		group.outerLeafSegmentsAdded = false
+		group.vlogRefDeltaUncovered = false
 		group.nativeRequirementsFallback = nil
 		group.nativeRequirements = rootpublication.StableLogicalObligationRequirements{}
 		group.nativeAppend = rootpublication.StableLogicalObligationMutation{}
@@ -899,4 +965,52 @@ func (group *RootPublicationBuildGroup) BindAcceptedPrefixCut(cut rootpublicatio
 	}
 	group.acceptedPrefixCut = cut
 	return nil
+}
+
+func leafPageLogSegmentsSameFileIDs(a, b []LeafPageLogSegment) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	if len(a) == 1 {
+		return a[0].FileID != 0 && a[0].FileID == b[0].FileID
+	}
+	seen := make(map[uint32]struct{}, len(a))
+	for _, seg := range a {
+		if seg.FileID == 0 {
+			return false
+		}
+		seen[seg.FileID] = struct{}{}
+	}
+	if len(seen) != len(a) {
+		return false
+	}
+	for _, seg := range b {
+		if _, ok := seen[seg.FileID]; !ok {
+			return false
+		}
+		delete(seen, seg.FileID)
+	}
+	return len(seen) == 0
+}
+
+func leafPageLogSegmentsSubsetOf(subset, superset []LeafPageLogSegment) bool {
+	for _, seg := range subset {
+		if seg.FileID == 0 {
+			continue
+		}
+		found := false
+		for _, allowed := range superset {
+			if allowed.FileID == seg.FileID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

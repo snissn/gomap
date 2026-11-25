@@ -36,6 +36,7 @@ type nativeJSONTxnBinding struct {
 	retainedScalar    indexEncodeArena
 	validationLease   *memtable.COWExternalLease
 	validationCharge  uint64
+	resolvedFinal     nativeJSONResolvedFinalRows
 	templates         templateV1Resolver
 	templateRecords   []templateV1Record
 	templateLearned   []templateV1LearnedTemplate
@@ -407,7 +408,7 @@ func (t *NativeJSONTxn) rootCoveredBSONUpdate() bool {
 	}
 	g := &t.bindings[0]
 	meta := &g.probe.meta
-	if !nativeBSONSetMeta(meta) || len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 ||
+	if !nativeBSONSetMeta(meta) || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 ||
 		g.typed != nil || g.projection != nil || g.plan == nil || g.plan.typed != nil || len(g.plan.additional) != 0 || len(g.plan.mutations) == 0 {
 		return false
 	}

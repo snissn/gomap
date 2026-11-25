@@ -871,6 +871,9 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 // removals remain unchanged. The separately bound raw-edge receipt permits
 // exact dependency projection without treating physical edges as ValuePtrs.
 func (db *DB) buildValueLogRefDeltaForApply(idx *indexGen, rootID, newRoot, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, result *zipper.ApplyResult) (*valueLogRefDelta, error) {
+	if len(entries) == 0 && len(ranges) == 0 && newRoot == rootID {
+		return db.newNoopValueLogRefDeltaForRootsIfTrackable(idx, baseSeq, rootID), nil
+	}
 	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected)
 	if err == nil && delta != nil && idx.zipper.PreservesMaterializedBaseV6(result, rootID, newRoot) {
 		delta.requiresCandidateProjection = false
