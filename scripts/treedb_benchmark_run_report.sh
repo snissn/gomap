@@ -29,6 +29,9 @@ MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 MONGO_READERS="${MONGO_READERS:-1,2,4,8,16,32}"
 MONGO_WRITERS="${MONGO_WRITERS:-1,2,4,8,16,32}"
+MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-}"
+MONGO_TREEDB_OPEN_MODE="${MONGO_TREEDB_OPEN_MODE:-legacy}"
+MONGO_TREEDB_MEMTABLE_MODE="${MONGO_TREEDB_MEMTABLE_MODE:-}"
 TIMEOUT="${TIMEOUT:-120m}"
 TITLE="${TITLE:-TreeDB Benchmark Run Report}"
 SKIP_RAW="${SKIP_RAW:-false}"
@@ -70,6 +73,12 @@ Options:
                          Producer counts for Mongo load scaling. Default: "1,2,4,8,16,32".
   --mongo-mode MODE      Mongo mode for full/load comparison: docker or external. Default: docker.
   --mongo-uri URI        MongoDB URI for external/scaling runs. Default: mongodb://127.0.0.1:27017.
+  --mongo-treedb-profile NAME
+                         TreeDB profile for Mongo suites (default: script default; use command_wal_relaxed with standalone).
+  --mongo-treedb-open-mode MODE
+                         TreeDB open mode for Mongo suites: legacy or standalone (COW). Default: legacy.
+  --mongo-treedb-memtable-mode MODE
+                         Optional TreeDB memtable mode override for Mongo suites (for example: cow_btree).
   --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
   --mongo-compact BOOL   Compact the MongoDB collection before final stats collection.
                          Set to true/false, 1/0, or yes/no.
@@ -185,6 +194,21 @@ while [[ $# -gt 0 ]]; do
     --mongo-uri)
       require_value "$1" "${2-}"
       MONGO_URI="$2"
+      shift 2
+      ;;
+    --mongo-treedb-profile)
+      require_value "$1" "${2-}"
+      MONGO_TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --mongo-treedb-open-mode)
+      require_value "$1" "${2-}"
+      MONGO_TREEDB_OPEN_MODE="$2"
+      shift 2
+      ;;
+    --mongo-treedb-memtable-mode)
+      require_value "$1" "${2-}"
+      MONGO_TREEDB_MEMTABLE_MODE="$2"
       shift 2
       ;;
     --mongo-image)
@@ -389,6 +413,9 @@ write_metadata() {
     echo "- mongo_image: $MONGO_IMAGE"
     echo "- mongo_compact: $MONGO_COMPACT"
     echo "- mongo_uri: $MONGO_URI"
+    echo "- mongo_treedb_open_mode: $MONGO_TREEDB_OPEN_MODE"
+    echo "- mongo_treedb_profile: ${MONGO_TREEDB_PROFILE:-default}"
+    echo "- mongo_treedb_memtable_mode: ${MONGO_TREEDB_MEMTABLE_MODE:-auto}"
     echo "- timeout: $TIMEOUT"
     echo "- mongo_readers: $MONGO_READERS"
     echo "- mongo_writers: $MONGO_WRITERS"
@@ -484,10 +511,22 @@ run_collections() {
   done
 }
 
+mongo_treedb_env_args() {
+  MONGO_TREEDB_ENV_ARGS=(
+    TREEDB_OPEN_MODE="$MONGO_TREEDB_OPEN_MODE"
+    TREEDB_MEMTABLE_MODE="$MONGO_TREEDB_MEMTABLE_MODE"
+  )
+  if [[ -n "$MONGO_TREEDB_PROFILE" ]]; then
+    MONGO_TREEDB_ENV_ARGS+=(TREEDB_PROFILE="$MONGO_TREEDB_PROFILE")
+  fi
+}
+
 run_mongo_full_sweep() {
   bool_true "$SKIP_MONGO" && return 0
   local root="$RUN_ROOT/mongo_gateway_full_sweep_1m_expanded"
+  mongo_treedb_env_args
   run_logged mongo_full_sweep env \
+    "${MONGO_TREEDB_ENV_ARGS[@]}" \
     TREEDB_DOCUMENT_FORMATS=bson \
     TREEDB_CLIENT_MODES=driver-command-raw \
     MONGO_CLIENT_MODES=driver-command-raw \
@@ -522,7 +561,9 @@ run_mongo_load_modes() {
   bool_true "$SKIP_MONGO" && return 0
   bool_true "$SKIP_LOAD_MODES" && return 0
   local root="$RUN_ROOT/mongo_client_mode_load_matrix_1m"
+  mongo_treedb_env_args
   run_logged mongo_load_modes env \
+    "${MONGO_TREEDB_ENV_ARGS[@]}" \
     TREEDB_DOCUMENT_FORMATS=bson \
     TREEDB_CLIENT_MODES="driver driver-command driver-command-raw raw-wire-tcp raw-wire" \
     MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
@@ -562,7 +603,9 @@ run_mongo_load_scaling() {
   bool_true "$SKIP_MONGO" && return 0
   bool_true "$SKIP_LOAD_SCALING" && return 0
   local root="$RUN_ROOT/mongo_gateway_load_scaling_1m"
+  mongo_treedb_env_args
   run_logged mongo_load_scaling env \
+    "${MONGO_TREEDB_ENV_ARGS[@]}" \
     MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
     MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
     ./scripts/mongo_gateway_load_scaling_bench.sh \
@@ -584,8 +627,10 @@ run_mongo_scaling() {
   bool_true "$SKIP_SCALING" && return 0
   local root="$RUN_ROOT/mongo_gateway_reader_writer_scaling_1m"
   mkdir -p "$root"
+  mongo_treedb_env_args
   for indexes in $INDEXES_LIST; do
     run_logged "mongo_scaling_indexes_${indexes}" env \
+      "${MONGO_TREEDB_ENV_ARGS[@]}" \
       MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
       MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
       ./scripts/mongo_gateway_scaling_bench.sh \

@@ -98,6 +98,8 @@ type config struct {
 	SecondaryIndexes                              int
 	ClientMode                                    string
 	TreeDBProfile                                 treedb.Profile
+	TreeDBOpenMode                                string
+	TreeDBMemtableMode                            string
 	TreeDBCommandWAL                              bool
 	TreeDBDocumentFormat                          collections.DocumentFormat
 	TreeDBDataRootStorage                         collections.RootStoragePolicy
@@ -166,6 +168,8 @@ type benchmarkResult struct {
 	RangeIndex         bool `json:"range_index"`
 
 	TreeDBProfile                                 string              `json:"treedb_profile,omitempty"`
+	TreeDBOpenMode                                string              `json:"treedb_open_mode,omitempty"`
+	TreeDBMemtableMode                            string              `json:"treedb_memtable_mode,omitempty"`
 	TreeDBCommandWAL                              bool                `json:"treedb_command_wal"`
 	TreeDBDocumentFormat                          string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage                         string              `json:"treedb_data_root_storage,omitempty"`
@@ -320,6 +324,7 @@ type diskSnapshot struct {
 
 type benchTarget struct {
 	client               *mongo.Client
+	owner                *treedb.DB
 	db                   *backenddb.DB
 	collections          *collections.CollectionManager
 	server               *mongogateway.Server
@@ -636,6 +641,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; driver-unack is MongoDB-only, direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: "+treedb.BenchmarkProfileFlagHelp)
+	fs.StringVar(&cfg.TreeDBOpenMode, "treedb-open-mode", treeDBOpenModeLegacy, "TreeDB open mode for -target treedb: legacy or standalone (COW)")
+	fs.StringVar(&cfg.TreeDBMemtableMode, "treedb-memtable-mode", "", "optional TreeDB memtable mode override for -target treedb (for example: cow_btree)")
 	fs.BoolVar(&cfg.TreeDBCommandWAL, "treedb-command-wal", false, "enable TreeDB command-WAL mode for -target treedb")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -707,6 +714,18 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Target != "treedb" && cfg.TreeDBCommandWAL {
 		return config{}, errors.New("treedb-command-wal is only supported with -target treedb")
+	}
+	treeDBOpenMode, err := parseTreeDBOpenMode(cfg.TreeDBOpenMode)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.TreeDBOpenMode = treeDBOpenMode
+	cfg.TreeDBMemtableMode = strings.TrimSpace(cfg.TreeDBMemtableMode)
+	if cfg.Target != "treedb" && (seenFlags["treedb-open-mode"] || cfg.TreeDBMemtableMode != "") {
+		return config{}, errors.New("treedb-open-mode and treedb-memtable-mode are only supported with -target treedb")
+	}
+	if cfg.Target == "treedb" && cfg.TreeDBOpenMode == treeDBOpenModeStandalone && cfg.RouteMode == routeModeProduction {
+		return config{}, errors.New("treedb-open-mode standalone is not supported with -route-mode production")
 	}
 	documentShape, err := parseDocumentShape(cfg.DocumentShape)
 	if err != nil {
@@ -901,6 +920,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBProfile = profile
+	if cfg.Target == "treedb" {
+		if err := validateTreeDBOpenMode(cfg); err != nil {
+			return config{}, err
+		}
+	}
 	if cfg.Target == "treedb" && treedb.OptionsForBenchmark(cfg.TreeDBProfile, "").CommandWAL {
 		cfg.TreeDBCommandWAL = true
 	}
@@ -943,6 +967,12 @@ func parseConfig(args []string) (config, error) {
 		}
 		maintenance = treeDBMaintenanceCheckpoint
 	}
+	if cfg.Target == "treedb" && cfg.TreeDBOpenMode == treeDBOpenModeStandalone && maintenance == treeDBMaintenanceFull {
+		if seenFlags["treedb-maintenance"] {
+			return config{}, errors.New("treedb-open-mode standalone does not support -treedb-maintenance full; use checkpoint or none")
+		}
+		maintenance = treeDBMaintenanceCheckpoint
+	}
 	cfg.TreeDBMaintenance = maintenance
 	if cfg.Deletes > cfg.Documents {
 		return config{}, errors.New("deletes cannot exceed documents")
@@ -982,6 +1012,32 @@ func validateProductionRouteProofShape(cfg config) error {
 		return nil
 	}
 	return fmt.Errorf("route-mode production fail-closed scaffold accepts only a serial insert-only workload; set %s", strings.Join(unsupported, ", "))
+}
+
+const (
+	treeDBOpenModeLegacy     = "legacy"
+	treeDBOpenModeStandalone = "standalone"
+)
+
+func parseTreeDBOpenMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", treeDBOpenModeLegacy:
+		return treeDBOpenModeLegacy, nil
+	case treeDBOpenModeStandalone:
+		return treeDBOpenModeStandalone, nil
+	default:
+		return "", fmt.Errorf("unknown treedb-open-mode %q (want %q or %q)", raw, treeDBOpenModeLegacy, treeDBOpenModeStandalone)
+	}
+}
+
+func validateTreeDBOpenMode(cfg config) error {
+	if cfg.TreeDBOpenMode != treeDBOpenModeStandalone {
+		return nil
+	}
+	if cfg.TreeDBProfile == treedb.ProfileBenchUnsafe {
+		return fmt.Errorf("treedb-open-mode standalone requires a COW production treedb-profile (%s); got %q", treedb.ProfileFlagHelp, cfg.TreeDBProfile)
+	}
+	return nil
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
@@ -1267,38 +1323,76 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 		}
 	}
 
-	opts, err := treeDBBenchmarkOptions(cfg, dir)
-	if err != nil {
-		if removeDir {
-			_ = os.RemoveAll(dir)
+	var (
+		owner          *treedb.DB
+		db             *backenddb.DB
+		backendCleanup func() error
+	)
+	if cfg.TreeDBOpenMode == treeDBOpenModeStandalone {
+		if err := ctx.Err(); err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	open := treedb.OpenBackend
-	if opts.IndexOuterLeavesInValueLog {
-		open = treedb.OpenBackendWithCachedLeafLog
-	}
-	if err := ctx.Err(); err != nil {
-		if removeDir {
-			_ = os.RemoveAll(dir)
+		var err error
+		owner, db, backendCleanup, err = openTreeDBStandaloneBackend(cfg, dir)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	db, backendCleanup, err := open(opts)
-	if err != nil {
-		if removeDir {
-			_ = os.RemoveAll(dir)
+	} else {
+		opts, err := treeDBBenchmarkOptions(cfg, dir)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
 		}
-		return nil, err
+		open := treedb.OpenBackend
+		if opts.IndexOuterLeavesInValueLog {
+			open = treedb.OpenBackendWithCachedLeafLog
+		}
+		if err := ctx.Err(); err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
+		db, backendCleanup, err = open(opts)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
 	}
 	manager := collections.NewCollectionManager(db)
+	closeBackend := func() error {
+		if owner != nil {
+			return errors.Join(manager.Close(), backendCleanup())
+		}
+		return backendCleanup()
+	}
+	if owner != nil {
+		if _, _, err := manager.ListCollectionsBounded(1); err != nil {
+			_ = closeBackend()
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, fmt.Errorf("standalone shared COW catalog preflight: %w", err)
+		}
+	}
 	cleanup := func(cleanupCtx context.Context) error {
 		if err := cleanupCtx.Err(); err != nil {
-			return errors.Join(err, backendCleanup())
+			return errors.Join(err, closeBackend())
 		}
-		return errors.Join(manager.FlushAll(), backendCleanup())
+		return errors.Join(manager.FlushAll(), closeBackend())
 	}
 	return &benchTarget{
+		owner:                owner,
 		db:                   db,
 		collections:          manager,
 		treedbDir:            dir,
@@ -1316,7 +1410,39 @@ func treeDBBenchmarkOptions(cfg config, dir string) (treedb.Options, error) {
 	opts.CommandWAL = opts.CommandWAL || cfg.TreeDBCommandWAL
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
+	if cfg.TreeDBMemtableMode != "" {
+		opts.MemtableMode = cfg.TreeDBMemtableMode
+	}
 	return opts, nil
+}
+
+func openTreeDBStandaloneBackend(cfg config, dir string) (*treedb.DB, *backenddb.DB, func() error, error) {
+	if err := validateTreeDBOpenMode(cfg); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
+		return nil, nil, nil, err
+	}
+	opts := treedb.OptionsForSemantic(cfg.TreeDBProfile, dir)
+	opts.CommandWAL = opts.CommandWAL || cfg.TreeDBCommandWAL
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	if cfg.TreeDBMemtableMode != "" {
+		opts.MemtableMode = cfg.TreeDBMemtableMode
+	}
+	freshOrdinaryBSON := cfg.TreeDBDocumentFormat == collections.DocumentFormatBSON &&
+		cfg.TreeDBProfile == treedb.ProfileCommandWALRelaxed
+	opts.FreshSystemPagerLeaves = freshOrdinaryBSON
+	opts.FreshRelaxedStandaloneWALStream = freshOrdinaryBSON
+	database, err := treedb.Open(opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		return nil, nil, nil, errors.Join(err, database.Close())
+	}
+	return database, backend, database.Close, nil
 }
 
 func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -1335,27 +1461,62 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 	}
 
-	opts, err := treeDBBenchmarkOptions(cfg, dir)
-	if err != nil {
-		if removeDir {
-			_ = os.RemoveAll(dir)
+	var (
+		owner          *treedb.DB
+		db             *backenddb.DB
+		backendCleanup func() error
+	)
+	if cfg.TreeDBOpenMode == treeDBOpenModeStandalone {
+		var err error
+		owner, db, backendCleanup, err = openTreeDBStandaloneBackend(cfg, dir)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	open := treedb.OpenBackend
-	if opts.IndexOuterLeavesInValueLog {
-		open = treedb.OpenBackendWithCachedLeafLog
-	}
-	db, backendCleanup, err := open(opts)
-	if err != nil {
-		if removeDir {
-			_ = os.RemoveAll(dir)
+	} else {
+		opts, err := treeDBBenchmarkOptions(cfg, dir)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
 		}
-		return nil, err
+		open := treedb.OpenBackend
+		if opts.IndexOuterLeavesInValueLog {
+			open = treedb.OpenBackendWithCachedLeafLog
+		}
+		db, backendCleanup, err = open(opts)
+		if err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
 	}
 	manager := collections.NewCollectionManager(db)
+	closeBackend := func() error {
+		if owner != nil {
+			return errors.Join(manager.Close(), backendCleanup())
+		}
+		return backendCleanup()
+	}
+	if owner != nil {
+		if _, _, err := manager.ListCollectionsBounded(1); err != nil {
+			_ = closeBackend()
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, fmt.Errorf("standalone shared COW catalog preflight: %w", err)
+		}
+	}
 	server := mongogateway.NewServer()
-	server.Collections = manager
+	if owner != nil {
+		server.ConfigureNativeSemanticBackend(manager, db)
+	} else {
+		server.Collections = manager
+	}
 	server.MaxFindScanDocuments = cfg.Documents
 	server.DefaultCollectionOptions = treeDBBenchmarkCollectionOptions(cfg)
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
@@ -1367,7 +1528,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			RemoteOwnerExecution: cfg.ProductionRouteRemoteExecution,
 		}, db, manager, server)
 		if err != nil {
-			_ = backendCleanup()
+			_ = closeBackend()
 			if removeDir {
 				_ = os.RemoveAll(dir)
 			}
@@ -1391,7 +1552,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		if productionRoute != nil {
 			_ = productionRoute.Close()
 		}
-		_ = backendCleanup()
+		_ = closeBackend()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -1416,7 +1577,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			if productionRoute != nil {
 				_ = productionRoute.Close()
 			}
-			_ = backendCleanup()
+			_ = closeBackend()
 			if removeDir {
 				_ = os.RemoveAll(dir)
 			}
@@ -1446,7 +1607,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		cancelServe()
 		_ = ln.Close()
-		_ = backendCleanup()
+		_ = closeBackend()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -1468,7 +1629,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		cancelServe()
 		_ = ln.Close()
-		_ = backendCleanup()
+		_ = closeBackend()
 		if removeDir {
 			_ = os.RemoveAll(dir)
 		}
@@ -1507,11 +1668,15 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			errs = appendCleanupErr(errs, cleanupCtx.Err())
 		}
 		errs = appendCleanupErr(errs, manager.FlushAll())
+		if owner != nil {
+			errs = appendCleanupErr(errs, manager.Close())
+		}
 		errs = appendCleanupErr(errs, backendCleanup())
 		return errors.Join(errs...)
 	}
 	return &benchTarget{
 		client:               client,
+		owner:                owner,
 		db:                   db,
 		collections:          manager,
 		server:               server,
@@ -1562,6 +1727,7 @@ func closeBenchTargetKeepDir(ctx context.Context, target *benchTarget) error {
 	target.cleanup = nil
 	err := cleanup(ctx)
 	target.client = nil
+	target.owner = nil
 	target.db = nil
 	target.collections = nil
 	target.server = nil
@@ -1817,6 +1983,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			result.TreeDBDir = target.treedbDir
 		}
 		result.TreeDBProfile = string(cfg.TreeDBProfile)
+		result.TreeDBOpenMode = cfg.TreeDBOpenMode
+		result.TreeDBMemtableMode = cfg.TreeDBMemtableMode
 		result.TreeDBCommandWAL = cfg.TreeDBCommandWAL
 		result.TreeDBDocumentFormat = string(cfg.TreeDBDocumentFormat)
 		result.TreeDBDataRootStorage = string(cfg.TreeDBDataRootStorage)
@@ -2119,6 +2287,8 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		RangeIndex:                             cfg.RangeIndex,
 		PrebuildDocuments:                      cfg.PrebuildDocuments,
 		TreeDBProfile:                          string(cfg.TreeDBProfile),
+		TreeDBOpenMode:                         cfg.TreeDBOpenMode,
+		TreeDBMemtableMode:                     cfg.TreeDBMemtableMode,
 		TreeDBCommandWAL:                       cfg.TreeDBCommandWAL,
 		TreeDBDocumentFormat:                   string(cfg.TreeDBDocumentFormat),
 		TreeDBDataRootStorage:                  string(cfg.TreeDBDataRootStorage),
@@ -3200,6 +3370,9 @@ func drainTreeDBCollectionsForPhase(target *benchTarget) (time.Duration, error) 
 	}
 	start := time.Now()
 	err := target.collections.FlushAll()
+	if err == nil && target.owner != nil {
+		err = target.owner.Checkpoint()
+	}
 	return time.Since(start), err
 }
 
@@ -6329,6 +6502,11 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 			if err := target.collections.FlushAll(); err != nil {
 				return err
 			}
+			if target.owner != nil {
+				if err := target.owner.Checkpoint(); err != nil {
+					return err
+				}
+			}
 		}
 		snapshot, err := collectDiskSnapshot(target.treedbDir)
 		if err != nil {
@@ -6366,7 +6544,11 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 				return err
 			}
 		}
-		if target.db != nil {
+		if target.owner != nil {
+			if err := target.owner.Checkpoint(); err != nil {
+				return err
+			}
+		} else if target.db != nil {
 			if err := target.db.Checkpoint(); err != nil {
 				return err
 			}
@@ -6428,10 +6610,19 @@ func runTreeDBMaintenanceStack(ctx context.Context, profile treedb.Profile, targ
 		return nil
 	}
 	if err := appendTreeDBMaintenanceStep(ctx, target, result, "compact_storage", func() (map[string]int64, string, error) {
-		stats, err := target.db.CompactStorage(ctx, backenddb.CompactStorageOptions{
+		compactOpts := backenddb.CompactStorageOptions{
 			Mode:          backenddb.CompactStorageFull,
 			SyncEachPhase: true,
-		})
+		}
+		var (
+			stats backenddb.CompactStorageStats
+			err   error
+		)
+		if target.owner != nil {
+			stats, err = target.owner.CompactStorage(ctx, compactOpts)
+		} else {
+			stats, err = target.db.CompactStorage(ctx, compactOpts)
+		}
 		if err != nil {
 			return nil, "", err
 		}
@@ -6531,7 +6722,11 @@ func collectLiveTreeDBStats(target *benchTarget) map[string]string {
 		return nil
 	}
 	stats := make(map[string]string)
-	if target.db != nil {
+	if target.owner != nil {
+		for key, value := range target.owner.Stats() {
+			stats[key] = value
+		}
+	} else if target.db != nil {
 		for key, value := range target.db.Stats() {
 			stats[key] = value
 		}
@@ -6831,7 +7026,12 @@ func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, resul
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	if target.db != nil {
+	if target.owner != nil {
+		if err := target.owner.Checkpoint(); err != nil {
+			return fmt.Errorf("checkpoint after %s: %w", name, err)
+		}
+		result.TreeDBStatsFinal = collectLiveTreeDBStats(target)
+	} else if target.db != nil {
 		if err := target.db.Checkpoint(); err != nil {
 			return fmt.Errorf("checkpoint after %s: %w", name, err)
 		}
@@ -7589,8 +7789,16 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
-				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
+			openMode := result.TreeDBOpenMode
+			if openMode == "" {
+				openMode = treeDBOpenModeLegacy
+			}
+			memtableMode := result.TreeDBMemtableMode
+			if memtableMode == "" {
+				memtableMode = "auto"
+			}
+			fmt.Fprintf(out, "treedb_profile=%s open_mode=%s memtable_mode=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
+				result.TreeDBProfile, openMode, memtableMode, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
@@ -7688,7 +7896,16 @@ var selectedTreeDBExactStatKeys = [...]string{
 }
 
 func selectedTreeDBStats(stats map[string]string) map[string]string {
-	return treedbstats.Selected(stats)
+	selected := treedbstats.Selected(stats)
+	for key, value := range stats {
+		if key == "treedb.cache.memtable_mode" || strings.HasPrefix(key, "treedb.cache.cow.") {
+			if selected == nil {
+				selected = make(map[string]string)
+			}
+			selected[key] = value
+		}
+	}
+	return selected
 }
 
 func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {

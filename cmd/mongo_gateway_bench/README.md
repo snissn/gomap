@@ -975,3 +975,47 @@ GOMAXPROCS=4 go test ./cmd/mongo_gateway_bench -run '^$' \
 Retain before/after samples and investigate material timing/allocation
 regressions before promotion. A successful small fixture is not large-graph
 qualification. These ordinary Go rows are not benchprof artifact inputs.
+
+
+## Standalone COW Open Mode (`-treedb-open-mode standalone`)
+
+`cmd/mongo_gateway_bench` supports `-treedb-open-mode legacy|standalone` (default
+`legacy` for historical baseline comparability) and optional
+`-treedb-memtable-mode` overrides.
+
+- `legacy` opens TreeDB through `OpenBackend` / `OpenBackendWithCachedLeafLog`
+  (legacy write-domain collections).
+- `standalone` opens TreeDB through `treedb.Open` with `treedb.OptionsForSemantic`
+  (Open-time `cow_btree` + `StandaloneCOWMemtableLimits()` +
+  `NativeSemanticBackend()`), mirroring `mongogateway.OpenStandaloneServer`.
+  It requires a COW production profile (`command_wal_relaxed`,
+  `command_wal_durable`, or `no_wal_fast`), routes `Checkpoint`,
+  `CompactStorage`, settled-read phase drains, and `Stats` through the owning
+  `*treedb.DB`, and rejects `bench_unsafe` and `-route-mode production`.
+
+The comparison and deep-benchmark wrappers accept `--treedb-open-mode`,
+`--treedb-memtable-mode`, and `--treedb-profile` (or `TREEDB_OPEN_MODE`,
+`TREEDB_MEMTABLE_MODE`, `TREEDB_PROFILE`; and `--mongo-treedb-open-mode`,
+`--mongo-treedb-profile`, `--mongo-treedb-memtable-mode` in
+`scripts/treedb_benchmark_run_report.sh`).
+
+Example head-to-head run against MongoDB 8:
+
+```sh
+./scripts/mongo_gateway_compare.sh \
+  --out /tmp/mongo_compare_standalone \
+  --docs 100000 \
+  --indexes "0 2" \
+  --treedb-open-mode standalone \
+  --treedb-profile command_wal_relaxed \
+  --treedb-maintenance checkpoint \
+  --treedb-document-format bson \
+  --treedb-client-mode driver-command-raw \
+  --mongo-client-mode driver-command-raw \
+  --range-index \
+  --concurrent-read-kinds "id,email,range" \
+  --concurrent-reader-sweep "1,4,16" \
+  --concurrent-reads 20000 \
+  --concurrent-writer-sweep "1,4,8" \
+  --concurrent-writes 20000
+```

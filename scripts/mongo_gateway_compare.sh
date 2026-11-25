@@ -51,6 +51,8 @@ TITLE="${TITLE:-Mongo Gateway Benchmark Comparison}"
 # Use command_wal_relaxed for command-WAL coverage once indexed catalog command
 # support is enabled for this workload; bench_unsafe is the explicit no-WAL ceiling.
 TREEDB_PROFILE="${TREEDB_PROFILE:-bench_unsafe}"
+TREEDB_OPEN_MODE="${TREEDB_OPEN_MODE:-legacy}"
+TREEDB_MEMTABLE_MODE="${TREEDB_MEMTABLE_MODE:-}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-template-v1}"
 TREEDB_DOCUMENT_FORMATS="${TREEDB_DOCUMENT_FORMATS:-$TREEDB_DOCUMENT_FORMAT}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver}"
@@ -58,6 +60,10 @@ TREEDB_CLIENT_MODES="${TREEDB_CLIENT_MODES:-$TREEDB_CLIENT_MODE}"
 TREEDB_DATA_ROOT_STORAGE="${TREEDB_DATA_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_STATE_ROOT_STORAGE="${TREEDB_INDEX_STATE_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_ROOT_STORAGE="${TREEDB_INDEX_ROOT_STORAGE:-compressed}"
+TREEDB_MAINTENANCE_SET=false
+if [[ -n "${TREEDB_MAINTENANCE+x}" && -n "$TREEDB_MAINTENANCE" ]]; then
+  TREEDB_MAINTENANCE_SET=true
+fi
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-full}"
 TREEDB_READ_STATE="${TREEDB_READ_STATE:-settled}"
 
@@ -133,6 +139,10 @@ Options:
                         "driver driver-find-raw driver-command driver-command-raw driver-unack".
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
   --treedb-profile NAME TreeDB profile. Default: bench_unsafe.
+  --treedb-open-mode MODE
+                        TreeDB open mode: legacy or standalone (COW). Default: legacy.
+  --treedb-memtable-mode MODE
+                        Optional TreeDB memtable mode override (for example: cow_btree).
   --treedb-document-format FORMAT
                         Single TreeDB document format.
   --treedb-document-formats LIST
@@ -342,6 +352,16 @@ while [[ $# -gt 0 ]]; do
       TREEDB_PROFILE="$2"
       shift 2
       ;;
+    --treedb-open-mode)
+      require_option_value "$1" "${2-}"
+      TREEDB_OPEN_MODE="$2"
+      shift 2
+      ;;
+    --treedb-memtable-mode)
+      require_option_value "$1" "${2-}"
+      TREEDB_MEMTABLE_MODE="$2"
+      shift 2
+      ;;
     --treedb-document-format)
       require_option_value "$1" "${2-}"
       TREEDB_DOCUMENT_FORMAT="$2"
@@ -367,6 +387,7 @@ while [[ $# -gt 0 ]]; do
     --treedb-maintenance)
       require_option_value "$1" "${2-}"
       TREEDB_MAINTENANCE="$2"
+      TREEDB_MAINTENANCE_SET=true
       shift 2
       ;;
     --treedb-read-state)
@@ -390,6 +411,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$TREEDB_OPEN_MODE" == "standalone" && "$TREEDB_MAINTENANCE_SET" == "false" ]]; then
+  TREEDB_MAINTENANCE="checkpoint"
+fi
 
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
@@ -1078,13 +1103,19 @@ for docs in $DOCS_LIST; do
           tree_profile_args=(-profile-dir "$tree_profile_dir")
         fi
 
+        tree_open_args=(-treedb-open-mode "$TREEDB_OPEN_MODE")
+        if [[ -n "$TREEDB_MEMTABLE_MODE" ]]; then
+          tree_open_args+=(-treedb-memtable-mode "$TREEDB_MEMTABLE_MODE")
+        fi
+
         echo
-        echo "==> $cell TreeDB ($tree_format, client=$tree_client_mode)"
+        echo "==> $cell TreeDB ($tree_format, client=$tree_client_mode, open_mode=$TREEDB_OPEN_MODE)"
         run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
           "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
           -treedb-dir "$tree_data" \
           -keep-treedb-dir \
           -treedb-profile "$TREEDB_PROFILE" \
+          "${tree_open_args[@]}" \
           -treedb-document-format "$tree_format" \
           -client-mode "$tree_client_mode" \
           -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
@@ -1148,6 +1179,7 @@ cat >"$README" <<EOF
 - matrix TSV: \`$MATRIX\`
 - raw JSON directory: \`$RAW_DIR\`
 - TreeDB data directory: \`$TREE_DIR\`
+- TreeDB open mode: \`$TREEDB_OPEN_MODE\` (profile: \`$TREEDB_PROFILE\`, memtable mode: \`${TREEDB_MEMTABLE_MODE:-auto}\`)
 - MongoDB data directory: \`$MONGO_DIR\`
 - docs list: \`$DOCS_LIST\`
 - secondary-index list: \`$INDEXES_LIST\`
