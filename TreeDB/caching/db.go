@@ -29800,6 +29800,7 @@ func (db *DB) untrackValueLogSegmentFromLane(l *lane, path string) bool {
 func (db *DB) flushLoop() {
 	// Close joins eligible work, not user-held cuts. The SAME goroutine remains
 	// cleanup-only until the final retained cut transfers its preborn work.
+	cleanupWorkerGID := backenddb.CurrentGoroutineID()
 	joined := false
 	defer func() {
 		if !joined {
@@ -29811,7 +29812,7 @@ func (db *DB) flushLoop() {
 		case <-db.closeCh:
 			db.flushAll(true)
 			for {
-				db.drainSemanticCleanup()
+				db.drainSemanticCleanupWithGID(cleanupWorkerGID)
 				if db.semanticCleanupTerminal() {
 					return
 				}
@@ -29830,7 +29831,7 @@ func (db *DB) flushLoop() {
 				<-db.flushCh
 			}
 		case <-db.flushCh:
-			db.drainSemanticCleanup()
+			db.drainSemanticCleanupWithGID(cleanupWorkerGID)
 			// Coalesced real requests survive cleanup-only wake consumption.
 			if db.flushRequested.Swap(false) {
 				db.flushAll(false)
