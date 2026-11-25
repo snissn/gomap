@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -57,17 +58,87 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 	}
 	// Metadata may name a file absent from the submitted pointer entries.
 	group.pinBatchValueLogSegmentsLocked(input.Delta)
+	var (
+		baseDescriptorEntries []collectionEntry
+		baseDescriptorErr     error
+		mayChangeDescriptors  bool
+	)
+	collectRefDelta := group.db.shouldCollectValueLogRefDelta(group.baseSeq)
+	if systemRoot && collectRefDelta {
+		mayChangeDescriptors = orderedRootDeltaMayChangeCollectionRootDescriptors(input.Delta)
+		if mayChangeDescriptors {
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), group.idx.pager, group.db.valueLogManager, input.BaseRoot)
+		}
+	}
 	// Native roots use the existing ordered-root DATA builder. PRIMARY private
 	// construction belongs only to the group's raw user-root path.
-	root, retired, metrics, result, err := group.db.publishOrderedRootDeltaBatchWithAllocatorResult(group.idx, input.BaseRoot, input.Delta, opts, group.tracker, group.tracker, input.IncludeDeletedOnColdBuild, group.db.shouldCollectValueLogRefDelta(group.baseSeq))
+	root, retired, metrics, result, err := group.db.publishOrderedRootDeltaBatchWithAllocatorResult(group.idx, input.BaseRoot, input.Delta, opts, group.tracker, group.tracker, input.IncludeDeletedOnColdBuild, collectRefDelta)
 	if err != nil {
 		group.failed = true
 		return 0, err
 	}
-	delta, err := group.db.buildAppliedOrderedRootDeltaBatchValueLogRefDelta(group.idx, group.baseSeq, input, orderedRootDeltaBatchGroupApplyResult{rootID: root, retired: retired, metrics: metrics, applyResult: result})
+	delta, err := group.db.buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOuterLeaves(group.idx, group.baseSeq, input, orderedRootDeltaBatchGroupApplyResult{rootID: root, retired: retired, metrics: metrics, applyResult: result}, opts.outerLeavesInValueLog)
 	if err != nil {
 		group.failed = true
 		return 0, err
+	}
+	if !systemRoot {
+		chained := false
+		if input.BaseRoot != 0 {
+			for i := range group.nativeRootTransitions {
+				if group.nativeRootTransitions[i].next == input.BaseRoot {
+					group.nativeRootTransitions[i].next = root
+					chained = true
+					break
+				}
+			}
+		}
+		if !chained {
+			group.nativeRootTransitions = append(group.nativeRootTransitions, nativeOrderedRootTransition{
+				base: input.BaseRoot,
+				next: root,
+			})
+		}
+		if delta != nil {
+			delta.requiresCandidateProjection = false
+		} else if collectRefDelta {
+			group.vlogRefDeltaUncovered = true
+		}
+	} else {
+		baseRoots := make([]uint64, len(group.nativeRootTransitions))
+		newRoots := make([]uint64, len(group.nativeRootTransitions))
+		for i, transition := range group.nativeRootTransitions {
+			baseRoots[i] = transition.base
+			newRoots[i] = transition.next
+		}
+		transitionsChanged := orderedRootTransitionsChanged(baseRoots, newRoots)
+		covered := false
+		if group.currentRoot == group.baseRoot {
+			if !mayChangeDescriptors && !transitionsChanged {
+				covered = true
+			} else if baseDescriptorErr == nil && orderedRootCollectionDescriptorTransitionsCoveredByDelta(
+				baseDescriptorEntries,
+				input.Delta,
+				group.currentRoot,
+				input.BaseRoot,
+				root,
+				baseRoots,
+				newRoots,
+			) {
+				covered = true
+			}
+		}
+		if delta == nil {
+			if collectRefDelta {
+				group.vlogRefDeltaUncovered = true
+			}
+		} else if covered {
+			delta.requiresCandidateProjection = false
+			group.nativeRootTransitions = group.nativeRootTransitions[:0]
+		} else {
+			delta.requiresCandidateProjection = true
+			group.vlogRefDeltaUncovered = true
+		}
 	}
 	group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)

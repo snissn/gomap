@@ -51,6 +51,11 @@ type privatePrimaryConstructionV6 interface {
 	AbortPrivatePrimaryConstructionV6() error
 }
 
+type nativeOrderedRootTransition struct {
+	base uint64
+	next uint64
+}
+
 // RootPublicationBuildGroup stages a logical cached apply across bounded
 // backend batches. Intermediate batches build private COW roots only. The final
 // batch transfers one complete root into one PreparedRootCandidate.
@@ -62,6 +67,9 @@ type RootPublicationBuildGroup struct {
 	// This is a read-capability window, never a construction limit or registry.
 	nativeBuiltRoots           [4]uint64
 	nativeBuiltRootCount       uint8
+	nativeRootTransitions      []nativeOrderedRootTransition
+	outerLeafSegmentsAdded     bool
+	vlogRefDeltaUncovered      bool
 	nativeResources            *rootpublication.StableResourceSet
 	nativeRequirements         rootpublication.StableLogicalObligationRequirements
 	nativeAppend               rootpublication.StableLogicalObligationMutation
@@ -413,6 +421,9 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
+	if delta != nil && (len(entries) != 0 || len(ranges) != 0 || newRoot != rootID) && delta.outerLeafDependencyReuse {
+		group.outerLeafSegmentsAdded = true
+	}
 	group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)
 	group.recordVacuumMutationLocked(entries, ranges)
@@ -495,6 +506,24 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	}
 	defer publishPrepareGuard.Release()
 
+	for _, transition := range group.nativeRootTransitions {
+		if transition.base != transition.next {
+			group.vlogRefDeltaUncovered = true
+			break
+		}
+	}
+	group.nativeRootTransitions = nil
+	if group.vlogRefDeltaUncovered && group.vlogRefDelta != nil {
+		releaseValueLogRefDelta(group.vlogRefDelta)
+		group.vlogRefDelta = nil
+	}
+	if !group.outerLeafSegmentsAdded && group.vlogRefDelta != nil && group.vlogRefDelta.outerLeafDependencyReuse && !group.vlogRefDelta.ordinaryRawProducer {
+		if err := addOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, group.vlogRefDelta); err != nil {
+			return err
+		}
+		group.outerLeafSegmentsAdded = true
+	}
+
 	intent := b.commandWALPublishIntent
 	group.retrySnapshotAdmission = group.retrySnapshotAdmission && group.hasExactCapturedCoverage(intent)
 	commandAppended := false
@@ -563,6 +592,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	group.nativeResources = nil // finalize owns the original closure on every exit
 	clear(group.nativeBuiltRoots[:])
 	group.nativeBuiltRootCount = 0
+	group.nativeRootTransitions = nil
+	group.outerLeafSegmentsAdded = false
+	group.vlogRefDeltaUncovered = false
 	group.nativeRequirementsFallback = nil // finalize borrows the original captured fallback only synchronously
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
@@ -651,6 +683,9 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		// synchronous finalize. Drop all aliases before endRead on every exit.
 		clear(group.nativeBuiltRoots[:])
 		group.nativeBuiltRootCount = 0
+		group.nativeRootTransitions = nil
+		group.outerLeafSegmentsAdded = false
+		group.vlogRefDeltaUncovered = false
 		group.nativeRequirementsFallback = nil
 		group.nativeRequirements = rootpublication.StableLogicalObligationRequirements{}
 		group.nativeAppend = rootpublication.StableLogicalObligationMutation{}

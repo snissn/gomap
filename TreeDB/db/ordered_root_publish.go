@@ -1685,10 +1685,17 @@ func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDelta(idx *indexGen, b
 	if err != nil {
 		return nil, err
 	}
-	var refDelta *valueLogRefDelta
+	return db.buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOuterLeaves(idx, baseSeq, input, result, rootOpts.outerLeavesInValueLog)
+}
+
+func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOuterLeaves(idx *indexGen, baseSeq uint64, input OrderedRootDeltaBatchPublishInput, result orderedRootDeltaBatchGroupApplyResult, outerLeavesInValueLog bool) (*valueLogRefDelta, error) {
+	var (
+		refDelta *valueLogRefDelta
+		err      error
+	)
 	switch {
 	case input.BaseRoot == 0:
-		refDelta, err = db.buildOrderedRootDeltaBatchValueLogRefDelta(idx, 0, baseSeq, input.Delta, rootOpts.outerLeavesInValueLog)
+		refDelta, err = db.buildOrderedRootDeltaBatchValueLogRefDelta(idx, 0, baseSeq, input.Delta, outerLeavesInValueLog)
 	case input.Delta == nil || input.Delta.IsEmpty():
 		refDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	default:
@@ -1700,12 +1707,12 @@ func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDelta(idx *indexGen, b
 		refDelta, err = db.buildValueLogRefDeltaWithOptions(
 			refPager, input.BaseRoot, baseSeq, entries, ranges,
 			&result.applyResult.OldPointerRefs, result.applyResult.OldEntriesRemoved,
-			result.applyResult.OldPointerRefsCollected, rootOpts.outerLeavesInValueLog,
+			result.applyResult.OldPointerRefsCollected, outerLeavesInValueLog,
 		)
 	}
 	if refDelta != nil {
 		refDelta.allowEmptyDependencyReuse = true
-		refDelta.outerLeafDependencyReuse = rootOpts.outerLeavesInValueLog
+		refDelta.outerLeafDependencyReuse = outerLeavesInValueLog
 	}
 	return refDelta, err
 }

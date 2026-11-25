@@ -78,26 +78,45 @@ func nativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows,
 func nativeJSONFinalRowsWithMode(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
 	return nativeJSONFinalRowsResolved(name, meta, rows, admit, prepareScratch, mode, nil)
 }
+type nativeJSONResolvedFinalRows struct {
+	valid    bool
+	options  collectionOptions
+	changed  []preparedBatchUpdate
+	runtimes []indexRuntime
+}
+
 func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode, resolver templateV1Resolver) (*directBufferedInsertPlan, []preparedBatchUpdate, []indexRuntime, error) {
+	opts, changed, runtimes, err := resolveNativeJSONFinalRows(name, meta, rows, admit, prepareScratch, mode, resolver)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges {
+		return nil, changed, runtimes, nil
+	}
+	plan, err := finishNativeJSONFinalRowsPlan(name, opts, runtimes, changed, admit)
+	return plan, changed, runtimes, err
+}
+
+func resolveNativeJSONFinalRows(name string, meta CollectionMeta, rows *nativeJSONRows, admit func(uint64) error, prepareScratch func([]byte) error, mode updateBatchMode, resolver templateV1Resolver) (collectionOptions, []preparedBatchUpdate, []indexRuntime, error) {
 	// Runtime descriptors are allocated before per-row parsing; admit them first.
 	headerCharge, err := nativeJSONIndexedPlanCharge(meta, nil, nil)
 	if err != nil {
-		return nil, nil, nil, err
+		return collectionOptions{}, nil, nil, err
 	}
 	if err = admit(headerCharge); err != nil {
-		return nil, nil, nil, err
+		return collectionOptions{}, nil, nil, err
 	}
 	planner, err := nativeJSONInsertPlanner(meta)
 	if err != nil {
-		return nil, nil, nil, err
+		return collectionOptions{}, nil, nil, err
 	}
 	planner.options.templateResolver = resolver
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
-		return nil, nil, nil, err
+		return collectionOptions{}, nil, nil, err
 	}
 	if err = admitNativeInsertArray(len(rows.rows), uint64(unsafe.Sizeof(preparedBatchUpdate{})), admit); err != nil {
-		return nil, nil, nil, err
+		return collectionOptions{}, nil, nil, err
 	}
 	// One maintained arena owns every retained old/new state. Multi-value
 	// extraction keeps its own normalized reference slices; reserve those
@@ -110,7 +129,7 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 			}
 			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta)
 			if err != nil || capacity > int(^uint(0)>>1)-bytesCap || len(runtimes) > int(^uint(0)>>1)-stateCount {
-				return nil, nil, nil, memtable.ErrCOWCapacity
+				return collectionOptions{}, nil, nil, memtable.ErrCOWCapacity
 			}
 			bytesCap += capacity
 			stateCount += len(runtimes)
@@ -121,7 +140,7 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 					// The maintained parser allocates a reference for every
 					// input element before sorting/deduplicating it.
 					if err = admitNativeInsertArray(len(doc), uint64(unsafe.Sizeof([]byte{})), admit); err != nil {
-						return nil, nil, nil, err
+						return collectionOptions{}, nil, nil, err
 					}
 				}
 			}
@@ -142,7 +161,7 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 		{stateCount, uint64(unsafe.Sizeof([]byte{}))},
 	} {
 		if err = admitNativeInsertArray(allocation.count, allocation.size, admit); err != nil {
-			return nil, nil, nil, err
+			return collectionOptions{}, nil, nil, err
 		}
 	}
 	encoder := indexEncodeArena{buf: make([]byte, 0, bytesCap), scratch: make([]byte, 0, maxDocument), states: make([][][]byte, 0, stateCount), valueRefs: make([][]byte, 0, stateCount)}
@@ -153,12 +172,12 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 		if row.opening != nil {
 			if prepareScratch != nil {
 				if err = prepareScratch(row.opening); err != nil {
-					return nil, nil, nil, err
+					return collectionOptions{}, nil, nil, err
 				}
 			}
 			item.oldState, err = orderedIndexStateForDocumentWithArena(row.opening, runtimes, planner.options, &encoder)
 			if err != nil {
-				return nil, nil, nil, err
+				return collectionOptions{}, nil, nil, err
 			}
 		}
 		if row.current == nil {
@@ -171,34 +190,37 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 		} else {
 			if prepareScratch != nil {
 				if err = prepareScratch(row.current); err != nil {
-					return nil, nil, nil, err
+					return collectionOptions{}, nil, nil, err
 				}
 			}
 			if err = prepareBatchUpdateIndexEffects(&item, runtimes, planner.options, &encoder, &stats, false); err != nil {
-				return nil, nil, nil, err
+				return collectionOptions{}, nil, nil, err
 			}
 		}
 		changed = append(changed, item)
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges {
 		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
-			return nil, nil, nil, errUpdateBatchChangesSecondaryUniqueIndex
+			return collectionOptions{}, nil, nil, errUpdateBatchChangesSecondaryUniqueIndex
 		}
 		// Conditional eligibility is decided before final uniqueness or publication.
-		return nil, changed, runtimes, nil
+		return planner.options, changed, runtimes, nil
 	}
-	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, planner.options, runtimes, changed)
+	return planner.options, changed, runtimes, nil
+}
+
+func finishNativeJSONFinalRowsPlan(name string, opts collectionOptions, runtimes []indexRuntime, changed []preparedBatchUpdate, admit func(uint64) error) (*directBufferedInsertPlan, error) {
+	charge, stateEntries, roots, err := nativeJSONFinalPlanCharge(name, opts, runtimes, changed)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if err = admit(charge); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if err = rejectBatchUniqueConflicts(runtimes, changed); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	plan, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed, stateEntries, roots)
-	return plan, changed, runtimes, err
+	return buildNativeCRUDFinalPlan(name, opts, runtimes, changed, stateEntries, roots)
 }
 
 func (t *NativeJSONTxn) admitStage(g *nativeJSONTxnBinding, n uint64) error {
@@ -668,6 +690,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 	if len(ids) == 0 || len(ids) != len(documents) {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
+	g.resolvedFinal = nativeJSONResolvedFinalRows{}
 	if err := t.admitRowControls(g, len(ids)); err != nil {
 		return err
 	}
@@ -771,6 +794,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if len(items) == 0 {
 		return nil, nil
 	}
+	g.resolvedFinal = nativeJSONResolvedFinalRows{}
 	if err := t.admitRowControls(g, len(items)); err != nil {
 		return nil, err
 	}
@@ -921,6 +945,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 	if g == nil {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
+	g.resolvedFinal = nativeJSONResolvedFinalRows{}
 	if err := t.admitRowControls(g, len(ids)); err != nil {
 		return 0, err
 	}
@@ -990,7 +1015,20 @@ func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *
 				return err
 			}
 		}
-		direct, changed, runtimes, err := nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) }, updateBatchModeAny, g.templates)
+		var (
+			direct   *directBufferedInsertPlan
+			changed  []preparedBatchUpdate
+			runtimes []indexRuntime
+			err      error
+		)
+		if g.resolvedFinal.valid {
+			resolved := g.resolvedFinal
+			g.resolvedFinal = nativeJSONResolvedFinalRows{}
+			changed, runtimes = resolved.changed, resolved.runtimes
+			direct, err = finishNativeJSONFinalRowsPlan(g.name, resolved.options, runtimes, changed, admit)
+		} else {
+			direct, changed, runtimes, err = nativeJSONFinalRowsResolved(g.name, g.probe.meta, &g.rows, admit, func(doc []byte) error { return t.prepareValidation(g, doc) }, updateBatchModeAny, g.templates)
+		}
 		if err != nil {
 			return err
 		}
