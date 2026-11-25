@@ -22,6 +22,17 @@ type nativeEnginePreparation struct {
 	schema                              *nativeSchemaState
 	ownedDomains                        []*nativeDomainState
 	ownedCollections                    []*nativeCollectionState
+	inlineDomains                       [1]*nativeDomainState
+	inlineCollections                   [1]*nativeCollectionState
+}
+
+// nativeEngineVersionWithPrep fuses nativeEngineVersion and
+// nativeEnginePreparation into a single heap allocation for prepared
+// successors. nativeEngineRefund remains strictly independent with zero
+// backpointer to this composite allocation.
+type nativeEngineVersionWithPrep struct {
+	version nativeEngineVersion
+	prep    nativeEnginePreparation
 }
 
 // sealPrivateBuilders completes ownership, not publication. Seal is infallible
@@ -63,7 +74,24 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	if err != nil {
 		return nil, err
 	}
-	e := &nativeEngineVersion{nextIncarnation: base.nextIncarnation, allocator: base.allocator, maintenance: base.maintenance, refund: &nativeEngineRefund{lease: lease}, preparation: &nativeEnginePreparation{ownedDomains: make([]*nativeDomainState, 0, domainCount), ownedCollections: make([]*nativeCollectionState, 0, collectionCount)}}
+	holder := new(nativeEngineVersionWithPrep)
+	e := &holder.version
+	p := &holder.prep
+	e.nextIncarnation = base.nextIncarnation
+	e.allocator = base.allocator
+	e.maintenance = base.maintenance
+	e.refund = &nativeEngineRefund{lease: lease}
+	e.preparation = p
+	if domainCount <= len(p.inlineDomains) {
+		p.ownedDomains = p.inlineDomains[:0]
+	} else {
+		p.ownedDomains = make([]*nativeDomainState, 0, domainCount)
+	}
+	if collectionCount <= len(p.inlineCollections) {
+		p.ownedCollections = p.inlineCollections[:0]
+	} else {
+		p.ownedCollections = make([]*nativeCollectionState, 0, collectionCount)
+	}
 	e.refs.Store(1)
 	e.cleanup.Work = e
 	if base.inventory != nil {
@@ -77,16 +105,27 @@ func nativeEnginePreparationCharge(collectionCount, domainCount int) (uint64, er
 	if collectionCount < 0 || domainCount < 0 {
 		return 0, memtable.ErrCOWCapacity
 	}
-	count := uint64(collectionCount) + uint64(domainCount)
-	ptr := uint64(unsafe.Sizeof(uintptr(0)))
-	if count > ^uint64(0)/ptr {
-		return 0, memtable.ErrCOWCapacity
-	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersion{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{}))) +
+	fused := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersionWithPrep{})))
+	separate := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineVersion{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEnginePreparation{})))
-	for _, bytes := range [2]uint64{uint64(collectionCount) * ptr, uint64(domainCount) * ptr} {
-		backing := memtable.COWAllocationCharge(bytes)
+	header := max(fused, separate)
+	charge := header + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{})))
+	ptr := uint64(unsafe.Sizeof(uintptr(0)))
+	if collectionCount > len(nativeEnginePreparation{}.inlineCollections) {
+		if uint64(collectionCount) > ^uint64(0)/ptr {
+			return 0, memtable.ErrCOWCapacity
+		}
+		backing := memtable.COWAllocationCharge(uint64(collectionCount) * ptr)
+		if backing > ^uint64(0)-charge {
+			return 0, memtable.ErrCOWCapacity
+		}
+		charge += backing
+	}
+	if domainCount > len(nativeEnginePreparation{}.inlineDomains) {
+		if uint64(domainCount) > ^uint64(0)/ptr {
+			return 0, memtable.ErrCOWCapacity
+		}
+		backing := memtable.COWAllocationCharge(uint64(domainCount) * ptr)
 		if backing > ^uint64(0)-charge {
 			return 0, memtable.ErrCOWCapacity
 		}
@@ -154,6 +193,8 @@ func (p *nativeEnginePreparation) finish() (done cowbtree.OwnedMapCompletion, fa
 	}
 	done.Append(p.schema.release())
 	p.schema = nil
+	clear(p.inlineDomains[:])
+	clear(p.inlineCollections[:])
 	p.ownedDomains, p.ownedCollections = nil, nil
 	return done, nil
 }
