@@ -28,6 +28,9 @@ func NewHashingEmbedder(cfg Config) (Embedder, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if len(cfg.Options) > 0 {
+		return nil, fmt.Errorf("embedding: provider %q does not accept options", ProviderHashing)
+	}
 	return &HashingEmbedder{dims: cfg.Dimensions}, nil
 }
 
