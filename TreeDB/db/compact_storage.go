@@ -469,6 +469,9 @@ func (db *DB) SettleCompactStorageAfterReadBasisRefresh(ctx context.Context, opt
 	priorGenerationsDeleted := stats.LeafGenerationGC.GenerationsDeleted
 	priorGenerationsEligible := stats.LeafGenerationGC.GenerationsEligible
 	if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-read-basis-refresh", func() error {
+		if _, err := db.refreshDurableRootSlotsForDeletedOuterLeafFiles(nil); err != nil {
+			return err
+		}
 		roots, systems := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{ProtectedRootIDs: roots, ProtectedSystemRootIDs: systems})
 		gc.BytesDeleted += priorBytesDeleted
@@ -739,7 +742,29 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 	}
 	compactLeafPackPlanState.invalidate()
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-leaf-generation-gc", func() error {
-		return db.checkpoint(maintenanceLocked)
+		if err := db.checkpoint(maintenanceLocked); err != nil {
+			return err
+		}
+		refreshed, err := db.refreshDurableRootSlotsForDeletedOuterLeafFiles(owner)
+		if err != nil {
+			return err
+		}
+		if refreshed {
+			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+			prior := stats.LeafGenerationGC
+			gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
+				ProtectedRootIDs:       protectedRootIDs,
+				ProtectedSystemRootIDs: protectedSystemRootIDs,
+			}, !maintenanceLocked)
+			gc.BytesDeleted += prior.BytesDeleted
+			gc.BytesEligible += prior.BytesEligible
+			gc.FilesDeleted += prior.FilesDeleted
+			gc.GenerationsDeleted += prior.GenerationsDeleted
+			gc.GenerationsEligible += prior.GenerationsEligible
+			stats.LeafGenerationGC = gc
+			return err
+		}
+		return nil
 	}); err != nil {
 		return stats, err
 	}
@@ -1175,7 +1200,29 @@ func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactS
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.checkpoint(!lockMaintenance)
+				if err := db.checkpoint(!lockMaintenance); err != nil {
+					return err
+				}
+				refreshed, err := db.refreshDurableRootSlotsForDeletedOuterLeafFiles(owner)
+				if err != nil {
+					return err
+				}
+				if refreshed {
+					protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+					prior := stats.LeafGenerationGC
+					gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
+						ProtectedRootIDs:       protectedRootIDs,
+						ProtectedSystemRootIDs: protectedSystemRootIDs,
+					}, lockMaintenance)
+					gc.BytesDeleted += prior.BytesDeleted
+					gc.BytesEligible += prior.BytesEligible
+					gc.FilesDeleted += prior.FilesDeleted
+					gc.GenerationsDeleted += prior.GenerationsDeleted
+					gc.GenerationsEligible += prior.GenerationsEligible
+					stats.LeafGenerationGC = gc
+					return err
+				}
+				return nil
 			}); err != nil {
 				return err
 			}
