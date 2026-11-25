@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // nativeEntryAtRoot shares only physical decoding/traversal, never logical
@@ -54,9 +55,15 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspace(cache *cowCache, w *cowRe
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider != nil {
+		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
+	}
 	point.leafGen++
-	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
-		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
+	// Pass cache=nil and localBlock=false so dictionary capability, COWReadLimits
+	// inspection, and leafPageCache hit accounting are never bypassed.
+	entry, err := reader.GetEntryExactWithPinnedCOWLeafCached(key, point.key[:], point.leaf[:], nil, w.limits, func(ptr page.LeafLogPtr, leafDst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
+		return readInspectedPhysicalLeaf(cache, w, ptr, leafDst, true, false, independent, &record)
 	})
 	if err != nil {
 		return node.LeafEntry{}, err

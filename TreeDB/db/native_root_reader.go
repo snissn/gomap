@@ -2,6 +2,7 @@ package db
 
 import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -77,6 +78,32 @@ func (r *SnapshotRootReader) GetEntryExactWithFixedScratch(key, keyScratch, leaf
 	}
 	defer r.owner.endRead()
 	return r.tree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, readLeaf)
+}
+
+// GetEntryExactWithPinnedCOWLeafCached performs a fixed-scratch point read on
+// this captured root with optional stack-local leaf-page caching under one
+// snapshot read pin, carrying verified leaf-page checksum proofs back to the
+// owner's leaf page cache.
+func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafCached(
+	key, keyScratch, leafScratch []byte,
+	cache *tree.FixedScratchLeafCache,
+	limits valuelog.COWReadLimits,
+	readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error),
+) (node.LeafEntry, error) {
+	if err := r.beginRead(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	defer r.owner.endRead()
+	if readLeaf == nil {
+		return r.tree.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, cache, nil)
+	}
+	return r.tree.GetEntryWithFixedScratchLeafProofCached(key, keyScratch, leafScratch, cache, func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageReadState, error) {
+		record, err := r.owner.inspectPinnedCOWLeafRecord(ptr, limits)
+		if err != nil {
+			return nil, tree.LeafLogPageReadState{}, err
+		}
+		return readLeaf(ptr, dst, record)
+	}, r.owner.reader.leafPageCache.markCopiedPageChecksumVerified)
 }
 
 // SeekGEEntryWithFixedScratch includes physical tombstones, leaving suppression
