@@ -1095,6 +1095,24 @@ func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
 		}
 	}
 
+	// 5b. Contended NativeValueAtPointer with Lane 0 held and exhausted budget
+	// must refuse inspection admission cleanly with ErrCOWCapacity and zero leaks.
+	beforeExhaust := budget.Stats()
+	exhaustPressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - beforeExhaust.ReservedBytes - leaseOverhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix.db.cow.physicalMu.Lock()
+	_, exhaustErr := fix.capture.NativeValueAtPointer(fix.valPtr, nil)
+	fix.db.cow.physicalMu.Unlock()
+	exhaustPressure.Close()
+	if !errors.Is(exhaustErr, memtable.ErrCOWCapacity) {
+		t.Fatalf("contended NativeValueAtPointer under exhausted budget err=%v want ErrCOWCapacity", exhaustErr)
+	}
+	if afterExhaust := budget.Stats(); afterExhaust.ReservedBytes != beforeExhaust.ReservedBytes || afterExhaust.ExternalLeases != beforeExhaust.ExternalLeases {
+		t.Fatalf("contended exhausted NativeValueAtPointer leaked budget: before=%+v after=%+v", beforeExhaust, afterExhaust)
+	}
+
 	// 6. Close capture and DB: 100% of lane 0 + spillover leases must be refunded.
 	if err := fix.capture.Close(); err != nil {
 		t.Fatal(err)
