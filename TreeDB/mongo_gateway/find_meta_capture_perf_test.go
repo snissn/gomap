@@ -12,6 +12,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -772,6 +773,133 @@ func TestFindMetaCaptureHasIndexedRangePredicateEquivalence(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("hasIndexedRangePredicateForIndex allocated %.1f allocs/op on equality plan, want 0", allocs)
 	}
+}
+
+func TestFindMetaCaptureIndexedPredicateMissingVsLookupError(t *testing.T) {
+	runCases := func(t *testing.T, col *collections.Collection) {
+		t.Helper()
+		view, err := col.OpenCollectionReadView()
+		if err != nil {
+			t.Fatalf("OpenCollectionReadView: %v", err)
+		}
+		defer func() { _ = view.Close() }()
+
+		dec, err := newFindDocumentDecoder(col, collections.DocumentFormatBSON)
+		if err != nil {
+			t.Fatalf("newFindDocumentDecoder: %v", err)
+		}
+		defer func() { _ = dec.Close() }()
+
+		// 1. Valid index name absent from the view's captured catalog suppresses
+		// missing-index errors and returns an empty slice (FindByIndexValueLimit parity).
+		missingPred, err := parseFindPredicates(mustMarshalWireDoc(t, bson.D{{Key: "ghost", Value: "abc"}}))
+		if err != nil {
+			t.Fatalf("parseFindPredicates(missing): %v", err)
+		}
+		docs, err := documentsForIndexedPredicate(col, view, dec, missingPred[0], collections.IndexDefinition{
+			Name:      "ghost_1",
+			Field:     "ghost",
+			ValueType: collections.IndexValueString,
+		}, 10, 10)
+		if err != nil || len(docs) != 0 {
+			t.Fatalf("missing index got docs=%d err=%v, want 0, nil", len(docs), err)
+		}
+
+		// 2. Existing index lookup failure (including ErrHybridSearchIndexUnavailable
+		// returned by non-native hybridScalarLookupView.visitLeafIDs) must be propagated,
+		// never suppressed as an empty result.
+		mismatchPred, err := parseFindPredicates(mustMarshalWireDoc(t, bson.D{{Key: "email", Value: int64(42)}}))
+		if err != nil {
+			t.Fatalf("parseFindPredicates(mismatch): %v", err)
+		}
+		if _, err := documentsForIndexedPredicate(col, view, dec, mismatchPred[0], collections.IndexDefinition{
+			Name:      "email_1",
+			Field:     "email",
+			ValueType: collections.IndexValueInt64,
+		}, 10, 10); err == nil {
+			t.Fatalf("expected lookup error for existing index email_1 with incompatible scalar type, got nil")
+		}
+
+		// 3. Invalid index name must propagate its validation error rather than returning empty.
+		if _, err := documentsForIndexedPredicate(col, view, dec, missingPred[0], collections.IndexDefinition{
+			Name:      "",
+			Field:     "ghost",
+			ValueType: collections.IndexValueString,
+		}, 10, 10); err == nil {
+			t.Fatalf("expected error for invalid empty index name, got nil")
+		}
+
+		// 4. Closed read view must propagate its error rather than returning empty.
+		closedView, err := col.OpenCollectionReadView()
+		if err != nil {
+			t.Fatalf("OpenCollectionReadView(closed): %v", err)
+		}
+		if err := closedView.Close(); err != nil {
+			t.Fatalf("Close view: %v", err)
+		}
+		emailPred, err := parseFindPredicates(mustMarshalWireDoc(t, bson.D{{Key: "email", Value: "user-00001@example.com"}}))
+		if err != nil {
+			t.Fatalf("parseFindPredicates(email): %v", err)
+		}
+		if _, err := documentsForIndexedPredicate(col, closedView, dec, emailPred[0], collections.IndexDefinition{
+			Name:      "email_1",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+		}, 10, 10); err == nil {
+			t.Fatalf("expected error on closed CollectionReadView, got nil")
+		}
+	}
+
+	t.Run("StandaloneCOW", func(t *testing.T) {
+		server, collName := openStandaloneCOWBSONFixture(t, collections.DocumentFormatBSON, false, 8)
+		col, err := server.Collections.OpenCollection("app." + collName)
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		runCases(t, col)
+	})
+
+	t.Run("NonNativeBTree", func(t *testing.T) {
+		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("backenddb.Open: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := db.Close(); err != nil {
+				t.Errorf("db.Close: %v", err)
+			}
+		})
+		mgr := collections.NewCollectionManager(db)
+		t.Cleanup(func() {
+			if err := mgr.Close(); err != nil {
+				t.Errorf("mgr.Close: %v", err)
+			}
+		})
+		if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+			Name:    "app.users",
+			Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+			Indexes: []collections.IndexDefinition{{
+				Name:      "email_1",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+				Unique:    true,
+			}},
+		}); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection("app.users")
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		rawDoc := mustMarshalWireDoc(t, bson.D{
+			{Key: "_id", Value: "user-00001"},
+			{Key: "email", Value: "user-00001@example.com"},
+		})
+		if _, err := col.Insert([]byte("user-00001"), rawDoc); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		runCases(t, col)
+	})
 }
 
 func BenchmarkFindOneIndexedBSONStandaloneCOW(b *testing.B) {

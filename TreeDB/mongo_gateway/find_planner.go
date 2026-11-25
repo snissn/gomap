@@ -1461,7 +1461,7 @@ func documentsForIndexedPredicate(col *collections.Collection, view *collections
 			return nil
 		})
 		if err != nil && !errors.Is(err, errIndexedPredicateLimitReached) {
-			if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+			if isMissingIndexLookupError(view, idx.Name, err) {
 				continue
 			}
 			return nil, err
@@ -1494,6 +1494,38 @@ func documentsForIndexedPredicate(col *collections.Collection, view *collections
 		return []wire.Document{}, nil
 	}
 	return out, nil
+}
+
+func collectionMetaHasIndex(meta collections.CollectionMeta, indexName string) bool {
+	for _, idx := range meta.Indexes {
+		if idx.Name == indexName {
+			return true
+		}
+	}
+	return false
+}
+
+// isMissingIndexLookupError reports whether an error from
+// CollectionReadView.VisitIndexValueIDs specifically indicates that indexName
+// does not exist in the view's captured catalog (matching FindByIndexValueLimit
+// returning an empty slice for a missing index). Underlying lookup, I/O, or
+// decoding failures wrapped in ErrHybridSearchIndexUnavailable on non-native
+// views must still be propagated when the index exists in the view.
+func isMissingIndexLookupError(view *collections.CollectionReadView, indexName string, err error) bool {
+	if errors.Is(err, collections.ErrIndexNotFound) {
+		return true
+	}
+	if !errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+		return false
+	}
+	if collections.ValidateIndexName(indexName) != nil {
+		return false
+	}
+	viewMeta, metaErr := view.Meta()
+	if metaErr != nil {
+		return false
+	}
+	return !collectionMetaHasIndex(viewMeta, indexName)
 }
 
 func documentsForIndexedFieldPredicates(col *collections.Collection, view *collections.CollectionReadView, decoder findDocumentDecoder, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, string, bool, int, error) {
