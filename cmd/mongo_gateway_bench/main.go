@@ -7693,6 +7693,9 @@ func collectDiskSnapshot(dir string) (diskSnapshot, error) {
 	out := diskSnapshot{}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) && path != dir {
+				return nil
+			}
 			return err
 		}
 		if !entry.Type().IsRegular() {
@@ -7700,6 +7703,9 @@ func collectDiskSnapshot(dir string) (diskSnapshot, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		size := info.Size()
