@@ -10019,6 +10019,7 @@ type DB struct {
 	vlogGenerationLeafPackLastReclaimedBytes                     atomic.Int64
 	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
 	vlogGenerationPrivateCOWPackLastAttemptNS                    atomic.Int64
+	vlogGenerationLeafPackLastAttemptErrored                     atomic.Bool
 	vlogGenerationLeafPackCanceledLastNS                         atomic.Int64
 	vlogGenerationLeafPackDeadlineLastNS                         atomic.Int64
 	vlogGenerationLeafPackLastSkipReason                         atomic.Value // string
@@ -20080,8 +20081,16 @@ func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
 		return false
 	}
 	// The bounded private-COW path owns no full cache maintenance fence. It
-	// runs on the existing non-GC tick before generic quiet/rewrite admission.
+	// runs on the existing non-GC tick after foreground admission gating.
 	if !runGC && db.privateCOWLeafPackEnabled() {
+		if db.closing.Load() || db.maintenanceActive.Load() || db.suppressBackgroundVlogGenerationForMaintenancePhase() ||
+			db.coalesceDeferredVectorBuildVlogMaintenance() || db.vlogGenerationMaintenanceActive.Load() {
+			return false
+		}
+		if ok, reason := db.shouldRunPeriodicPrivateCOWLeafPack(time.Now()); !ok {
+			db.observeVlogGenerationLeafPackAdmissionSkip(reason)
+			return false
+		}
 		attempted, err := db.runPrivateCOWLeafPackSlice()
 		if err != nil && db.notifyError != nil {
 			db.notifyError(fmt.Errorf("cachingdb: private COW leaf maintenance: %w", err))
@@ -20853,7 +20862,7 @@ func (db *DB) observeVlogGenerationLeafPackAdmissionSkip(reason string) {
 	if db == nil || reason == "" {
 		return
 	}
-	if !envBool(envEnableLeafGenerationPackMaintenance) || !db.indexOuterLeavesInValueLog {
+	if (!envBool(envEnableLeafGenerationPackMaintenance) && !db.privateCOWLeafPackEnabled()) || !db.indexOuterLeavesInValueLog {
 		return
 	}
 	switch reason {

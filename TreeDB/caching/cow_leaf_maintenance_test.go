@@ -30,6 +30,8 @@ type privateCOWPackHeldBackend struct {
 	published       chan backenddb.LeafGenerationPackRunOnceStats
 	release         chan struct{}
 	failure         error
+	gcFailure       error
+	gcDeleted       int
 	fallbackFailure error
 	calls           int
 	gcCalls         int
@@ -56,7 +58,7 @@ func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner
 	b.lastOpts = opts
 	if b.forceNoop {
 		b.last = backenddb.LeafGenerationPackRunOnceStats{SkipReason: "test: no remaining pack candidate"}
-		return b.last, nil
+		return b.last, b.failure
 	}
 	stats, err := b.DB.LeafGenerationPackRunOnceForPrivateCOW(owner, ctx, opts)
 	b.last = stats
@@ -90,6 +92,10 @@ func (b *privateCOWPackHeldBackend) CommandWALCheckpointFallbackNeedsRefresh(bas
 func (b *privateCOWPackHeldBackend) LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error) {
 	b.gcCalls++
 	stats, err := b.DB.LeafGenerationGC(ctx, opts)
+	if b.gcDeleted > 0 {
+		stats.GenerationsDeleted = b.gcDeleted
+	}
+	err = errors.Join(err, b.gcFailure)
 	if b.gcCompleted != nil {
 		b.gcCompleted <- privateCOWLeafGCResult{packet: ctx.Done(), stats: stats}
 	}
@@ -880,5 +886,210 @@ func TestPrivateCOWLeafPackDebtResponsiveMultiGenerationPack(t *testing.T) {
 	}
 	if len(backend.last.Selection.GenerationIDs) <= privateCOWLeafPackGenerations {
 		t.Fatalf("expected > %d generations packed under debt, got %d (%v)", privateCOWLeafPackGenerations, len(backend.last.Selection.GenerationIDs), backend.last.Selection.GenerationIDs)
+	}
+}
+
+func TestPrivateCOWLeafPackPeriodicWriteBurstGateAndRecovery(t *testing.T) {
+	cache, backend := privateCOWPackFixture(t)
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	// Unset envEnableLeafGenerationPackMaintenance to exercise standalone COW default mode.
+	if err := os.Unsetenv(envEnableLeafGenerationPackMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	backend.forceNoop = true
+	backend.overrideDebt = true
+	backend.debtGenerations = privateCOWLeafPackDebtGenerations
+	backend.debtBytes = privateCOWLeafPackDebtBytes
+
+	// 1. Periodic write-burst skip: active write suppresses periodic pack and
+	// records telemetry even when TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE is unset.
+	cache.noteWrite()
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); ran || backend.calls != 0 {
+		t.Fatalf("periodic write-burst skip failed: ran=%v calls=%d", ran, backend.calls)
+	}
+	if got := cache.vlogGenerationLeafPackSkipWriteBurst.Load(); got != 1 {
+		t.Fatalf("skip.write_burst=%d want 1", got)
+	}
+	if got := cache.Stats()["treedb.cache.vlog_generation.leaf_pack.skip.write_burst"]; got != "1" {
+		t.Fatalf("stats skip.write_burst=%q want %q", got, "1")
+	}
+	if got := atomicValueString(&cache.vlogGenerationLeafPackLastSkipReason); got != "write_burst" {
+		t.Fatalf("lastSkipReason=%q want %q", got, "write_burst")
+	}
+	// Transient admission skips must not poison privateCOWLeafPackPolicy() into 30s backoff.
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	for _, reason := range []string{"write_burst", "foreground_iterators", "queue_pressure"} {
+		cache.storeVlogGenerationLeafPackLastSkipReason(reason)
+		if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackDebtInterval {
+			t.Fatalf("transient skip %q poisoned debt interval: got %v want %v", reason, interval, privateCOWLeafPackDebtInterval)
+		}
+	}
+
+	// 2. Quiet recovery: once lastForegroundWriteUnixNano is past write-burst grace,
+	// periodic maintenance runs normally.
+	cache.storeVlogGenerationLeafPackLastSkipReason("write_burst")
+	grace := leafGenerationPackMaintenanceWriteBurstGrace()
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-grace - time.Second).UnixNano())
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); !ran || backend.calls != 1 {
+		t.Fatalf("quiet recovery failed: ran=%v calls=%d", ran, backend.calls)
+	}
+
+	// 3. Emergency debt override: under an active write burst with sealed debt
+	// >= 256 MiB, periodic maintenance overrides write-burst gating.
+	skipsBefore := cache.vlogGenerationLeafPackSkipWriteBurst.Load()
+	backend.debtBytes = privateCOWLeafPackEmergencyDebtBytes
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	cache.noteWrite()
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); !ran || backend.calls != 2 {
+		t.Fatalf("emergency debt override failed: ran=%v calls=%d", ran, backend.calls)
+	}
+	if got := cache.vlogGenerationLeafPackSkipWriteBurst.Load(); got != skipsBefore {
+		t.Fatalf("emergency debt override incremented skip.write_burst: %d -> %d", skipsBefore, got)
+	}
+}
+
+func TestPrivateCOWLeafPackPeriodicGateSuppressedDuringMaintenanceAndClosing(t *testing.T) {
+	cache, backend := privateCOWPackFixture(t)
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	if err := os.Unsetenv(envEnableLeafGenerationPackMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	backend.forceNoop = true
+	cache.noteWrite()
+
+	// Restore maintenance phase must suppress without incrementing skip.write_burst.
+	cache.SetMaintenancePhase(MaintenancePhaseRestore)
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); ran || backend.calls != 0 {
+		t.Fatalf("restore phase ran periodic pack: ran=%v calls=%d", ran, backend.calls)
+	}
+	cache.SetMaintenancePhase(MaintenancePhaseSteady)
+
+	// maintenanceActive must suppress without incrementing skip.write_burst.
+	cache.maintenanceActive.Store(true)
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); ran || backend.calls != 0 {
+		t.Fatalf("maintenanceActive ran periodic pack: ran=%v calls=%d", ran, backend.calls)
+	}
+	cache.maintenanceActive.Store(false)
+
+	// vlogGenerationMaintenanceActive must suppress without incrementing skip.write_burst.
+	cache.vlogGenerationMaintenanceActive.Store(true)
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); ran || backend.calls != 0 {
+		t.Fatalf("vlogGenerationMaintenanceActive ran periodic pack: ran=%v calls=%d", ran, backend.calls)
+	}
+	cache.vlogGenerationMaintenanceActive.Store(false)
+
+	// closing must suppress without incrementing skip.write_burst.
+	cache.closing.Store(true)
+	if ran := cache.maybeRunPeriodicVlogGenerationMaintenance(false); ran || backend.calls != 0 {
+		t.Fatalf("closing ran periodic pack: ran=%v calls=%d", ran, backend.calls)
+	}
+	cache.closing.Store(false)
+
+	if got := cache.vlogGenerationLeafPackSkipWriteBurst.Load(); got != 0 {
+		t.Fatalf("suppressed states incremented skip.write_burst=%d want 0", got)
+	}
+}
+
+func TestPrivateCOWLeafPackErrorBackoffPreserved(t *testing.T) {
+	cache, backend := privateCOWPackFixture(t)
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	if err := os.Unsetenv(envEnableLeafGenerationPackMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	backend.forceNoop = true
+	backend.overrideDebt = true
+	backend.debtGenerations = privateCOWLeafPackDebtGenerations
+	backend.debtBytes = privateCOWLeafPackDebtBytes
+
+	// 1. Pack slice returning ErrLeafGenerationMaintenanceLimit returns (true, nil)
+	// but MUST set error backoff and preserve the 30s interval even under debt
+	// and even if a later write_burst admission skip overwrites lastSkipReason.
+	backend.failure = backenddb.ErrLeafGenerationMaintenanceLimit
+	attempted, err := cache.runPrivateCOWLeafPackSlice()
+	if !attempted || err != nil {
+		t.Fatalf("limit pack slice: attempted=%v err=%v want true, nil", attempted, err)
+	}
+	if !cache.vlogGenerationLeafPackLastAttemptErrored.Load() {
+		t.Fatal("limit pack slice did not mark LastAttemptErrored")
+	}
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	cache.observeVlogGenerationLeafPackAdmissionSkip("write_burst")
+	if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackInterval {
+		t.Fatalf("limit error backoff overridden after write_burst skip: got %v want %v", interval, privateCOWLeafPackInterval)
+	}
+
+	// 2. Pack error with lastDeleted > 0 from a prior GC (e.g. failure before
+	// line 156 clears lastDeleted, or GC failure after deleting generations)
+	// MUST preserve the 30s backoff instead of dropping to 3s.
+	backend.failure = nil
+	backend.gcFailure = backenddb.ErrLeafGenerationMaintenanceLimit
+	backend.gcDeleted = 2
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	attempted, err = cache.runPrivateCOWLeafPackSlice()
+	if !attempted || err != nil {
+		t.Fatalf("limit GC slice: attempted=%v err=%v want true, nil", attempted, err)
+	}
+	if !cache.vlogGenerationLeafPackLastAttemptErrored.Load() {
+		t.Fatal("limit GC slice did not mark LastAttemptErrored")
+	}
+	if got := cache.vlogGenerationLeafPackGCLastDeletedGenerations.Load(); got != 2 {
+		t.Fatalf("lastDeleted=%d want 2", got)
+	}
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackInterval {
+		t.Fatalf("GC limit error backoff overridden by lastDeleted>0: got %v want %v", interval, privateCOWLeafPackInterval)
+	}
+
+	// 3. Hard error during slice (e.g., refreshRequired before line 156 clears lastDeleted,
+	// or packErr != nil) sets LastAttemptErrored and preserves 30s backoff even with lastDeleted > 0.
+	backend.gcFailure = nil
+	backend.gcDeleted = 0
+	cache.vlogGenerationLeafPackLastAttemptErrored.Store(false)
+	cache.vlogGenerationLeafPackGCLastDeletedGenerations.Store(3)
+	cache.cow.refreshRequired.Store(true)
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	attempted, err = cache.runPrivateCOWLeafPackSlice()
+	cache.cow.refreshRequired.Store(false)
+	if attempted || !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("refreshRequired slice: attempted=%v err=%v", attempted, err)
+	}
+	if !cache.vlogGenerationLeafPackLastAttemptErrored.Load() {
+		t.Fatal("pre-defer error did not mark LastAttemptErrored")
+	}
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackInterval {
+		t.Fatalf("pre-defer error backoff overridden by lastDeleted>0: got %v want %v", interval, privateCOWLeafPackInterval)
+	}
+
+	// Hard packErr != nil also preserves 30s backoff.
+	backend.failure = errors.New("synthetic pack error")
+	cache.vlogGenerationLeafPackLastAttemptErrored.Store(false)
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	attempted, err = cache.runPrivateCOWLeafPackSlice()
+	if !attempted || !errors.Is(err, backend.failure) {
+		t.Fatalf("hard pack error slice: attempted=%v err=%v", attempted, err)
+	}
+	if !cache.vlogGenerationLeafPackLastAttemptErrored.Load() {
+		t.Fatal("hard pack error did not mark LastAttemptErrored")
+	}
+	cache.vlogGenerationLeafPackGCLastDeletedGenerations.Store(1)
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackInterval {
+		t.Fatalf("hard pack error backoff overridden by lastDeleted>0: got %v want %v", interval, privateCOWLeafPackInterval)
+	}
+
+	// 4. Clean non-error completion clears LastAttemptErrored and restores 3s debt interval.
+	backend.failure = nil
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	attempted, err = cache.runPrivateCOWLeafPackSlice()
+	if !attempted || err != nil {
+		t.Fatalf("clean recovery slice: attempted=%v err=%v", attempted, err)
+	}
+	if cache.vlogGenerationLeafPackLastAttemptErrored.Load() {
+		t.Fatal("clean slice did not clear LastAttemptErrored")
+	}
+	cache.storeVlogGenerationLeafPackLastSkipReason("")
+	if interval, _, _ := cache.privateCOWLeafPackPolicy(); interval != privateCOWLeafPackDebtInterval {
+		t.Fatalf("clean recovery did not restore debt interval: got %v want %v", interval, privateCOWLeafPackDebtInterval)
 	}
 }

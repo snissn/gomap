@@ -22,6 +22,7 @@ const (
 	privateCOWLeafPackInterval             = 30 * time.Second
 	privateCOWLeafPackDebtGenerations      = 6
 	privateCOWLeafPackDebtBytes            = 64 << 20
+	privateCOWLeafPackEmergencyDebtBytes   = 256 << 20
 	privateCOWLeafPackDebtInterval         = 3 * time.Second
 	privateCOWLeafPackDebtGenerationsBatch = 6
 	privateCOWLeafPackDebtCopyBytes        = 64 << 20
@@ -59,14 +60,32 @@ func (db *DB) privateCOWLeafPackPolicy() (interval time.Duration, maxGenerations
 	lastAttempt := db.vlogGenerationPrivateCOWPackLastAttemptNS.Load()
 	lastSkipReason := atomicValueString(&db.vlogGenerationLeafPackLastSkipReason)
 	lastDeleted := db.vlogGenerationLeafPackGCLastDeletedGenerations.Load()
-	if lastAttempt == 0 ||
+	if !db.vlogGenerationLeafPackLastAttemptErrored.Load() && (lastAttempt == 0 ||
 		lastSkipReason == "" ||
 		lastDeleted > 0 ||
 		lastSkipReason == "plan_admission:no_candidates" ||
-		lastSkipReason == "plan_admission:too_few_generations" {
+		lastSkipReason == "plan_admission:too_few_generations" ||
+		lastSkipReason == "write_burst" ||
+		lastSkipReason == "foreground_iterators" ||
+		lastSkipReason == "queue_pressure") {
 		interval = privateCOWLeafPackDebtInterval
 	}
 	return interval, maxGenerations, maxCopyBytes
+}
+
+func (db *DB) shouldRunPeriodicPrivateCOWLeafPack(now time.Time) (bool, string) {
+	admission := db.foregroundLeafPackAdmission(now)
+	if admission.allowed {
+		return true, ""
+	}
+	if db != nil {
+		if reader, ok := db.backend.(backendLeafGenerationSealedDebtReader); ok {
+			if _, sealedBytes := reader.LeafGenerationSealedDebt(); sealedBytes >= privateCOWLeafPackEmergencyDebtBytes {
+				return true, ""
+			}
+		}
+	}
+	return false, admission.reason
 }
 
 // Initial WAL-on scheduler state is not an opt-out. Explicit disables, unlike
@@ -122,6 +141,11 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	}
 	// A failed accepted handoff must not be retried at every scheduler tick.
 	db.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().UnixNano())
+	defer func() {
+		if retErr != nil {
+			db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
+		}
+	}()
 	if err := db.completeCOWHandoff(); err != nil {
 		return true, err
 	}
@@ -224,6 +248,7 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 			return true, packErr
 		}
 		if errors.Is(packErr, context.Canceled) || errors.Is(packErr, context.DeadlineExceeded) || errors.Is(packErr, backenddb.ErrLeafGenerationMaintenanceLimit) {
+			db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
 			db.vlogGenerationLeafPackSkips.Add(1)
 			db.storeVlogGenerationLeafPackLastSkipReason(packErr.Error())
 			return true, nil
@@ -275,13 +300,24 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		}
 		gcErr = db.privateCOWLeafMaintenanceError(gcErr)
 		if db.cow.refreshRequired.Load() {
+			db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
 			return true, gcErr
 		}
 		if errors.Is(gcErr, context.Canceled) || errors.Is(gcErr, context.DeadlineExceeded) || errors.Is(gcErr, backenddb.ErrLeafGenerationMaintenanceLimit) {
+			db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
 			return true, nil
 		}
-		return true, gcErr
+		if gcErr != nil {
+			return true, gcErr
+		}
+		db.vlogGenerationLeafPackLastAttemptErrored.Store(false)
+		return true, nil
 	}
+	if ctx.Err() != nil {
+		db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
+		return true, nil
+	}
+	db.vlogGenerationLeafPackLastAttemptErrored.Store(false)
 	return true, nil
 }
 
