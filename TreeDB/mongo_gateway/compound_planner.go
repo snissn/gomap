@@ -59,24 +59,26 @@ func compoundIndexPlans(meta collections.CollectionMeta, plan findPlan) []compou
 			out = append(out, candidate)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].equalityPrefix != out[j].equalityPrefix {
-			return out[i].equalityPrefix > out[j].equalityPrefix
-		}
-		if out[i].hasRange != out[j].hasRange {
-			return out[i].hasRange
-		}
-		if out[i].sortSatisfied != out[j].sortSatisfied {
-			return out[i].sortSatisfied
-		}
-		if out[i].residualFilters != out[j].residualFilters {
-			return out[i].residualFilters < out[j].residualFilters
-		}
-		if out[i].idx.Unique != out[j].idx.Unique {
-			return out[i].idx.Unique
-		}
-		return out[i].idx.Name < out[j].idx.Name
-	})
+	if len(out) > 1 {
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].equalityPrefix != out[j].equalityPrefix {
+				return out[i].equalityPrefix > out[j].equalityPrefix
+			}
+			if out[i].hasRange != out[j].hasRange {
+				return out[i].hasRange
+			}
+			if out[i].sortSatisfied != out[j].sortSatisfied {
+				return out[i].sortSatisfied
+			}
+			if out[i].residualFilters != out[j].residualFilters {
+				return out[i].residualFilters < out[j].residualFilters
+			}
+			if out[i].idx.Unique != out[j].idx.Unique {
+				return out[i].idx.Unique
+			}
+			return out[i].idx.Name < out[j].idx.Name
+		})
+	}
 	return out
 }
 
@@ -96,11 +98,14 @@ func compoundPlanPaginationSafe(candidate compoundIndexPlan, plan findPlan) bool
 // executor. No requested sort is deliberately order-irrelevant, so the
 // legacy probe remains preferred there.
 func compoundPlanDeferredToLegacyLookup(meta collections.CollectionMeta, plan findPlan) bool {
-	if plan.hint.present || len(findIndexProbes(meta, plan)) == 0 {
+	if plan.hint.present || !hasFindIndexProbe(meta, plan) {
 		return false
 	}
+	if plan.sort.field == "" {
+		return true
+	}
 	candidate, ok := compoundIndexPlanFor(meta, plan)
-	return !ok || plan.sort.field == "" || !candidate.sortSatisfied
+	return !ok || !candidate.sortSatisfied
 }
 
 // mongoPrimaryKeyLess compares canonical gateway primary keys by their BSON
@@ -448,7 +453,7 @@ func compoundRangeBounds(predicates []findPredicate) (collections.IndexRangeBoun
 	return lower, upper, true, true
 }
 
-func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, compoundIndexPlan, bool, error) {
+func (s *Server) documentsForCompoundIndexPlanWithMeta(col *collections.Collection, meta collections.CollectionMeta, decoder findDocumentDecoder, plan findPlan) ([]wire.Document, compoundIndexPlan, bool, error) {
 	// Keep direct primary-key lookup as the established winner for supported
 	// `_id` equality/$in shapes. Compound planning must be additive, never a
 	// regression of that bounded path.
@@ -456,12 +461,12 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 			return nil, compoundIndexPlan{}, false, nil
 		}
-		if compoundPlanDeferredToLegacyLookup(col.MetaView(), plan) {
+		if compoundPlanDeferredToLegacyLookup(meta, plan) {
 			return nil, compoundIndexPlan{}, false, nil
 		}
 	}
-	ids, candidate, ok, err := s.compoundIndexPlanIDs(col, plan)
-	if err != nil && !plan.hint.present && len(findIndexProbes(col.MetaView(), plan)) != 0 && errors.Is(err, errMongoFindScanCapExceeded) {
+	ids, candidate, ok, err := s.compoundIndexPlanIDsWithMeta(col, meta, plan)
+	if err != nil && !plan.hint.present && hasFindIndexProbe(meta, plan) && errors.Is(err, errMongoFindScanCapExceeded) {
 		// A sort-satisfying compound walk is preferred when it completes, but
 		// it is not entitled to turn a selective legacy alternative into an
 		// error. Hand the command back to the established adaptive legacy
@@ -495,7 +500,7 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 			continue
 		}
 		plan.recordMaterialized()
-		doc, err := storedDocumentToBSON(col, materializer, stored)
+		doc, err := decoder.decode(stored)
 		if err != nil {
 			return nil, candidate, true, err
 		}
@@ -516,6 +521,10 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 // decoding documents. Cursor execution retains these small primary keys and
 // materializes BSON only as each batch is requested.
 func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan, retainedIDCaps ...int) ([][]byte, compoundIndexPlan, bool, error) {
+	return s.compoundIndexPlanIDsWithMeta(col, col.MetaView(), plan, retainedIDCaps...)
+}
+
+func (s *Server) compoundIndexPlanIDsWithMeta(col *collections.Collection, meta collections.CollectionMeta, plan findPlan, retainedIDCaps ...int) ([][]byte, compoundIndexPlan, bool, error) {
 	if s.compoundIndexPlanScanHook != nil {
 		s.compoundIndexPlanScanHook()
 	}
@@ -524,7 +533,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			return nil, compoundIndexPlan{}, false, nil
 		}
 	}
-	candidates := compoundIndexPlans(col.MetaView(), plan)
+	candidates := compoundIndexPlans(meta, plan)
 	if len(candidates) == 0 {
 		return nil, compoundIndexPlan{}, false, nil
 	}
