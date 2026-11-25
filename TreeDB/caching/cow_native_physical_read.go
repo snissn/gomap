@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -315,21 +316,39 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDict
 func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	limit := cache.budget.Limits().MaxInFlightBytes
 	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
-	if mu, slotReader, ok := cache.tryLockPhysicalLane(cache.physicalLaneSeed.Add(1)); ok {
+	f, _, err := b.snapshot.PinnedValueLogSegment(ptr.FileID)
+	if err != nil {
+		return nil, err
+	}
+	shape, err := f.InspectCOWRecord(ptr, limits)
+	if err != nil {
+		return nil, err
+	}
+	var mu *sync.Mutex
+	var slotReader **cowReadWorkspace
+	var ok bool
+	// Multi-lane spillover slots are reserved for dictionary-compressed values
+	// so concurrent uncompressed/block value reads never retain extra leases.
+	if shape.Compressed && shape.DictID != 0 {
+		mu, slotReader, ok = cache.tryLockPhysicalLane(cache.physicalLaneSeed.Add(1))
+	} else if cache.physicalMu.TryLock() {
+		mu, slotReader, ok = &cache.physicalMu, &cache.physicalReader, true
+	}
+	if ok {
 		defer mu.Unlock()
 		fresh := *slotReader == nil
 		w, err := cache.physicalWorkspaceSlotLocked(slotReader, limits)
 		if err != nil {
 			return nil, err
 		}
-		owned, err := b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
+		owned, err := b.readInspectedNativeValueWithWorkspace(cache, w, provider, f, ptr, shape, dst, useDst, admitOutput)
 		if err != nil && fresh && *slotReader == w && len(w.codecs) == 0 && w.allocations == nil {
 			*slotReader = nil
 			w.close()
 		}
 		return owned, err
 	}
-	// All retained physical lanes are busy (or budget headroom is tight for
+	// All eligible physical lanes are busy (or budget headroom is tight for
 	// admitting a new spillover slot): admit a bounded per-call temporary
 	// decoder workspace so concurrent value reads never serialize or retain
 	// overflow leases.
@@ -338,7 +357,7 @@ func (b *cowBackendBasis) nativeValueAtPointerInto(cache *cowCache, provider cow
 		return nil, err
 	}
 	defer w.close()
-	return b.readNativeValueWithWorkspace(cache, w, provider, ptr, dst, useDst, admitOutput)
+	return b.readInspectedNativeValueWithWorkspace(cache, w, provider, f, ptr, shape, dst, useDst, admitOutput)
 }
 
 func (b *cowBackendBasis) readNativeValueWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, ptr page.ValuePtr, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
@@ -350,6 +369,10 @@ func (b *cowBackendBasis) readNativeValueWithWorkspace(cache *cowCache, w *cowRe
 	if err != nil {
 		return nil, err
 	}
+	return b.readInspectedNativeValueWithWorkspace(cache, w, provider, f, ptr, shape, dst, useDst, admitOutput)
+}
+
+func (b *cowBackendBasis) readInspectedNativeValueWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, useDst bool, admitOutput func(uint64) error) ([]byte, error) {
 	var definition *cowCacheDictionaryRead
 	if shape.Compressed && shape.DictID != 0 {
 		if provider == nil {

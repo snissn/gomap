@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1023,7 +1024,17 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		if native {
-			if laneMu, slotReader, ok := c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1)); ok {
+			var laneMu *sync.Mutex
+			var slotReader **cowReadWorkspace
+			var ok bool
+			// Multi-lane spillover slots are reserved for dictionary-compressed
+			// records so non-dictionary reads never retain extra spillover leases.
+			if shape.DictID != 0 {
+				laneMu, slotReader, ok = c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1))
+			} else if c.physicalMu.TryLock() {
+				laneMu, slotReader, ok = &c.physicalMu, &c.physicalReader, true
+			}
+			if ok {
 				// A preceding decoder may have admitted this exact inspected leaf
 				// while we raced. Preserve the original policy before copying a hit.
 				if data, state, hit, cacheErr := record.CopyVerifiedPage(dst); cacheErr != nil || hit {
