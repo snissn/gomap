@@ -2425,6 +2425,7 @@ type mongoUpdateCoalescer struct {
 	name          string
 	execMu        sync.Mutex
 	inFlight      atomic.Int32
+	workerBusy    atomic.Bool
 	stoppedFlag   atomic.Bool
 	inlineExecs   atomic.Uint64
 	workerBatches atomic.Uint64
@@ -2456,14 +2457,22 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if coalescer == nil {
 		return runMongoUpdateOne(col, update)
 	}
-	coalescer.inFlight.Add(1)
+	active := coalescer.inFlight.Add(1)
 	defer coalescer.inFlight.Add(-1)
 
-	if coalescer.maxDelay == 0 && len(coalescer.requests) == 0 && !coalescer.stoppedFlag.Load() && coalescer.execMu.TryLock() {
-		if !coalescer.stoppedFlag.Load() {
+	if coalescer.maxDelay == 0 &&
+		active <= 2 &&
+		len(coalescer.requests) == 0 &&
+		!coalescer.workerBusy.Load() &&
+		!coalescer.stoppedFlag.Load() &&
+		coalescer.execMu.TryLock() {
+		if !coalescer.stoppedFlag.Load() && len(coalescer.requests) == 0 {
 			return coalescer.runInline(col, update)
 		}
 		coalescer.execMu.Unlock()
+		if len(coalescer.requests) > 0 {
+			coalescer.signalWake()
+		}
 	}
 
 	done := getMongoUpdateResultChan()
@@ -2747,7 +2756,9 @@ func (c *mongoUpdateCoalescer) run() {
 					return
 				}
 				c.execMu.Lock()
+				c.workerBusy.Store(true)
 				c.runBatchStartingWith(first)
+				c.workerBusy.Store(false)
 				c.execMu.Unlock()
 				resetIdle()
 			case <-idle:
@@ -2771,23 +2782,32 @@ func (c *mongoUpdateCoalescer) run() {
 		select {
 		case <-c.wakeCh:
 			c.execMu.Lock()
-			var first mongoUpdateCoalescerRequest
-			var ok bool
-			hasReq := false
-			select {
-			case first, ok = <-c.requests:
-				if !ok {
-					c.execMu.Unlock()
-					return
+			c.workerBusy.Store(true)
+			ranAny := false
+		drain:
+			for {
+				select {
+				case first, ok := <-c.requests:
+					if !ok {
+						c.workerBusy.Store(false)
+						c.execMu.Unlock()
+						return
+					}
+					c.runBatchStartingWith(first)
+					ranAny = true
+					if c.stoppedFlag.Load() {
+						c.drainRequestsDirect()
+						c.workerBusy.Store(false)
+						c.execMu.Unlock()
+						return
+					}
+				default:
+					break drain
 				}
-				hasReq = true
-			default:
 			}
-			if hasReq {
-				c.runBatchStartingWith(first)
-			}
+			c.workerBusy.Store(false)
 			c.execMu.Unlock()
-			if hasReq {
+			if ranAny {
 				resetIdle()
 			}
 			if len(c.requests) > 0 {
