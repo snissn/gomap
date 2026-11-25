@@ -49,7 +49,11 @@ const (
 	// Bound evaluation work so training cost stays predictable on long streams.
 	// Use even down-sampling rather than prefix truncation to preserve shape.
 	maxChooseKEvalSamples = 4096
+	maxChooseKEvalBytes   = 512 << 10
+	minChooseKEvalSamples = 64
 	maxDecodeCostSamples  = 256
+	maxDecodeCostBytes    = 128 << 10
+	minDecodeCostSamples  = 32
 )
 
 func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
@@ -66,14 +70,8 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	if len(samples) == 0 || len(dict) == 0 {
 		return nil
 	}
-	eval := samples
-	if len(eval) > maxChooseKEvalSamples {
-		eval = evenlySampleRecords(eval, maxChooseKEvalSamples)
-	}
-	rawTotal := 0
-	for _, v := range eval {
-		rawTotal += len(v)
-	}
+	ks := resolveCandidateK(opts.CandidateK)
+	eval, rawTotal := chooseKEvalSamples(samples, ks)
 	if rawTotal == 0 {
 		return nil
 	}
@@ -82,11 +80,6 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	if nsPerByte <= 0 {
 		nsPerByte = decodeCostEstimate(dict, eval, opts.EncoderWorkspace)
 	}
-	ks := opts.CandidateK
-	if len(ks) == 0 {
-		ks = []int{1, 2, 4, 8, 16, 32}
-	}
-	ks = normalizeCandidateK(ks)
 	var sharedEnc *zstd.Encoder
 	if opts.EncoderWorkspace == nil {
 		if enc, err := zstd.NewWriter(nil,
@@ -197,6 +190,67 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		Samples:          len(eval),
 		Timestamp:        time.Now(),
 	}
+}
+
+func resolveCandidateK(candidateK []int) []int {
+	if len(candidateK) == 0 {
+		return normalizeCandidateK([]int{1, 2, 4, 8, 16, 32})
+	}
+	return normalizeCandidateK(candidateK)
+}
+
+func maxCandidateK(ks []int) int {
+	maxK := 1
+	for _, k := range ks {
+		if k > maxK {
+			maxK = k
+		}
+	}
+	return maxK
+}
+
+func chooseKEvalSamples(samples [][]byte, ks []int) ([][]byte, int64) {
+	minEvalSamples := minChooseKEvalSamples
+	if maxK := maxCandidateK(ks); maxK*2 > minEvalSamples {
+		minEvalSamples = maxK * 2
+	}
+	return boundEvalSamples(samples, maxChooseKEvalSamples, maxChooseKEvalBytes, minEvalSamples)
+}
+
+func boundEvalSamples(samples [][]byte, maxSamples int, maxBytes int64, minSamples int) ([][]byte, int64) {
+	eval := samples
+	if maxSamples > 0 && len(eval) > maxSamples {
+		eval = evenlySampleRecords(eval, maxSamples)
+	}
+	var rawTotal int64
+	for _, v := range eval {
+		rawTotal += int64(len(v))
+	}
+	if rawTotal == 0 || maxBytes <= 0 || rawTotal <= maxBytes {
+		return eval, rawTotal
+	}
+	if minSamples < 1 {
+		minSamples = 1
+	}
+	if minSamples > len(eval) {
+		minSamples = len(eval)
+	}
+	avgSampleBytes := rawTotal / int64(len(eval))
+	if avgSampleBytes < 1 {
+		avgSampleBytes = 1
+	}
+	targetSamples := int(maxBytes / avgSampleBytes)
+	if targetSamples < minSamples {
+		targetSamples = minSamples
+	}
+	if targetSamples < len(eval) {
+		eval = evenlySampleRecords(eval, targetSamples)
+		rawTotal = 0
+		for _, v := range eval {
+			rawTotal += int64(len(v))
+		}
+	}
+	return eval, rawTotal
 }
 
 func normalizeCandidateK(values []int) []int {
@@ -369,10 +423,7 @@ func batchTotalsWithEncodeWorkspace(ws *zstd.DictEncodeWorkspace, dict []byte, s
 }
 
 func decodeCostEstimate(dict []byte, samples [][]byte, encodeWS *zstd.DictEncodeWorkspace) float64 {
-	eval := samples
-	if len(eval) > maxDecodeCostSamples {
-		eval = evenlySampleRecords(eval, maxDecodeCostSamples)
-	}
+	eval, _ := boundEvalSamples(samples, maxDecodeCostSamples, maxDecodeCostBytes, minDecodeCostSamples)
 	n := len(eval)
 	if n == 0 {
 		return 1.0
