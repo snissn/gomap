@@ -587,19 +587,47 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 }
 
 func (m *NativeJSONManager) insertBulkBatch(name string, ids, documents [][]byte) error {
-	for attempt := 0; ; attempt++ {
-		if err := m.db.PrepareNativeProducer(); err != nil {
-			return err
+	coord := collectionSchemaCoordinatorForDBCollection(m.db, name)
+	capacityRetried := false
+	allowBulkPreimage := true
+	for attempt := 0; ; {
+		retry, capacityRetry, err := m.insertBulkBatchOnce(coord, name, ids, documents, allowBulkPreimage)
+		if capacityRetry && !capacityRetried {
+			if reliefErr := m.db.PrepareNativeProducer(); reliefErr != nil {
+				return errors.Join(err, reliefErr)
+			}
+			capacityRetried = true
+			allowBulkPreimage = false
+			continue
 		}
-		pre, preErr := prepareNativeBulkInsertPreimage(m, name, ids, documents, false)
+		if retry && attempt+1 < nativeInsertAttempts {
+			attempt++
+			continue
+		}
+		return err
+	}
+}
+
+func (m *NativeJSONManager) insertBulkBatchOnce(coord *collectionSchemaCoordinator, name string, ids, documents [][]byte, allowBulkPreimage bool) (retry, capacityRetry bool, err error) {
+	releaseSlot := coord.acquireBulkPreimageSlot()
+	defer releaseSlot()
+	if err := m.db.PrepareNativeProducer(); err != nil {
+		return false, false, err
+	}
+	var pre *nativeBulkInsertPreimage
+	if allowBulkPreimage {
+		var preErr error
+		pre, preErr = prepareNativeBulkInsertPreimage(m, name, ids, documents, false)
 		if preErr != nil {
-			return mutationNotAcceptedError(preErr)
-		}
-		_, retry, err := m.commitBulkInsertAttempt(name, ids, documents, pre, 0, nil, false, nil, nil, nil)
-		if !retry || attempt+1 == nativeInsertAttempts {
-			return err
+			preErr = mutationNotAcceptedError(preErr)
+			return false, isRetryableBulkCapacityRefusal(preErr, nil), preErr
 		}
 	}
+	_, retry, err = m.commitBulkInsertAttempt(name, ids, documents, pre, 0, nil, false, nil, nil, nil)
+	if err != nil && !retry && isRetryableBulkCapacityRefusal(err, nil) {
+		capacityRetry = true
+	}
+	return retry, capacityRetry, err
 }
 
 func (m *NativeJSONManager) commitBulkInsertAttempt(
@@ -613,13 +641,13 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 	projected **nativeInsertProjectedRefusal,
 	journal *nativeOperationJournal,
 ) (bool, bool, error) {
-	if pre != nil {
-		defer pre.Close()
-	}
 	coord := collectionSchemaCoordinatorForDBCollection(m.db, name)
 	if coord != nil {
 		coord.nativeBulkInsertMu.Lock()
 		defer coord.nativeBulkInsertMu.Unlock()
+	}
+	if pre != nil {
+		defer pre.Close()
 	}
 	tx, err := m.beginPrepared(name)
 	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)

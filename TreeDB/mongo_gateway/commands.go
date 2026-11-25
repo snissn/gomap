@@ -16,6 +16,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -172,16 +173,20 @@ func (s *Server) runMongoInsertCommandWithJournal(name string, col *collections.
 			}
 			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 		}
-		if _, batchErr := col.InsertBatchValidatedBSON(ids, stored); batchErr == nil {
+		if batchErr := runMongoInsertBatchValidatedBSON(col, ids, stored, budget); batchErr == nil {
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
-		} else if errors.Is(batchErr, collections.ErrCommitAmbiguous) {
+		} else if errors.Is(batchErr, collections.ErrCommitAmbiguous) || backenddb.CommitPublicationAccepted(batchErr) {
 			return mongoInsertCommandError(batchErr)
 		} else {
 			// A non-ambiguous native batch failure is pre-publication. This includes
-			// duplicate conflicts and item/planning failures (for example an
-			// oversized secondary-index key). Give the atomic reservation back and
-			// preserve Mongo's indexed ordered/unordered semantics per item.
+			// duplicate conflicts, item/planning failures, and finite COW capacity
+			// refusals. Give the atomic reservation back; on COW capacity refusal,
+			// split into bounded sub-batches rather than falling straight to N
+			// single-document commits.
 			budget.refundTargets(len(ids))
+			if isPrePublicationCOWCapacityError(batchErr) {
+				return s.runMongoInsertChunkedBSON(col, ids, stored, ordered, budget)
+			}
 		}
 	}
 	inserted := int32(0)
@@ -230,6 +235,132 @@ func (s *Server) runMongoInsertCommandWithJournal(name string, col *collections.
 		if ordered {
 			break
 		}
+	}
+	return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+}
+
+const mongoInsertCapacityMinChunkSize = 64
+
+func isPrePublicationCOWCapacityError(err error) bool {
+	return errors.Is(err, memtable.ErrCOWCapacity) &&
+		!errors.Is(err, collections.ErrCommitAmbiguous) &&
+		!backenddb.CommitPublicationAccepted(err)
+}
+
+func runMongoInsertBatchValidatedBSON(col *collections.Collection, ids, stored [][]byte, budget *mongoWriteBudget) error {
+	if budget != nil && budget.insertBatchValidatedBSONHook != nil {
+		return budget.insertBatchValidatedBSONHook(ids, stored)
+	}
+	_, err := col.InsertBatchValidatedBSON(ids, stored)
+	return err
+}
+
+// runMongoInsertChunkedBSON handles pre-publication COW capacity refusals for
+// multi-document BSON inserts by halving the batch size into bounded sub-batches
+// down to mongoInsertCapacityMinChunkSize before ever falling back to per-item
+// inserts for a failing chunk. It preserves mongoWriteBudget reservations,
+// cumulative inserted counts, globally offset writeErrors indices, ordered vs
+// unordered stop rules, immediate ErrCommitAmbiguous aborts, and standalone
+// write_concern fencing (leaving operationJournal unselected).
+func (s *Server) runMongoInsertChunkedBSON(col *collections.Collection, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget) (wire.Document, error) {
+	chunkSize := len(ids) / 2
+	if chunkSize < 1 {
+		chunkSize = 1
+	}
+	if chunkSize >= defaultMaxWriteBatchSize {
+		chunkSize = defaultMaxWriteBatchSize / 2
+	}
+	inserted := int32(0)
+	writeErrors := make([]mongoWriteError, 0)
+	for offset := 0; offset < len(ids); {
+		chunkLen := chunkSize
+		if remaining := len(ids) - offset; remaining < chunkLen {
+			chunkLen = remaining
+		}
+		if budget != nil && budget.beforeInsertChunkHook != nil {
+			budget.beforeInsertChunkHook(offset, chunkLen)
+		}
+		if err := budget.reserveTargets(chunkLen); err != nil {
+			if reserveErr := budget.reserveError(); reserveErr == nil {
+				writeErrors = append(writeErrors, mongoWriteError{index: offset, err: err})
+			} else {
+				if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: offset, err: err})
+			}
+			return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+		}
+		end := offset + chunkLen
+		chunkErr := runMongoInsertBatchValidatedBSON(col, ids[offset:end], stored[offset:end], budget)
+		if chunkErr == nil {
+			inserted += int32(chunkLen)
+			offset = end
+			continue
+		}
+		if errors.Is(chunkErr, collections.ErrCommitAmbiguous) || backenddb.CommitPublicationAccepted(chunkErr) {
+			return mongoInsertCommandError(chunkErr)
+		}
+		if chunkLen == 1 {
+			if reserveErr := budget.reserveError(); reserveErr != nil {
+				if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: offset, err: reserveErr})
+				return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: offset, err: chunkErr})
+			if ordered {
+				return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+			}
+			offset = end
+			continue
+		}
+		budget.refundTargets(chunkLen)
+		if isPrePublicationCOWCapacityError(chunkErr) && chunkLen > mongoInsertCapacityMinChunkSize {
+			nextSize := chunkLen / 2
+			if nextSize < mongoInsertCapacityMinChunkSize {
+				nextSize = mongoInsertCapacityMinChunkSize
+			}
+			if nextSize < chunkLen {
+				chunkSize = nextSize
+				continue
+			}
+		}
+		for localIdx := 0; localIdx < chunkLen; localIdx++ {
+			globalIdx := offset + localIdx
+			if err := budget.reserveTarget(); err != nil {
+				if reserveErr := budget.reserveError(); reserveErr == nil {
+					writeErrors = append(writeErrors, mongoWriteError{index: globalIdx, err: err})
+				} else {
+					if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+						return nil, terminalErr
+					}
+					writeErrors = append(writeErrors, mongoWriteError{index: globalIdx, err: err})
+				}
+				return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+			}
+			err := runMongoInsertOne(col, ids[globalIdx], stored[globalIdx])
+			if err == nil {
+				inserted++
+				continue
+			}
+			if errors.Is(err, collections.ErrCommitAmbiguous) {
+				return mongoCommitAmbiguousCommandError(err)
+			}
+			if reserveErr := budget.reserveError(); reserveErr != nil {
+				if terminalErr := budget.reserveTerminalError(); terminalErr != nil {
+					return nil, terminalErr
+				}
+				writeErrors = append(writeErrors, mongoWriteError{index: globalIdx, err: reserveErr})
+				return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+			}
+			writeErrors = append(writeErrors, mongoWriteError{index: globalIdx, err: err})
+			if ordered {
+				return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
+			}
+		}
+		offset = end
 	}
 	return marshalInsertResponseWithWriteErrors(inserted, writeErrors)
 }
@@ -1346,6 +1477,12 @@ type mongoWriteBudget struct {
 	// beforeNativeUpdateBatchHook is test-only coordination after native batch
 	// planning/materialization and immediately before its atomic publication.
 	beforeNativeUpdateBatchHook func()
+	// beforeInsertChunkHook is test-only coordination immediately before a
+	// capacity-chunked BSON insert reserves targets for its next sub-batch.
+	beforeInsertChunkHook func(offset, chunkLen int)
+	// insertBatchValidatedBSONHook is test-only coordination replacing
+	// col.InsertBatchValidatedBSON for deterministic chunk error-handling tests.
+	insertBatchValidatedBSONHook func(ids, stored [][]byte) error
 }
 
 const (

@@ -37,6 +37,8 @@ type collectionSchemaCoordinator struct {
 	// pressure maintenance, preventing cross-batch history expiry and barrier
 	// collapse without blocking single-row group commit coalescing.
 	nativeBulkInsertMu                     sync.Mutex
+	nativeBulkPreimageOnce                 sync.Once
+	nativeBulkPreimageTokens               chan struct{}
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex
@@ -64,6 +66,32 @@ type collectionSchemaCoordinator struct {
 	typedGraphCandidateAttempts  int64
 	typedGraphWorkEpochLimits    *typedGraphWorkEpochLimits
 	typedGraphWorkEpoch          uint64
+}
+
+const nativeBulkPreimageMaxConcurrent = 2
+
+// acquireBulkPreimageSlot bounds concurrent off-gate bulk insert preimages per
+// collection so parallel producers overlap CPU preparation with serialized
+// commit without exhausting finite COW in-flight headroom. Lazy sync.Once
+// initialization keeps zero-value coordinators usable without deadlocking.
+func (coord *collectionSchemaCoordinator) acquireBulkPreimageSlot() func() {
+	if coord == nil {
+		return func() {}
+	}
+	coord.nativeBulkPreimageOnce.Do(func() {
+		tokens := make(chan struct{}, nativeBulkPreimageMaxConcurrent)
+		for range nativeBulkPreimageMaxConcurrent {
+			tokens <- struct{}{}
+		}
+		coord.nativeBulkPreimageTokens = tokens
+	})
+	<-coord.nativeBulkPreimageTokens
+	var releaseOnce sync.Once
+	return func() {
+		releaseOnce.Do(func() {
+			coord.nativeBulkPreimageTokens <- struct{}{}
+		})
+	}
 }
 
 func (coord *collectionSchemaCoordinator) registerPartitionLiveSearchPin(key vectorPartitionLiveSearchPinKeyV1) {
