@@ -17,14 +17,56 @@ import (
 // Normal private COW writers continue; writers requiring a flush and explicit
 // checkpoints can wait for this cooperative timeout, including native I/O.
 const (
-	privateCOWLeafPackCopyBytes   = 32 << 20
-	privateCOWLeafPackGenerations = 2
-	privateCOWLeafPackInterval    = 30 * time.Second
-	privateCOWLeafPackTimeout     = 5 * time.Second
+	privateCOWLeafPackCopyBytes            = 32 << 20
+	privateCOWLeafPackGenerations          = 2
+	privateCOWLeafPackInterval             = 30 * time.Second
+	privateCOWLeafPackDebtGenerations      = 6
+	privateCOWLeafPackDebtBytes            = 64 << 20
+	privateCOWLeafPackDebtInterval         = 3 * time.Second
+	privateCOWLeafPackDebtGenerationsBatch = 6
+	privateCOWLeafPackDebtCopyBytes        = 64 << 20
+	privateCOWLeafPackTimeout              = 5 * time.Second
 )
 
 type backendPrivateCOWLeafPackRunner interface {
 	LeafGenerationPackRunOnceForPrivateCOW(*transactionowner.Owner, context.Context, backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error)
+}
+
+type backendLeafGenerationSealedDebtReader interface {
+	LeafGenerationSealedDebt() (generations int, bytes int64)
+}
+
+func (db *DB) privateCOWLeafPackPolicy() (interval time.Duration, maxGenerations int, maxCopyBytes int64) {
+	interval = privateCOWLeafPackInterval
+	maxGenerations = privateCOWLeafPackGenerations
+	maxCopyBytes = privateCOWLeafPackCopyBytes
+	if db == nil {
+		return interval, maxGenerations, maxCopyBytes
+	}
+	reader, ok := db.backend.(backendLeafGenerationSealedDebtReader)
+	if !ok {
+		return interval, maxGenerations, maxCopyBytes
+	}
+	sealedGenerations, sealedBytes := reader.LeafGenerationSealedDebt()
+	if sealedGenerations < privateCOWLeafPackDebtGenerations && sealedBytes < privateCOWLeafPackDebtBytes {
+		return interval, maxGenerations, maxCopyBytes
+	}
+	maxGenerations = privateCOWLeafPackDebtGenerationsBatch
+	maxCopyBytes = privateCOWLeafPackDebtCopyBytes
+	// Preserve existing backoff after no-progress selection skips or errors,
+	// while tightening cadence when draining active debt or transitioning out
+	// of an idle/no-candidate state into high sealed-generation debt.
+	lastAttempt := db.vlogGenerationPrivateCOWPackLastAttemptNS.Load()
+	lastSkipReason := atomicValueString(&db.vlogGenerationLeafPackLastSkipReason)
+	lastDeleted := db.vlogGenerationLeafPackGCLastDeletedGenerations.Load()
+	if lastAttempt == 0 ||
+		lastSkipReason == "" ||
+		lastDeleted > 0 ||
+		lastSkipReason == "plan_admission:no_candidates" ||
+		lastSkipReason == "plan_admission:too_few_generations" {
+		interval = privateCOWLeafPackDebtInterval
+	}
+	return interval, maxGenerations, maxCopyBytes
 }
 
 // Initial WAL-on scheduler state is not an opt-out. Explicit disables, unlike
@@ -62,7 +104,8 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		db.vlogGenerationMaintenanceSkipPauseFile.Add(1)
 		return false, nil
 	}
-	if last := db.vlogGenerationPrivateCOWPackLastAttemptNS.Load(); last != 0 && time.Since(time.Unix(0, last)) < privateCOWLeafPackInterval {
+	interval, maxGenerations, maxCopyBytes := db.privateCOWLeafPackPolicy()
+	if last := db.vlogGenerationPrivateCOWPackLastAttemptNS.Load(); last != 0 && time.Since(time.Unix(0, last)) < interval {
 		return false, nil
 	}
 	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
@@ -131,7 +174,7 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	stats, packErr := db.backend.(backendPrivateCOWLeafPackRunner).LeafGenerationPackRunOnceForPrivateCOW(db.cow.txnOwner, ctx, backenddb.LeafGenerationPackFromPlanOptions{
 		Sync: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
 		MinReclaimPerByteCopiedPPM: leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM,
-		MaxGenerations:             privateCOWLeafPackGenerations, MaxBytesToCopy: privateCOWLeafPackCopyBytes,
+		MaxGenerations:             maxGenerations, MaxBytesToCopy: maxCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
 	})
 	// Observation only: an already accepted pack must still reach the original
