@@ -261,6 +261,11 @@ func TestNativeBSONSetFastPathCorrectnessAndIndexes(t *testing.T) {
 
 func TestNativeBSONSetFastPathPredicateAndExclusions(t *testing.T) {
 	baseMeta := *bsonSetFastPathComplexMeta("users")
+	typedStorageMeta := typedMinimaCollectionMeta()
+	typedStorageMeta.Options.DocumentFormat = DocumentFormatBSON
+	typedStorageMeta.Indexes = nil
+	typedStorageMeta.TextIndexes = nil
+	typedStorageMeta.VectorIndexes = nil
 	cases := []struct {
 		name  string
 		meta  CollectionMeta
@@ -348,14 +353,8 @@ func TestNativeBSONSetFastPathPredicateAndExclusions(t *testing.T) {
 			want:  true,
 		},
 		{
-			name: "column_store_excluded",
-			meta: CollectionMeta{
-				Name: "docs",
-				Options: CollectionOptions{
-					DocumentFormat: DocumentFormatBSON,
-					ColumnStore:    &ColumnStoreConfig{},
-				},
-			},
+			name:  "typed_storage_excluded",
+			meta:  typedStorageMeta,
 			items: []BSONSetUpdateBatchItem{{DocumentID: []byte("u0"), Fields: []BSONSetField{{Key: "score"}}}},
 			want:  true,
 		},
