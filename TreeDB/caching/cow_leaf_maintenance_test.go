@@ -813,21 +813,50 @@ func TestPrivateCOWLeafPackDebtResponsivePolicyAndBackoff(t *testing.T) {
 func TestPrivateCOWLeafPackDebtResponsiveMultiGenerationPack(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
 	cache, backend := privateCOWPackFixture(t)
-	// Build >= 6 sealed generations with dead pages so real debt crosses the
-	// debt watermark and multiple generations are packed in a single slice.
-	for round := 1; round <= 8; round++ {
-		privateCOWPackWrite(t, cache, backend.DB, round, 1024)
+	writeRange := func(prefix string, start, end int, fill byte) {
+		t.Helper()
+		b := cache.NewBatchWithSize(end - start)
+		defer b.Close()
+		val := bytes.Repeat([]byte{fill}, 128)
+		for i := start; i < end; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("%s-%05d", prefix, i)), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f := &cowPressureRolloverFixture{db: cache, backend: backend.DB}
+		if err := f.write(b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotateAllLeafLanes := func() {
+		t.Helper()
+		for _, l := range cache.leafLogAppendLanesSnapshot() {
+			l.vlogMu.Lock()
+			rotateErr := cache.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if rotateErr != nil {
+				t.Fatal(rotateErr)
+			}
+		}
+	}
+
+	// Build 6 distinct sealed generations, each holding its own sorted key range
+	// (`gen-01-*` .. `gen-06-*`), then overwrite 75% of each range in a final
+	// generation so all 6 sealed generations are deterministically ~75% dead /
+	// ~25% live (~3,000,000 PPM reclaim-per-copy) and cross the debt watermark.
+	const numGenerations = 6
+	const keysPerGen = 1024
+	const overwritePerGen = 768
+	for round := 1; round <= numGenerations; round++ {
+		writeRange(fmt.Sprintf("gen-%02d", round), 0, keysPerGen, byte(round))
 		if err := cache.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
-		cache.leafLog.vlogMu.Lock()
-		rotateErr := cache.rotateValueLogMuHeld(&cache.leafLog)
-		cache.leafLog.vlogMu.Unlock()
-		if rotateErr != nil {
-			t.Fatal(rotateErr)
-		}
+		rotateAllLeafLanes()
 	}
-	privateCOWPackWrite(t, cache, backend.DB, 9, 1024)
+	for round := 1; round <= numGenerations; round++ {
+		writeRange(fmt.Sprintf("gen-%02d", round), 0, overwritePerGen, byte(0x80+round))
+	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
