@@ -642,6 +642,9 @@ type cowDictLeafReadFixture struct {
 
 func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLimits, numKeys int) *cowDictLeafReadFixture {
 	tb.Helper()
+	if runtime.GOOS == "windows" {
+		tb.Skip("outer-leaf dictionary value-log persistence unsupported on Windows")
+	}
 	dir := tb.TempDir()
 	var store *dictdb.Store
 	backend, err := backenddb.Open(backenddb.Options{
