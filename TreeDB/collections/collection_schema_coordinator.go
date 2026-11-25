@@ -68,7 +68,7 @@ type collectionSchemaCoordinator struct {
 	typedGraphWorkEpoch          uint64
 }
 
-const nativeBulkPreimageMaxConcurrent = 2
+const nativeBulkPreimageMaxConcurrent = 4
 
 // acquireBulkPreimageSlot bounds concurrent off-gate bulk insert preimages per
 // collection so parallel producers overlap CPU preparation with serialized

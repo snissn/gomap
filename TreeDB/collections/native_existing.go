@@ -256,7 +256,7 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 				preElapsed = time.Since(preStarted)
 			}
 		}
-		recordStats, retry, err := c.nativeJSON.commitBulkInsertAttempt(c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
+		recordStats, retry, err := c.nativeJSON.commitBulkInsertAttempt(coord, c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
 		capacityRetry := err != nil && !retry && (projected == nil || *projected == nil) && isRetryableBulkCapacityRefusal(err, journal)
 		return recordStats, retry, capacityRetry, err
 	}

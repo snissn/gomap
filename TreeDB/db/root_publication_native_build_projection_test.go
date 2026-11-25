@@ -493,8 +493,8 @@ func TestRootPublicationNativeBuildGroupMidGroupLeafRotationFailsClosed(t *testi
 	_ = sys2.Close()
 	finalizeNativeBuildGroupEmptyCarrier(t, d, group)
 
-	if got := scans.Load(); got == 0 {
-		t.Fatal("mid-group leaf-log rotation bypassed fail-closed candidate scan")
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("registered mid-group leaf-log rotation triggered %d candidate scans, want 0", got)
 	}
 
 	// Verify BOTH intermediate seg2 AND current seg3 are retained in the visible closure!
@@ -523,6 +523,37 @@ func TestRootPublicationNativeBuildGroupMidGroupLeafRotationFailsClosed(t *testi
 		t.Fatalf("current rotated segment %d missing from visible closure %v", seg3, retained)
 	}
 
+	// Unregistered mid-group leaf-log rotation (bypassing RegisterValueLogSegment*)
+	// MUST still fail closed to the exact candidate scanner.
+	scans.Store(0)
+	unregGroup, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unregGroup.Close()
+	seg4 := rotateLedgerTestLeafLogBypassingObserver(t, d, log, 4)
+	dAUnreg := batch.New(nil, 1024)
+	_ = dAUnreg.Set([]byte("a/1"), bytes.Repeat([]byte("U"), 128))
+	rootAUnreg, err := unregGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootA2, Delta: dAUnreg})
+	_ = dAUnreg.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sysUnreg := batch.New(nil, 1024)
+	_ = sysUnreg.Set(descKeyA, encodeMaintenanceRootID(rootAUnreg))
+	if err := unregGroup.BuildNativeSystemDelta(sysUnreg); err != nil {
+		_ = sysUnreg.Close()
+		t.Fatal(err)
+	}
+	_ = sysUnreg.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, unregGroup)
+	if got := scans.Load(); got == 0 {
+		t.Fatal("unregistered mid-group leaf-log rotation bypassed fail-closed candidate scan")
+	}
+	if _, ok := visibleOuterLeafFileIDs(t, d)[seg4]; !ok {
+		t.Fatalf("unregistered rotated segment %d missing from visible closure", seg4)
+	}
+
 	// Next steady-state build group without mid-group rotation must execute 0 scans.
 	scans.Store(0)
 	steady, err := d.BeginRootPublicationBuildGroup()
@@ -532,7 +563,7 @@ func TestRootPublicationNativeBuildGroupMidGroupLeafRotationFailsClosed(t *testi
 	defer steady.Close()
 	dA3 := batch.New(nil, 1024)
 	_ = dA3.Set([]byte("a/1"), bytes.Repeat([]byte("E"), 128))
-	rootA3, err := steady.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootA2, Delta: dA3})
+	rootA3, err := steady.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootAUnreg, Delta: dA3})
 	_ = dA3.Close()
 	if err != nil {
 		t.Fatal(err)

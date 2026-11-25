@@ -116,6 +116,9 @@ type DB struct {
 	leafGenerationPendingFileIDs   []uint32
 	leafGenerationPendingSet       map[uint32]struct{}
 	leafGenerationPendingCommitSeq map[uint32]uint64
+	leafSegmentObserverMu          sync.Mutex
+	leafSegmentObserverActive      bool
+	leafSegmentObserverIDs         []uint32
 	lock                           *lockfile.Lock
 
 	physicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
@@ -5830,4 +5833,72 @@ type pagerAllocator struct {
 
 func (a *pagerAllocator) Alloc(hint uint64) (uint64, error) {
 	return a.p.Alloc(1)
+}
+
+func isObservedLeafLaneFileID(fileID uint32) bool {
+	if fileID == 0 {
+		return false
+	}
+	lane, _ := valuelog.DecodeFileID(fileID)
+	return lane == valuelog.ReservedLeafLogLaneID
+}
+
+func (db *DB) beginBuildGroupLeafSegmentObservation() {
+	if db == nil {
+		return
+	}
+	db.leafSegmentObserverMu.Lock()
+	db.leafSegmentObserverActive = true
+	db.leafSegmentObserverIDs = db.leafSegmentObserverIDs[:0]
+	db.leafSegmentObserverMu.Unlock()
+}
+
+func (db *DB) recordObservedLeafSegmentRegistration(fileID, previousFileID uint32) {
+	if db == nil {
+		return
+	}
+	recordCurrent := isObservedLeafLaneFileID(fileID)
+	recordPrevious := isObservedLeafLaneFileID(previousFileID)
+	if !recordCurrent && !recordPrevious {
+		return
+	}
+	db.leafSegmentObserverMu.Lock()
+	if db.leafSegmentObserverActive {
+		if recordCurrent {
+			db.appendObservedLeafSegmentIDLocked(fileID)
+		}
+		if recordPrevious {
+			db.appendObservedLeafSegmentIDLocked(previousFileID)
+		}
+	}
+	db.leafSegmentObserverMu.Unlock()
+}
+
+func (db *DB) appendObservedLeafSegmentIDLocked(fileID uint32) {
+	for _, existing := range db.leafSegmentObserverIDs {
+		if existing == fileID {
+			return
+		}
+	}
+	db.leafSegmentObserverIDs = append(db.leafSegmentObserverIDs, fileID)
+}
+
+func (db *DB) finishBuildGroupLeafSegmentObservation() []uint32 {
+	if db == nil {
+		return nil
+	}
+	db.leafSegmentObserverMu.Lock()
+	db.leafSegmentObserverActive = false
+	var observed []uint32
+	if len(db.leafSegmentObserverIDs) > 0 {
+		observed = make([]uint32, len(db.leafSegmentObserverIDs))
+		copy(observed, db.leafSegmentObserverIDs)
+		if cap(db.leafSegmentObserverIDs) > 64 {
+			db.leafSegmentObserverIDs = nil
+		} else {
+			db.leafSegmentObserverIDs = db.leafSegmentObserverIDs[:0]
+		}
+	}
+	db.leafSegmentObserverMu.Unlock()
+	return observed
 }
