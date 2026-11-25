@@ -163,6 +163,9 @@ type IngestSourcesConfig struct {
 	// TextField names the parent field holding text to chunk. Empty defaults
 	// to "body" (matching ChunkedIngestOptions).
 	TextField string
+	// OmitParentTextField strips TextField from the persisted parent document
+	// after chunking so text indexes on TextField do not double-index parents.
+	OmitParentTextField bool
 	// Concurrency bounds the source worker pool. Zero defaults to 4; values
 	// larger than the source count clamp down. Calls to the one shared Embedder
 	// instance remain serialized because providers need not be thread-safe.
@@ -212,11 +215,12 @@ func (cfg *IngestSourcesConfig) validate() error {
 
 // ingestPlan is the validated, mutation-free per-source work unit.
 type ingestPlan struct {
-	source   SourceDocument
-	parentID []byte
-	parent   []byte
-	children []chunkChild
-	texts    [][]byte
+	source       SourceDocument
+	parentID     []byte
+	parent       []byte
+	storedParent []byte
+	children     []chunkChild
+	texts        [][]byte
 }
 
 // IngestSources chunks, embeds, and indexes sources in one call.
@@ -413,11 +417,11 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			}
 		}
 		if err == nil {
-			plan, planErr := c.buildChunkPlan(sd.ID, parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField})
+			plan, planErr := c.buildChunkPlan(sd.ID, parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField, OmitParentTextField: cfg.OmitParentTextField})
 			if planErr == nil {
 				texts, textErr := extractChunkTexts(plan.children, cfg.textField())
 				if textErr == nil {
-					plans[i] = ingestPlan{source: sd, parentID: append([]byte(nil), sd.ID...), parent: parent, children: plan.children, texts: texts}
+					plans[i] = ingestPlan{source: sd, parentID: append([]byte(nil), sd.ID...), parent: parent, storedParent: plan.storedParent, children: plan.children, texts: texts}
 				} else {
 					err = textErr
 				}
@@ -489,7 +493,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		// Phase 1 validated every source without mutation. Rebuild the
 		// authoritative pure plan under this parent's lock so same-parent
 		// plan→replace remains coherent without holding sibling locks.
-		replanned, err := c.buildChunkPlan(plan.parentID, plan.parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField})
+		replanned, err := c.buildChunkPlan(plan.parentID, plan.parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField, OmitParentTextField: cfg.OmitParentTextField})
 		if err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageChunk, Err: err}
 		}
@@ -497,7 +501,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageChunk, Err: err}
 		}
-		plan.children, plan.texts = replanned.children, texts
+		plan.storedParent, plan.children, plan.texts = replanned.storedParent, replanned.children, texts
 		if cfg.hooks != nil && cfg.hooks.beforeSource != nil {
 			if err := cfg.hooks.beforeSource(i); err != nil {
 				return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage,
@@ -569,7 +573,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		insertIDs = append(insertIDs, plan.parentID)
 		insertDocs := make([][]byte, 0, len(childDocs)+1)
 		insertDocs = append(insertDocs, childDocs...)
-		insertDocs = append(insertDocs, plan.parent)
+		insertDocs = append(insertDocs, plan.storedParent)
 		publicationHooks := &sourcePublicationHooks{}
 		if cfg.hooks != nil {
 			publicationHooks.afterDeletePlan = func() error {

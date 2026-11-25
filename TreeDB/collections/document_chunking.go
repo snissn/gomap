@@ -24,7 +24,11 @@ type ChunkedIngestOptions struct {
 	// TextField names the parent document field holding the text to chunk.
 	// Empty defaults to "body".
 	TextField string
-	hooks     *chunkedIngestHooks
+	// OmitParentTextField strips TextField from the persisted parent document
+	// after chunking so text indexes on TextField index only derived chunk
+	// children rather than double-indexing the full parent text.
+	OmitParentTextField bool
+	hooks               *chunkedIngestHooks
 }
 
 type chunkedIngestHooks struct {
@@ -91,7 +95,8 @@ func chunkPlanDocs(children []chunkChild) [][]byte {
 
 // chunkedIngestPlan is the validated, mutation-free output of buildChunkPlan.
 type chunkedIngestPlan struct {
-	children []chunkChild
+	storedParent []byte
+	children     []chunkChild
 }
 
 type chunkedDocumentBatchPlan struct {
@@ -143,6 +148,16 @@ func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg 
 	chunks, err := chunking.SplitChunks(string(parentID), text, cfg)
 	if err != nil {
 		return plan, err
+	}
+	if opts.OmitParentTextField {
+		delete(fields, opts.textField())
+		storedParent, err := json.Marshal(fields)
+		if err != nil {
+			return plan, fmt.Errorf("collections: encode parent %q without text field: %w", parentID, err)
+		}
+		plan.storedParent = storedParent
+	} else {
+		plan.storedParent = bytes.Clone(parentDocument)
 	}
 	plan.children = make([]chunkChild, 0, len(chunks))
 	for _, ch := range chunks {
@@ -298,7 +313,7 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	}
 	// Parent upsert, stale-child delete, and child insert remain separate
 	// durable boundaries; retry repairs any reported commit ambiguity.
-	if err := c.upsertParentDocument(parentID, parentDocument); err != nil {
+	if err := c.upsertParentDocument(parentID, plan.storedParent); err != nil {
 		return result, err
 	}
 	if len(oldChildren) > 0 {
@@ -370,7 +385,7 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		if err != nil {
 			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
 		}
-		plans[i] = chunkedDocumentBatchPlan{parentID: bytes.Clone(source.ID), parent: parent, children: plan.children}
+		plans[i] = chunkedDocumentBatchPlan{parentID: bytes.Clone(source.ID), parent: plan.storedParent, children: plan.children}
 	}
 
 	parentIDs := make([][]byte, len(plans))
@@ -505,6 +520,136 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 		return replaced, nil
 	}
 	return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", collectionMutationRetryExhausted(lastErr))
+}
+
+// DeleteChunkedDocument atomically deletes parentID and all of its live
+// derived `<parentID>#<ordinal>` chunk children in one durable publication.
+// Returns the total number of deleted live documents (parent if present plus
+// deleted children). Deleting a nonexistent parent with no children returns 0, nil.
+func (c *Collection) DeleteChunkedDocument(parentID []byte) (int, error) {
+	if len(parentID) == 0 {
+		return 0, chunking.ValidateParentID("")
+	}
+	return c.DeleteChunkedDocuments([][]byte{parentID})
+}
+
+// DeleteChunkedDocuments atomically deletes every parent in parentIDs and all
+// of their live `<parentID>#<ordinal>` chunk children in one durable
+// collection-root publication. Duplicate or invalid parent IDs fail closed
+// before any mutation. Returns the total number of deleted live documents.
+func (c *Collection) DeleteChunkedDocuments(parentIDs [][]byte) (int, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	if len(parentIDs) == 0 {
+		return 0, nil
+	}
+
+	ids := make([][]byte, len(parentIDs))
+	seen := make(map[string]struct{}, len(parentIDs))
+	for i, parentID := range parentIDs {
+		if err := chunking.ValidateParentID(string(parentID)); err != nil {
+			return 0, fmt.Errorf("collections: delete chunked batch parent %d (%q): %w", i, parentID, err)
+		}
+		key := string(parentID)
+		if _, dup := seen[key]; dup {
+			return 0, fmt.Errorf("collections: delete chunked batch has duplicate parent ID %q at index %d", parentID, i)
+		}
+		seen[key] = struct{}{}
+		ids[i] = bytes.Clone(parentID)
+	}
+
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), ids)
+	if err != nil {
+		return 0, err
+	}
+	defer lifecycleLocks.releaseAll()
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
+	defer unlockNativeAdmission()
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.collectionName())
+	_ = snap.Close()
+	if err != nil {
+		return 0, fmt.Errorf("collections: load chunked delete catalog: %w", err)
+	}
+	if catalog == nil {
+		return 0, errCollectionNotFound
+	}
+	if err := c.flushCollectionWriteDomainsWithVectorAdmissionLocked(); err != nil {
+		return 0, fmt.Errorf("collections: publish chunk write domains before batch delete: %w", err)
+	}
+	return c.deleteChunkedDocumentBatchLocked(ids)
+}
+
+func (c *Collection) deleteChunkedDocumentBatchLocked(parentIDs [][]byte) (int, error) {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, err
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		return 0, fmt.Errorf("collections: publish chunk write domains before batch delete: %w", err)
+	}
+
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		var deletedCount int
+		deletePlanner := func(snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, error) {
+			primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+			attemptDeleteIDs := make([][]byte, 0, len(parentIDs)*2)
+			for _, parentID := range parentIDs {
+				oldChildren, _, err := c.chunkChildrenAtSnapshot(parentID, snap, catalog)
+				if err != nil {
+					return nil, err
+				}
+				attemptDeleteIDs = append(attemptDeleteIDs, oldChildren...)
+				_, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, parentID, nil)
+				if err != nil {
+					return nil, err
+				}
+				if found {
+					attemptDeleteIDs = append(attemptDeleteIDs, parentID)
+				}
+			}
+			deletedCount = len(attemptDeleteIDs)
+			return attemptDeleteIDs, nil
+		}
+		plan, err := c.buildSourceReplacementPlan(nil, nil, nil, deletePlanner, nil, nil, nil, false)
+		if err != nil {
+			if isRetriableCollectionMutationError(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return 0, fmt.Errorf("collections: publish atomic chunked delete batch: %w", err)
+		}
+		if deletedCount == 0 {
+			plan.close()
+			return 0, nil
+		}
+		publishErr := c.publishSourceReplacementPlan(plan, nil, nil)
+		plan.close()
+		if isRetriableCollectionMutationError(publishErr) {
+			lastErr = publishErr
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		if publishErr != nil {
+			return 0, fmt.Errorf("collections: publish atomic chunked delete batch: %w", publishErr)
+		}
+		return deletedCount, nil
+	}
+	return 0, fmt.Errorf("collections: publish atomic chunked delete batch: %w", collectionMutationRetryExhausted(lastErr))
 }
 
 func (c *Collection) upsertParentDocument(parentID []byte, parentDocument []byte) error {
