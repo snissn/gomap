@@ -31,7 +31,12 @@ type collectionSchemaCoordinator struct {
 
 	// Native scalar producers share admission through durable completion. DDL
 	// and vector/carrier mutations exclude every producer for the same namespace.
-	vectorDDLMutationMu                    sync.RWMutex
+	vectorDDLMutationMu sync.RWMutex
+	// Multi-row ordinary bulk InsertBatch commits coordinate capture+commit on
+	// this per-collection gate after parallel preparation and outside producer
+	// pressure maintenance, preventing cross-batch history expiry and barrier
+	// collapse without blocking single-row group commit coalescing.
+	nativeBulkInsertMu                     sync.Mutex
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex

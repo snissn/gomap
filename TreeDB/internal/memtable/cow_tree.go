@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -1108,30 +1109,34 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 			logicalDelta = p.ordered.applyValidatedFrom(w.ordered, entries)
 		}
 		routing := w.ordered.routing(entries)
-		for index, e := range entries {
-			if routing.routes(index) {
-				// A newly qualified version replaces any prior raw incarnation.
-				// Deleting a missing key can still copy its raw search path. Only
-				// real migration work is included in the original reservation; use
-				// the staged tree because earlier operations may insert this key.
-				if p.private.Len() != 0 && cowHasKey(p.private, e.Key) {
+		if w.ordered == nil && len(entries) >= 2 && cowEntriesStrictlySortedNonDelete(entries) {
+			logicalDelta = applySortedNonDeleteCOWMutations(p.private, entries, c.Payload)
+		} else {
+			for index, e := range entries {
+				if routing.routes(index) {
+					// A newly qualified version replaces any prior raw incarnation.
+					// Deleting a missing key can still copy its raw search path. Only
+					// real migration work is included in the original reservation; use
+					// the staged tree because earlier operations may insert this key.
+					if p.private.Len() != 0 && cowHasKey(p.private, e.Key) {
+						if previous, removed := cowDeleteKey(p.private, e.Key); removed {
+							logicalDelta.replace(len(e.Key), "", previous)
+						}
+					}
+					continue
+				}
+				// Lookup returns an existing owned key; safe builds compare bytes
+				// directly, without temporary key conversions before or after admission.
+				if e.Remove {
 					if previous, removed := cowDeleteKey(p.private, e.Key); removed {
 						logicalDelta.replace(len(e.Key), "", previous)
 					}
+					continue
 				}
-				continue
+				value := cowEncodeValue(e)
+				previous, _ := btree.SetBytes(p.private, e.Key, value)
+				logicalDelta.replace(len(e.Key), value, previous)
 			}
-			// Lookup returns an existing owned key; safe builds compare bytes
-			// directly, without temporary key conversions before or after admission.
-			if e.Remove {
-				if previous, removed := cowDeleteKey(p.private, e.Key); removed {
-					logicalDelta.replace(len(e.Key), "", previous)
-				}
-				continue
-			}
-			value := cowEncodeValue(e)
-			previous, _ := btree.SetBytes(p.private, e.Key, value)
-			logicalDelta.replace(len(e.Key), value, previous)
 		}
 		p.logicalBytes, p.logicalOverflow = logicalDelta.bytes, logicalDelta.overflow
 		p.private = p.private.SealOwned()
@@ -1167,6 +1172,91 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	}
 	w.pending = p
 	return p, nil
+}
+
+func cowEntriesStrictlySortedNonDelete(entries []COWMutation) bool {
+	if len(entries) < 2 {
+		return false
+	}
+	if entries[0].Remove {
+		return false
+	}
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Remove || bytes.Compare(entries[i-1].Key, entries[i].Key) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func applySortedNonDeleteCOWMutations(tr *btree.Map[string, cowValue], entries []COWMutation, admittedPayload uint64) cowLogicalDelta {
+	var totalKeyBytes, totalValBytes, perValAdmitted uint64
+	for _, e := range entries {
+		totalKeyBytes += uint64(len(e.Key))
+		if _, isConst := cowIsEmptyConstantValue(e); !isConst {
+			vSize := uint64(cowValueMetadataBytes + len(e.Value))
+			totalValBytes += vSize
+			perValAdmitted += cowAllocation(vSize)
+		}
+	}
+	var valArena, keyArena []byte
+	if bytesToStringZeroCopy {
+		valSide := perValAdmitted
+		if totalValBytes > 0 {
+			valCharge := cowAllocation(totalValBytes)
+			// Never let the value arena exceed the per-value admission slice;
+			// otherwise a fallback to per-entry key copies could exceed admittedPayload.
+			if valCharge <= perValAdmitted && valCharge <= admittedPayload {
+				valArena = make([]byte, totalValBytes)
+				valSide = valCharge
+			}
+		}
+		if totalKeyBytes > 0 && valSide < admittedPayload {
+			keyCharge := cowAllocation(totalKeyBytes)
+			if keyCharge <= admittedPayload-valSide {
+				keyArena = make([]byte, totalKeyBytes)
+			}
+		}
+	}
+	valOff := 0
+	keyOff := 0
+	var logicalDelta cowLogicalDelta
+	var pendingPrev cowValue
+	pendingPrevIdx := -1
+
+	keyAt := func(i int) []byte { return entries[i].Key }
+	onReplace := func(i int, prev cowValue) {
+		pendingPrev = prev
+		pendingPrevIdx = i
+	}
+	valAt := func(i int) cowValue {
+		var val cowValue
+		if valArena != nil {
+			val, valOff = cowEncodeValueInto(valArena, valOff, entries[i])
+		} else {
+			val = cowEncodeValue(entries[i])
+		}
+		var prev cowValue
+		if pendingPrevIdx == i {
+			prev = pendingPrev
+			pendingPrev = ""
+			pendingPrevIdx = -1
+		}
+		logicalDelta.replace(len(entries[i].Key), val, prev)
+		return val
+	}
+	ownKey := func(i int) string {
+		k := entries[i].Key
+		if keyArena != nil && len(k) > 0 {
+			dst := keyArena[keyOff : keyOff+len(k)]
+			copy(dst, k)
+			keyOff += len(k)
+			return bytesToStringNoCopy(dst)
+		}
+		return string(k)
+	}
+	btree.SetSortedBytes(tr, len(entries), keyAt, valAt, ownKey, onReplace)
+	return logicalDelta
 }
 
 // reconcileNodes returns only an unspent part of the original proven node
@@ -1631,6 +1721,31 @@ func (r *COWRoot) Len() int {
 		n += r.ordered.len()
 	}
 	return n
+}
+
+// MaxKey returns the maximum key currently in this immutable root when it uses
+// the standard non-ordered representation. Callers must hold the enclosing cut.
+func (r *COWRoot) MaxKey() (string, bool) {
+	if r == nil || r.ordered != nil {
+		return "", false
+	}
+	maxKey, _, ok := r.tree.Max()
+	if r.l1 != nil && len(r.l1.chunks) > 0 {
+		lastChunk := r.l1.chunks[len(r.l1.chunks)-1]
+		if len(lastChunk.entries) > 0 {
+			k := lastChunk.entries[len(lastChunk.entries)-1].key
+			if !ok || k > maxKey {
+				maxKey, ok = k, true
+			}
+		}
+	}
+	if len(r.delta) > 0 {
+		k := r.delta[len(r.delta)-1].key
+		if !ok || k > maxKey {
+			maxKey, ok = k, true
+		}
+	}
+	return maxKey, ok
 }
 func (r *COWRoot) Height() int {
 	h := r.tree.Height()

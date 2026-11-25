@@ -321,6 +321,11 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	if len(g.probe.meta.Indexes) == 0 {
 		return nil
 	}
+	// Fast path: once validation scratch is admitted, check an O(1) upper bound
+	// derived from len(doc) for scalar-only BSON schemas before re-parsing BSON.
+	if g.validationCharge != 0 && nativeBSONValidationFitsWithoutParse(g, len(doc)) {
+		return nil
+	}
 	n, err := nativeJSONIndexedPlanCharge(g.probe.meta, [][]byte{nil}, [][]byte{doc})
 	if err != nil {
 		return err
@@ -352,6 +357,41 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	}
 	g.validationCharge = n
 	return nil
+}
+
+func nativeBSONValidationFitsWithoutParse(g *nativeJSONTxnBinding, docLen int) bool {
+	meta := g.probe.meta
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatBSON || meta.Options.AllowArrayValuesInIndex {
+		return false
+	}
+	for _, index := range meta.Indexes {
+		if index.MultiKey || len(index.Components) > 0 {
+			return false
+		}
+	}
+	// Each scalar field's value is at most docLen bytes; source per index is at
+	// most max(docLen+16, bsonIndexKeyNumericV2MaxDigits).
+	perIdx := max(docLen+16, bsonIndexKeyNumericV2MaxDigits)
+	maxSource := max(64, len(meta.Indexes)*perIdx)
+	if maxSource > cap(g.validation.scratch) {
+		return false
+	}
+	maxCap, err := nativeJSONEncodedCapacity(maxSource, meta.Indexes)
+	if err != nil || maxCap > cap(g.validation.buf) {
+		return false
+	}
+	// Conservative upper bound matching nativeJSONIndexedCharge for scalar-only single-doc validation.
+	perIndex := uint64(unsafe.Sizeof(indexDefinition{})) + uint64(unsafe.Sizeof(indexRuntime{})) + uint64(unsafe.Sizeof(directBufferedSecondaryRootPlan{})) + uint64(unsafe.Sizeof(directBufferedUniqueValueRootPlan{})) + uint64(unsafe.Sizeof(collectionUniqueProbeRun{})) + uint64(unsafe.Sizeof(CollectionSecondaryRunStats{}))
+	upper := memtable.COWAllocationCharge(uint64(len(meta.Indexes)) * perIndex)
+	upper += memtable.COWAllocationCharge((uint64(maxSource) + uint64(len(meta.Name)) + 64) * 16 * uint64(len(meta.Indexes)))
+	upper += memtable.COWAllocationCharge(uint64(maxSource) * 128)
+	headers := uint64(unsafe.Sizeof(uniqueProbeCandidate{})) + uint64(unsafe.Sizeof(directBufferedSecondaryRootEntry{})) + uint64(unsafe.Sizeof(directBufferedRootEntry{})) + 8*uint64(unsafe.Sizeof([]byte{}))
+	upper += memtable.COWAllocationCharge(uint64(len(meta.Indexes)) * headers)
+	upper += memtable.COWAllocationCharge(uint64(estimateIndexEncodeArenaBytesForCount(1, len(meta.Indexes))) * 2)
+	for _, index := range meta.Indexes {
+		upper += memtable.COWAllocationCharge(uint64(len(index.Name)+len(index.Field)+len(meta.Name)) * 8)
+	}
+	return upper <= g.validationCharge
 }
 
 // A binding keeps the active chunk of each backing. Staged rows keep their
@@ -452,7 +492,7 @@ func nativeJSONScalarRefillCapacity(needed, available, rows, unit int) int {
 		return 0
 	}
 	limit := int(^uint(0)>>1) / unit
-	spare := min((4<<10)/unit, limit-needed)
+	spare := min((64<<10)/unit, limit-needed)
 	return needed + min(rows-1, spare/needed)*needed
 }
 
@@ -925,6 +965,9 @@ func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *CollectionInsertStats) error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
+		if g.plan != nil {
+			continue
+		}
 		if g.typed != nil {
 			if err := t.finalizeNativeTyped(g); err != nil {
 				return err

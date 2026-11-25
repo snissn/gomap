@@ -127,15 +127,21 @@ func (j *History) clearPending(closeLease bool) {
 		lease.Close()
 	}
 }
+func (j *History) hashNamespace(namespace Namespace) uint64 {
+	if namespace == (Namespace{}) {
+		return 0
+	}
+	var identity [25]byte
+	identity[0] = byte(namespace.Kind)
+	binary.LittleEndian.PutUint64(identity[1:9], namespace.Collection)
+	binary.LittleEndian.PutUint64(identity[9:17], namespace.Domain)
+	binary.LittleEndian.PutUint64(identity[17:25], namespace.Interpretation)
+	return maphash.Bytes(j.seed, identity[:])
+}
 func (j *History) hashKey(namespace Namespace, key string) uint64 {
 	hash := maphash.String(j.seed, key)
 	if namespace != (Namespace{}) {
-		var identity [25]byte
-		identity[0] = byte(namespace.Kind)
-		binary.LittleEndian.PutUint64(identity[1:9], namespace.Collection)
-		binary.LittleEndian.PutUint64(identity[9:17], namespace.Domain)
-		binary.LittleEndian.PutUint64(identity[17:25], namespace.Interpretation)
-		hash ^= maphash.Bytes(j.seed, identity[:])
+		hash ^= j.hashNamespace(namespace)
 	}
 	return hash
 }
@@ -399,28 +405,47 @@ func (j *History) PrepareEffects(entries []batch.Entry, ranges []batch.DeleteRan
 	}
 	// Points precede ranges/barriers for the existing chunk binary search. Within
 	// points use the explicit namespace tuple and then canonical byte ordering.
-	slices.SortFunc(j.pending.effects, func(a, b effect) int {
-		ap, bp := !a.rangeEffect && !a.barrier, !b.rangeEffect && !b.barrier
-		if ap != bp {
-			if ap {
-				return -1
+	// Bulk native inserts already emit strictly sorted point effects; skip the
+	// O(N log N) sort and deduplication pass when that holds.
+	strictSortedPoints := true
+	for i, e := range j.pending.effects {
+		if e.rangeEffect || e.barrier {
+			strictSortedPoints = false
+			break
+		}
+		if i > 0 {
+			prev := j.pending.effects[i-1]
+			c := compareNamespace(prev.namespace, e.namespace)
+			if c > 0 || (c == 0 && prev.key >= e.key) {
+				strictSortedPoints = false
+				break
 			}
-			return 1
-		}
-		if c := compareNamespace(a.namespace, b.namespace); c != 0 {
-			return c
-		}
-		return strings.Compare(a.key, b.key)
-	})
-	out := j.pending.effects[:0]
-	for _, e := range j.pending.effects {
-		if e.rangeEffect || e.barrier || len(out) == 0 || out[len(out)-1].namespace != e.namespace || out[len(out)-1].key != e.key {
-			out = append(out, e)
 		}
 	}
-	clear(j.pending.effects[len(out):])
-	j.pending.effects = out
-	if len(out) == 0 {
+	if !strictSortedPoints {
+		slices.SortFunc(j.pending.effects, func(a, b effect) int {
+			ap, bp := !a.rangeEffect && !a.barrier, !b.rangeEffect && !b.barrier
+			if ap != bp {
+				if ap {
+					return -1
+				}
+				return 1
+			}
+			if c := compareNamespace(a.namespace, b.namespace); c != 0 {
+				return c
+			}
+			return strings.Compare(a.key, b.key)
+		})
+		out := j.pending.effects[:0]
+		for _, e := range j.pending.effects {
+			if e.rangeEffect || e.barrier || len(out) == 0 || out[len(out)-1].namespace != e.namespace || out[len(out)-1].key != e.key {
+				out = append(out, e)
+			}
+		}
+		clear(j.pending.effects[len(out):])
+		j.pending.effects = out
+	}
+	if len(j.pending.effects) == 0 {
 		j.clearPending(true)
 		return Prepared{}, nil
 	}
@@ -492,6 +517,9 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	indexMask := uint32(len(j.index) - 1)
 	end := (j.head + j.count + len(j.pending.effects) - 1) & recordMask
 	j.bytes += j.pending.bytes
+	var cachedNS Namespace
+	var cachedNSHash uint64
+	hasCachedNS := false
 	for _, e := range j.pending.effects {
 		slot := (j.head + j.count) & recordMask
 		record := &j.records[slot]
@@ -514,7 +542,12 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 			j.ranges++
 			j.rangeSeq = seq
 		} else {
-			home := uint32(j.hashKey(e.namespace, e.key)) & indexMask
+			if !hasCachedNS || e.namespace != cachedNS {
+				cachedNS = e.namespace
+				cachedNSHash = j.hashNamespace(e.namespace)
+				hasCachedNS = true
+			}
+			home := uint32(maphash.String(j.seed, e.key)^cachedNSHash) & indexMask
 			i := int(home)
 			for j.index[i].seq != 0 && (j.index[i].key != e.key || j.index[i].namespace != e.namespace) {
 				i = (i + 1) & int(indexMask)

@@ -25,9 +25,26 @@ func txnJournalControlCharge(n int) uint64 {
 	}
 	return charge
 }
+
+const (
+	defaultTxnJournalCapacity = 4096
+	maxTxnJournalCapacity     = 65536
+	defaultCOWInFlightBudget  = 64 << 20
+)
+
 func (c *cowCache) txnJournalCapacity() int {
-	n := 4096
-	for n > 8 && txnJournalControlCharge(n) > c.budget.Limits().MaxInFlightBytes/16 {
+	limit := c.budget.Limits().MaxInFlightBytes
+	maxCharge := limit / 16
+	n := defaultTxnJournalCapacity
+	// Preserve the 4096-slot ring for DefaultCOWLimits() (64 MiB) and smaller
+	// test budgets, while scaling up to 65536 slots for larger budgets such as
+	// StandaloneCOWMemtableLimits() (512 MiB) within the same 1/16 control cap.
+	if limit > defaultCOWInFlightBudget {
+		for n < maxTxnJournalCapacity && txnJournalControlCharge(n*2) <= maxCharge {
+			n *= 2
+		}
+	}
+	for n > 8 && txnJournalControlCharge(n) > maxCharge {
 		n /= 2
 	}
 	return n
