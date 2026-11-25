@@ -18,6 +18,16 @@ type nativePhysicalRangeScanner interface {
 	NativeScanLiveKeysAtRoot(root uint64, start, end []byte, visit func(key []byte) (bool, error)) error
 }
 
+type nativePhysicalBatchEntryReader interface {
+	NativeEntriesAtRoot(root uint64, keys [][]byte, dst []node.LeafEntry, found []bool, copyValues bool) error
+}
+
+type warmRangeDocBatch struct {
+	entries [17]node.LeafEntry
+	found   [17]bool
+	keys    [17][]byte
+}
+
 type warmRangeCollector struct {
 	lease             *memtable.COWExternalLease
 	charge            uint64
@@ -232,6 +242,18 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 		if dedupe {
 			collectorAllowance += uint64(opts.Limit) * (memtable.COWAllocationCharge(768) + memtable.COWAllocationCharge(64))
 		}
+		if documents &&
+			!nativeTypedMeta(r.meta) &&
+			r.domain.hasBase && r.domain.domain != nil && r.domain.domain.refs.Load() > 0 &&
+			r.domain.domain.baseRoot != 0 && r.domain.domain.pending == nil && r.domain.domain.captured == nil {
+			if _, hasBatch := r.capture.(nativePhysicalBatchEntryReader); hasBatch {
+				batchAllowance := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeDocBatch{})))
+				if batchAllowance > ^uint64(0)-collectorAllowance {
+					return false, true, memtable.ErrCOWCapacity
+				}
+				collectorAllowance += batchAllowance
+			}
+		}
 		if collectorAllowance > ^uint64(0)-charge {
 			return false, true, memtable.ErrCOWCapacity
 		}
@@ -312,6 +334,149 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 
 		emitted := 0
 		missing := 0
+		primarySettled := documents &&
+			!nativeTypedMeta(r.meta) &&
+			r.domain.hasBase &&
+			r.domain.domain != nil &&
+			r.domain.domain.refs.Load() > 0 &&
+			r.domain.domain.baseRoot != 0 &&
+			r.domain.domain.pending == nil &&
+			r.domain.domain.captured == nil
+		if batchReader, ok := r.capture.(nativePhysicalBatchEntryReader); ok && primarySettled && len(collector.collectedIDs) > 0 {
+			if r.capture == nil || r.failure != nil || r.closing {
+				return false, backenddb.ErrClosed
+			}
+			numDocs := len(collector.collectedIDs)
+			totalKeys := numDocs
+			if collector.hasLookahead {
+				totalKeys++
+			}
+			var (
+				batch     *warmRangeDocBatch
+				entries   []node.LeafEntry
+				found     []bool
+				batchKeys [][]byte
+			)
+			if totalKeys <= len(warmRangeDocBatch{}.entries) {
+				if err := collector.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeDocBatch{})))); err != nil {
+					return false, err
+				}
+				batch = &warmRangeDocBatch{}
+				entries = batch.entries[:totalKeys]
+				found = batch.found[:totalKeys]
+				batchKeys = batch.keys[:totalKeys]
+			} else {
+				eCharge := memtable.COWAllocationCharge(uint64(totalKeys) * uint64(unsafe.Sizeof(node.LeafEntry{})))
+				fCharge := memtable.COWAllocationCharge(uint64(totalKeys) * uint64(unsafe.Sizeof(bool(false))))
+				kCharge := memtable.COWAllocationCharge(uint64(totalKeys) * uint64(unsafe.Sizeof([]byte{})))
+				if fCharge > ^uint64(0)-eCharge || kCharge > ^uint64(0)-eCharge-fCharge {
+					return false, memtable.ErrCOWCapacity
+				}
+				if err := collector.admit(eCharge + fCharge + kCharge); err != nil {
+					return false, err
+				}
+				entries = make([]node.LeafEntry, totalKeys)
+				found = make([]bool, totalKeys)
+				batchKeys = make([][]byte, totalKeys)
+			}
+			defer func() {
+				clear(entries)
+				clear(batchKeys)
+				entries, found, batchKeys = nil, nil, nil
+				batch = nil
+			}()
+
+			copy(batchKeys, collector.collectedIDs)
+			lookIdx := numDocs
+			if collector.hasLookahead {
+				batchKeys[lookIdx] = collector.lookaheadID
+			}
+			if batchErr := batchReader.NativeEntriesAtRoot(r.domain.domain.baseRoot, batchKeys, entries, found, true); batchErr != nil {
+				return false, batchErr
+			}
+
+			for i := 0; i < numDocs; i++ {
+				id := collector.collectedIDs[i]
+				collector.collectedIDs[i] = nil
+				batchKeys[i] = nil
+				if r.capture == nil || r.failure != nil || r.closing {
+					return false, backenddb.ErrClosed
+				}
+				if !found[i] || entries[i].Flags&node.FlagTombstone != 0 {
+					entries[i] = node.LeafEntry{}
+					missing++
+					continue
+				}
+				var document []byte
+				if entries[i].Flags&node.FlagPointer != 0 {
+					ptr := entries[i].ValuePtr
+					entries[i] = node.LeafEntry{}
+					var valErr error
+					document, valErr = r.readValue(ptr, nil)
+					if valErr != nil {
+						return false, valErr
+					}
+				} else {
+					document = entries[i].Value
+					entries[i] = node.LeafEntry{}
+				}
+				cont, visitErr := func() (bool, error) {
+					r.mu.Unlock()
+					defer r.mu.Lock()
+					return visit(id, document)
+				}()
+				document = nil
+				if visitErr != nil {
+					return false, visitErr
+				}
+				if !cont {
+					return false, nil
+				}
+				emitted++
+				if r.capture == nil || r.failure != nil || r.closing {
+					return false, backenddb.ErrClosed
+				}
+			}
+			collector.collectedIDs = nil
+
+			if !collector.hasLookahead {
+				return false, nil
+			}
+			var fallbackRawKey []byte
+			if missing == 0 {
+				lookFound := found[lookIdx]
+				lookFlags := entries[lookIdx].Flags
+				lookPtr := entries[lookIdx].ValuePtr
+				entries[lookIdx] = node.LeafEntry{}
+				batchKeys[lookIdx] = nil
+				if lookFound && lookFlags&node.FlagTombstone == 0 {
+					if lookFlags&node.FlagPointer != 0 {
+						if _, lookErr := r.readValue(lookPtr, nil); lookErr != nil {
+							return false, lookErr
+						}
+					}
+					return true, nil
+				}
+				// Orphan (Limit+1)-th lookahead key: resume cursor after lookaheadRawKey
+				// to verify whether any subsequent live primary document exists.
+				fallbackRawKey = collector.lookaheadRawKey
+			} else {
+				// Missing primary doc(s) within collectedIDs: resume cursor after
+				// lastEmittedRawKey so lookahead and subsequent keys are scanned cleanly.
+				fallbackRawKey = collector.lastEmittedRawKey
+			}
+			clear(entries)
+			clear(batchKeys)
+			entries, found, batchKeys = nil, nil, nil
+			batch = nil
+			fallbackCharge := memtable.COWAllocationCharge(page.PageSize+1) +
+				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainCursor{})))
+			if err := collector.admit(fallbackCharge); err != nil {
+				return false, err
+			}
+			return r.scanIndexRangeCursor(valueType, opts, documents, dedupe, domain, start, end, fallbackRawKey, emitted, seen, collector.admit, visit)
+		}
+
 		for i, id := range collector.collectedIDs {
 			collector.collectedIDs[i] = nil
 			if r.capture == nil || r.failure != nil || r.closing {
