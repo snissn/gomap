@@ -68,12 +68,17 @@ var (
 // Config selects and parameterizes an embedder. Validate must pass before any
 // registry Create; all violations are fail-closed errors.
 type Config struct {
-	// Provider names a registered embedder factory (e.g. "hashing").
+	// Provider names a registered embedder factory (e.g. "hashing", "openai_compat").
 	Provider string `json:"provider"`
 	// Dimensions is the declared vector width. It must match both the
 	// provider's capability and the target vector index definition at
 	// ingest time.
 	Dimensions int `json:"dimensions"`
+	// Options carries optional provider-specific string parameters (for example
+	// "base_url", "model", or "api_key_env" for HTTP providers). Secret values
+	// should be referenced by environment variable name rather than embedded in
+	// persisted configs.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // Validate fails closed on any configuration that cannot be honored exactly.

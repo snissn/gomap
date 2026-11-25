@@ -174,6 +174,9 @@ func DefaultRegistry() *Registry {
 		if err := defaultReg.Register(ProviderHashing, NewHashingEmbedder); err != nil {
 			panic(fmt.Sprintf("embedding: register built-in hashing provider: %v", err))
 		}
+		if err := defaultReg.Register(ProviderOpenAICompat, NewOpenAICompatEmbedder); err != nil {
+			panic(fmt.Sprintf("embedding: register built-in openai_compat provider: %v", err))
+		}
 	})
 	return defaultReg
 }
