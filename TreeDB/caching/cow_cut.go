@@ -515,6 +515,7 @@ type cowCache struct {
 	nativePressureRemembered                                                                       bool
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
+	semanticWakePending                                                                            atomic.Bool
 	flushWake                                                                                      chan struct{}
 	pointStaging                                                                                   *cowPointStaging
 }
