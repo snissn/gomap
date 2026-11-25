@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -9,6 +10,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+var nativeBulkCapacityDrainHook atomic.Pointer[func()]
+
+func setNativeBulkCapacityDrainHookForTest(fn func()) func() {
+	var next *func()
+	if fn != nil {
+		f := fn
+		next = &f
+	}
+	prev := nativeBulkCapacityDrainHook.Swap(next)
+	return func() {
+		nativeBulkCapacityDrainHook.Store(prev)
+	}
+}
+
+func isRetryableBulkCapacityRefusal(err error, journal *nativeOperationJournal) bool {
+	if !errors.Is(err, memtable.ErrCOWCapacity) {
+		return false
+	}
+	if errors.Is(err, ErrCommitAmbiguous) || errors.Is(err, backenddb.ErrClosed) || backenddb.CommitPublicationAccepted(err) {
+		return false
+	}
+	if journal != nil && (journal.completion.AssignedLSN() != 0 || journal.completion.Attempted()) {
+		return false
+	}
+	return true
+}
 
 // The existing API's native role owns no legacy coordinator, write domain or
 // raw barrier. Both public frontends use the same NativeJSONTxn preparation.
@@ -121,13 +149,37 @@ func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, reque
 	}
 	var refusedPrepare, refusedPublish time.Duration
 	historyExpiryRetries := 0
-	for attempt := 0; ; attempt++ {
+	capacityRetried := false
+	allowBulkPreimage := true
+	for attempt := 0; ; {
 		stats = CollectionInsertStats{}
-		recordStats, retry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, observeProjection, journal)
+		recordStats, retry, capacityRetry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, observeProjection, journal, allowBulkPreimage)
 		// The original history/projection refusal is retryable only before a
 		// physical attempt. Preserve the same original owner and bound.
 		if journal != nil && (journal.completion.AssignedLSN() != 0 || journal.completion.Attempted()) {
-			retry, refusal = false, nil
+			retry, refusal, capacityRetry = false, nil, false
+		}
+		if capacityRetry && !capacityRetried {
+			// Both unlockVector and the bulk preimage slot have been released.
+			// Drain producer pressure outside unlockVector before retrying once
+			// with pre == nil so two preimages cannot double-charge COW budget.
+			if c.manager.isClosing() {
+				return nil, backenddb.ErrClosed
+			}
+			if hook := nativeBulkCapacityDrainHook.Load(); hook != nil && *hook != nil {
+				(*hook)()
+			}
+			if reliefErr := c.nativeJSON.db.PrepareNativeProducer(); reliefErr != nil {
+				return nil, errors.Join(err, reliefErr)
+			}
+			capacityRetried = true
+			allowBulkPreimage = false
+			refusedPrepare += stats.PrepareDocuments
+			refusedPublish += stats.Publish
+			if journal != nil {
+				journal.completion = backenddb.NativeJournalCompletion{}
+			}
+			continue
 		}
 		if attempt+1 < nativeInsertAttempts && (retry || refusal != nil) {
 			if refusal != nil {
@@ -143,7 +195,9 @@ func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, reque
 			if retry {
 				historyExpiryRetries++
 			}
-			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
+			attempt++
+			refusedPrepare += stats.PrepareDocuments
+			refusedPublish += stats.Publish
 			if journal != nil {
 				journal.completion = backenddb.NativeJournalCompletion{}
 			}
@@ -168,31 +222,51 @@ func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, reque
 // End the original producer admission before fresh maintenance/capture. The
 // deferred unlock also covers panic/error paths; no private attempt survives it.
 func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (bool, bool, error) {
-	return c.nativeInsertPreparedOnceWithJournal(ids, documents, stats, ordinaryOnly, projection, projected, nil)
+	recordStats, retry, _, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, stats, ordinaryOnly, projection, projected, nil, true)
+	return recordStats, retry, err
 }
 
-func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (bool, bool, error) {
+func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, allowBulkPreimage bool) (bool, bool, bool, error) {
+	if len(ids) > 1 && projection == nil {
+		// Bound concurrent bulk producers before prepareNativeProducerMutation so
+		// queued writers neither hold vectorDDLMutationMu while waiting nor carry
+		// a stale pre-wait pressure observation across intervening commits.
+		coord := c.collectionSchemaCoordinator()
+		releaseSlot := coord.acquireBulkPreimageSlot()
+		defer releaseSlot()
+		unlockVector, _, err := c.prepareNativeProducerMutation()
+		if err != nil {
+			return false, false, false, err
+		}
+		defer unlockVector()
+		var pre *nativeBulkInsertPreimage
+		var preElapsed time.Duration
+		if allowBulkPreimage {
+			var preStarted time.Time
+			if stats != nil {
+				preStarted = time.Now()
+			}
+			var preErr error
+			pre, preErr = prepareNativeBulkInsertPreimage(c.nativeJSON, c.name, ids, documents, stats != nil)
+			if preErr != nil {
+				preErr = mutationNotAcceptedError(preErr)
+				return false, false, isRetryableBulkCapacityRefusal(preErr, journal), preErr
+			}
+			if stats != nil {
+				preElapsed = time.Since(preStarted)
+			}
+		}
+		recordStats, retry, err := c.nativeJSON.commitBulkInsertAttempt(c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
+		capacityRetry := err != nil && !retry && (projected == nil || *projected == nil) && isRetryableBulkCapacityRefusal(err, journal)
+		return recordStats, retry, capacityRetry, err
+	}
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	defer unlockVector()
-	if len(ids) > 1 && projection == nil {
-		var preStarted time.Time
-		if stats != nil {
-			preStarted = time.Now()
-		}
-		pre, preErr := prepareNativeBulkInsertPreimage(c.nativeJSON, c.name, ids, documents, stats != nil)
-		if preErr != nil {
-			return false, false, mutationNotAcceptedError(preErr)
-		}
-		var preElapsed time.Duration
-		if stats != nil {
-			preElapsed = time.Since(preStarted)
-		}
-		return c.nativeJSON.commitBulkInsertAttempt(c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
-	}
-	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal)
+	recordStats, retry, err := c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal)
+	return recordStats, retry, false, err
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {
