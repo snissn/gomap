@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -405,5 +406,147 @@ func TestRootPublicationNativeBuildGroupNonEmptyRawBatchPreservesOrdinaryProduce
 		t.Fatalf("ordinary raw build group + empty carrier triggered %d scans, want 0", got)
 	}
 	assertOrdinaryRawCensus(t, d)
+	assertCandidateTrackerMatchesFullScan(t, d)
+}
+
+func TestRootPublicationNativeBuildGroupMidGroupLeafRotationFailsClosed(t *testing.T) {
+	d, log := openNativeBuildProjectionTestDB(t, t.TempDir())
+	defer func() {
+		closeVacuumTestLeafPageLog(t, d, log)
+		_ = d.Close()
+	}()
+
+	descKeyA := []byte(collectionRootDescriptorPrefix + "rot-a")
+	descKeyB := []byte(collectionRootDescriptorPrefix + "rot-b")
+
+	// Seed two collection roots in segment 1.
+	seedGroup, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dA := batch.New(nil, 1024)
+	_ = dA.Set([]byte("a/1"), bytes.Repeat([]byte("A"), 128))
+	rootA, err := seedGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{Delta: dA})
+	_ = dA.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dB := batch.New(nil, 1024)
+	_ = dB.Set([]byte("b/1"), bytes.Repeat([]byte("B"), 128))
+	rootB, err := seedGroup.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{Delta: dB})
+	_ = dB.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sysSeed := batch.New(nil, 1024)
+	_ = sysSeed.Set(descKeyA, encodeMaintenanceRootID(rootA))
+	_ = sysSeed.Set(descKeyB, encodeMaintenanceRootID(rootB))
+	if err := seedGroup.BuildNativeSystemDelta(sysSeed); err != nil {
+		_ = sysSeed.Close()
+		t.Fatal(err)
+	}
+	_ = sysSeed.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, seedGroup)
+
+	// Mid-group rotation: start on seg 1, rotate to seg 2 for rootA, rotate to seg 3
+	// for rootB (mirroring COW mode where intermediate rotations are registered
+	// without being retained in CreatedLeafPageLogSegmentsSnapshot).
+	var scans atomic.Int64
+	restore := d.SetScanCandidateExternalReferencesHookForTesting(func() {
+		scans.Add(1)
+	})
+	defer restore()
+
+	group, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.Close()
+
+	rotateProjectionTestLeafLog(t, d, log, 2)
+	seg2 := log.fileID
+	dA2 := batch.New(nil, 1024)
+	_ = dA2.Set([]byte("a/1"), bytes.Repeat([]byte("C"), 128))
+	rootA2, err := group.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootA, Delta: dA2})
+	_ = dA2.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotateProjectionTestLeafLog(t, d, log, 3)
+	seg3 := log.fileID
+	dB2 := batch.New(nil, 1024)
+	_ = dB2.Set([]byte("b/1"), bytes.Repeat([]byte("D"), 128))
+	rootB2, err := group.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootB, Delta: dB2})
+	_ = dB2.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sys2 := batch.New(nil, 1024)
+	_ = sys2.Set(descKeyA, encodeMaintenanceRootID(rootA2))
+	_ = sys2.Set(descKeyB, encodeMaintenanceRootID(rootB2))
+	if err := group.BuildNativeSystemDelta(sys2); err != nil {
+		_ = sys2.Close()
+		t.Fatal(err)
+	}
+	_ = sys2.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, group)
+
+	if got := scans.Load(); got == 0 {
+		t.Fatal("mid-group leaf-log rotation bypassed fail-closed candidate scan")
+	}
+
+	// Verify BOTH intermediate seg2 AND current seg3 are retained in the visible closure!
+	resources, _, err := d.rootPublication.cloneVisibleResourcesWithWorkMax(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	diag, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := make(map[uint32]struct{})
+	for _, desc := range diag.Physical() {
+		if desc.Kind == rootpublication.ResourceOuterLeafLog {
+			retained[uint32(desc.Generation)] = struct{}{}
+		}
+	}
+	if err := diag.CloseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := retained[seg2]; !ok {
+		t.Fatalf("intermediate rotated segment %d missing from visible closure %v", seg2, retained)
+	}
+	if _, ok := retained[seg3]; !ok {
+		t.Fatalf("current rotated segment %d missing from visible closure %v", seg3, retained)
+	}
+
+	// Next steady-state build group without mid-group rotation must execute 0 scans.
+	scans.Store(0)
+	steady, err := d.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer steady.Close()
+	dA3 := batch.New(nil, 1024)
+	_ = dA3.Set([]byte("a/1"), bytes.Repeat([]byte("E"), 128))
+	rootA3, err := steady.BuildNativeOrderedRoot(OrderedRootDeltaBatchPublishInput{BaseRoot: rootA2, Delta: dA3})
+	_ = dA3.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys3 := batch.New(nil, 1024)
+	_ = sys3.Set(descKeyA, encodeMaintenanceRootID(rootA3))
+	if err := steady.BuildNativeSystemDelta(sys3); err != nil {
+		_ = sys3.Close()
+		t.Fatal(err)
+	}
+	_ = sys3.Close()
+	finalizeNativeBuildGroupEmptyCarrier(t, d, steady)
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("steady-state group after rotation triggered %d scans, want 0", got)
+	}
 	assertCandidateTrackerMatchesFullScan(t, d)
 }

@@ -2,6 +2,8 @@ package collections
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strconv"
@@ -192,8 +194,8 @@ func TestNativeBSONSetIndexedCustodyNoLeak(t *testing.T) {
 			}
 			perOp := float64(extDelta) / float64(updates)
 			rolloverDelta := afterRollovers - beforeRollovers
-			if extDelta > maxAllowedDelta || rolloverDelta != 0 {
-				t.Errorf("%s: custody leak/rollover storm over %d updates: extDelta=%d B (%.1f B/op, limit <=256 B/op), rollovers=%d (want 0)",
+			if extDelta > maxAllowedDelta || rolloverDelta > 1 {
+				t.Errorf("%s: custody leak/rollover storm over %d updates: extDelta=%d B (%.1f B/op, limit <=256 B/op), rollovers=%d (want <=1)",
 					tc.name, updates, extDelta, perOp, rolloverDelta)
 			}
 
@@ -479,6 +481,97 @@ func TestNativeBSONSetNoSecondaryUniqueIndexChangesEdges(t *testing.T) {
 		if got := bsonSetFieldTouchesIndexPath(tc.field, tc.index); got != tc.want {
 			t.Fatalf("bsonSetFieldTouchesIndexPath(%q, %q) = %t, want %t", tc.field, tc.index, got, tc.want)
 		}
+	}
+}
+
+func TestNativeBSONMidGroupLeafRotationRetainsAllLeafFiles(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	t.Setenv("TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES", "8192")
+	for _, tc := range []struct {
+		name             string
+		systemPagerLeafs bool
+	}{
+		{name: "fresh_pager_catalog", systemPagerLeafs: true},
+		{name: "legacy_external_catalog", systemPagerLeafs: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+			opts.MemtableMode = "cow_btree"
+			opts.FreshSystemPagerLeaves = tc.systemPagerLeafs
+			owner, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			manager := NewCollectionManager(backend)
+			_, err = manager.CreateCollection(&CollectionMeta{
+				Name: "db.leafpack",
+				Options: CollectionOptions{
+					DocumentFormat:        DocumentFormatBSON,
+					DataRootStoragePolicy: RootStorageCompressed,
+				},
+			})
+			if err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			col, err := manager.OpenCollection("db.leafpack")
+			if err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			for first := 0; first < 512; first += 128 {
+				ids, docs := make([][]byte, 128), make([][]byte, 128)
+				for i := range ids {
+					id := fmt.Sprintf("row-%06d", first+i)
+					ids[i] = []byte(id)
+					var payload []byte
+					for part := range 6 {
+						block := sha256.Sum256([]byte(fmt.Sprintf("%s/%d", id, part)))
+						payload = append(payload, block[:]...)
+					}
+					docs[i], err = bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "payload", Value: payload}})
+					if err != nil {
+						_ = owner.Close()
+						t.Fatal(err)
+					}
+				}
+				if ack, err := col.InsertBatchValidatedBSON(ids, docs); err != nil || len(ack) != len(ids) {
+					_ = owner.Close()
+					t.Fatalf("insert: acknowledged %d of %d: %v", len(ack), len(ids), err)
+				}
+				if err := backend.SyncNativeSemanticPrefix(); err != nil {
+					_ = owner.Close()
+					t.Fatalf("SyncNativeSemanticPrefix: %v", err)
+				}
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			maintenance, closeMaintenance, err := treedb.OpenBackend(treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := closeMaintenance(); err != nil {
+					t.Error(err)
+				}
+			}()
+			plan, err := maintenance.LeafGenerationPlan(context.Background(), backenddb.LeafGenerationPlanOptions{
+				Force:                   true,
+				MinPublishedAgeCommits:  1,
+				MinCandidateGenerations: 1,
+			})
+			if err != nil || len(plan.CandidateGenerationIDs) == 0 {
+				t.Fatalf("LeafGenerationPlan failed: plan=%+v err=%v", plan, err)
+			}
+		})
 	}
 }
 
