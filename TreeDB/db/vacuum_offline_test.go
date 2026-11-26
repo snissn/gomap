@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -777,5 +778,175 @@ func TestVacuumIndexOnline_SmallFastProfileChunkSizeShrinksIndex(t *testing.T) {
 		if !bytes.Equal(got, val) {
 			t.Fatalf("value mismatch for key-%05d", i)
 		}
+	}
+}
+
+func TestVacuumIndexOffline_PrunesSettledEmptyCommandWALSegments(t *testing.T) {
+	dir := t.TempDir()
+	const fastChunkSize = int64(4 << 20)
+
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  fastChunkSize,
+		KeepRecent:                 1,
+		CommandWAL:                 true,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	val := bytes.Repeat([]byte("w"), 180)
+	for round := 0; round < 3; round++ {
+		b := d.NewBatch()
+		for i := 0; i < 256; i++ {
+			k := []byte(fmt.Sprintf("wal-prune-%05d", i))
+			if err := b.Set(k, val); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("close batch: %v", err)
+		}
+	}
+	if err := d.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("RefreshCommandWALCheckpointFallback: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	walDir := WALDirPath(dir)
+	beforeSegments := 0
+	beforeEntries, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("readdir wal before vacuum: %v", err)
+	}
+	for _, entry := range beforeEntries {
+		if !entry.IsDir() && commitlog.IsCommandSegmentName(entry.Name()) {
+			beforeSegments++
+		}
+	}
+	if beforeSegments == 0 {
+		t.Fatalf("expected active empty command-WAL container before offline vacuum in %s", walDir)
+	}
+
+	if err := VacuumIndexOffline(Options{
+		Dir:                        dir,
+		ChunkSize:                  fastChunkSize,
+		KeepRecent:                 1,
+		IndexOuterLeavesInValueLog: true,
+	}); err != nil {
+		t.Fatalf("VacuumIndexOffline: %v", err)
+	}
+
+	afterEntries, err := os.ReadDir(walDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("readdir wal after vacuum: %v", err)
+	}
+	for _, entry := range afterEntries {
+		if !entry.IsDir() && commitlog.IsCommandSegmentName(entry.Name()) {
+			t.Fatalf("offline vacuum left empty command-WAL segment %s behind", entry.Name())
+		}
+	}
+
+	verify, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("reopen read-only: %v", err)
+	}
+	for i := 0; i < 256; i++ {
+		got, err := verify.Get([]byte(fmt.Sprintf("wal-prune-%05d", i)))
+		if err != nil || !bytes.Equal(got, val) {
+			_ = verify.Close()
+			t.Fatalf("get wal-prune-%05d: err=%v len=%d", i, err, len(got))
+		}
+	}
+	if err := verify.Close(); err != nil {
+		t.Fatalf("close read-only verify: %v", err)
+	}
+
+	// Subsequent read-write reopen and commits must continue monotonically.
+	rw, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen read-write after offline vacuum: %v", err)
+	}
+	if err := rw.SetSync([]byte("post-vacuum"), []byte("ok")); err != nil {
+		_ = rw.Close()
+		t.Fatalf("post-vacuum SetSync: %v", err)
+	}
+	if err := rw.Checkpoint(); err != nil {
+		_ = rw.Close()
+		t.Fatalf("post-vacuum Checkpoint: %v", err)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatalf("close rw: %v", err)
+	}
+	verify2, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("reopen verify2: %v", err)
+	}
+	defer func() { _ = verify2.Close() }()
+	if got, err := verify2.Get([]byte("post-vacuum")); err != nil || !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("post-vacuum=%q err=%v", got, err)
+	}
+}
+
+func TestVacuumIndexOffline_RetainsNonEmptyCommandWALSegments(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                    dir,
+		KeepRecent:             1,
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.SetSync([]byte("keep"), []byte("v1")); err != nil {
+		_ = d.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	// Close without Checkpoint so the active command-WAL segment still contains
+	// committed frames (LogicalFileSize > 0, maxLSN <= appliedLSN).
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	walDir := WALDirPath(dir)
+	if err := VacuumIndexOffline(Options{Dir: dir, KeepRecent: 1}); err != nil {
+		t.Fatalf("VacuumIndexOffline: %v", err)
+	}
+
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("readdir wal: %v", err)
+	}
+	foundNonEmpty := false
+	for _, entry := range entries {
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+			continue
+		}
+		f, err := os.Open(filepath.Join(walDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("open %s: %v", entry.Name(), err)
+		}
+		logicalSize, sizeErr := commitlog.LogicalFileSize(f)
+		_ = f.Close()
+		if sizeErr == nil && logicalSize > 0 {
+			foundNonEmpty = true
+		}
+	}
+	if !foundNonEmpty {
+		t.Fatalf("offline vacuum removed non-empty command-WAL segment in %s", walDir)
 	}
 }

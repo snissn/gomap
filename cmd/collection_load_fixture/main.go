@@ -1211,7 +1211,7 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 	if len(plan.CandidateGenerationIDs) == 0 {
 		out.DiskBytesAfterPack = beforeDisk.TotalBytes
 		gcStart := time.Now()
-		gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+		gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{ConvergeFallback: true})
 		if err != nil {
 			return out, fmt.Errorf("leaf-generation GC without pack candidates: %w", err)
 		}
@@ -1261,7 +1261,7 @@ func maybePackLeafGenerations(cfg config, backend *backenddb.DB) (*leafGeneratio
 	out.DiskBytesAfterPack = afterPack.TotalBytes
 
 	gcStart := time.Now()
-	gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
+	gcStats, err := backend.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{ConvergeFallback: true})
 	if err != nil {
 		return out, fmt.Errorf("leaf-generation GC after pack: %w", err)
 	}

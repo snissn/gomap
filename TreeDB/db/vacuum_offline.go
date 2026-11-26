@@ -149,7 +149,13 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 			return nil
 		})
 		pair, newPager, produce = nil, nil, nil
-		return e
+		if e != nil {
+			return e
+		}
+		if _, err := pruneClosedEmptyCommandWALSegmentsLocked(opts.Dir); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	replacement, err := newStartupIndexGeneration(d, lock)
@@ -411,6 +417,9 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		if err := removeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
 			return err
 		}
+	}
+	if _, err := pruneClosedEmptyCommandWALSegmentsLocked(opts.Dir); err != nil {
+		return err
 	}
 
 	return nil

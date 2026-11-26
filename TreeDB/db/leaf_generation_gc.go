@@ -15,6 +15,14 @@ import (
 type LeafGenerationGCOptions struct {
 	MaintenanceLimits LeafGenerationMaintenanceLimits
 	DryRun            bool
+	// ConvergeFallback, when true on a destructive writable non-native-semantic
+	// LeafGenerationGC call, converges the alternate durable fallback root slot
+	// onto the current root (and refreshes conservative outer-leaf durable slot
+	// pins if deleted records remain unpruned) when unpinned dead generations
+	// are retained solely by an older recoverable fallback root, then runs a
+	// settle pass to reclaim them. Ordinary GC (false) retains existing
+	// fallback roots.
+	ConvergeFallback bool
 
 	// ProtectedRootIDs are additional ordinary root page IDs whose leaf-log
 	// children must be treated as live even when they are not reachable from the
@@ -46,20 +54,112 @@ type LeafGenerationGCStats struct {
 	ManifestRevisionBytesDeleted  int64
 }
 
+type leafGenerationGCAttemptOutcome struct {
+	stats                   LeafGenerationGCStats
+	retiringRecoverableOnly bool
+	hasUnprunedDeleted      bool
+}
+
+func mergeLeafGenerationGCStats(prior, next LeafGenerationGCStats) LeafGenerationGCStats {
+	next.GenerationsEligible += prior.GenerationsEligible
+	next.GenerationsDeleted += prior.GenerationsDeleted
+	next.FilesDeleted += prior.FilesDeleted
+	next.BytesEligible += prior.BytesEligible
+	next.BytesDeleted += prior.BytesDeleted
+	next.ManifestRevisionsEligible += prior.ManifestRevisionsEligible
+	next.ManifestRevisionsDeleted += prior.ManifestRevisionsDeleted
+	next.ManifestRevisionBytesEligible += prior.ManifestRevisionBytesEligible
+	next.ManifestRevisionBytesDeleted += prior.ManifestRevisionBytesDeleted
+	return next
+}
+
+func manifestHasDeletedLeafGenerationRecord(manifest *leafGenerationManifest) bool {
+	if manifest == nil {
+		return false
+	}
+	for _, gen := range manifest.Generations {
+		if gen.State == leafGenerationStateDeleted {
+			return true
+		}
+	}
+	return false
+}
+
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
-	return db.leafGenerationGC(ctx, opts, true)
+	if db == nil {
+		return LeafGenerationGCStats{}, fmt.Errorf("missing db")
+	}
+	if db.readOnly && !opts.DryRun {
+		return LeafGenerationGCStats{}, ErrReadOnly
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return LeafGenerationGCStats{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+
+	outcome, err := db.leafGenerationGCWithOutcome(ctx, opts, false)
+	if err != nil || opts.DryRun || !opts.ConvergeFallback || db.nativeSemanticActive.Load() {
+		return outcome.stats, err
+	}
+	stats := outcome.stats
+	if outcome.retiringRecoverableOnly && !db.closing.Load() {
+		// Unpinned dead generations were retained solely because the alternate
+		// durable root slot still points to a pre-pack / older root. Converge
+		// both durable slots to the current root while holding maintenanceMu
+		// (matching CompactStorage's lock order) so Close cannot tear down the
+		// publication runtime between passes and recovery remains valid on
+		// either slot.
+		if err := db.refreshDurableRootFallback(); err != nil {
+			return stats, err
+		}
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		outcome, err = db.leafGenerationGCWithOutcome(ctx, opts, false)
+		stats = mergeLeafGenerationGCStats(stats, outcome.stats)
+		if err != nil {
+			return stats, err
+		}
+	}
+	if outcome.hasUnprunedDeleted && !db.closing.Load() {
+		refreshed, err := db.refreshDurableRootSlotsForDeletedOuterLeafFiles(nil)
+		if err != nil {
+			return stats, err
+		}
+		if refreshed {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			outcome, err = db.leafGenerationGCWithOutcome(ctx, opts, false)
+			stats = mergeLeafGenerationGCStats(stats, outcome.stats)
+			if err != nil {
+				return stats, err
+			}
+		}
+	}
+	return stats, nil
 }
 
 func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions, lockMaintenance bool) (LeafGenerationGCStats, error) {
-	var stats LeafGenerationGCStats
+	outcome, err := db.leafGenerationGCWithOutcome(ctx, opts, lockMaintenance)
+	return outcome.stats, err
+}
+
+func (db *DB) leafGenerationGCWithOutcome(ctx context.Context, opts LeafGenerationGCOptions, lockMaintenance bool) (leafGenerationGCAttemptOutcome, error) {
+	var outcome leafGenerationGCAttemptOutcome
 	if db == nil {
-		return stats, fmt.Errorf("missing db")
+		return outcome, fmt.Errorf("missing db")
 	}
 	if db.readOnly && !opts.DryRun {
-		return stats, ErrReadOnly
+		return outcome, ErrReadOnly
 	}
 	if !db.indexOuterLeavesInValueLog {
-		return stats, nil
+		return outcome, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -71,7 +171,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 	if !opts.DryRun {
 		if err := db.CheckStorageMaintenanceReady(); err != nil {
-			return stats, err
+			return outcome, err
 		}
 	}
 
@@ -80,30 +180,30 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		attempts++
 	}
 	for attempt := 0; attempt < attempts; attempt++ {
-		stats, stale, err := db.leafGenerationGCAttempt(ctx, opts)
+		outcome, stale, err := db.leafGenerationGCAttempt(ctx, opts)
 		if err != nil {
-			return stats, err
+			return outcome, err
 		}
 		if !stale {
-			if err := db.gcLeafManifestRevisions(ctx, opts, &stats); err != nil {
+			if err := db.gcLeafManifestRevisions(ctx, opts, &outcome.stats); err != nil {
 				// Inspection has the same bounded stale-authority retry contract
 				// in both phases. Apply failures remain errors, never deletion permission.
 				if !opts.DryRun || !errors.Is(err, ErrRecoverableRootSetStale) {
-					return stats, err
+					return outcome, err
 				}
 			} else {
-				return stats, nil
+				return outcome, nil
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return LeafGenerationGCStats{}, err
+			return leafGenerationGCAttemptOutcome{}, err
 		}
 	}
-	return LeafGenerationGCStats{}, ErrLeafGenerationGCStaleScan
+	return leafGenerationGCAttemptOutcome{}, ErrLeafGenerationGCStaleScan
 }
 
-func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, bool, error) {
-	var stats LeafGenerationGCStats
+func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGCOptions) (leafGenerationGCAttemptOutcome, bool, error) {
+	var outcome leafGenerationGCAttemptOutcome
 
 	// Refresh, snapshot acquisition, and the live scan intentionally run outside
 	// writeMu. Pin their backing resources against Close without joining the lock
@@ -118,12 +218,13 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	}
 	defer releaseTeardown()
 	if db.closing.Load() {
-		return stats, false, nil
+		return outcome, false, nil
 	}
 
 	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits, opts.DryRun)
+	outcome.stats = stats
 	if err != nil || !prepared {
-		return stats, false, err
+		return outcome, false, err
 	}
 	var recoverableRoots *RecoverableRootSet
 	if opts.DryRun {
@@ -132,40 +233,40 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
 	}
 	if err != nil {
-		return stats, false, err
+		return outcome, false, err
 	}
 	defer recoverableRoots.Release()
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
-		return stats, false, ErrClosed
+		return outcome, false, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
 		snap.releaseLeafGenerationPins()
 	}
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()
-		return stats, false, nil
+		return outcome, false, nil
 	}
 	if err := opts.MaintenanceLimits.admitSnapshot(ctx, snap); err != nil {
 		_ = snap.Close()
-		return stats, false, err
+		return outcome, false, err
 	}
 
 	basis, ok, err := db.captureLeafGenerationGCScanBasis(snap, opts.MaintenanceLimits)
 	if err != nil {
 		_ = snap.Close()
-		return stats, false, err
+		return outcome, false, err
 	}
 	if !ok {
 		_ = snap.Close()
-		return stats, opts.DryRun, nil
+		return outcome, opts.DryRun, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		_ = snap.Close()
-		return stats, false, err
+		return outcome, false, err
 	}
 	var recoverableLive map[uint64]struct{}
 	if recoverableRoots != nil {
@@ -173,22 +274,24 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		if err != nil {
 			_ = snap.Close()
 			if opts.DryRun && errors.Is(err, ErrRecoverableRootSetStale) {
-				return stats, true, nil
+				return outcome, true, nil
 			}
-			return stats, false, err
+			return outcome, false, err
 		}
 	}
 	if err := snap.Close(); err != nil {
-		return stats, false, err
+		return outcome, false, err
 	}
 	snap = nil
 	releaseTeardown()
 
 	if opts.DryRun {
-		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations, recoverableLive, recoverableRoots)
+		dryStats, stale, err := db.leafGenerationGCDryRunFromScan(basis, liveGenerations, recoverableLive, recoverableRoots)
+		outcome.stats = dryStats
+		return outcome, stale, err
 	}
-	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations, recoverableLive, recoverableRoots)
-	return stats, false, err
+	outcome, err = db.leafGenerationGCApplyScan(basis, liveGenerations, recoverableLive, recoverableRoots)
+	return outcome, false, err
 }
 
 type leafGenerationGCScanBasis struct {
@@ -198,9 +301,10 @@ type leafGenerationGCScanBasis struct {
 }
 
 type leafGenerationGCDecision struct {
-	stats               LeafGenerationGCStats
-	intermediateChanged bool
-	zombieFileIDs       map[uint32]struct{}
+	stats                   LeafGenerationGCStats
+	intermediateChanged     bool
+	retiringRecoverableOnly bool
+	zombieFileIDs           map[uint32]struct{}
 }
 
 func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits, dryRun bool) (LeafGenerationGCStats, bool, error) {
@@ -379,8 +483,8 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 	return decision.stats, false, nil
 }
 
-func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations, recoverableGenerations map[uint64]struct{}, recoverableRoots *RecoverableRootSet) (LeafGenerationGCStats, error) {
-	var stats LeafGenerationGCStats
+func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations, recoverableGenerations map[uint64]struct{}, recoverableRoots *RecoverableRootSet) (leafGenerationGCAttemptOutcome, error) {
+	var outcome leafGenerationGCAttemptOutcome
 
 	db.writeMu.Lock()
 	runLeafGenerationGCExclusivePhaseHook(true)
@@ -391,29 +495,30 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
 	if db.closing.Load() {
-		return stats, nil
+		return outcome, nil
 	}
 
 	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
 	if !ok {
-		return stats, nil
+		return outcome, nil
 	}
 	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
 	if err != nil {
-		return stats, err
+		return outcome, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
 	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, recoverableGenerations, basis.commitSeq, false)
-	stats = decision.stats
+	outcome.stats = decision.stats
+	outcome.retiringRecoverableOnly = decision.retiringRecoverableOnly
 	if err := recoverableRoots.revalidateWithDurablePublishLockHeld(); err != nil {
-		return stats, err
+		return outcome, err
 	}
 	recoverableRoots.Release()
 
 	if len(decision.zombieFileIDs) > 0 {
 		for fileID := range decision.zombieFileIDs {
 			if err := db.valueLogManager.MarkZombie(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
-				return stats, err
+				return outcome, err
 			}
 			// A maintenance refresh can discover a previously deleted segment
 			// that was never part of a published ValueLogSet. Such a file has no
@@ -421,38 +526,39 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 			// removal directly. Snapshot- or identity-pinned files remain marked
 			// zombie and are retried by the manager when their final pin releases.
 			if _, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
-				return stats, err
+				return outcome, err
 			}
 		}
 	}
 
 	if decision.intermediateChanged {
 		if err := db.replaceLeafGenerationManifest(manifest); err != nil {
-			return stats, err
+			return outcome, err
 		}
 		db.leafGenerationManifest = manifest
 	}
 	if decision.intermediateChanged || len(decision.zombieFileIDs) > 0 {
 		if err := db.publishLeafGenerationState(len(decision.zombieFileIDs) > 0); err != nil {
-			return stats, err
+			return outcome, err
 		}
 	}
 
 	prePrune := manifest.clone()
 	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
 	if err != nil {
-		return stats, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
+		return outcome, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
 	}
+	outcome.hasUnprunedDeleted = manifestHasDeletedLeafGenerationRecord(manifest)
 	if !pruned {
-		return stats, nil
+		return outcome, nil
 	}
-	stats.GenerationsDeleted = countPrunedLeafGenerations(prePrune, manifest)
-	stats.FilesDeleted = filesDeleted
+	outcome.stats.GenerationsDeleted = countPrunedLeafGenerations(prePrune, manifest)
+	outcome.stats.FilesDeleted = filesDeleted
 	if err := db.replaceLeafGenerationManifest(manifest); err != nil {
-		return stats, err
+		return outcome, err
 	}
 	db.leafGenerationManifest = manifest
-	return stats, db.publishLeafGenerationState(false)
+	return outcome, db.publishLeafGenerationState(false)
 }
 
 func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView, limits LeafGenerationMaintenanceLimits) (map[uint64]struct{}, error) {
@@ -557,6 +663,9 @@ func (db *DB) buildLeafGenerationGCDecision(manifest *leafGenerationManifest, fi
 		// so a later pass can reclaim it after every durable fallback advances.
 		if _, ok := recoverableGenerations[gen.GenerationID]; ok {
 			decision.stats.GenerationsRetiring++
+			if db.leafGenerationPins.count(gen.GenerationID) == 0 {
+				decision.retiringRecoverableOnly = true
+			}
 			if gen.State != leafGenerationStateRetiring {
 				gen.State = leafGenerationStateRetiring
 				if currentCommitSeq > gen.RetiredCommitSeq {

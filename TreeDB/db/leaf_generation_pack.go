@@ -67,9 +67,12 @@ func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 
 type LeafGenerationPackOptions struct {
 	// Set only by the named private-COW operation, never by an application callback.
-	privateCOWOwner   *transactionowner.Owner
-	MaintenanceLimits LeafGenerationMaintenanceLimits
-	GenerationIDs     []uint64
+	privateCOWOwner *transactionowner.Owner
+	// Set by CompactStorage, which manages leaf-page-log handoff and sequence
+	// advancement explicitly around the full compaction sequence.
+	skipLeafPageLogAdvance bool
+	MaintenanceLimits      LeafGenerationMaintenanceLimits
+	GenerationIDs          []uint64
 	// Sync is retained for API compatibility. Leaf-generation pack publication
 	// is always durable: copied records/pages, the promoted-directory entry, and
 	// the alternate meta page are synchronized before source generations can
@@ -439,9 +442,49 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			return stats, err
 		}
 		stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
+		if opts.privateCOWOwner == nil && !opts.skipLeafPageLogAdvance {
+			if err := db.advanceLeafPageLogPastPackedSources(rawSourceIDs, stats.CreatedFileIDs); err != nil {
+				return stats, fmt.Errorf("leaf generation pack: advance leaf page log past packed sources: %w", err)
+			}
+		}
 		return stats, nil
 	}
 	return stats, errLeafGenerationPackPublishConflict
+}
+
+// advanceLeafPageLogPastPackedSources rotates any active multi-lane leaf-page
+// log writer still parked on a packed source generation past the newly created
+// packed segment sequence so subsequent LeafGenerationGC can reclaim those
+// packed sources instead of treating them as live current writers.
+func (db *DB) advanceLeafPageLogPastPackedSources(rawSourceIDs, createdRawFileIDs []uint32) error {
+	if db == nil || len(rawSourceIDs) == 0 || len(createdRawFileIDs) == 0 {
+		return nil
+	}
+	db.writeMu.RLock()
+	log := db.leafPageLog
+	db.writeMu.RUnlock()
+	if log == nil || !compactStorageLeafPageLogHandoffCapable(log) {
+		return nil
+	}
+	currentRawIDs, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil || len(currentRawIDs) == 0 {
+		return err
+	}
+	intersects := false
+	for _, rawID := range rawSourceIDs {
+		if _, ok := currentRawIDs[rawID]; ok {
+			intersects = true
+			break
+		}
+	}
+	if !intersects {
+		return nil
+	}
+	maxSeq := maxLeafGenerationFileSeq(createdRawFileIDs)
+	if maxSeq == 0 {
+		return nil
+	}
+	return compactStorageAdvanceLeafPageLogSeqAtLeast(log, maxSeq)
 }
 
 func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (LeafPageLogSequenceReserver, *rewriteRIDAllocator, error) {

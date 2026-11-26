@@ -444,6 +444,41 @@ func TestRunFixtureLeafGenerationReportsDiskTotals(t *testing.T) {
 	}
 }
 
+func TestRunFixtureCommandWALRelaxedOfflineVacuumPrunesEmptyWAL(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	cfg, err := parseConfig([]string{
+		"-dir", dir,
+		"-docs", "256",
+		"-batch-size", "64",
+		"-format", "template-v1",
+		"-indexes", "2",
+		"-profile", "command_wal_relaxed",
+		"-index-vacuum", "offline",
+		"-reopen-verify=true",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	summary, err := runFixture(cfg)
+	if err != nil {
+		t.Fatalf("run fixture: %v", err)
+	}
+	if summary.Verify.Samples == 0 {
+		t.Fatal("expected reopen verification samples")
+	}
+	walDir := filepath.Join(dir, "maindb", "wal")
+	entries, err := os.ReadDir(walDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("readdir wal: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "commit-l") && strings.HasSuffix(entry.Name(), ".log") {
+			t.Fatalf("expected empty command-WAL segment %s to be pruned after offline vacuum", entry.Name())
+		}
+	}
+}
+
 func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
 	if testing.Short() {
 		t.Skip("loads a large enough fixture to exercise multi-batch collection roots")

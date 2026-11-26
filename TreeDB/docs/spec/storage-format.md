@@ -2308,6 +2308,21 @@ registry excludes prepared and published resources; held snapshot generation
 pins conservatively retain every matching revision. The current compatibility
 revision is always retained. GC validates the complete exact-parent revision
 inventory before deletion; it never selects revisions by age or a fixed count.
+For destructive `LeafGenerationGC` calls that explicitly opt in via
+`LeafGenerationGCOptions{ConvergeFallback: true}` (`!opts.DryRun`, writable
+handle, `!nativeSemanticActive`, serialized under `maintenanceMu`), if an
+initial pass leaves unpinned dead generations in `retiring` solely because of
+an older recoverable fallback root, GC converges the alternate durable meta
+slot onto the current root using the existing durable publication path before
+retrying reclamation, and refreshes conservative outer-leaf slot pins when
+deleted records remain unpruned; ordinary `LeafGenerationGC`
+(`ConvergeFallback: false`) retains existing fallback roots, and dry-run,
+read-only, native-semantic-owner, and active snapshot-pin exclusions remain
+unchanged so fallback recovery and held readers stay valid. When
+`VacuumIndexOffline` swaps a rebuilt `index.db` under the exclusive database
+lock, it may also prune settled 0-logical-byte fixed command-WAL containers
+once the replacement index is durably synced, while conservatively retaining
+any non-empty or unvalidated WAL segments.
 The existing generation-maintenance scheduler invokes this same whole-generation
 collector independently of value rewrite and experimental leaf packing. This
 changes collection scheduling, not manifest bytes, reachability rules, or deletion
