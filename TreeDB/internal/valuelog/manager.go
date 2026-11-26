@@ -1550,6 +1550,8 @@ type Manager struct {
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
+	onSegmentRetiredMu          sync.Mutex
+	onSegmentRetired            func(fileID uint32) error
 }
 
 // PreparedReadProfile reports the configuration that bounds value-log reads
@@ -2122,7 +2124,7 @@ func (m *Manager) Refresh() error {
 		}
 		m.mu.Unlock()
 	}
-	return nil
+	return m.ReconcileRetiredSegments()
 }
 
 func (m *Manager) recoverStableDeleteDirOnce(dir string) error {
@@ -2879,6 +2881,11 @@ func (m *Manager) retryZombieDelete(f *File) {
 			m.finishDeletionAdmission(f)
 			if finishErr := m.finishOriginalDeletion(f, errors.Join(removeErr, syncErr, unobserveErr), parent); finishErr != nil {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
+			}
+			if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
+				if retiredErr := onRetired(f.ID); retiredErr != nil {
+					log.Printf("valuelog: post-retirement reconcile failed for %s: %v", f.Path, retiredErr)
+				}
 			}
 			return
 		} else if !isWindowsSharingViolationError(removeErr) {

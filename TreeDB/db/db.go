@@ -184,6 +184,9 @@ type DB struct {
 	// immediately before its destructive revalidation.
 	testValueLogGCBeforeRevalidateHook func()
 
+	postValueLogGCHookMu sync.Mutex
+	postValueLogGCHook   func() error
+
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
 
@@ -5576,6 +5579,40 @@ func (db *DB) Zipper() *zipper.Zipper {
 		return nil
 	}
 	return idx.zipper
+}
+
+// SetPostValueLogGCHook registers an optional callback invoked after a
+// non-dry-run ValueLogGC pass deletes or leaves pending segments. The callback
+// runs strictly outside publishPrepareMu and valueLogPublicationMu; any non-nil
+// error is propagated outward from ValueLogGC.
+func (db *DB) SetPostValueLogGCHook(fn func() error) {
+	if db == nil {
+		return
+	}
+	db.postValueLogGCHookMu.Lock()
+	db.postValueLogGCHook = fn
+	db.postValueLogGCHookMu.Unlock()
+}
+
+func (db *DB) postValueLogGCHookSnapshot() func() error {
+	if db == nil {
+		return nil
+	}
+	db.postValueLogGCHookMu.Lock()
+	fn := db.postValueLogGCHook
+	db.postValueLogGCHookMu.Unlock()
+	return fn
+}
+
+// SetValueLogSegmentRetiredHook registers an optional callback invoked by the
+// backend value-log manager after physical deletion and registry retirement
+// complete for a segment (including deferred snapshot release, leaf-log GC, and
+// retry completion).
+func (db *DB) SetValueLogSegmentRetiredHook(fn func(fileID uint32) error) {
+	if db == nil || db.valueLogManager == nil {
+		return
+	}
+	db.valueLogManager.SetOnSegmentRetired(fn)
 }
 
 // SetZipperParallelMergePressureSource installs an optional pressure signal for

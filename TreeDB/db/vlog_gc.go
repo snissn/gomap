@@ -287,6 +287,15 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
+	var publishPrepareLocked bool
+	unlockPublishPrepare := func() {
+		if publishPrepareLocked {
+			db.publishPrepareMu.Unlock()
+			publishPrepareLocked = false
+		}
+	}
+	defer unlockPublishPrepare()
+
 	{
 		var err error
 		if opts.DryRun {
@@ -311,7 +320,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 
 		if !opts.DryRun {
 			db.publishPrepareMu.Lock()
-			defer db.publishPrepareMu.Unlock()
+			publishPrepareLocked = true
 			if !observedOnly && db.currentCommitSeq() != scannedSeq {
 				return stats, ErrRecoverableRootSetStale
 			}
@@ -705,6 +714,17 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 
 	if !opts.DryRun && !db.readOnly {
 		db.persistValueLogRefTrackerBestEffort()
+	}
+	// Release publishPrepareMu strictly before invoking the post-GC hook so
+	// secondary managers (e.g. cached.valueLogReader) reconcile retired handles
+	// outside publishPrepareMu and valueLogPublicationMu.
+	unlockPublishPrepare()
+	if !opts.DryRun && (stats.SegmentsDeleted > 0 || stats.SegmentsPending > 0) {
+		if hook := db.postValueLogGCHookSnapshot(); hook != nil {
+			if err := hook(); err != nil {
+				return stats, err
+			}
+		}
 	}
 	return stats, nil
 }

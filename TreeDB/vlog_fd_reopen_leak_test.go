@@ -1,0 +1,540 @@
+package treedb
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.JournalLanes = 4
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.Policy = ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 8 << 10
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	ctx := context.Background()
+	expected := make(map[string][]byte)
+
+	const cycles = 3
+	const keysPerCycle = 128
+	const roundsPerCycle = 8
+
+	makePayload := func(cycle, round, i int) []byte {
+		buf := make([]byte, 1024)
+		x := uint64(cycle+1)*0x9e3779b97f4a7c15 ^ uint64(round+1)*0xbf58476d1ce4e5b9 ^ uint64(i+1)*0x94d049bb133111eb
+		for off := 0; off < len(buf); off += 8 {
+			x ^= x >> 12
+			x ^= x << 25
+			x ^= x >> 27
+			v := x * 0x2545f4914f6cdd1d
+			buf[off+0] = byte(v)
+			buf[off+1] = byte(v >> 8)
+			buf[off+2] = byte(v >> 16)
+			buf[off+3] = byte(v >> 24)
+			buf[off+4] = byte(v >> 32)
+			buf[off+5] = byte(v >> 40)
+			buf[off+6] = byte(v >> 48)
+			buf[off+7] = byte(v >> 56)
+		}
+		return buf
+	}
+
+	for cycle := 0; cycle < cycles; cycle++ {
+		backend, cleanup, statsFn, err := OpenBackendWithCachedLeafLogStats(opts)
+		if err != nil {
+			t.Fatalf("cycle %d OpenBackendWithCachedLeafLogStats: %v", cycle, err)
+		}
+
+		// Verify reopen did not explode hot lanes after prior rewrite lanes (e.g. lane 254).
+		hotLanes := -1
+		if st := statsFn(); st != nil {
+			if raw, ok := st["treedb.cache.journal_lanes.hot"]; ok {
+				parsed, parseErr := strconv.Atoi(raw)
+				if parseErr != nil {
+					_ = cleanup()
+					t.Fatalf("cycle %d parse treedb.cache.journal_lanes.hot=%q: %v", cycle, raw, parseErr)
+				}
+				hotLanes = parsed
+				if hotLanes > opts.JournalLanes {
+					t.Errorf("cycle %d reopen exploded hot lanes: got %d, want <= %d", cycle, hotLanes, opts.JournalLanes)
+				}
+			}
+		}
+
+		// Write and overwrite values via the backend value-log appender so
+		// value_vlog rotates multiple sealed segments and accumulates both
+		// unreferenced and partially-stale segments eligible for rewrite +
+		// ValueLogGC during CompactStorage.
+		for round := 0; round < roundsPerCycle; round++ {
+			keys := make([][]byte, keysPerCycle)
+			vals := make([][]byte, keysPerCycle)
+			for i := 0; i < keysPerCycle; i++ {
+				keys[i] = []byte(fmt.Sprintf("k-%04d", i))
+				vals[i] = makePayload(cycle, round, i)
+				expected[string(keys[i])] = vals[i]
+			}
+			ptrs, err := backend.AppendValueLogValues(vals)
+			if err != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d round %d AppendValueLogValues: %v", cycle, round, err)
+			}
+			b := backend.NewBatch()
+			pb, ok := b.(interface {
+				SetPointer([]byte, page.ValuePtr) error
+			})
+			if !ok {
+				_ = b.Close()
+				_ = cleanup()
+				t.Fatalf("cycle %d round %d NewBatch(%T) does not support SetPointer", cycle, round, b)
+			}
+			for i := range keys {
+				if err := pb.SetPointer(keys[i], ptrs[i]); err != nil {
+					_ = b.Close()
+					_ = cleanup()
+					t.Fatalf("cycle %d round %d SetPointer: %v", cycle, round, err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				_ = cleanup()
+				t.Fatalf("cycle %d round %d WriteSync: %v", cycle, round, err)
+			}
+			if err := b.Close(); err != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d round %d Batch.Close: %v", cycle, round, err)
+			}
+		}
+		// Overwrite 90% of keys in a partial round so the prior sealed segments
+		// have high stale ratio (eligible for ValueLogRewriteOnline into lane 254+),
+		// then commit two inline empty-value updates so KeepRecent=1 advances past
+		// older recoverable roots.
+		{
+			partialCount := (keysPerCycle * 9) / 10
+			keys := make([][]byte, partialCount)
+			vals := make([][]byte, partialCount)
+			for i := 0; i < partialCount; i++ {
+				keys[i] = []byte(fmt.Sprintf("k-%04d", i))
+				vals[i] = makePayload(cycle, roundsPerCycle, i)
+				expected[string(keys[i])] = vals[i]
+			}
+			ptrs, err := backend.AppendValueLogValues(vals)
+			if err != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d partial AppendValueLogValues: %v", cycle, err)
+			}
+			b := backend.NewBatch()
+			pb := b.(interface {
+				SetPointer([]byte, page.ValuePtr) error
+			})
+			for i := range keys {
+				if err := pb.SetPointer(keys[i], ptrs[i]); err != nil {
+					_ = b.Close()
+					_ = cleanup()
+					t.Fatalf("cycle %d partial SetPointer: %v", cycle, err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				_ = cleanup()
+				t.Fatalf("cycle %d partial WriteSync: %v", cycle, err)
+			}
+			if err := b.Close(); err != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d partial Batch.Close: %v", cycle, err)
+			}
+		}
+		for partial := 0; partial < 2; partial++ {
+			b := backend.NewBatch()
+			key := []byte(fmt.Sprintf("meta-bump-%d-%d", cycle, partial))
+			if err := b.Set(key, nil); err != nil {
+				_ = b.Close()
+				_ = cleanup()
+				t.Fatalf("cycle %d meta-bump Set: %v", cycle, err)
+			}
+			expected[string(key)] = []byte{}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				_ = cleanup()
+				t.Fatalf("cycle %d meta-bump WriteSync: %v", cycle, err)
+			}
+			if err := b.Close(); err != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d meta-bump Close: %v", cycle, err)
+			}
+		}
+
+		// Capture pre-compaction value_vlog segment identities & inodes.
+		type trackedSeg struct {
+			path     string
+			identity rootpublication.StableIdentity
+			inode    segmentInode
+			hasInode bool
+		}
+		var preSegments []trackedSeg
+		entries, err := os.ReadDir(valueLogDir)
+		if err != nil {
+			_ = cleanup()
+			t.Fatalf("cycle %d ReadDir(value_vlog): %v", cycle, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+				continue
+			}
+			p := filepath.Join(valueLogDir, entry.Name())
+			f, openErr := os.Open(p)
+			if openErr != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d Open(%s): %v", cycle, p, openErr)
+			}
+			id, idErr := rootpublication.StableIdentityFromFile(f)
+			_ = f.Close()
+			if idErr != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d StableIdentityFromFile(%s): %v", cycle, p, idErr)
+			}
+			ino, hasIno := statSegmentInode(p)
+			preSegments = append(preSegments, trackedSeg{
+				path:     p,
+				identity: id,
+				inode:    ino,
+				hasInode: hasIno,
+			})
+		}
+
+		if _, err := backend.CompactStorage(ctx, backenddb.CompactStorageOptions{
+			Mode:                                backenddb.CompactStorageFull,
+			ValueLogRewriteMinSegmentStaleRatio: 0.01,
+			ValueLogRewriteMinSegmentStaleBytes: 1,
+		}); err != nil {
+			_ = cleanup()
+			t.Fatalf("cycle %d CompactStorage: %v", cycle, err)
+		}
+
+		registry := backend.ValueLogIdentityPinRegistry()
+		deletedInodes := make(map[segmentInode]string)
+		var staleObservers uint64
+		deletedCount := 0
+		for _, seg := range preSegments {
+			if _, statErr := os.Stat(seg.path); os.IsNotExist(statErr) {
+				deletedCount++
+				if seg.hasInode {
+					deletedInodes[seg.inode] = seg.path
+				}
+				if obs := registry.ObserverCount(seg.identity); obs != 0 {
+					staleObservers += obs
+					t.Errorf("cycle %d deleted segment %s still has registry ObserverCount=%d (retired=%t)",
+						cycle, filepath.Base(seg.path), obs, registry.IsRetired(seg.identity))
+				}
+			}
+		}
+		if deletedCount == 0 {
+			_ = cleanup()
+			t.Fatalf("cycle %d expected at least one pre-existing value_vlog file to be unlinked", cycle)
+		}
+
+		matchedInodeFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+		t.Logf("cycle %d metrics: hotLanes=%d preSegments=%d deleted=%d staleObservers=%d matchedInodeFDs=%d procDeletedFDs=%d",
+			cycle, hotLanes, len(preSegments), deletedCount, staleObservers, matchedInodeFDs, procDeletedFDs)
+		if matchedInodeFDs != 0 || procDeletedFDs != 0 {
+			t.Errorf("cycle %d leaked deleted value_vlog FDs after CompactStorage: matchedInodeFDs=%d procDeletedFDs=%d staleObservers=%d",
+				cycle, matchedInodeFDs, procDeletedFDs, staleObservers)
+		}
+
+		// Read-back all expected keys before closing this cycle.
+		for k, want := range expected {
+			got, getErr := backend.Get([]byte(k))
+			if getErr != nil {
+				_ = cleanup()
+				t.Fatalf("cycle %d Get(%q): %v", cycle, k, getErr)
+			}
+			if !bytes.Equal(got, want) {
+				_ = cleanup()
+				t.Fatalf("cycle %d Get(%q) mismatch: got %dB want %dB", cycle, k, len(got), len(want))
+			}
+		}
+
+		if err := cleanup(); err != nil {
+			t.Fatalf("cycle %d cleanup: %v", cycle, err)
+		}
+	}
+
+	// Final reopen verification.
+	reopen, cleanup, err := OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("final reopen OpenBackendWithCachedLeafLog: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("final reopen cleanup: %v", err)
+		}
+	}()
+	for k, want := range expected {
+		got, err := reopen.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("final reopen Get(%q): %v", k, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("final reopen Get(%q) mismatch", k)
+		}
+	}
+}
+
+func TestPostValueLogGCHookErrorPropagatesAndRunsOutsidePublishLocks(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.JournalLanes = 2
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.Policy = ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 8 << 10
+
+	backend, cleanup, err := OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	}()
+
+	// Create multiple sealed value-log segments and overwrite them so GC deletes segments.
+	for round := 0; round < 6; round++ {
+		vals := make([][]byte, 64)
+		for i := range vals {
+			buf := make([]byte, 512)
+			for j := range buf {
+				buf[j] = byte((round*31 + i*17 + j*13) & 0xff)
+			}
+			vals[i] = buf
+		}
+		ptrs, err := backend.AppendValueLogValues(vals)
+		if err != nil {
+			t.Fatalf("round %d AppendValueLogValues: %v", round, err)
+		}
+		b := backend.NewBatch()
+		pb := b.(interface {
+			SetPointer([]byte, page.ValuePtr) error
+		})
+		for i := range vals {
+			if err := pb.SetPointer([]byte(fmt.Sprintf("hk-%03d", i)), ptrs[i]); err != nil {
+				_ = b.Close()
+				t.Fatalf("SetPointer: %v", err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			t.Fatalf("WriteSync: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Batch.Close: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		b := backend.NewBatch()
+		if err := b.Set([]byte(fmt.Sprintf("hb-%d", i)), nil); err != nil {
+			_ = b.Close()
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			t.Fatalf("WriteSync: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Batch.Close: %v", err)
+		}
+	}
+
+	ctx := context.Background()
+	hookCalls := 0
+	injectedErr := errors.New("injected post-gc reconcile failure")
+	backend.SetPostValueLogGCHook(func() error {
+		hookCalls++
+		// Writing a tiny inline key synchronously requires publishPrepareMu
+		// (and RefreshValueLogSet requires valueLogPublicationMu); succeeding
+		// here proves neither lock is held when the hook runs.
+		if err := backend.RefreshValueLogSet(); err != nil {
+			return fmt.Errorf("RefreshValueLogSet inside post-GC hook failed: %w", err)
+		}
+		b := backend.NewBatch()
+		if err := b.Set([]byte("hook-lock-probe"), nil); err != nil {
+			_ = b.Close()
+			return err
+		}
+		err := b.WriteSync()
+		_ = b.Close()
+		if err != nil {
+			return err
+		}
+		return injectedErr
+	})
+
+	// DryRun must never invoke the post-GC hook.
+	if _, err := backend.ValueLogGC(ctx, backenddb.ValueLogGCOptions{DryRun: true}); err != nil {
+		t.Fatalf("ValueLogGC DryRun: %v", err)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("DryRun invoked post-GC hook %d times, want 0", hookCalls)
+	}
+
+	// Non-dry-run ValueLogGC must run the hook outside publish locks and propagate its error.
+	gcStats, err := backend.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+	if !errors.Is(err, injectedErr) {
+		t.Fatalf("ValueLogGC error=%v, want %v (stats=%+v, hookCalls=%d)", err, injectedErr, gcStats, hookCalls)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("post-GC hook calls=%d, want 1", hookCalls)
+	}
+}
+
+func TestOpen_CompactStorageNoDeletedFDs(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.JournalLanes = 4
+	opts.IndexOuterLeavesInValueLog = false
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.Policy = ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 8 << 10
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	ctx := context.Background()
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	expected := make(map[string][]byte)
+	for round := 0; round < 6; round++ {
+		b := db.NewBatch()
+		for i := 0; i < 64; i++ {
+			k := []byte(fmt.Sprintf("ok-%04d", i))
+			v := make([]byte, 1024)
+			for j := range v {
+				v[j] = byte((round*41 + i*19 + j*7) & 0xff)
+			}
+			if err := b.Set(k, v); err != nil {
+				_ = b.Close()
+				t.Fatalf("Set: %v", err)
+			}
+			expected[string(k)] = v
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			t.Fatalf("WriteSync: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Batch.Close: %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+	}
+
+	type trackedSeg struct {
+		path     string
+		identity rootpublication.StableIdentity
+		inode    segmentInode
+		hasInode bool
+	}
+	var preSegments []trackedSeg
+	entries, err := os.ReadDir(valueLogDir)
+	if err != nil {
+		t.Fatalf("ReadDir(value_vlog): %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		p := filepath.Join(valueLogDir, entry.Name())
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatalf("Open(%s): %v", p, err)
+		}
+		id, idErr := rootpublication.StableIdentityFromFile(f)
+		_ = f.Close()
+		if idErr != nil {
+			t.Fatalf("StableIdentityFromFile(%s): %v", p, idErr)
+		}
+		ino, hasIno := statSegmentInode(p)
+		preSegments = append(preSegments, trackedSeg{path: p, identity: id, inode: ino, hasInode: hasIno})
+	}
+
+	if _, err := db.CompactStorage(ctx, CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleRatio: 0.01,
+		ValueLogRewriteMinSegmentStaleBytes: 1,
+	}); err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+
+	registry := db.backend.ValueLogIdentityPinRegistry()
+	deletedInodes := make(map[segmentInode]string)
+	deletedCount := 0
+	for _, seg := range preSegments {
+		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
+			deletedCount++
+			if seg.hasInode {
+				deletedInodes[seg.inode] = seg.path
+			}
+			if obs := registry.ObserverCount(seg.identity); obs != 0 {
+				t.Errorf("deleted segment %s still has ObserverCount=%d", filepath.Base(seg.path), obs)
+			}
+		}
+	}
+	if deletedCount == 0 {
+		t.Fatalf("expected CompactStorage to delete at least 1 segment")
+	}
+	matchedInodeFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+	if matchedInodeFDs != 0 || procDeletedFDs != 0 {
+		t.Errorf("leaked deleted FDs after treedb.Open CompactStorage: matchedInodeFDs=%d procDeletedFDs=%d", matchedInodeFDs, procDeletedFDs)
+	}
+	for k, want := range expected {
+		got, err := db.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q) mismatch", k)
+		}
+	}
+}

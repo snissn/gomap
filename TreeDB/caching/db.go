@@ -8150,14 +8150,58 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	return db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false)
 }
 
+// ReconcileRetiredValueLogReader closes and detaches unpinned value-log segment
+// handles held by the cached reader whose physical identities have already been
+// retired by another manager sharing the same pin registry.
+func (db *DB) ReconcileRetiredValueLogReader() error {
+	if db == nil || db.closing.Load() {
+		return nil
+	}
+	db.valueLogReaderMu.RLock()
+	if db.closing.Load() {
+		db.valueLogReaderMu.RUnlock()
+		return nil
+	}
+	reader := db.valueLogReader
+	db.valueLogReaderMu.RUnlock()
+	if reader == nil {
+		return nil
+	}
+	return reader.ReconcileRetiredSegments()
+}
+
+// ReconcileRetiredValueLogSegment closes and detaches a single unpinned
+// value-log segment handle held by the cached reader if its physical identity
+// has already been retired in the shared pin registry.
+func (db *DB) ReconcileRetiredValueLogSegment(fileID uint32) error {
+	if db == nil || fileID == 0 || db.closing.Load() {
+		return nil
+	}
+	db.valueLogReaderMu.RLock()
+	if db.closing.Load() {
+		db.valueLogReaderMu.RUnlock()
+		return nil
+	}
+	reader := db.valueLogReader
+	db.valueLogReaderMu.RUnlock()
+	if reader == nil {
+		return nil
+	}
+	return reader.ReconcileRetiredSegment(fileID)
+}
+
 // admittedCompletion is valid only while the original maintenance flushMu lease
 // keeps Close from disposing readers, append lanes, or the captured basis.
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admittedCompletion bool) error {
 	if db == nil || (db.closing.Load() && !admittedCompletion) {
 		return nil
 	}
-	if db.valueLogReader != nil {
-		if err := db.valueLogReader.Refresh(); err != nil {
+	db.valueLogReaderMu.RLock()
+	reader := db.valueLogReader
+	db.valueLogReaderMu.RUnlock()
+	if reader != nil {
+		// Refresh also reconciles retired segments on reader.
+		if err := reader.Refresh(); err != nil {
 			return err
 		}
 	}
@@ -9296,6 +9340,7 @@ type DB struct {
 	valueLogRewriteTriggerBytes    int64
 	valueLogRewriteTriggerChurn    int64
 	valueLogRewriteMinSegmentAge   time.Duration
+	valueLogReaderMu               sync.RWMutex
 	valueLogReader                 *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
@@ -12825,7 +12870,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	maxLaneID := -1
+	maxWALLaneID := -1
 	maxLeafVlogSeq := 0
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
@@ -12840,16 +12885,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				}
 				continue
 			}
-			if seg.lane > maxLaneID {
-				maxLaneID = seg.lane
-			}
 			if seg.seq > maxVlogSeq[seg.lane] {
 				maxVlogSeq[seg.lane] = seg.seq
 			}
 			continue
 		}
-		if seg.lane > maxLaneID {
-			maxLaneID = seg.lane
+		if opts.ExternalCommandWAL && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+			continue
+		}
+		if seg.lane > maxWALLaneID {
+			maxWALLaneID = seg.lane
 		}
 		if seg.seq > maxWALSeq[seg.lane] {
 			maxWALSeq[seg.lane] = seg.seq
@@ -12878,9 +12923,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCountDefaulted && valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
 		laneCount = 3
 	}
-	// Temporarily remove the logic that increases laneCount based on maxLaneID
-	if maxLaneID+1 > laneCount {
-		laneCount = maxLaneID + 1
+	// Only recovered non-command redo WAL segments expand laneCount so WAL
+	// recovery and walClosedSizes keep matching db.lanes[seg.lane]. Value-log
+	// segments (such as high-numbered rewrite output lanes like 254) are served
+	// by valuelog.Manager and must never inflate active writer lanes.
+	if maxWALLaneID+1 > laneCount {
+		laneCount = maxWALLaneID + 1
 	}
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
 		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
@@ -27098,11 +27146,14 @@ func (db *DB) Close() error {
 		db.hashSortedIndexer.Close()
 		db.hashSortedIndexer = nil
 	}
-	if db.valueLogReader != nil {
-		if err := db.valueLogReader.Close(); err != nil {
+	db.valueLogReaderMu.Lock()
+	reader := db.valueLogReader
+	db.valueLogReader = nil
+	db.valueLogReaderMu.Unlock()
+	if reader != nil {
+		if err := reader.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		db.valueLogReader = nil
 	}
 
 	var walBytes int64
