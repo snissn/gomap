@@ -14133,9 +14133,13 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	var textTables []memtable.Table
 	var textIters []iterator.UnsafeIterator
+	var cleanupPointerizedTextTables func()
 	defer func() {
 		for _, it := range textIters {
 			_ = it.Close()
+		}
+		if cleanupPointerizedTextTables != nil {
+			cleanupPointerizedTextTables()
 		}
 		resetCollectionTables(textTables)
 	}()
@@ -14146,8 +14150,13 @@ func (c *Collection) insertBatchNoIndex(
 		if err := appendTextIndexNoIndexInsertDeltas(snap, catalog, plannerOptions, entries, &textRootNames, textBaseRootIDs, &textPolicies, &textTables); err != nil {
 			return nil, err
 		}
+		publishTextTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, textRootNames, textTables)
+		if err != nil {
+			return nil, err
+		}
+		cleanupPointerizedTextTables = cleanupPointerized
 		for i, textRootName := range textRootNames {
-			textIter := textTables[i].NewIterator(nil, nil)
+			textIter := publishTextTables[i].NewIterator(nil, nil)
 			textIters = append(textIters, textIter)
 			rootNames = append(rootNames, textRootName)
 			baseRootIDs[textRootName] = textBaseRootIDs[textRootName]

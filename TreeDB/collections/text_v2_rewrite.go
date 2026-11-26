@@ -428,6 +428,12 @@ func (c *Collection) rewriteTextIndexWithCommandWALIntent(ctx context.Context, i
 		return stats, beforeStats, "no_delta_roots", nil
 	}
 
+	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, catalog.meta, rootNames, tables)
+	if err != nil {
+		return empty, emptyStorage, "", err
+	}
+	defer cleanupPointerized()
+
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	defer func() {
@@ -436,7 +442,7 @@ func (c *Collection) rewriteTextIndexWithCommandWALIntent(ctx context.Context, i
 		}
 	}()
 	for i, rootName := range rootNames {
-		iter := tables[i].NewIterator(nil, nil)
+		iter := publishTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{BaseRoot: baseRootIDs[rootName], Iter: iter, StoragePolicy: policies[i]})
 	}
