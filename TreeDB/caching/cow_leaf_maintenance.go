@@ -62,6 +62,10 @@ type backendLeafGenerationSealedDebtReader interface {
 	LeafGenerationSealedDebt() (generations int, bytes int64)
 }
 
+type backendLeafGenerationDeletedPruner interface {
+	PruneDeletedLeafGenerations() (generationsDeleted int, filesDeleted int, err error)
+}
+
 func (db *DB) privateCOWLeafPackPolicy() (interval time.Duration, maxGenerations int, maxCopyBytes int64) {
 	interval = privateCOWLeafPackInterval
 	maxGenerations = privateCOWLeafPackGenerations
@@ -381,6 +385,31 @@ func (db *DB) runPrivateCOWLeafPackLocked(parentCtx context.Context, maxGenerati
 		// GC can publish a manifest view even when it returns a later error.
 		if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
 			return true, errors.Join(gcErr, err)
+		}
+		// Adopting the post-GC basis releases the previous COW basis snapshot
+		// and synchronously unlinks newly unpinned zombie segments. Prune any
+		// already-Deleted manifest records whose files are now gone from disk
+		// without re-running a full index reachability scan.
+		if gcErr == nil && (gcStats.GenerationsEligible > 0 || gcStats.BytesDeleted > 0) && gcStats.FilesDeleted == 0 && ctx.Err() == nil && !db.closing.Load() {
+			if pruner, ok := db.backend.(backendLeafGenerationDeletedPruner); ok {
+				prunedGens, prunedFiles, pruneErr := pruner.PruneDeletedLeafGenerations()
+				if prunedGens > 0 {
+					db.vlogGenerationLeafPackGCDeletedGenerations.Add(uint64(prunedGens))
+					db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(gcStats.GenerationsDeleted + prunedGens))
+				}
+				if prunedFiles > 0 {
+					db.vlogGenerationLeafPackGCDeletedFiles.Add(uint64(prunedFiles))
+					db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(gcStats.FilesDeleted + prunedFiles))
+				}
+				if prunedGens > 0 || prunedFiles > 0 || pruneErr != nil {
+					if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
+						return true, errors.Join(pruneErr, err)
+					}
+				}
+				if pruneErr != nil {
+					gcErr = pruneErr
+				}
+			}
 		}
 		gcErr = db.privateCOWLeafMaintenanceError(gcErr)
 		if db.cow.refreshRequired.Load() {

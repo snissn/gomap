@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1274,5 +1275,124 @@ func TestPrivateCOWCheckpointReclaimsDeadSealedGenerations(t *testing.T) {
 	gotLive, err := cache.Get([]byte("idle-gen-01-01023"))
 	if err != nil || !bytes.Equal(gotLive, bytes.Repeat([]byte{0x31}, 128)) {
 		t.Fatalf("live key mismatch after checkpoint pack: err=%v len=%d", err, len(gotLive))
+	}
+}
+
+func TestPrivateCOWCheckpointUnlinksWholeGenerationGCZombiesBeforeClose(t *testing.T) {
+	cache, backend := privateCOWPackFixture(t)
+	rotateAllLeafLanes := func() {
+		t.Helper()
+		for _, ln := range cache.leafLogAppendLanesSnapshot() {
+			if ln == nil {
+				continue
+			}
+			ln.vlogMu.Lock()
+			err := cache.rotateValueLogMuHeld(ln)
+			ln.vlogMu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writeRange := func(prefix string, start, count int, fill byte) {
+		t.Helper()
+		b := cache.NewBatchWithSize(count)
+		defer b.Close()
+		val := bytes.Repeat([]byte{fill}, 128)
+		for i := start; i < start+count; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("%s-%05d", prefix, i)), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f := &cowPressureRolloverFixture{db: cache, backend: backend.DB}
+		if err := f.write(b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leafDirBytes := func() (int, int64) {
+		t.Helper()
+		entries, err := os.ReadDir(backenddb.LeafLogDirPath(backend.DB.Dir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		var total int64
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				t.Fatal(err)
+			}
+			count++
+			total += info.Size()
+		}
+		return count, total
+	}
+
+	// Build 3 sealed generations and overwrite 100% of all keys across two later
+	// generations so the old generations are whole-generation GC eligible on
+	// every platform (including macOS without pack promotion).
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	const keys = 512
+	for round := 1; round <= 4; round++ {
+		writeRange("k", 0, keys, byte(round))
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		rotateAllLeafLanes()
+	}
+	// One more commit on the latest generation so both dual-meta slots point
+	// exclusively to post-overwrite roots.
+	writeRange("k", 0, keys, 0x55)
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	writeRange("k", 0, keys, 0x66)
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	filesBefore, bytesBefore := leafDirBytes()
+	sealedBefore, sealedBytesBefore := backend.DB.LeafGenerationSealedDebt()
+	t.Logf("before idle checkpoint: files=%d bytes=%d sealedGens=%d sealedBytes=%d", filesBefore, bytesBefore, sealedBefore, sealedBytesBefore)
+
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	backend.forceNoop = true
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("idle Checkpoint: %v", err)
+	}
+
+	filesAfterCP, bytesAfterCP := leafDirBytes()
+	sealedAfterCP, sealedBytesAfterCP := backend.DB.LeafGenerationSealedDebt()
+	deletedFiles := cache.vlogGenerationLeafPackGCLastDeletedFiles.Load()
+	deletedGens := cache.vlogGenerationLeafPackGCLastDeletedGenerations.Load()
+	deletedBytes := cache.vlogGenerationLeafPackGCLastDeletedBytes.Load()
+	t.Logf("after idle checkpoint (BEFORE Close): files=%d bytes=%d sealedGens=%d sealedBytes=%d calls=%d gcCalls=%d deletedFiles=%d deletedGens=%d deletedBytes=%d",
+		filesAfterCP, bytesAfterCP, sealedAfterCP, sealedBytesAfterCP,
+		backend.calls, backend.gcCalls, deletedFiles, deletedGens, deletedBytes)
+
+	if deletedFiles == 0 || deletedGens == 0 || deletedBytes == 0 {
+		t.Fatalf("expected immediate GC unlink and manifest prune during Checkpoint: deletedFiles=%d deletedGens=%d deletedBytes=%d",
+			deletedFiles, deletedGens, deletedBytes)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	filesAfterClose, bytesAfterClose := leafDirBytes()
+	t.Logf("after Close: files=%d bytes=%d", filesAfterClose, bytesAfterClose)
+
+	if filesAfterCP != filesAfterClose || bytesAfterCP != bytesAfterClose {
+		t.Fatalf("zombie leaf files stayed on disk until Close(): afterCheckpoint=(%d files, %d bytes) afterClose=(%d files, %d bytes)",
+			filesAfterCP, bytesAfterCP, filesAfterClose, bytesAfterClose)
+	}
+	if filesAfterCP >= filesBefore || bytesAfterCP >= bytesBefore {
+		t.Fatalf("idle Checkpoint did not unlink dead leaf segments before Close(): before=(%d files, %d bytes) afterCP=(%d files, %d bytes)",
+			filesBefore, bytesBefore, filesAfterCP, bytesAfterCP)
 	}
 }
