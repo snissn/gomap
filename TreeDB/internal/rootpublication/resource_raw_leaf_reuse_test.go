@@ -122,3 +122,82 @@ func TestRawLeafParentCoverageRequiresExactPhysicalPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestDependenciesCoveredBy(t *testing.T) {
+	dir := t.TempDir()
+	leafFile := writeStableResourceFixture(t, dir, "leaf.log", "0123456789abcdef")
+	vlogFile := writeStableResourceFixture(t, dir, "value.log", "0123456789abcdef")
+	dictFile := writeStableResourceFixture(t, dir, "dict.bin", "0123456789abcdef")
+	otherFile := writeStableResourceFixture(t, dir, "rotated.log", "0123456789abcdef")
+
+	makeMixedSet := func(lf *os.File, leafBytes uint64, vf *os.File, vlogBytes uint64, dictSynced bool) *StableResourceSet {
+		t.Helper()
+		b := NewStableResourceSetBuilder()
+		if lf != nil {
+			tok, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceOuterLeafLog, LogicalLane: "raw", ResourceID: "7", Generation: 7,
+				DiagnosticPath: "leaf.log", File: lf, Frontier: DurableFrontier{Bytes: leafBytes},
+				Reachability: ReachabilityOuterLeafRawPointer,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Add(tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if vf != nil {
+			tok, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceValueLog, LogicalLane: "vlog", ResourceID: "1", Generation: 1,
+				DiagnosticPath: "value.log", File: vf, Frontier: DurableFrontier{Bytes: vlogBytes},
+				Reachability: ReachabilityValueLogPointer,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Add(tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if dictFile != nil {
+			tok, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceDictionary, LogicalLane: "dictdb/value-log", ResourceID: "dict", Generation: 1,
+				DiagnosticPath: "dict.bin", File: dictFile, Frontier: DurableFrontier{Bytes: 8},
+				Reachability: ReachabilityDictionaryGeneration, ContentSynced: dictSynced,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Add(tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s, err := b.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.Release)
+		return s
+	}
+
+	parent := makeMixedSet(leafFile, 8, vlogFile, 8, true)
+	for _, tc := range []struct {
+		name        string
+		set, parent *StableResourceSet
+		want        bool
+	}{
+		{"exact-mixed-with-certified-dict", makeMixedSet(leafFile, 8, vlogFile, 8, true), parent, true},
+		{"uncertified-dict-declines", makeMixedSet(leafFile, 8, vlogFile, 8, false), parent, false},
+		{"leaf-grew", makeMixedSet(leafFile, 16, vlogFile, 8, true), parent, false},
+		{"vlog-grew", makeMixedSet(leafFile, 8, vlogFile, 16, true), parent, false},
+		{"leaf-rotated", makeMixedSet(otherFile, 8, vlogFile, 8, true), parent, false},
+		{"nil-parent", makeMixedSet(leafFile, 8, vlogFile, 8, true), nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.set.DependenciesCoveredBy(tc.parent)
+			if err != nil || got != tc.want {
+				t.Fatalf("DependenciesCoveredBy=%v err=%v want %v", got, err, tc.want)
+			}
+		})
+	}
+}

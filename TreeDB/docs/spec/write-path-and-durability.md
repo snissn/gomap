@@ -259,21 +259,35 @@ The fixed consequences are:
   (`command_wal_relaxed`, when `durabilitycut` and
   checkpoint/WAL flush test hooks are inactive), frontier capture records the
   command-WAL frontier without pre-rotating or fsyncing the active WAL segment
-  prior to backend materialization. After backend publication crosses
-  `WaitThrough(visibleCommitSeq)` so the durable root's `AppliedCommandLSN`
-  durably covers the checkpoint frontier, checkpoint teardown closes the
-  command-WAL prefix: if `durableAppliedLSN >= frontier`, the superseded active
-  WAL segment rotates without fsyncing its contents immediately before cleanup
-  unlinks it (`RotateCommandWALActiveSegment(false)`), while any un-synced new
-  empty target retains `dirSyncPending` so the next explicit `Sync` persists
-  its directory entry. If any concurrent post-frontier write advances
-  `frontier > durableAppliedLSN` (or under `command_wal_durable`,
+  prior to backend materialization; backend flush still drains userspace WAL
+  buffers and surfaces journal-local failures (`FlushCommandWAL(false)`). After
+  backend publication crosses `WaitThrough(visibleCommitSeq)` so the durable
+  root's `AppliedCommandLSN` durably covers the checkpoint frontier, checkpoint
+  teardown closes the command-WAL prefix: if `durableAppliedLSN >= frontier`,
+  the superseded active WAL segment rotates without fsyncing its contents
+  immediately before cleanup unlinks it (`RotateCommandWALActiveSegment(false)`),
+  while any un-synced new empty target retains `dirSyncPending` so the next
+  explicit `Sync` persists its directory entry. If any concurrent post-frontier
+  write advances `frontier > durableAppliedLSN` (or under `command_wal_durable`,
   `durabilitycut`, or active test hooks), teardown falls back to synchronous
   prefix sync and rotation (`RotateCommandWALActiveSegment(true)`).
   Newly rotated empty non-fixed WAL segments that are already directory-synced
   record `cleanEmptySynced` so redundant empty-segment syncs are skipped until
   bytes are appended, while explicit barrier syncs on unrotated segments always
   execute their file sync.
+- Durable-root publication tracks a live-session completion receipt for the
+  currently selected durable slot (`dataCompletion`, never minted by reopen or
+  rebuild). When `durabilitycut` is inactive and every dependency in a new
+  durable-root candidate is already producer-certified (`ContentSynced` with a
+  stable namespace) or matches an unchanged mutable-append outer-leaf/value-log
+  handle and frontier already synced by that live-session parent slot
+  (`DependenciesCoveredBy`), the transaction skips redundant dependency file
+  re-fsyncs while preserving index data-before-meta sync ordering.
+- Value-log dictionary publication to `dictdb` persists dictionary bytes,
+  content hash, frame group size `K`, and class/global current markers in a
+  single atomic `WriteSync` commit; pointer-backed dictionary segments are
+  flushed to the OS before `WriteSync` so the durable-root transaction performs
+  the single authoritative value-log sync before `dictdb/index.db` commits.
 - A write or sync error after target-meta bytes may have been dirtied poisons
   the writable handle. Writes, publication, cleanup, GC, rewrite, and
   reclamation fail with the public recovery-required error until reopen.

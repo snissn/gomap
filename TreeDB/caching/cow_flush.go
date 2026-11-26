@@ -523,6 +523,10 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 }
 
 func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool) (retErr error) {
+	return db.flushCOWFrozenCutWithColumnCompactionAndWALSync(syncFlush, publish, cut, forceIdle, operation, generationPressure, true)
+}
+
+func (db *DB) flushCOWFrozenCutWithColumnCompactionAndWALSync(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool, syncCommandWAL bool) (retErr error) {
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
 	// from this immutable cut and its exact captured disk basis below.
@@ -613,8 +617,10 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
 		} else if syncFlush {
 			// Always drain the writer and surface journal-local failures, even
-			// when the command prefix already has durable root coverage.
-			err = wal.FlushCommandWAL(!sealedFallback)
+			// when the command prefix already has durable root coverage or
+			// explicit relaxed Checkpoint defers active WAL fsync until
+			// WaitThrough proves durableAppliedLSN >= frontier.
+			err = wal.FlushCommandWAL(!sealedFallback && syncCommandWAL)
 		} else {
 			err = wal.CheckCommandWALPublishReady()
 		}

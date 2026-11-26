@@ -1868,6 +1868,16 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		return fmt.Errorf("activate root-publication seal generation: %w", err)
 	}
 	preparedOwned = false
+	dependenciesCovered := false
+	if !durabilitycut.Enabled() && resources != nil && token != nil && runtime.idx != nil &&
+		base.pending == nil && len(base.ambiguous) == 0 && base.slot <= 1 && base.slotResources[base.slot] != nil {
+		completed := base.dataCompletion
+		if completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
+			if covered, covErr := resources.DependenciesCoveredBy(base.slotResources[base.slot]); covErr == nil {
+				dependenciesCovered = covered
+			}
+		}
+	}
 	seal := &rootPublicationSealV1{
 		metadata: runtime.metadata, metadataCharge: sealCharge,
 		latestSequence: memberNext.CommitSeq, groupLength: group.Len(),
@@ -1876,7 +1886,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
 		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
-		target: target,
+		target: target, dependenciesCovered: dependenciesCovered,
 	}
 	seal.disposalFailure.payload = seal
 	runtime.debt = append(runtime.debt, prepared)
@@ -2135,6 +2145,13 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 		meta: seal.meta, record: seal.record, manifest: seal.manifest.DiagnosticProjectionV1(), slot: seal.target,
 		slotCommit: seal.base.slotCommit, slotResources: seal.base.slotResources,
 		slotMeta: seal.base.slotMeta, slotRecord: seal.base.slotRecord, ambiguous: seal.base.ambiguous,
+	}
+	if seal.idx != nil && seal.token != nil {
+		current.dataCompletion = primaryDataCompletionV6{
+			pager:       seal.idx.pager,
+			incarnation: seal.token.Generation(),
+			identity:    seal.token.Identity(),
+		}
 	}
 	current.slotCommit[seal.target] = seal.next.CommitSeq
 	current.slotMeta[seal.target] = seal.meta

@@ -17,17 +17,41 @@ import (
 // Normal private COW writers continue; writers requiring a flush and explicit
 // checkpoints can wait for this cooperative timeout, including native I/O.
 const (
-	privateCOWLeafPackCopyBytes            = 32 << 20
-	privateCOWLeafPackGenerations          = 2
-	privateCOWLeafPackInterval             = 30 * time.Second
-	privateCOWLeafPackDebtGenerations      = 6
-	privateCOWLeafPackDebtBytes            = 64 << 20
-	privateCOWLeafPackEmergencyDebtBytes   = 256 << 20
-	privateCOWLeafPackDebtInterval         = 3 * time.Second
-	privateCOWLeafPackDebtGenerationsBatch = 6
-	privateCOWLeafPackDebtCopyBytes        = 64 << 20
-	privateCOWLeafPackTimeout              = 5 * time.Second
+	privateCOWLeafPackCopyBytes                 = 32 << 20
+	privateCOWLeafPackGenerations               = 2
+	privateCOWLeafPackInterval                  = 30 * time.Second
+	privateCOWLeafPackDebtGenerations           = 6
+	privateCOWLeafPackDebtBytes                 = 64 << 20
+	privateCOWLeafPackEmergencyDebtBytes        = 256 << 20
+	privateCOWLeafPackDebtInterval              = 3 * time.Second
+	privateCOWLeafPackDebtGenerationsBatch      = 6
+	privateCOWLeafPackDebtCopyBytes             = 64 << 20
+	privateCOWLeafPackTimeout                   = 5 * time.Second
+	privateCOWLeafPackDefaultWriteBurstGrace    = 2 * time.Second
+	privateCOWCheckpointLeafPackDebtGenerations = 2
+	privateCOWCheckpointLeafPackDebtBytes       = 32 << 20
+	privateCOWCheckpointLeafPackMaxGenerations  = 32
 )
+
+func privateCOWLeafPackWriteBurstGrace() time.Duration {
+	if _, set := os.LookupEnv(envLeafGenerationPackMaintenanceWriteBurstGraceMillis); set {
+		return leafGenerationPackMaintenanceWriteBurstGrace()
+	}
+	return privateCOWLeafPackDefaultWriteBurstGrace
+}
+
+func (db *DB) cowHasPendingFrozenCut() bool {
+	if db == nil || db.cow == nil {
+		return false
+	}
+	cut := db.cow.retainCut()
+	if cut == nil {
+		return false
+	}
+	hasFrozen := len(cut.frozen) > 0
+	_ = db.cow.releaseCut(cut)
+	return hasFrozen
+}
 
 type backendPrivateCOWLeafPackRunner interface {
 	LeafGenerationPackRunOnceForPrivateCOW(*transactionowner.Owner, context.Context, backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error)
@@ -75,6 +99,13 @@ func (db *DB) privateCOWLeafPackPolicy() (interval time.Duration, maxGenerations
 
 func (db *DB) shouldRunPeriodicPrivateCOWLeafPack(now time.Time) (bool, string) {
 	admission := db.foregroundLeafPackAdmission(now)
+	if admission.allowed && db != nil {
+		if grace := privateCOWLeafPackWriteBurstGrace(); grace > 0 && !db.foregroundWriteQuietFor(now, grace) {
+			admission = leafGenerationPackMaintenanceAdmission{reason: "write_burst"}
+		} else if db.checkpointing.Load() || db.cowHasPendingFrozenCut() {
+			admission = leafGenerationPackMaintenanceAdmission{reason: "queue_pressure"}
+		}
+	}
 	if admission.allowed {
 		return true, ""
 	}
@@ -139,6 +170,46 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	if db.closing.Load() || db.maintenanceActive.Load() || db.suppressBackgroundVlogGenerationForMaintenancePhase() {
 		return false, nil
 	}
+	return db.runPrivateCOWLeafPackLocked(context.Background(), maxGenerations, maxCopyBytes)
+}
+
+// maybeRunPrivateCOWLeafPackAtCheckpointLocked reclaims dead sealed leaf-log
+// generations at explicit Checkpoint() boundaries when sealed debt is elevated.
+// Clean-load checkpoints have zero or one sealed generation and return in O(1)
+// without scanning the index or issuing I/O. Caller holds flushMu.
+func (db *DB) maybeRunPrivateCOWLeafPackAtCheckpointLocked(parentCtx context.Context) error {
+	if !db.privateCOWLeafPackEnabled() || db.closing.Load() || db.suppressBackgroundVlogGenerationForMaintenancePhase() ||
+		db.coalesceDeferredVectorBuildVlogMaintenance() || db.maintenanceActive.Load() {
+		return nil
+	}
+	if paused, _ := vlogGenerationMaintenancePausedByFile(); paused {
+		db.vlogGenerationMaintenanceSkipPauseFile.Add(1)
+		return nil
+	}
+	reader, ok := db.backend.(backendLeafGenerationSealedDebtReader)
+	if !ok {
+		return nil
+	}
+	sealedGenerations, sealedBytes := reader.LeafGenerationSealedDebt()
+	if sealedGenerations < privateCOWCheckpointLeafPackDebtGenerations && sealedBytes < privateCOWCheckpointLeafPackDebtBytes {
+		return nil
+	}
+	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer db.vlogGenerationMaintenanceActive.Store(false)
+	if db.closing.Load() || db.maintenanceActive.Load() || db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		return nil
+	}
+	maxGenerations := max(privateCOWLeafPackDebtGenerationsBatch, min(sealedGenerations, privateCOWCheckpointLeafPackMaxGenerations))
+	_, err := db.runPrivateCOWLeafPackLocked(parentCtx, maxGenerations, privateCOWLeafPackDebtCopyBytes)
+	if err != nil && errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !db.cow.refreshRequired.Load() {
+		return nil
+	}
+	return err
+}
+
+func (db *DB) runPrivateCOWLeafPackLocked(parentCtx context.Context, maxGenerations int, maxCopyBytes int64) (attempted bool, retErr error) {
 	// A failed accepted handoff must not be retried at every scheduler tick.
 	db.vlogGenerationPrivateCOWPackLastAttemptNS.Store(time.Now().UnixNano())
 	defer func() {
@@ -194,6 +265,10 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	}()
 	ctx, cancel := db.leafGenerationPackMaintenanceContext(privateCOWLeafPackTimeout)
 	defer cancel()
+	if parentCtx != nil && parentCtx.Done() != nil {
+		stop := context.AfterFunc(parentCtx, cancel)
+		defer stop()
+	}
 	roots, systemRoots := db.publishedLeafGenerationProtectionIDs()
 	stats, packErr := db.backend.(backendPrivateCOWLeafPackRunner).LeafGenerationPackRunOnceForPrivateCOW(db.cow.txnOwner, ctx, backenddb.LeafGenerationPackFromPlanOptions{
 		Sync: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,

@@ -343,6 +343,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	}
 	var frontier *cowReadCut
 	var err error
+	deferRelaxedWALSync := false
 	if generationPressure {
 		// Producer admission already froze and marked this prefix. Retain
 		// that root set and use its frozen endpoint; concurrent writes in
@@ -356,9 +357,11 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		db.writeMu.Unlock()
 	} else {
 		// Explicit Checkpoint on relaxed command-WAL defers active WAL segment
-		// rotation until after index.db + leaf_vlog durably cover the frontier,
-		// avoiding a synchronous fsync of a segment about to be unlinked.
+		// rotation and WAL fsync until after index.db + leaf_vlog durably cover
+		// the frontier, avoiding a synchronous fsync of a segment about to be
+		// unlinked.
 		rotateJournal := !pressureOnly && (!db.relaxedSync || automatic || durabilitycut.Enabled() || db.testBeforeCheckpointFrontierDrain != nil || db.testAfterCheckpointFrontierCapture != nil)
+		deferRelaxedWALSync = !pressureOnly && !rotateJournal
 		err = db.rotateCOWFrontier(ctx, true, &frontier, rotateJournal)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
@@ -390,7 +393,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure)
+	err = db.flushCOWFrozenCutWithColumnCompactionAndWALSync(true, &publish, frontier, operation != nil, operation, generationPressure, !deferRelaxedWALSync)
 	frontier = nil
 	if err != nil {
 		return err
@@ -458,6 +461,12 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		}
 	} else if cleanupNeeded {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
+			return err
+		}
+	}
+	if !automatic && operation == nil && !durabilitycut.Enabled() &&
+		db.testBeforeCheckpointFrontierDrain == nil && db.testAfterCheckpointFrontierCapture == nil {
+		if err = db.maybeRunPrivateCOWLeafPackAtCheckpointLocked(ctx); err != nil {
 			return err
 		}
 	}

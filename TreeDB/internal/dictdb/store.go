@@ -170,7 +170,7 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 			_ = batch.Close()
 			return 0, err
 		}
-		if err := writer.Sync(); err != nil {
+		if err := writer.Flush(); err != nil {
 			_ = batch.Close()
 			return 0, err
 		}
@@ -189,6 +189,135 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 	if err := batch.Set(hashKey, valBuf); err != nil {
 		_ = batch.Close()
 		return 0, err
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		return 0, err
+	}
+	if err := batch.Close(); err != nil {
+		return 0, err
+	}
+	if usePointer {
+		if err := s.backend.RefreshValueLogSet(); err != nil {
+			return 0, err
+		}
+	}
+	return dictID, nil
+}
+
+// PublishDict atomically persists dictBytes (deduped by hash), optional frame
+// group size k (> 0), and the class/global current markers in one durable
+// backend commit. When dictBytes is stored as a value-log pointer, the segment
+// is flushed before WriteSync so the backend's durable-root transaction issues
+// a single authoritative fsync of the value-log segment before index commit.
+func (s *Store) PublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if k != 0 && (k < dictKMin || k > dictKMax) {
+		return 0, fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	if dictBytes == nil {
+		dictBytes = []byte{}
+	}
+	checksum := sha256.Sum256(dictBytes)
+	hKey := hashKey(checksum)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var (
+		dictID         uint64
+		needWriteBytes bool
+		needWriteHash  bool
+	)
+	val, err := s.backend.Get(hKey)
+	if err != nil {
+		return 0, err
+	}
+	if val != nil {
+		if len(val) != 8 {
+			return 0, fmt.Errorf("dictdb: invalid hash entry size %d", len(val))
+		}
+		dictID = binary.BigEndian.Uint64(val)
+	} else {
+		dictID = binary.BigEndian.Uint64(checksum[:8])
+		existing, err := s.backend.Get(bytesKey(dictID))
+		if err != nil {
+			return 0, err
+		}
+		if existing != nil {
+			if !bytes.Equal(existing, dictBytes) {
+				return 0, fmt.Errorf("dictdb: dict id collision for %d", dictID)
+			}
+			needWriteHash = true
+		} else {
+			needWriteBytes = true
+			needWriteHash = true
+		}
+	}
+
+	batch := s.backend.NewBatch().(*db.Batch)
+	usePointer := false
+	if needWriteBytes {
+		inlineThreshold := s.backend.InlineThreshold()
+		usePointer = len(dictBytes) > inlineThreshold
+		bKey := bytesKey(dictID)
+		if usePointer {
+			writer, err := s.ensureValueLogWriterLocked()
+			if err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+			rid := dictID
+			if rid == 0 {
+				s.nextRID++
+				rid = s.nextRID
+			}
+			ptr, err := writer.Append(0, nil, rid, dictBytes)
+			if err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+			if err := writer.Flush(); err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+			if err := batch.SetPointer(bKey, ptr); err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+		} else {
+			if err := batch.Set(bKey, dictBytes); err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
+		}
+	}
+
+	valBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(valBuf, dictID)
+	if needWriteHash {
+		if err := batch.Set(hKey, valBuf); err != nil {
+			_ = batch.Close()
+			return 0, err
+		}
+	}
+	if k > 0 && dictID != 0 {
+		if err := batch.Set(kKey(dictID), []byte{byte(k)}); err != nil {
+			_ = batch.Close()
+			return 0, err
+		}
+	}
+	cKey := currentKeyForClass(class)
+	if err := batch.Set(cKey, valBuf); err != nil {
+		_ = batch.Close()
+		return 0, err
+	}
+	if alsoSetGlobal && !bytes.Equal(cKey, currentKey()) {
+		if err := batch.Set(currentKey(), valBuf); err != nil {
+			_ = batch.Close()
+			return 0, err
+		}
 	}
 	if err := batch.WriteSync(); err != nil {
 		_ = batch.Close()

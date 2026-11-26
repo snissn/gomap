@@ -60,31 +60,31 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 			t.Fatalf("w1 nowNano calls=%d want 0", got)
 		}
 
-		// w2: active == 2 (never > 2) must still execute 100% inline with zero clock calls.
-		coalescer.inFlight.Add(1)
+		// w2..w4: active <= 4 (never > 4) must still execute 100% inline with zero clock calls.
+		coalescer.inFlight.Add(3)
 		for i := 4; i < 8; i++ {
 			resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(i), int64(10+i)), nil, 0)
 			if err != nil || !mongoCommandResponseOK(resp) {
-				coalescer.inFlight.Add(-1)
-				t.Fatalf("w2 update[%d]: resp=%s err=%v", i, resp, err)
+				coalescer.inFlight.Add(-3)
+				t.Fatalf("w4 update[%d]: resp=%s err=%v", i, resp, err)
 			}
 		}
-		coalescer.inFlight.Add(-1)
+		coalescer.inFlight.Add(-3)
 
 		if got := coalescer.inlineExecs.Load(); got != 8 {
-			t.Fatalf("w2 inlineExecs=%d want 8", got)
+			t.Fatalf("w4 inlineExecs=%d want 8", got)
 		}
 		if got := coalescer.workerBatches.Load(); got != 0 {
-			t.Fatalf("w2 workerBatches=%d want 0", got)
+			t.Fatalf("w4 workerBatches=%d want 0", got)
 		}
 		if got := coalescer.batchModeUntil.Load(); got != 0 {
-			t.Fatalf("w2 batchModeUntil=%d want 0", got)
+			t.Fatalf("w4 batchModeUntil=%d want 0", got)
 		}
 		if got := clockCalls.Load(); got != 0 {
-			t.Fatalf("w2 nowNano calls=%d want 0", got)
+			t.Fatalf("w4 nowNano calls=%d want 0", got)
 		}
 
-		// maxDelay > 0 must not latch or invoke clock even when active > 2.
+		// maxDelay > 0 must not latch or invoke clock even when active > 4.
 		sDelay, collDelay := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
 		defer func() { _ = sDelay.Close() }()
 		sDelay.Server.UpdateCoalescingMaxDelay = 2 * time.Millisecond
@@ -97,9 +97,9 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 			delayClockCalls.Add(1)
 			return 1_000_000_000
 		}
-		cDelay.inFlight.Add(2)
+		cDelay.inFlight.Add(4)
 		resp, err := sDelay.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collDelay, 0, 55), nil, 0)
-		cDelay.inFlight.Add(-2)
+		cDelay.inFlight.Add(-4)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("maxDelay>0 update: resp=%s err=%v", resp, err)
 		}
@@ -111,8 +111,8 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 	})
 
-	t.Run("LatchActiveOver2WorkerBatchRefreshAndExpiry", func(t *testing.T) {
-		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 8)
+	t.Run("LatchActiveOver4WorkerBatchRefreshAndExpiry", func(t *testing.T) {
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 16)
 		defer func() { _ = s.Close() }()
 
 		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
@@ -141,12 +141,12 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Step 1: Observe active == 3 -> latches batchModeUntil = t0 + hyst.
-		coalescer.inFlight.Add(2)
+		// Step 1: Observe active == 5 -> latches batchModeUntil = t0 + hyst.
+		coalescer.inFlight.Add(4)
 		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, 100), nil, 0)
-		coalescer.inFlight.Add(-2)
+		coalescer.inFlight.Add(-4)
 		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("active=3 update: resp=%s err=%v", resp, err)
+			t.Fatalf("active=5 update: resp=%s err=%v", resp, err)
 		}
 		syncWorkerIdle()
 
@@ -155,13 +155,13 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 			t.Fatalf("batchModeUntil=%d want %d", got, wantUntil)
 		}
 		if got := coalescer.inlineExecs.Load(); got != 0 {
-			t.Fatalf("inlineExecs=%d want 0 after active=3", got)
+			t.Fatalf("inlineExecs=%d want 0 after active=5", got)
 		}
 		if got := coalescer.workerBatches.Load(); got != 1 {
-			t.Fatalf("workerBatches=%d want 1 after active=3", got)
+			t.Fatalf("workerBatches=%d want 1 after active=5", got)
 		}
 
-		// Step 2: While now < batchModeUntil, active == 1 and active == 2 stay on worker path.
+		// Step 2: While now < batchModeUntil, active == 1 and active == 4 stay on worker path.
 		fakeNow.Store(wantUntil - 1)
 		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 1, 101), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
@@ -169,11 +169,11 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 		syncWorkerIdle()
 
-		coalescer.inFlight.Add(1)
+		coalescer.inFlight.Add(3)
 		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 2, 102), nil, 0)
-		coalescer.inFlight.Add(-1)
+		coalescer.inFlight.Add(-3)
 		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("latched active=2 update: resp=%s err=%v", resp, err)
+			t.Fatalf("latched active=4 update: resp=%s err=%v", resp, err)
 		}
 		syncWorkerIdle()
 
@@ -184,11 +184,11 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 			t.Fatalf("workerBatches=%d want 3 while batchModeUntil active", got)
 		}
 
-		// Step 3: Worker batch with len(batch) >= 3 refreshes batchModeUntil even
+		// Step 3: Worker batch with len(batch) >= 5 refreshes batchModeUntil even
 		// if the clock advanced after callers entered runMongoUpdateCoalesced.
 		tWorker := wantUntil + int64(5*time.Millisecond)
 		coalescer.execMu.Lock()
-		const batchSize = 3
+		const batchSize = 5
 		errCh := make(chan error, batchSize)
 		var wg sync.WaitGroup
 		wg.Add(batchSize)
@@ -214,7 +214,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 			coalescer.execMu.Unlock()
 			t.Fatalf("queued=%d want %d", got, batchSize)
 		}
-		// Advance clock after all 3 writers already enqueued, so only the worker
+		// Advance clock after all 5 writers already enqueued, so only the worker
 		// latch refresh inside runBatchStartingWith sees tWorker.
 		fakeNow.Store(tWorker)
 		coalescer.execMu.Unlock()
@@ -236,7 +236,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 
 		// Still latched right before refreshed expiry.
 		fakeNow.Store(wantRefreshedUntil - 1)
-		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 6, 306), nil, 0)
+		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 8, 308), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("pre-expiry update: resp=%s err=%v", resp, err)
 		}
@@ -248,7 +248,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		// Step 4: Advance clock past batchHysteresis -> batchModeUntil clears to 0
 		// and inline execution resumes cleanly with zero subsequent clock calls.
 		fakeNow.Store(wantRefreshedUntil)
-		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 7, 307), nil, 0)
+		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 9, 309), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("post-expiry update 1: resp=%s err=%v", resp, err)
 		}
@@ -260,7 +260,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 
 		callsAfterClear := clockCalls.Load()
-		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 7, 308), nil, 0)
+		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 9, 310), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("post-expiry update 2: resp=%s err=%v", resp, err)
 		}
@@ -270,8 +270,8 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		if got := clockCalls.Load(); got != callsAfterClear {
 			t.Fatalf("nowNano calls after clear=%d want %d (zero overhead)", got, callsAfterClear)
 		}
-		if got := findDocN(t, s.Server, collName, 7); got != 308 {
-			t.Fatalf("doc 7 n=%d want 308", got)
+		if got := findDocN(t, s.Server, collName, 9); got != 310 {
+			t.Fatalf("doc 9 n=%d want 310", got)
 		}
 	})
 
@@ -390,7 +390,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		// Case C: A slow worker batch (clock advances > batchHysteresis during
 		// runBatch) refreshes batchModeUntil at batch completion so the full
 		// hysteresis window protects post-batch turnaround.
-		sSlow, collSlow := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		sSlow, collSlow := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 8)
 		defer func() { _ = sSlow.Close() }()
 		colSlow, err := sSlow.Collections.OpenCollection("app." + collSlow)
 		if err != nil {
@@ -422,8 +422,12 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		req0 := makeUnbufferedReq(0, 10)
 		req1 := makeUnbufferedReq(1, 20)
 		req2 := makeUnbufferedReq(2, 30)
+		req3 := makeUnbufferedReq(3, 40)
+		req4 := makeUnbufferedReq(4, 50)
 		cSlow.requests <- req1
 		cSlow.requests <- req2
+		cSlow.requests <- req3
+		cSlow.requests <- req4
 
 		doneBatch := make(chan struct{})
 		go func() {
@@ -438,11 +442,10 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		// results (blocked sending req1.done).
 		tAfterBatch := t0 + int64(2*hyst)
 		slowNow.Store(tAfterBatch)
-		if res := <-req1.done; res.err != nil || !res.matched || !res.modified {
-			t.Fatalf("slow req1=%+v want matched,modified,nil", res)
-		}
-		if res := <-req2.done; res.err != nil || !res.matched || !res.modified {
-			t.Fatalf("slow req2=%+v want matched,modified,nil", res)
+		for i, req := range []mongoUpdateCoalescerRequest{req1, req2, req3, req4} {
+			if res := <-req.done; res.err != nil || !res.matched || !res.modified {
+				t.Fatalf("slow req%d=%+v want matched,modified,nil", i+1, res)
+			}
 		}
 		<-doneBatch
 
