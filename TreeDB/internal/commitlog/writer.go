@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sync"
@@ -193,6 +194,9 @@ type Writer struct {
 	rawLenPrefix           [4]byte
 	size                   int64
 	maxSegmentSize         int64
+	cleanEmptySynced       bool
+	writebackHintOffset    int64
+	writtenFileBytes       int64
 	compress               bool
 	enc                    *zstd.Encoder
 	syncFn                 func(*os.File) error
@@ -223,10 +227,21 @@ func (s *writerFileSink) Write(p []byte) (int, error) {
 		s.owner.fixed.pending = append(s.owner.fixed.pending, p...)
 		return len(p), nil
 	}
+	if s.owner != nil {
+		s.owner.cleanEmptySynced = false
+	}
 	start := time.Now()
 	n, err := s.file.Write(p)
 	if s.owner != nil {
 		s.owner.observeWriteSyscalls(1, uint64(max(n, 0)), time.Since(start), err)
+		if err == nil && n > 0 && s.owner.fixed == nil {
+			s.owner.writtenFileBytes += int64(n)
+			const walWritebackChunkBytes = 2 << 20
+			if s.owner.writtenFileBytes-s.owner.writebackHintOffset >= walWritebackChunkBytes {
+				s.owner.writebackHintOffset = s.owner.writtenFileBytes
+				_ = stableio.BeginWriteback(s.file, uint64(s.owner.writtenFileBytes))
+			}
+		}
 	}
 	return n, err
 }
@@ -823,6 +838,9 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	w.fileSink.file = file
 	w.resetBufioForContainer()
 	w.size = size
+	w.cleanEmptySynced = syncCurrent && size == 0 && state == nil
+	w.writtenFileBytes = size
+	w.writebackHintOffset = size
 	if state != nil && oldFixed == nil {
 		w.syncFn = syncWALData
 	} else if state == nil && oldFixed != nil {
@@ -2110,6 +2128,12 @@ func (w *Writer) Flush() error {
 	return w.flushFixed()
 }
 
+var defaultCommitlogSyncFilePtr = reflect.ValueOf(stableio.SyncFile).Pointer()
+
+func isDefaultCommitlogSyncFn(fn func(*os.File) error) bool {
+	return fn == nil || reflect.ValueOf(fn).Pointer() == defaultCommitlogSyncFilePtr
+}
+
 func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
@@ -2128,7 +2152,14 @@ func (w *Writer) Sync() error {
 	if err := w.flushFixed(); err != nil {
 		return err
 	}
-	return w.syncFile()
+	if w.cleanEmptySynced && w.size == 0 && w.fixed == nil && !durabilitycut.Enabled() && isDefaultCommitlogSyncFn(w.syncFn) {
+		return nil
+	}
+	err := w.syncFile()
+	if err == nil && w.size == 0 && w.fixed == nil {
+		w.cleanEmptySynced = true
+	}
+	return err
 }
 
 func (w *Writer) Close() error {

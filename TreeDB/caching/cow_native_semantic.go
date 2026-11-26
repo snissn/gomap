@@ -352,6 +352,26 @@ func (db *DB) CaptureNativeCut() (backenddb.NativeSemanticCapture, error) {
 	return db.CaptureNativeSemanticState(db.cow.txnOwner)
 }
 
+// WithNativeSemanticStateReadOnly synchronously borrows the current retained
+// cut's immutable native semantic state without allocating a capture handle or
+// external lease. Callers must not retain references derived from state after
+// fn returns.
+func (db *DB) WithNativeSemanticStateReadOnly(fn func(backenddb.NativeSemanticState) bool) bool {
+	if db == nil || db.cow == nil || fn == nil {
+		return false
+	}
+	cut := db.cow.retainCut()
+	if cut == nil {
+		return false
+	}
+	ok := false
+	if cut.semanticRootSet != nil {
+		ok = fn(cut.semanticRootSet)
+	}
+	_ = db.cow.releaseCut(cut)
+	return ok
+}
+
 // WriteNativePublication uses the ordinary original batch/P -> raw order. The
 // typed finalizer runs privately after the sole canonical frame is assigned;
 // logical install follows only a complete successful native+raw preparation.

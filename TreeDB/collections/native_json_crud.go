@@ -91,29 +91,6 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 			}
 		}
 	}
-	if bsonItems != nil {
-		items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	if len(items) == 0 {
-		return nil, true, nil
-	}
-	if mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) {
-		if err = tx.admitRowControls(g, count); err != nil {
-			return nil, false, err
-		}
-		for _, item := range items {
-			if err = tx.admitRowDocument(g, item.DocumentID, nil); err != nil {
-				return nil, false, err
-			}
-		}
-		if _, err = prepareUpdateBatchItems(items); err != nil {
-			return nil, false, err
-		}
-		return make([]UpdateBatchResult, count), false, nil
-	}
 	primaryOnlyBSONSet := bsonItems != nil &&
 		nativeBSONSetMeta(&g.probe.meta) &&
 		len(g.probe.meta.TextIndexes) == 0 &&
@@ -122,9 +99,35 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 		g.projection == nil &&
 		len(g.templateRecords) == 0 &&
 		!bsonSetFieldsMayTouchAnyIndex(g.probe.meta, bsonItems)
-	if primaryOnlyBSONSet {
-		results, err = tx.updateBatchInto("", items, true)
+	if primaryOnlyBSONSet && !(mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta)) {
+		if len(bsonItems) == 0 {
+			return nil, true, nil
+		}
+		results, err = tx.updatePrimaryOnlyBSONSetBatchInto("", bsonItems)
 	} else {
+		if bsonItems != nil {
+			items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		if len(items) == 0 {
+			return nil, true, nil
+		}
+		if mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) {
+			if err = tx.admitRowControls(g, count); err != nil {
+				return nil, false, err
+			}
+			for _, item := range items {
+				if err = tx.admitRowDocument(g, item.DocumentID, nil); err != nil {
+					return nil, false, err
+				}
+			}
+			if _, err = prepareUpdateBatchItems(items); err != nil {
+				return nil, false, err
+			}
+			return make([]UpdateBatchResult, count), false, nil
+		}
 		results, err = tx.UpdateBatch(items)
 	}
 	if err != nil {

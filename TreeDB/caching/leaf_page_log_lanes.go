@@ -2,8 +2,10 @@ package caching
 
 import (
 	"errors"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -261,7 +263,33 @@ func (g *cachingLeafPageLogGroup) Flush() error {
 }
 
 func (g *cachingLeafPageLogGroup) Sync() error {
-	return g.forEachLane(func(log *cachingLeafPageLog) error { return log.Sync() })
+	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	lanes := g.db.leafLogAppendLanesSnapshot()
+	if len(lanes) <= 1 || durabilitycut.Enabled() {
+		return g.forEachLane(func(log *cachingLeafPageLog) error { return log.Sync() })
+	}
+	var active []*lane
+	for _, l := range lanes {
+		if l != nil {
+			active = append(active, l)
+		}
+	}
+	if len(active) <= 1 {
+		return g.forEachLane(func(log *cachingLeafPageLog) error { return log.Sync() })
+	}
+	errs := make([]error, len(active))
+	var wg sync.WaitGroup
+	for i, l := range active {
+		wg.Add(1)
+		go func(idx int, ln *lane) {
+			defer wg.Done()
+			errs[idx] = (&cachingLeafPageLog{db: g.db, lane: ln}).Sync()
+		}(i, l)
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func (g *cachingLeafPageLogGroup) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {

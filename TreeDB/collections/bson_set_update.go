@@ -406,8 +406,64 @@ func cloneBSONSetUpdateCommandWALDocuments(docs []commitlog.CollectionDocument) 
 
 func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBatchItem, error) {
 	out := make([]updateBatchItem, len(items))
-	seen := make(map[uint64]int, len(items))
-	collisions := make(map[uint64][]int)
+	var specsBuf [32]bsonSetUpdate
+	var specs []bsonSetUpdate
+	if len(items) <= len(specsBuf) {
+		specs = specsBuf[:0]
+	} else {
+		specs = make([]bsonSetUpdate, 0, len(items))
+	}
+	specs, err := prepareBSONSetUpdateSpecsInto(items, specs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		out[i] = newBSONSetUpdateBatchItem(items[i].DocumentID, specs[i])
+	}
+	return out, nil
+}
+
+func prepareBSONSetUpdateSpecsInto(items []BSONSetUpdateBatchItem, dst []bsonSetUpdate) ([]bsonSetUpdate, error) {
+	n := len(items)
+	if cap(dst) < n {
+		dst = make([]bsonSetUpdate, n)
+	} else {
+		dst = dst[:n]
+	}
+	if n == 1 {
+		if len(items[0].DocumentID) == 0 {
+			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", 0)
+		}
+		spec, err := newBSONSetUpdate(items[0].Fields)
+		if err != nil {
+			return nil, updateBatchItemError(0, err)
+		}
+		dst[0] = spec
+		return dst, nil
+	}
+	if n <= 32 {
+		var hashes [32]uint64
+		for i, item := range items {
+			if len(item.DocumentID) == 0 {
+				return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+			}
+			hash := maphash.Bytes(bsonSetBatchDocumentIDHashSeed, item.DocumentID)
+			for j := 0; j < i; j++ {
+				if hashes[j] == hash && bytes.Equal(items[j].DocumentID, item.DocumentID) {
+					return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+				}
+			}
+			hashes[i] = hash
+			spec, err := newBSONSetUpdate(item.Fields)
+			if err != nil {
+				return nil, updateBatchItemError(i, err)
+			}
+			dst[i] = spec
+		}
+		return dst, nil
+	}
+	seen := make(map[uint64]int, n)
+	var collisions map[uint64][]int
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
 			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
@@ -422,6 +478,9 @@ func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBat
 					return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
 				}
 			}
+			if collisions == nil {
+				collisions = make(map[uint64][]int)
+			}
 			collisions[hash] = append(collisions[hash], i)
 		} else {
 			seen[hash] = i
@@ -430,9 +489,9 @@ func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBat
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
-		out[i] = newBSONSetUpdateBatchItem(item.DocumentID, spec)
+		dst[i] = spec
 	}
-	return out, nil
+	return dst, nil
 }
 
 func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {

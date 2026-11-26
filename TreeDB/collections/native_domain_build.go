@@ -23,6 +23,10 @@ type nativeOrderedRootBuilder interface {
 	BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput) (uint64, error)
 }
 
+type nativeOrderedRootColdScanner interface {
+	BuildNativeOrderedRootColdScan(backenddb.OrderedRootColdScanPublishInput) (uint64, error)
+}
+
 type nativeSystemRootBuilder interface {
 	BuildNativeSystemDelta(*batch.Batch) error
 }
@@ -130,11 +134,20 @@ func (b *nativeDomainBuild) materializeWithCatalogAndDelta(group nativeOrderedRo
 		}
 		b.roots = append(b.roots, positions.source.root)
 	}
+	coldScanner, hasColdScanner := group.(nativeOrderedRootColdScanner)
 	for i := len(b.roots) - 1; i >= 0 && b.failure == nil; i-- {
-		b.buildSource(group, b.roots[i], names, delta, batchEntries)
+		if !b.catalog && b.root == 0 && hasColdScanner {
+			b.buildColdScan(coldScanner, b.roots[i])
+		} else {
+			b.buildSource(group, b.roots[i], names, delta, batchEntries)
+		}
 	}
 	if b.failure == nil && b.source.pending != nil {
-		b.buildSource(group, b.source.pending, names, delta, batchEntries)
+		if !b.catalog && b.root == 0 && hasColdScanner {
+			b.buildColdScan(coldScanner, b.source.pending)
+		} else {
+			b.buildSource(group, b.source.pending, names, delta, batchEntries)
+		}
 	}
 	clear(b.roots)
 	b.roots = b.roots[:0]
@@ -144,6 +157,41 @@ func (b *nativeDomainBuild) materializeWithCatalogAndDelta(group nativeOrderedRo
 	}
 	b.complete = true
 	return b.root, nil
+}
+
+func (b *nativeDomainBuild) buildColdScan(coldScanner nativeOrderedRootColdScanner, root *memtable.COWRoot) {
+	entryCount := root.Len()
+	if entryCount <= 0 {
+		return
+	}
+	checkInlineThreshold := b.source.name == "primary" || b.source.name == "templates"
+	next, err := coldScanner.BuildNativeOrderedRootColdScan(backenddb.OrderedRootColdScanPublishInput{
+		StoragePolicy:        b.source.storagePolicy,
+		EntryCount:           entryCount,
+		CheckInlineThreshold: checkInlineThreshold,
+		Scan: func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error {
+			var scanErr error
+			root.ScanOwned(func(row memtable.COWRecord) bool {
+				if row.Flags&node.FlagTombstone != 0 {
+					return true
+				}
+				key := nativeBorrowedStringBytes(row.Key)
+				if row.Flags&node.FlagPointer != 0 {
+					scanErr = emit(key, nil, row.Ptr, node.FlagPointer, row.Revision)
+					return scanErr == nil
+				}
+				value := nativeBorrowedStringBytes(row.Value)
+				scanErr = emit(key, value, page.ValuePtr{}, node.FlagInline, row.Revision)
+				return scanErr == nil
+			})
+			return scanErr
+		},
+	})
+	if err != nil {
+		b.failure = err
+		return
+	}
+	b.root = next
 }
 
 func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState], delta *batch.Batch, batchEntries int) {

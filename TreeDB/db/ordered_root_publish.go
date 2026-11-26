@@ -250,6 +250,16 @@ type StorageMaintenanceRootDeltaPublishInput struct {
 // batch whose iterator materialization has already been done by the caller.
 // Callers retain ownership of Delta and must keep any borrowed key/value views
 // immutable until the publish call returns.
+// OrderedRootColdScanPublishInput streams sorted entries directly into a cold
+// (BaseRoot == 0) ordered root build without materializing an intermediate
+// batch.Batch.
+type OrderedRootColdScanPublishInput struct {
+	StoragePolicy        OrderedRootStoragePolicy
+	EntryCount           int
+	CheckInlineThreshold bool
+	Scan                 func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error
+}
+
 type OrderedRootDeltaBatchPublishInput struct {
 	BaseRoot      uint64
 	Delta         *batch.Batch
@@ -1758,13 +1768,15 @@ func (db *DB) buildOrderedRootDeltaBatchValueLogRefDelta(idx *indexGen, baseRoot
 		// delta key; leave warm batches on the existing exact projection path.
 		return nil, nil
 	}
-	entries, _ := delta.ApplyPlan()
 	refDelta := newValueLogRefDelta()
 	refDelta.allowEmptyDependencyReuse = true
 	refDelta.outerLeafDependencyReuse = outerLeavesInValueLog
-	for i := range entries {
-		if entries[i].Type == batch.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
-			refDelta.add(entries[i].ValuePtr.FileID, 1)
+	if delta.HasValueLogPointers() {
+		entries, _ := delta.ApplyPlan()
+		for i := range entries {
+			if entries[i].Type == batch.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+				refDelta.add(entries[i].ValuePtr.FileID, 1)
+			}
 		}
 	}
 	return refDelta, nil

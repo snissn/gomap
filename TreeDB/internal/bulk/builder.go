@@ -3,13 +3,55 @@ package bulk
 import (
 	"errors"
 	"fmt"
+	"sync"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+type bulkLeafBatchSlab struct {
+	pages      [valuelog.MaxFrameK][page.PageSize]byte
+	pageSlices [valuelog.MaxFrameK][]byte
+	keys       [valuelog.MaxFrameK][]byte
+	keyArena   []byte
+	count      int
+}
+
+func (s *bulkLeafBatchSlab) reset() {
+	for i := 0; i < s.count; i++ {
+		s.pageSlices[i] = nil
+		s.keys[i] = nil
+	}
+	s.count = 0
+	s.keyArena = s.keyArena[:0]
+}
+
+var bulkLeafBatchSlabPool = sync.Pool{
+	New: func() any {
+		return &bulkLeafBatchSlab{}
+	},
+}
+
+func acquireBulkLeafBatchSlab() *bulkLeafBatchSlab {
+	s := bulkLeafBatchSlabPool.Get().(*bulkLeafBatchSlab)
+	s.reset()
+	return s
+}
+
+func releaseBulkLeafBatchSlab(s *bulkLeafBatchSlab) {
+	if s == nil {
+		return
+	}
+	s.reset()
+	if cap(s.keyArena) > 1<<20 {
+		s.keyArena = nil
+	}
+	bulkLeafBatchSlabPool.Put(s)
+}
 
 type Allocator interface {
 	Alloc(hint uint64) (uint64, error)
@@ -53,8 +95,32 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 	return BuildWithOptions(iter, alloc, p, BuildOptions{})
 }
 
+// EntryEmitter receives one sorted entry during BuildWithScan.
+type EntryEmitter func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error
+
 // BuildWithOptions creates a new B-Tree from a sorted iterator with custom options.
 func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
+	return BuildWithScan(func(emit EntryEmitter) error {
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
+			if err := emit(key, val, ptr, flags, revision); err != nil {
+				return err
+			}
+			if !iter.Valid() {
+				if err := iter.Error(); err != nil {
+					return err
+				}
+				break
+			}
+			iter.Next()
+		}
+		return nil
+	}, alloc, p, opts)
+}
+
+// BuildWithScan creates a new B-Tree from a push-based sorted entry scan.
+func BuildWithScan(scan func(emit EntryEmitter) error, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
 	leafLog := opts.LeafPageLog
 	var outputPages uint64
 	if opts.OutputPages != nil {
@@ -70,40 +136,40 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		}
 		return nil
 	}
-	if !iter.Valid() {
-		// Empty tree? Return a new empty root.
-		if err := countPage(); err != nil {
-			return 0, err
-		}
-		buf := make([]byte, page.PageSize)
-		b := newLeafBuilder(buf, opts)
-		if leafLog != nil {
-			b.SetPageID(0)
-			n := b.Finish()
-			ptr, err := leafLog.AppendLeafPage(n.Data())
-			if err != nil {
-				return 0, err
-			}
-			if err := countPage(); err != nil {
-				return 0, err
-			}
-			return buildSingleLeafLogRoot(alloc, p, []byte{}, ptr)
-		}
-
-		rootID, err := alloc.Alloc(0)
-		if err != nil {
-			return 0, err
-		}
-		// Write empty leaf
-		b.SetPageID(rootID)
-		n := b.Finish()
-		if err := p.Write(rootID, n.Data()); err != nil {
-			return 0, err
-		}
-		return rootID, nil
-	}
 
 	var levels []*levelBuilder
+	batcher, hasBatcher := leafLog.(LeafPageBatchAppender)
+	canPipelineLeafBatches := leafLog != nil && hasBatcher && !durabilitycut.Enabled()
+
+	var leafSlabs [2]*bulkLeafBatchSlab
+	activeSlabIdx := 0
+	type leafBatchResult struct {
+		ptrs []page.LeafLogPtr
+		err  error
+	}
+	var inFlightCh chan leafBatchResult
+	inFlightSlabIdx := -1
+	defer func() {
+		if inFlightSlabIdx >= 0 && inFlightCh != nil {
+			<-inFlightCh
+			inFlightSlabIdx = -1
+		}
+		releaseBulkLeafBatchSlab(leafSlabs[0])
+		releaseBulkLeafBatchSlab(leafSlabs[1])
+	}()
+
+	allocLeafBuf := func() []byte {
+		if leafLog == nil {
+			return make([]byte, page.PageSize)
+		}
+		if leafSlabs[activeSlabIdx] == nil {
+			leafSlabs[activeSlabIdx] = acquireBulkLeafBatchSlab()
+		}
+		s := leafSlabs[activeSlabIdx]
+		buf := s.pages[s.count][:]
+		clear(buf)
+		return buf
+	}
 
 	newBuilder := func(buf []byte, typ page.PageType) *node.Builder {
 		if typ == page.PageTypeLeaf {
@@ -119,11 +185,13 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 
 	ensureLevel := func(lvl int) error {
 		for len(levels) <= lvl {
-			buf := make([]byte, page.PageSize)
-
 			typ := page.PageTypeInternal
+			var buf []byte
 			if len(levels) == 0 {
 				typ = page.PageTypeLeaf
+				buf = allocLeafBuf()
+			} else {
+				buf = make([]byte, page.PageSize)
 			}
 
 			b := newBuilder(buf, typ)
@@ -144,22 +212,15 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		return nil
 	}
 
-	if err := ensureLevel(0); err != nil {
-		return 0, err
-	}
-
-	type pendingLeafPagePromotion struct {
-		key  []byte
-		page []byte
-	}
-	var pendingLeafPages []pendingLeafPagePromotion
-
 	resetLevelBuilder := func(lvl int) error {
 		lb := levels[lvl]
-		buf := make([]byte, page.PageSize)
 		typ := page.PageTypeInternal
+		var buf []byte
 		if lvl == 0 {
 			typ = page.PageTypeLeaf
+			buf = allocLeafBuf()
+		} else {
+			buf = make([]byte, page.PageSize)
 		}
 		lb.builder = newBuilder(buf, typ)
 		if typ == page.PageTypeLeaf && leafLog != nil {
@@ -206,19 +267,65 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		}
 		return nil
 	}
-	flushPendingLeafPages := func() error {
-		if len(pendingLeafPages) == 0 {
+	drainInFlightLeafPages := func() error {
+		if inFlightSlabIdx < 0 {
 			return nil
 		}
-		pages := make([][]byte, len(pendingLeafPages))
-		for i := range pendingLeafPages {
-			pages[i] = pendingLeafPages[i].page
+		res := <-inFlightCh
+		s := leafSlabs[inFlightSlabIdx]
+		inFlightSlabIdx = -1
+		if res.err != nil {
+			s.reset()
+			return res.err
+		}
+		if len(res.ptrs) != s.count {
+			n := s.count
+			s.reset()
+			return fmt.Errorf("bulk: leaf page batch returned %d ptrs for %d pages", len(res.ptrs), n)
+		}
+		for i, ptr := range res.ptrs {
+			if err := promoteChild(0, s.keys[i], page.LeafLogChildRef(ptr)); err != nil {
+				s.reset()
+				return err
+			}
+		}
+		s.reset()
+		return nil
+	}
+	flushPendingLeafPages := func(async bool) error {
+		s := leafSlabs[activeSlabIdx]
+		if s == nil || s.count == 0 {
+			if !async {
+				return drainInFlightLeafPages()
+			}
+			return nil
+		}
+		if err := drainInFlightLeafPages(); err != nil {
+			return err
+		}
+		pages := s.pageSlices[:s.count]
+		if async && canPipelineLeafBatches {
+			if inFlightCh == nil {
+				inFlightCh = make(chan leafBatchResult, 1)
+			}
+			inFlightSlabIdx = activeSlabIdx
+			nextIdx := activeSlabIdx ^ 1
+			if leafSlabs[nextIdx] == nil {
+				leafSlabs[nextIdx] = acquireBulkLeafBatchSlab()
+			}
+			activeSlabIdx = nextIdx
+			go func(batchPages [][]byte) {
+				ptrs, err := batcher.AppendLeafPages(batchPages)
+				inFlightCh <- leafBatchResult{ptrs: ptrs, err: err}
+			}(pages)
+			return nil
 		}
 		var ptrs []page.LeafLogPtr
-		if batcher, ok := leafLog.(LeafPageBatchAppender); ok {
+		if hasBatcher {
 			var err error
 			ptrs, err = batcher.AppendLeafPages(pages)
 			if err != nil {
+				s.reset()
 				return err
 			}
 		} else {
@@ -226,24 +333,33 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			for i, leafPage := range pages {
 				ptr, err := leafLog.AppendLeafPage(leafPage)
 				if err != nil {
+					s.reset()
 					return err
 				}
 				ptrs[i] = ptr
 			}
 		}
-		if len(ptrs) != len(pendingLeafPages) {
-			return fmt.Errorf("bulk: leaf page batch returned %d ptrs for %d pages", len(ptrs), len(pendingLeafPages))
+		if len(ptrs) != s.count {
+			n := s.count
+			s.reset()
+			return fmt.Errorf("bulk: leaf page batch returned %d ptrs for %d pages", len(ptrs), n)
 		}
 		for i, ptr := range ptrs {
-			if err := promoteChild(0, pendingLeafPages[i].key, page.LeafLogChildRef(ptr)); err != nil {
+			if err := promoteChild(0, s.keys[i], page.LeafLogChildRef(ptr)); err != nil {
+				s.reset()
 				return err
 			}
 		}
-		for i := range pendingLeafPages {
-			pendingLeafPages[i] = pendingLeafPagePromotion{}
-		}
-		pendingLeafPages = pendingLeafPages[:0]
+		s.reset()
 		return nil
+	}
+	appendPendingLeafPage := func(key, leafData []byte) {
+		s := leafSlabs[activeSlabIdx]
+		off := len(s.keyArena)
+		s.keyArena = append(s.keyArena, key...)
+		s.keys[s.count] = s.keyArena[off:len(s.keyArena):len(s.keyArena)]
+		s.pageSlices[s.count] = leafData
+		s.count++
 	}
 	flush = func(lvl int) error {
 		lb := levels[lvl]
@@ -261,12 +377,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if err := countPage(); err != nil {
 				return err
 			}
-			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
-				key:  append([]byte(nil), key...),
-				page: n.Data(),
-			})
-			if len(pendingLeafPages) >= valuelog.MaxFrameK {
-				if err := flushPendingLeafPages(); err != nil {
+			appendPendingLeafPage(key, n.Data())
+			if leafSlabs[activeSlabIdx].count >= valuelog.MaxFrameK {
+				if err := flushPendingLeafPages(true); err != nil {
 					return err
 				}
 			}
@@ -285,10 +398,14 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		return resetLevelBuilder(lvl)
 	}
 
-	for iter.Valid() {
-		key := iter.UnsafeKey()
-		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
-
+	emitted := false
+	emitEntry := func(key, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) error {
+		if !emitted {
+			if err := ensureLevel(0); err != nil {
+				return err
+			}
+			emitted = true
+		}
 		lb := levels[0]
 		if lb.startKey == nil {
 			lb.startKey = append([]byte(nil), key...)
@@ -297,7 +414,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		err := lb.builder.AddLeafEntryWithRevision(key, val, flags, ptr, revision)
 		if err == node.ErrNodeFull {
 			if err := flush(0); err != nil {
-				return 0, err
+				return err
 			}
 			lb = levels[0]
 			if lb.startKey == nil {
@@ -305,18 +422,41 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			}
 			err = lb.builder.AddLeafEntryWithRevision(key, val, flags, ptr, revision)
 		}
+		return err
+	}
+	if err := scan(emitEntry); err != nil {
+		return 0, err
+	}
+	if !emitted {
+		// Empty tree: return a new empty root.
+		if err := countPage(); err != nil {
+			return 0, err
+		}
+		buf := make([]byte, page.PageSize)
+		b := newLeafBuilder(buf, opts)
+		if leafLog != nil {
+			b.SetPageID(0)
+			n := b.Finish()
+			ptr, err := leafLog.AppendLeafPage(n.Data())
+			if err != nil {
+				return 0, err
+			}
+			if err := countPage(); err != nil {
+				return 0, err
+			}
+			return buildSingleLeafLogRoot(alloc, p, []byte{}, ptr)
+		}
 
+		rootID, err := alloc.Alloc(0)
 		if err != nil {
 			return 0, err
 		}
-
-		if !iter.Valid() {
-			if err := iter.Error(); err != nil {
-				return 0, err
-			}
-			break
+		b.SetPageID(rootID)
+		n := b.Finish()
+		if err := p.Write(rootID, n.Data()); err != nil {
+			return 0, err
 		}
-		iter.Next()
+		return rootID, nil
 	}
 
 	// Finalize all levels
@@ -334,11 +474,8 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if err := countPage(); err != nil {
 				return 0, err
 			}
-			pendingLeafPages = append(pendingLeafPages, pendingLeafPagePromotion{
-				key:  append([]byte(nil), key...),
-				page: n.Data(),
-			})
-			if err := flushPendingLeafPages(); err != nil {
+			appendPendingLeafPage(key, n.Data())
+			if err := flushPendingLeafPages(false); err != nil {
 				return 0, err
 			}
 			continue

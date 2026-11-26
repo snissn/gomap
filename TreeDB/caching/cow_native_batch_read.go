@@ -15,7 +15,7 @@ import (
 // transaction's opening physical root under one warm read lane and one snapshot
 // read pin, admitting copied inline values through admitOutput before allocation.
 func (tx *nativeConditionalTxn) NativeEntriesAtRootAdmitted(root uint64, keys [][]byte, dst []node.LeafEntry, found []bool, admitOutput func(uint64) error) error {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {

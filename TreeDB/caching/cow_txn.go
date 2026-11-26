@@ -54,6 +54,10 @@ func (db *DB) InitOwnedCOWTxnWithRawDurableAdmission(tx *ConditionalTxn, owner *
 }
 
 func (db *DB) initOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error) error {
+	return db.initOwnedCOWTxnWithOptions(tx, owner, durableOrdinaryEligible, write, 0, false)
+}
+
+func (db *DB) initOwnedCOWTxnWithOptions(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error, extraCharge uint64, deferRawDomains bool) error {
 	if db == nil || db.cow == nil || owner == nil || db.cow.txnOwner != owner {
 		return backenddb.ErrConditionalTxnUnsupported
 	}
@@ -80,11 +84,15 @@ func (db *DB) initOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner,
 		return err
 	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowTxnState{})))
+	if extraCharge > ^uint64(0)-charge {
+		return memtable.ErrCOWCapacity
+	}
+	charge += extraCharge
 	lease, err := c.budget.AcquireExternal(charge)
 	if err != nil {
 		return err
 	}
-	snap, err := db.acquireCOWSnapshotWithError()
+	snap, err := db.acquireCOWSnapshotWithOptions(deferRawDomains)
 	if err != nil {
 		lease.Close()
 		return err
@@ -96,8 +104,15 @@ func (db *DB) initOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner,
 		lease.Close()
 		return errors.Join(batchErr, closeErr)
 	}
-	*tx = ConditionalTxn{db: db, batch: b, snap: snap, startSeq: snap.cowCut.logicalSeq, cow: &cowTxnState{lease: lease, charged: charge, write: write, durableOrdinaryEligible: durableOrdinaryEligible}}
+	tx.db = db
+	tx.batch = b
+	tx.snap = snap
+	tx.startSeq = snap.cowCut.logicalSeq
+	tx.closed = false
+	tx.cowState = cowTxnState{lease: lease, charged: charge, write: write, durableOrdinaryEligible: durableOrdinaryEligible}
+	tx.cow = &tx.cowState
 	tx.reads = tx.inlineReads[:0]
+	tx.readIndex = nil
 	tx.keyArena = tx.inlineKeys[:0]
 	b.cowState.txn = tx
 	db.conditionalTxnStarted.Add(1)

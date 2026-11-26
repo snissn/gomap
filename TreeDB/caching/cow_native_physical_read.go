@@ -141,7 +141,7 @@ func (c *NativeSemanticCapture) NativeEntryAtRootInto(root uint64, key, dst []by
 }
 
 func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return node.LeafEntry{}, backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {
@@ -152,7 +152,7 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 }
 
 func (tx *nativeConditionalTxn) NativeEntryAtRootAdmitted(root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return node.LeafEntry{}, backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {
@@ -375,7 +375,7 @@ func (c *NativeSemanticCapture) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) 
 }
 
 func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return nil, backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {
@@ -532,7 +532,7 @@ func (c *NativeSemanticCapture) NativeValueAtPointerInto(ptr page.ValuePtr, dst 
 }
 
 func (tx *nativeConditionalTxn) NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return nil, backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {

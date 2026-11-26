@@ -5,8 +5,10 @@ import (
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -34,6 +36,113 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRoot(input OrderedRoot
 	group.mu.Lock()
 	defer group.mu.Unlock()
 	return group.buildNativeOrderedRootLocked(input, false)
+}
+
+// BuildNativeOrderedRootColdScan builds a cold (BaseRoot == 0) native ordered
+// root directly from a push-based sorted entry scan, avoiding intermediate
+// batch.Batch materialization.
+func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input OrderedRootColdScanPublishInput) (uint64, error) {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group == nil || group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || input.Scan == nil {
+		return 0, errors.New("invalid captured native root cold build")
+	}
+	if input.EntryCount <= 0 {
+		return 0, nil
+	}
+	opts, err := group.db.orderedRootPublishOptionsForPolicy(input.StoragePolicy)
+	if err != nil {
+		return 0, err
+	}
+	if opts.outerLeavesInValueLog && opts.leafPageLog == nil {
+		return 0, errors.New("ordered root value-log leaf storage requires a leaf page log")
+	}
+	group.db.observeOrderedRootSpanNativeEligibility(group.db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:          OrderedRootSpanNativeRouteOverlayColdBuild,
+		Context:        "ordered-root cold scan build",
+		DeltaOps:       input.EntryCount,
+		ForceColdBuild: true,
+	}))
+	var leafPageLog bulk.LeafPageAppender
+	if opts.outerLeavesInValueLog {
+		leafPageLog = opts.leafPageLog
+	}
+	collectRefDelta := opts.outerLeavesInValueLog || group.db.shouldCollectValueLogRefDelta(group.baseSeq)
+	var refDelta *valueLogRefDelta
+	if collectRefDelta {
+		refDelta = newValueLogRefDelta()
+		refDelta.allowEmptyDependencyReuse = true
+		refDelta.outerLeafDependencyReuse = opts.outerLeavesInValueLog
+		refDelta.requiresCandidateProjection = false
+	}
+	root, err := bulk.BuildWithScan(func(emit bulk.EntryEmitter) error {
+		var emptyBytes [0]byte
+		return input.Scan(func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error {
+			if len(key) == 0 {
+				key = emptyBytes[:]
+			}
+			if flags&node.FlagPointer != 0 {
+				if !page.IsValueLogFileID(ptr.FileID) {
+					return ErrNativeSemanticUnsupported
+				}
+				group.pinValueLogSegmentLocked(ptr.FileID)
+				if refDelta != nil {
+					refDelta.add(ptr.FileID, 1)
+				}
+				return emit(key, nil, ptr, node.FlagPointer, rev)
+			}
+			if len(val) == 0 {
+				val = emptyBytes[:]
+			}
+			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
+			if input.CheckInlineThreshold {
+				threshold = min(threshold, group.db.InlineThresholdForKey(key))
+			}
+			if len(val) > threshold {
+				var values [1][]byte
+				values[0] = val
+				ptrs, appendErr := group.appendNativeValueLogValuesLocked(values[:])
+				if appendErr != nil {
+					return appendErr
+				}
+				ptr = ptrs[0]
+				if refDelta != nil {
+					refDelta.add(ptr.FileID, 1)
+				}
+				return emit(key, nil, ptr, node.FlagPointer, rev)
+			}
+			return emit(key, val, page.ValuePtr{}, node.FlagInline, rev)
+		})
+	}, group.tracker, group.idx.pager, bulk.BuildOptions{
+		LeafPrefixCompression: opts.leafPrefixCompression,
+		LeafColumnar:          opts.leafColumnar,
+		PackedValuePtr:        opts.packedValuePtr,
+		InternalBaseDelta:     opts.internalBaseDelta && !opts.outerLeavesInValueLog,
+		LeafPageLog:           leafPageLog,
+		MaxOutputPages:        opts.maxOutputPages,
+	})
+	if err != nil {
+		releaseValueLogRefDelta(refDelta)
+		group.failed = true
+		return 0, err
+	}
+	group.nativeRootTransitions = append(group.nativeRootTransitions, nativeOrderedRootTransition{
+		base: 0,
+		next: root,
+	})
+	group.mergeValueLogRefDeltaLocked(refDelta)
+	releaseValueLogRefDelta(refDelta)
+	if root != 0 {
+		count := int(group.nativeBuiltRootCount)
+		if count == len(group.nativeBuiltRoots) {
+			copy(group.nativeBuiltRoots[:count-1], group.nativeBuiltRoots[1:count])
+			count--
+		}
+		group.nativeBuiltRoots[count] = root
+		count++
+		group.nativeBuiltRootCount = uint8(count)
+	}
+	return root, nil
 }
 func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input OrderedRootDeltaBatchPublishInput, systemRoot bool) (uint64, error) {
 	if group == nil || group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || input.Delta == nil {
@@ -258,6 +367,10 @@ func (group *RootPublicationBuildGroup) AppendNativeValueLogValues(values [][]by
 	}
 	group.mu.Lock()
 	defer group.mu.Unlock()
+	return group.appendNativeValueLogValuesLocked(values)
+}
+
+func (group *RootPublicationBuildGroup) appendNativeValueLogValuesLocked(values [][]byte) ([]page.ValuePtr, error) {
 	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil {
 		return nil, ErrNativeSemanticUnsupported
 	}

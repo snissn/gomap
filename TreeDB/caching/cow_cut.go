@@ -832,6 +832,10 @@ func (db *DB) acquireCOWSnapshot() *Snapshot {
 }
 
 func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
+	return db.acquireCOWSnapshotWithOptions(false)
+}
+
+func (db *DB) acquireCOWSnapshotWithOptions(deferRawDomains bool) (*Snapshot, error) {
 	stripe := uint32(db.cow.captureCalls.Add(1))
 	if !db.cow.beginReadStripe(stripe) {
 		return nil, backenddb.ErrClosed
@@ -841,13 +845,17 @@ func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
 	if cut == nil {
 		return nil, backenddb.ErrClosed
 	}
-	return db.snapshotFromCOWCut(cut)
+	return db.snapshotFromCOWCutWithOptions(cut, deferRawDomains)
 }
 
 // snapshotFromCOWCut consumes the caller's retained cut, including on admission
 // failure. The caller already holds the cache read gate; no recursive admission
 // is allowed while a concurrent Close may be waiting for that gate.
 func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
+	return db.snapshotFromCOWCutWithOptions(cut, false)
+}
+
+func (db *DB) snapshotFromCOWCutWithOptions(cut *cowReadCut, deferRawDomains bool) (*Snapshot, error) {
 	// Admission and allocation are outside cutMu. The temporary cut reference
 	// prevents a concurrent publication from retiring the chosen anchor.
 	extra := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Snapshot{})))
@@ -874,10 +882,14 @@ func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
 	}
 	snap.backendFallback = backendSnapshotLookup{db: db, snapshot: snap.backend, rootID: snap.backendRootID}
 	if lazyDomains {
-		d := cut.retainOrBuildDomains()
-		snap.cowDomains = d
-		snap.rootPointShards = d.domains
-		snap.rootIterator = rootDomainSnapshot{immutables: d.sources}
+		if deferRawDomains {
+			snap.cowDomainsLazy.Store(true)
+		} else {
+			d := cut.retainOrBuildDomains()
+			snap.cowDomains = d
+			snap.rootPointShards = d.domains
+			snap.rootIterator = rootDomainSnapshot{immutables: d.sources}
+		}
 	} else {
 		snap.rootPointShards = cut.domains
 		snap.rootIterator = rootDomainSnapshot{immutables: cut.sources}

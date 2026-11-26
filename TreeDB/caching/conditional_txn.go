@@ -30,6 +30,7 @@ const (
 // memtable/journal path after validation under the exclusive writer gate.
 type ConditionalTxn struct {
 	cow      *cowTxnState
+	cowState cowTxnState
 	db       *DB
 	batch    *Batch
 	snap     *Snapshot
@@ -583,11 +584,10 @@ func (tx *ConditionalTxn) finish() error {
 		tx.cow.writeIndex = nil
 		tx.cow.iterators = nil
 		tx.cow.write = nil
+		clear(tx.reads)
 		tx.reads = nil
 		tx.readIndex = nil
 		tx.keyArena = nil
-		clear(tx.inlineReads[:])
-
 	}
 	if tx.batch != nil && tx.cow != nil {
 		tx.batch.cowState.txn = nil
@@ -599,6 +599,8 @@ func (tx *ConditionalTxn) finish() error {
 	}
 	if tx.cow != nil {
 		tx.cow.lease.Close()
+		tx.cow.lease = nil
+		tx.cow = nil
 	}
 	if db != nil {
 		db.conditionalActiveTxnCount.Add(-1)

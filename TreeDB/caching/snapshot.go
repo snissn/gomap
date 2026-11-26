@@ -36,6 +36,7 @@ import (
 type Snapshot struct {
 	cowCut          *cowReadCut
 	cowDomains      *cowCutDomains
+	cowDomainsLazy  atomic.Bool
 	cowCache        *cowCache
 	cowPin          *memtable.COWView
 	cowReader       *cowReadWorkspace
@@ -109,6 +110,7 @@ func putSnapshot(snap *Snapshot) {
 	}
 	snap.cowCut = nil
 	snap.cowDomains = nil
+	snap.cowDomainsLazy.Store(false)
 	snap.cowPin = nil
 	snap.db = nil
 	snap.view = nil
@@ -422,6 +424,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.iteratorMu.Unlock()
 	var err error
 	if s.cowCut != nil {
+		s.cowDomainsLazy.Store(false)
 		s.rootPointShards = nil
 		s.rootIterator = rootDomainSnapshot{}
 		if d := s.cowDomains; d != nil {
@@ -493,10 +496,27 @@ func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page
 	return val, ptr, flags, found
 }
 
+func (s *Snapshot) ensureCOWDomains() {
+	if s == nil || !s.cowDomainsLazy.Load() {
+		return
+	}
+	s.iteratorMu.Lock()
+	defer s.iteratorMu.Unlock()
+	if !s.cowDomainsLazy.Load() || s.closed.Load() || s.cowCut == nil {
+		return
+	}
+	d := s.cowCut.retainOrBuildDomains()
+	s.cowDomains = d
+	s.rootPointShards = d.domains
+	s.rootIterator = rootDomainSnapshot{immutables: d.sources}
+	s.cowDomainsLazy.Store(false)
+}
+
 func (s *Snapshot) lookupCachedRootDomainEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
 	if s == nil {
 		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
+	s.ensureCOWDomains()
 	if memtableViewHasRangeSpans(s.view) {
 		val, ptr, flags, revision, found, _ = s.lookupEntryWithRangeSpansRevisionSource(key)
 		return val, ptr, flags, revision, found
@@ -1280,6 +1300,7 @@ func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
 		return out, nil
 	}
 
+	s.ensureCOWDomains()
 	refs := make([]getManyProbeRef, len(keys))
 	shardCount := len(s.rootPointShards)
 	for i, key := range keys {
