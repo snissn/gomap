@@ -2606,7 +2606,7 @@ func appendIndexScalar(dst []byte, valueType IndexValueType, value any) ([]byte,
 		if !ok {
 			return dst, nil, fmt.Errorf("collections: indexed value for type %q must be string, got %T", valueType, value)
 		}
-		dst = appendIndexStringComponent(dst, []byte(v))
+		dst = appendIndexStringComponentString(dst, v)
 	case IndexValueBool:
 		v, ok := value.(bool)
 		if !ok {
@@ -2632,7 +2632,27 @@ func appendIndexScalar(dst []byte, valueType IndexValueType, value any) ([]byte,
 }
 
 func appendIndexStringComponent(dst []byte, value []byte) []byte {
+	if bytes.IndexByte(value, 0x00) < 0 {
+		dst = append(dst, value...)
+		return append(dst, 0x00, 0x00)
+	}
 	for _, c := range value {
+		if c == 0x00 {
+			dst = append(dst, 0x00, 0xff)
+			continue
+		}
+		dst = append(dst, c)
+	}
+	return append(dst, 0x00, 0x00)
+}
+
+func appendIndexStringComponentString(dst []byte, value string) []byte {
+	if strings.IndexByte(value, 0x00) < 0 {
+		dst = append(dst, value...)
+		return append(dst, 0x00, 0x00)
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
 		if c == 0x00 {
 			dst = append(dst, 0x00, 0xff)
 			continue
@@ -2954,18 +2974,26 @@ func indexComponentLength(valueType IndexValueType, key []byte) (int, error) {
 	}
 }
 
-func prefixEnd(prefix []byte) []byte {
+func appendPrefixEnd(dst, prefix []byte) ([]byte, bool) {
 	if len(prefix) == 0 {
-		return nil
+		return nil, false
 	}
-	out := bytes.Clone(prefix)
-	for i := len(out) - 1; i >= 0; i-- {
-		if out[i] != 0xff {
-			out[i]++
-			return out[:i+1]
+	for i := len(prefix) - 1; i >= 0; i-- {
+		if prefix[i] != 0xff {
+			dst = append(dst[:0], prefix[:i+1]...)
+			dst[i]++
+			return dst, true
 		}
 	}
-	return nil
+	return nil, false
+}
+
+func prefixEnd(prefix []byte) []byte {
+	out, ok := appendPrefixEnd(nil, prefix)
+	if !ok {
+		return nil
+	}
+	return out
 }
 
 func (plan *insertBatchPlan) publishRootRuns(publisher groupedRootPublisher, baseRootIDs map[string]uint64) ([]uint64, error) {

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -45,6 +47,9 @@ type oneShotRead struct {
 	successor     tree.OwnedSuccessorScratch
 	successorKey  [page.PageSize]byte
 	successorLeaf [page.PageSize]byte
+	// Scoped alternate-root tree used transiently during OneShotReadView key
+	// scans and always scrubbed via Reset(nil, nil, 0) before returning.
+	altTree tree.Tree
 }
 
 var oneShotReadPool = sync.Pool{New: func() any {
@@ -146,6 +151,140 @@ func (v OneShotReadView) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte
 		return dst, false, err
 	}
 	return out, true, nil
+}
+
+// SeekFirstLiveKeyAtRoot finds the smallest non-tombstone key in [start, end)
+// at rootID and appends it to dst. It uses the private one-shot fixed successor
+// scratch without acquiring a tree.Iterator or retaining alternate-root state.
+func (v OneShotReadView) SeekFirstLiveKeyAtRoot(rootID uint64, start, end, dst []byte) ([]byte, bool, error) {
+	if !v.active() {
+		return dst, false, ErrClosed
+	}
+	if rootID == 0 {
+		return dst, false, nil
+	}
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return dst, false, nil
+	}
+	r := v.r
+	s := &r.snapshot
+	var tr *tree.Tree
+	if s.state != nil && rootID == s.state.RootPageID {
+		tr = &s.tree
+	} else {
+		if s.idx == nil || s.idx.pager == nil {
+			return dst, false, ErrClosed
+		}
+		r.altTree.Reset(s.idx.pager, &s.reader, rootID)
+		defer r.altTree.Reset(nil, nil, 0)
+		tr = &r.altTree
+	}
+	r.successor.BeginLeafBatch()
+	defer r.successor.EndLeafBatch()
+	curStart := start
+	var nextBuf [256]byte
+	for {
+		entry, found, err := tr.SeekGEWithFixedScratch(curStart, end, r.successorKey[:], r.successorLeaf[:], &r.successor, r.readSuccessorLeaf)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				return dst, false, nil
+			}
+			return dst, false, err
+		}
+		if !found {
+			return dst, false, nil
+		}
+		if entry.Flags&node.FlagTombstone == 0 {
+			return append(dst, entry.Key...), true, nil
+		}
+		if len(entry.Key)+1 <= len(nextBuf) {
+			n := copy(nextBuf[:], entry.Key)
+			nextBuf[n] = 0x00
+			curStart = nextBuf[:n+1]
+		} else {
+			next := make([]byte, len(entry.Key)+1)
+			copy(next, entry.Key)
+			curStart = next
+		}
+		if end != nil && bytes.Compare(curStart, end) >= 0 {
+			return dst, false, nil
+		}
+	}
+}
+
+// VisitKeysAtRoot visits keys in [start, end) at rootID in ascending order
+// without exposing an exported Snapshot or Iterator. Borrowed keys passed to fn
+// are valid only for the duration of each callback invocation. Returning
+// cont=false stops iteration cleanly.
+func (v OneShotReadView) VisitKeysAtRoot(rootID uint64, start, end []byte, includeTombstones bool, fn func(key []byte, isDeleted bool) (bool, error)) error {
+	if !v.active() {
+		return ErrClosed
+	}
+	if rootID == 0 || fn == nil {
+		return nil
+	}
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return nil
+	}
+	r := v.r
+	s := &r.snapshot
+	// Copy bounded start/end into pooled scratch when they fit (and clone only
+	// oversized bounds) so caller stack-allocated key buffers never escape into
+	// the pooled tree.Iterator.
+	var sStart, sEnd []byte
+	if len(start)+len(end) <= len(r.successorKey) {
+		off := 0
+		if start != nil {
+			copy(r.successorKey[off:], start)
+			sStart = r.successorKey[off : off+len(start) : off+len(start)]
+			off += len(start)
+		}
+		if end != nil {
+			copy(r.successorKey[off:], end)
+			sEnd = r.successorKey[off : off+len(end) : off+len(end)]
+		}
+	} else {
+		if start != nil {
+			sStart = bytes.Clone(start)
+		}
+		if end != nil {
+			sEnd = bytes.Clone(end)
+		}
+	}
+	var tr *tree.Tree
+	if s.state != nil && rootID == s.state.RootPageID {
+		tr = &s.tree
+	} else {
+		if s.idx == nil || s.idx.pager == nil {
+			return ErrClosed
+		}
+		r.altTree.Reset(s.idx.pager, &s.reader, rootID)
+		defer r.altTree.Reset(nil, nil, 0)
+		tr = &r.altTree
+	}
+	it := tr.IteratorWithOptions(sStart, sEnd, tree.IteratorOptions{
+		Mode:              tree.IteratorModeKeysOnly,
+		IncludeTombstones: includeTombstones,
+	})
+	defer func() { _ = it.Close() }()
+	if ordinary, ok := it.(*tree.Iterator); ok {
+		for ordinary.Valid() {
+			cont, err := fn(ordinary.UnsafeKey(), ordinary.IsDeleted())
+			if err != nil || !cont {
+				return err
+			}
+			ordinary.Next()
+		}
+		return ordinary.Error()
+	}
+	for it.Valid() {
+		cont, err := fn(it.UnsafeKey(), it.IsDeleted())
+		if err != nil || !cont {
+			return err
+		}
+		it.Next()
+	}
+	return it.Error()
 }
 
 // WithOneShotRead executes fn against a pooled private one-shot read view

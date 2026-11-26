@@ -1701,6 +1701,7 @@ func (n *Node) searchLeafPrefixBlock(blockStart, blockEnd uint16, target []byte)
 		}
 	}
 
+	var stackScratch [128]byte
 	prevKey := restartKey
 	for idx := blockStart + 1; idx < blockEnd; idx++ {
 		off, err := n.getOffset(idx)
@@ -1737,9 +1738,15 @@ func (n *Node) searchLeafPrefixBlock(blockStart, blockEnd uint16, target []byte)
 		}
 
 		keyLen := layout.prefixLen + layout.suffixLen
-		cur := n.ensureKeyScratch(keyLen)
-		if len(cur) != keyLen {
-			return 0, false, ErrCorruptedNode
+		var cur []byte
+		if keyLen <= len(stackScratch) {
+			cur = stackScratch[:keyLen]
+		} else {
+			n.leafValid = false
+			cur = n.ensureKeyScratch(keyLen)
+			if len(cur) != keyLen {
+				return 0, false, ErrCorruptedNode
+			}
 		}
 		// If prevKey and cur share backing storage, the existing prefix bytes are
 		// already in place and we only need to overwrite the suffix below.
@@ -1760,17 +1767,7 @@ func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
 		return 0, false, nil
 	}
 	if count <= smallSearchThreshold {
-		for idx := uint16(0); idx < count; idx++ {
-			k, _, _, err := n.leafEntryKeyAt(idx)
-			if err != nil {
-				return 0, false, err
-			}
-			cmp := bytes.Compare(k, key)
-			if cmp >= 0 {
-				return idx, cmp == 0, nil
-			}
-		}
-		return count, false, nil
+		return n.searchLeafPrefixBlock(0, count, key)
 	}
 
 	interval := leafPrefixRestartInterval

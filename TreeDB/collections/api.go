@@ -1342,7 +1342,16 @@ type collectionCatalog struct {
 	columnManifestRootName string
 	indexRuntimes          []indexRuntime
 	indexRuntimesErr       error
+	secondaryIndexes       []collectionSecondaryIndexEntry
 	typedGraphBase         *typedGraphBaseAlias
+}
+
+type collectionSecondaryIndexEntry struct {
+	def          IndexDefinition
+	rootName     string
+	rootID       uint64
+	hasOverlays  bool
+	dedupeDocIDs bool
 }
 
 type collectionRootOverlayFilter struct {
@@ -22177,8 +22186,46 @@ func newCollectionCatalogWithOverlayMetadataOwned(meta CollectionMeta, roots map
 			collection: meta.Name,
 			indexes:    plannerIndexes(meta.Indexes),
 		}).indexRuntimes()
+		sec := make([]collectionSecondaryIndexEntry, len(meta.Indexes))
+		for i, idx := range meta.Indexes {
+			rootName := collectionSecondaryRootName(meta.Name, idx.Name)
+			sec[i] = collectionSecondaryIndexEntry{
+				def:          idx,
+				rootName:     rootName,
+				rootID:       roots[rootName],
+				hasOverlays:  len(rootOverlays[rootName]) != 0,
+				dedupeDocIDs: shouldDedupeIndexDocumentIDs(idx, meta.Options),
+			}
+		}
+		catalog.secondaryIndexes = sec
 	}
 	return catalog
+}
+
+func (c *collectionCatalog) secondaryIndex(indexName string) (collectionSecondaryIndexEntry, bool) {
+	if c == nil {
+		return collectionSecondaryIndexEntry{}, false
+	}
+	if len(c.secondaryIndexes) == len(c.meta.Indexes) {
+		for i := range c.secondaryIndexes {
+			if c.secondaryIndexes[i].def.Name == indexName {
+				return c.secondaryIndexes[i], true
+			}
+		}
+		return collectionSecondaryIndexEntry{}, false
+	}
+	idx, ok := findIndex(c.meta.Indexes, indexName)
+	if !ok {
+		return collectionSecondaryIndexEntry{}, false
+	}
+	rootName := collectionSecondaryRootName(c.meta.Name, idx.Name)
+	return collectionSecondaryIndexEntry{
+		def:          idx,
+		rootName:     rootName,
+		rootID:       c.rootID(rootName),
+		hasOverlays:  len(c.overlayRootIDs(rootName)) != 0,
+		dedupeDocIDs: shouldDedupeIndexDocumentIDs(idx, c.meta.Options),
+	}, true
 }
 
 func cloneRootOverlayMap(in map[string][]uint64) map[string][]uint64 {
@@ -23630,7 +23677,8 @@ func (c *Collection) getCurrentPrimaryRootRunEntryLocked(domain *collectionWrite
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
-	return c.FindByIndexValue(indexName, value)
+	out, _, err := c.findByIndexExact(indexName, value, true, nil, 0)
+	return out, err
 }
 
 type IndexRangeBound struct {
@@ -23723,28 +23771,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
-	capHint := defaultIndexRangeResultCap
-	if opts.Limit > 0 && opts.Limit < capHint {
-		capHint = opts.Limit
-	}
-	var out [][]byte
-	truncated, found, err := c.scanIndexRange(indexName, opts, func(id []byte) (bool, error) {
-		if out == nil {
-			out = make([][]byte, 0, capHint)
-		}
-		out = append(out, id)
-		return true, nil
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	if !found {
-		return nil, false, nil
-	}
-	if out == nil {
-		out = make([][]byte, 0)
-	}
-	return out, truncated, nil
+	return c.findByIndexRange(indexName, opts)
 }
 
 // FindByCompoundIndexRange returns document IDs in compound-index order. It
@@ -24044,23 +24071,22 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if catalog == nil {
 		return false, false, errCollectionNotFound
 	}
-	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	secIdx, ok := catalog.secondaryIndex(indexName)
 	if !ok {
 		return false, false, nil
 	}
+	idx := secIdx.def
 	if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
 		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
 	}
-	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	var startBuf [128]byte
+	var endBuf [128]byte
+	start, end, exactPrefix, exactPrefixScan, empty, err := indexRangeScanBoundsInto(idx.ValueType, opts, startBuf[:0], endBuf[:0])
 	if err != nil {
 		return false, false, err
 	}
 	if empty {
 		return false, true, nil
-	}
-	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
-	if err != nil {
-		return false, false, err
 	}
 	if exactPrefixScan {
 		// Exact document scans still need buffered tombstones for unique indexes.
@@ -24077,11 +24103,14 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if bufferedTable != nil {
 		bufferedIt = bufferedTable.NewIterator(start, end)
 	}
-	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, secIdx.rootName, start, end, true)
 	if err != nil {
 		return false, false, err
 	}
-	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	primaryRootName := catalog.primaryRootName
+	if primaryRootName == "" {
+		primaryRootName = collectionPrimaryRootName(catalog.meta.Name)
+	}
 	var primaryReader backenddb.SnapshotRootReader
 	primaryReaderOK := false
 	primaryRootMissing := false
@@ -24183,13 +24212,110 @@ func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn
 	return truncated, err
 }
 
-func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) (result [][]byte, truncated bool, resultErr error) {
+const (
+	indexResultChunkMin = 1024
+	indexResultChunkMax = 4096
+)
+
+// indexIDCollector packs caller-owned document IDs into bounded 3-index sliced
+// chunks (cap == len per ID) to avoid one heap allocation per returned ID while
+// guaranteeing that mutations or append() on any returned ID never alias or
+// overwrite adjacent IDs and that retaining one ID pins at most 4 KiB.
+type indexIDCollector struct {
+	ids   [][]byte
+	chunk []byte
+	off   int
+}
+
+func (c *indexIDCollector) appendID(raw []byte, uniqueHint bool, limitHint int) {
+	n := len(raw)
+	if !uniqueHint && n > 0 && c.ids != nil && len(c.chunk)-c.off >= n {
+		start := c.off
+		end := start + n
+		copy(c.chunk[start:end], raw)
+		c.off = end
+		c.ids = append(c.ids, c.chunk[start:end:end])
+		return
+	}
+	c.appendIDSlow(raw, uniqueHint, limitHint)
+}
+
+func (c *indexIDCollector) appendIDSlow(raw []byte, uniqueHint bool, limitHint int) {
+	n := len(raw)
+	if uniqueHint && len(c.ids) == 0 {
+		id := make([]byte, n)
+		copy(id, raw)
+		c.ids = [][]byte{id}
+		return
+	}
+	if c.ids == nil {
+		capHint := defaultIndexRangeResultCap
+		if limitHint > 0 && limitHint < capHint {
+			capHint = limitHint
+		}
+		c.ids = make([][]byte, 0, capHint)
+	}
+	if n == 0 {
+		c.ids = append(c.ids, []byte{})
+		return
+	}
+	if n > indexResultChunkMax/2 {
+		id := make([]byte, n)
+		copy(id, raw)
+		c.ids = append(c.ids, id)
+		return
+	}
+	if len(c.chunk)-c.off < n {
+		chunkCap := len(c.chunk) * 2
+		if chunkCap == 0 {
+			chunkCap = indexResultChunkMin
+			if limitHint > 0 && limitHint <= 4 {
+				if small := limitHint * 32; small < chunkCap {
+					chunkCap = small
+				}
+			}
+		}
+		if chunkCap > indexResultChunkMax {
+			chunkCap = indexResultChunkMax
+		}
+		if chunkCap < n {
+			chunkCap = n
+		}
+		c.chunk = make([]byte, chunkCap)
+		c.off = 0
+	}
+	start := c.off
+	end := start + n
+	copy(c.chunk[start:end], raw)
+	c.off = end
+	c.ids = append(c.ids, c.chunk[start:end:end])
+}
+
+func extractExactIndexDocumentID(valueType IndexValueType, key []byte, prefixLen int) ([]byte, error) {
+	if valueType == IndexValueBSONOrderedV2 {
+		return indexKeyDocumentID(valueType, key)
+	}
+	if len(key) <= prefixLen {
+		return nil, errors.New("collections: malformed secondary index key: missing document id")
+	}
+	return key[prefixLen:], nil
+}
+
+func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
+	return c.findByIndexExact(indexName, "", false, value, maxResults)
+}
+
+func (c *Collection) findByIndexExact(indexName, stringValue string, hasStringValue bool, anyValue any, maxResults int) (result [][]byte, truncated bool, resultErr error) {
 	if c != nil && c.nativeJSON != nil {
 		if maxResults < 0 {
 			return nil, false, errors.New("collections: max index results cannot be negative")
 		}
+		queryValue := anyValue
+		if hasStringValue {
+			queryValue = stringValue
+		}
 		err := c.nativeJSON.withOneShotRead(c.name, func(read *NativeJSONRead) error {
-			return read.visitIndexValueIDs(indexName, value, func(id []byte) error {
+			return read.visitIndexValueIDs(indexName, queryValue, func(id []byte) error {
 				if maxResults > 0 && len(result) == maxResults {
 					truncated = true
 					return errNativeIndexVisitComplete
@@ -24208,14 +24334,340 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		}
 		return result, truncated, err
 	}
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, false, err
+	}
 	if maxResults < 0 {
 		return nil, false, errors.New("collections: max index results cannot be negative")
 	}
-	return c.FindByIndexRange(indexName, IndexRangeOptions{
-		Lower: IndexRangeBound{Value: value, Inclusive: true},
-		Upper: IndexRangeBound{Value: value, Inclusive: true},
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	domain := c.writeDomain
+	domainLocked := false
+	canUseOneShot := true
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		if domain.count != 0 && hasBufferedIndexedRootRuns(domain) {
+			canUseOneShot = false
+		}
+	}
+	if canUseOneShot {
+		var (
+			collector    indexIDCollector
+			indexFound   bool
+			needFallback bool
+		)
+		oneShotErr := c.db.WithOneShotRead(func(view backenddb.OneShotReadView) error {
+			if domainLocked {
+				domain.mu.RUnlock()
+				domainLocked = false
+			}
+			state, ok := view.StateToken()
+			if !ok {
+				needFallback = true
+				return nil
+			}
+			catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+			if catalog == nil || catalog.nativeText != nil {
+				needFallback = true
+				return nil
+			}
+			secIdx, ok := catalog.secondaryIndex(indexName)
+			if !ok {
+				indexFound = false
+				return nil
+			}
+			indexFound = true
+			idx := secIdx.def
+			if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
+				return errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+			}
+			if secIdx.hasOverlays {
+				needFallback = true
+				return nil
+			}
+			var prefixBuf [128]byte
+			var prefix []byte
+			if hasStringValue {
+				if idx.ValueType != IndexValueString {
+					_, _, encErr := appendIndexScalar(prefixBuf[:0], idx.ValueType, stringValue)
+					return encErr
+				}
+				prefix = appendIndexStringComponentString(prefixBuf[:0], stringValue)
+			} else {
+				var encErr error
+				_, prefix, encErr = appendIndexScalar(prefixBuf[:0], idx.ValueType, anyValue)
+				if encErr != nil {
+					return encErr
+				}
+			}
+			if secIdx.rootID == 0 {
+				return nil
+			}
+			var endBuf [128]byte
+			end, _ := appendPrefixEnd(endBuf[:0], prefix)
+			prefixLen := len(prefix)
+			if idx.Unique && maxResults == 0 && !secIdx.dedupeDocIDs {
+				var keyBuf [128]byte
+				key, found, seekErr := view.SeekFirstLiveKeyAtRoot(secIdx.rootID, prefix, end, keyBuf[:0])
+				if seekErr != nil {
+					return seekErr
+				}
+				if !found {
+					return nil
+				}
+				rawID, idErr := extractExactIndexDocumentID(idx.ValueType, key, prefixLen)
+				if idErr != nil {
+					return idErr
+				}
+				collector.appendID(rawID, true, 0)
+				return nil
+			}
+			if !secIdx.dedupeDocIDs && maxResults == 0 && idx.ValueType != IndexValueBSONOrderedV2 {
+				return view.VisitKeysAtRoot(secIdx.rootID, prefix, end, false, func(key []byte, _ bool) (bool, error) {
+					if len(key) <= prefixLen {
+						return false, errors.New("collections: malformed secondary index key: missing document id")
+					}
+					collector.appendID(key[prefixLen:], false, 0)
+					return true, nil
+				})
+			}
+			var seen map[string]struct{}
+			return view.VisitKeysAtRoot(secIdx.rootID, prefix, end, false, func(key []byte, _ bool) (bool, error) {
+				rawID, idErr := extractExactIndexDocumentID(idx.ValueType, key, prefixLen)
+				if idErr != nil {
+					return false, idErr
+				}
+				if secIdx.dedupeDocIDs {
+					if seen == nil {
+						if maxResults > 0 {
+							seen = make(map[string]struct{}, maxResults)
+						} else {
+							seen = make(map[string]struct{})
+						}
+					}
+					if _, dup := seen[string(rawID)]; dup {
+						return true, nil
+					}
+					seen[string(rawID)] = struct{}{}
+				}
+				if maxResults > 0 && len(collector.ids) >= maxResults {
+					truncated = true
+					return false, nil
+				}
+				collector.appendID(rawID, idx.Unique, maxResults)
+				return true, nil
+			})
+		})
+		if domainLocked {
+			domain.mu.RUnlock()
+			domainLocked = false
+		}
+		if oneShotErr != nil {
+			return nil, false, oneShotErr
+		}
+		if !needFallback {
+			if !indexFound {
+				return nil, false, nil
+			}
+			if collector.ids == nil {
+				return make([][]byte, 0), truncated, nil
+			}
+			return collector.ids, truncated, nil
+		}
+	} else if domainLocked {
+		domain.mu.RUnlock()
+		domainLocked = false
+	}
+	queryValue := anyValue
+	if hasStringValue {
+		queryValue = stringValue
+	}
+	return c.findByIndexRange(indexName, IndexRangeOptions{
+		Lower: IndexRangeBound{Value: queryValue, Inclusive: true},
+		Upper: IndexRangeBound{Value: queryValue, Inclusive: true},
 		Limit: maxResults,
 	})
+}
+
+func (c *Collection) findByIndexRange(indexName string, opts IndexRangeOptions) ([][]byte, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		var collector indexIDCollector
+		truncated, found, err := c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
+			collector.appendID(id, false, opts.Limit)
+			return true, nil
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		if collector.ids == nil {
+			return make([][]byte, 0), truncated, nil
+		}
+		return collector.ids, truncated, nil
+	}
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, false, err
+	}
+	if opts.Limit < 0 {
+		return nil, false, errors.New("collections: index range limit cannot be negative")
+	}
+	if opts.Desc {
+		return nil, false, errors.New("collections: descending index range scans are not supported")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	domain := c.writeDomain
+	domainLocked := false
+	canUseOneShot := true
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		if domain.count != 0 && hasBufferedIndexedRootRuns(domain) {
+			canUseOneShot = false
+		}
+	}
+	if canUseOneShot {
+		var (
+			collector    indexIDCollector
+			indexFound   bool
+			truncated    bool
+			needFallback bool
+		)
+		oneShotErr := c.db.WithOneShotRead(func(view backenddb.OneShotReadView) error {
+			if domainLocked {
+				domain.mu.RUnlock()
+				domainLocked = false
+			}
+			state, ok := view.StateToken()
+			if !ok {
+				needFallback = true
+				return nil
+			}
+			catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+			if catalog == nil || catalog.nativeText != nil {
+				needFallback = true
+				return nil
+			}
+			secIdx, ok := catalog.secondaryIndex(indexName)
+			if !ok {
+				indexFound = false
+				return nil
+			}
+			indexFound = true
+			idx := secIdx.def
+			if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
+				return errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+			}
+			if secIdx.hasOverlays {
+				needFallback = true
+				return nil
+			}
+			var startBuf [128]byte
+			var endBuf [128]byte
+			start, end, exactPrefix, exactPrefixScan, empty, err := indexRangeScanBoundsInto(idx.ValueType, opts, startBuf[:0], endBuf[:0])
+			if err != nil {
+				return err
+			}
+			if empty || secIdx.rootID == 0 {
+				return nil
+			}
+			exactPrefixLen := len(exactPrefix)
+			if exactPrefixScan && idx.Unique && opts.Limit == 0 && !secIdx.dedupeDocIDs {
+				var keyBuf [128]byte
+				key, found, seekErr := view.SeekFirstLiveKeyAtRoot(secIdx.rootID, start, end, keyBuf[:0])
+				if seekErr != nil {
+					return seekErr
+				}
+				if !found {
+					return nil
+				}
+				rawID, idErr := extractExactIndexDocumentID(idx.ValueType, key, exactPrefixLen)
+				if idErr != nil {
+					return idErr
+				}
+				collector.appendID(rawID, true, 0)
+				return nil
+			}
+			var seen map[string]struct{}
+			return view.VisitKeysAtRoot(secIdx.rootID, start, end, false, func(key []byte, _ bool) (bool, error) {
+				var rawID []byte
+				var idErr error
+				if exactPrefixScan {
+					rawID, idErr = extractExactIndexDocumentID(idx.ValueType, key, exactPrefixLen)
+				} else {
+					rawID, idErr = indexKeyDocumentID(idx.ValueType, key)
+				}
+				if idErr != nil {
+					return false, idErr
+				}
+				if secIdx.dedupeDocIDs {
+					if seen == nil {
+						if opts.Limit > 0 {
+							seen = make(map[string]struct{}, opts.Limit)
+						} else {
+							seen = make(map[string]struct{})
+						}
+					}
+					if _, dup := seen[string(rawID)]; dup {
+						return true, nil
+					}
+					seen[string(rawID)] = struct{}{}
+				}
+				if opts.Limit > 0 && len(collector.ids) >= opts.Limit {
+					truncated = true
+					return false, nil
+				}
+				collector.appendID(rawID, exactPrefixScan && idx.Unique, opts.Limit)
+				return true, nil
+			})
+		})
+		if domainLocked {
+			domain.mu.RUnlock()
+			domainLocked = false
+		}
+		if oneShotErr != nil {
+			return nil, false, oneShotErr
+		}
+		if !needFallback {
+			if !indexFound {
+				return nil, false, nil
+			}
+			if collector.ids == nil {
+				return make([][]byte, 0), truncated, nil
+			}
+			return collector.ids, truncated, nil
+		}
+	} else if domainLocked {
+		domain.mu.RUnlock()
+		domainLocked = false
+	}
+	var collector indexIDCollector
+	truncated, found, err := c.scanIndexRangeWithCloneMode(indexName, opts, false, func(id []byte) (bool, error) {
+		collector.appendID(id, false, opts.Limit)
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if collector.ids == nil {
+		return make([][]byte, 0), truncated, nil
+	}
+	return collector.ids, truncated, nil
 }
 
 // orderedBSONIndexRequiresCompoundRangeAPI reports whether the ordered BSON v2
@@ -24228,6 +24680,122 @@ func orderedBSONIndexRequiresCompoundRangeAPI(idx IndexDefinition) bool {
 }
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
+	if c != nil && c.nativeJSON == nil && ValidateIndexName(indexName) == nil && opts.Limit >= 0 && !opts.Desc {
+		if err := c.flushBufferedNoIndex(); err != nil {
+			return false, false, err
+		}
+		domain := c.writeDomain
+		domainLocked := false
+		canUseOneShot := true
+		if domain != nil {
+			domain.mu.RLock()
+			domainLocked = true
+			if domain.count != 0 && hasBufferedIndexedRootRuns(domain) {
+				canUseOneShot = false
+			}
+		}
+		if canUseOneShot {
+			var (
+				indexFound   bool
+				truncated    bool
+				needFallback bool
+			)
+			oneShotErr := c.db.WithOneShotRead(func(view backenddb.OneShotReadView) error {
+				if domainLocked {
+					domain.mu.RUnlock()
+					domainLocked = false
+				}
+				state, ok := view.StateToken()
+				if !ok {
+					needFallback = true
+					return nil
+				}
+				catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+				if catalog == nil || catalog.nativeText != nil {
+					needFallback = true
+					return nil
+				}
+				secIdx, ok := catalog.secondaryIndex(indexName)
+				if !ok {
+					indexFound = false
+					return nil
+				}
+				indexFound = true
+				idx := secIdx.def
+				if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
+					return errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+				}
+				if secIdx.hasOverlays {
+					needFallback = true
+					return nil
+				}
+				var startBuf [128]byte
+				var endBuf [128]byte
+				start, end, exactPrefix, exactPrefixScan, empty, err := indexRangeScanBoundsInto(idx.ValueType, opts, startBuf[:0], endBuf[:0])
+				if err != nil {
+					return err
+				}
+				if empty || secIdx.rootID == 0 {
+					return nil
+				}
+				exactPrefixLen := len(exactPrefix)
+				emitted := 0
+				var seen map[string]struct{}
+				return view.VisitKeysAtRoot(secIdx.rootID, start, end, false, func(key []byte, _ bool) (bool, error) {
+					var rawID []byte
+					var idErr error
+					if exactPrefixScan {
+						rawID, idErr = extractExactIndexDocumentID(idx.ValueType, key, exactPrefixLen)
+					} else {
+						rawID, idErr = indexKeyDocumentID(idx.ValueType, key)
+					}
+					if idErr != nil {
+						return false, idErr
+					}
+					if secIdx.dedupeDocIDs {
+						if seen == nil {
+							if opts.Limit > 0 {
+								seen = make(map[string]struct{}, opts.Limit)
+							} else {
+								seen = make(map[string]struct{})
+							}
+						}
+						if _, dup := seen[string(rawID)]; dup {
+							return true, nil
+						}
+						seen[string(rawID)] = struct{}{}
+					}
+					if opts.Limit > 0 && emitted >= opts.Limit {
+						truncated = true
+						return false, nil
+					}
+					cont, cbErr := fn(bytes.Clone(rawID))
+					if cbErr != nil || !cont {
+						return false, cbErr
+					}
+					emitted++
+					return true, nil
+				})
+			})
+			if domainLocked {
+				domain.mu.RUnlock()
+				domainLocked = false
+			}
+			if oneShotErr != nil {
+				return false, indexFound, oneShotErr
+			}
+			if !needFallback {
+				return truncated, indexFound, nil
+			}
+		} else if domainLocked {
+			domain.mu.RUnlock()
+			domainLocked = false
+		}
+	}
+	return c.scanIndexRangeWithCloneMode(indexName, opts, true, fn)
+}
+
+func (c *Collection) scanIndexRangeWithCloneMode(indexName string, opts IndexRangeOptions, cloneIDs bool, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c != nil && c.nativeJSON != nil {
 		return c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
 			return fn(id)
@@ -24271,23 +24839,22 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if catalog == nil {
 		return false, false, errCollectionNotFound
 	}
-	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	secIdx, ok := catalog.secondaryIndex(indexName)
 	if !ok {
 		return false, false, nil
 	}
+	idx := secIdx.def
 	if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
 		return false, false, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
 	}
-	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	var startBuf [128]byte
+	var endBuf [128]byte
+	start, end, exactPrefix, exactPrefixScan, empty, err := indexRangeScanBoundsInto(idx.ValueType, opts, startBuf[:0], endBuf[:0])
 	if err != nil {
 		return false, true, err
 	}
 	if empty {
 		return false, true, nil
-	}
-	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
-	if err != nil {
-		return false, true, err
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
@@ -24315,15 +24882,17 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 		defer func() { _ = bufferedIt.Close() }()
 	}
 	var persistedIt iterator.UnsafeIterator
-	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, secIdx.rootName, start, end, true)
 	if err != nil {
 		return false, true, err
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeDocumentIDs, fn)
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, idx.ValueType, opts.Limit, false, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:  cloneIDs,
+		DedupeDocumentID: secIdx.dedupeDocIDs,
+	}, fn)
 	return truncated, true, err
 }
 
@@ -24460,56 +25029,63 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 	return table, nil
 }
 
-func indexRangeScanBounds(valueType IndexValueType, opts IndexRangeOptions) ([]byte, []byte, bool, error) {
-	var start []byte
-	var end []byte
-	var err error
-	var lowerEncoded []byte
-	var upperEncoded []byte
+func indexRangeScanBoundsInto(valueType IndexValueType, opts IndexRangeOptions, startBuf, endBuf []byte) (start, end, exactPrefix []byte, exactPrefixScan, empty bool, err error) {
 	lowerBounded := !opts.Lower.Unbounded
 	upperBounded := !opts.Upper.Unbounded
+	var lowerScratch [128]byte
+	var upperScratch [128]byte
+	var lowerEncoded []byte
+	var upperEncoded []byte
 	if lowerBounded {
-		lowerEncoded, err = encodeIndexScalar(valueType, opts.Lower.Value)
+		_, lowerEncoded, err = appendIndexScalar(lowerScratch[:0], valueType, opts.Lower.Value)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, false, false, err
 		}
 	}
 	if upperBounded {
-		upperEncoded, err = encodeIndexScalar(valueType, opts.Upper.Value)
+		_, upperEncoded, err = appendIndexScalar(upperScratch[:0], valueType, opts.Upper.Value)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, false, false, err
 		}
 	}
 
 	if valueType == IndexValueDouble {
-		upperNaN := upperBounded && encodedDoubleComponentIsNaN(upperEncoded)
-		switch {
-		case upperNaN && !opts.Upper.Inclusive:
-			return nil, nil, true, nil
+		if upperBounded && encodedDoubleComponentIsNaN(upperEncoded) && !opts.Upper.Inclusive {
+			return nil, nil, nil, false, true, nil
 		}
 	}
 
 	if lowerBounded {
 		if opts.Lower.Inclusive {
-			start = bytes.Clone(lowerEncoded)
+			start = append(startBuf[:0], lowerEncoded...)
 		} else {
-			start = prefixEnd(lowerEncoded)
-			if start == nil {
-				return nil, nil, true, nil
+			var ok bool
+			start, ok = appendPrefixEnd(startBuf[:0], lowerEncoded)
+			if !ok {
+				return nil, nil, nil, false, true, nil
 			}
 		}
 	}
 	if upperBounded {
 		if opts.Upper.Inclusive {
-			end = prefixEnd(upperEncoded)
+			end, _ = appendPrefixEnd(endBuf[:0], upperEncoded)
 		} else {
-			end = bytes.Clone(upperEncoded)
+			end = append(endBuf[:0], upperEncoded...)
 		}
 	}
 	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
-		return nil, nil, true, nil
+		return nil, nil, nil, false, true, nil
 	}
-	return start, end, false, nil
+	if lowerBounded && upperBounded && opts.Lower.Inclusive && opts.Upper.Inclusive && bytes.Equal(lowerEncoded, upperEncoded) {
+		exactPrefix = start
+		exactPrefixScan = true
+	}
+	return start, end, exactPrefix, exactPrefixScan, false, nil
+}
+
+func indexRangeScanBounds(valueType IndexValueType, opts IndexRangeOptions) ([]byte, []byte, bool, error) {
+	start, end, _, _, empty, err := indexRangeScanBoundsInto(valueType, opts, nil, nil)
+	return start, end, empty, err
 }
 
 func compoundIndexRangeScanBounds(idx IndexDefinition, opts CompoundIndexRangeOptions) ([]byte, []byte, bool, error) {
