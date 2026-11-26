@@ -1143,11 +1143,12 @@ func TestPrivateCOWCheckpointReclaimsDeadSealedGenerations(t *testing.T) {
 		t.Fatalf("clean single-generation Checkpoint triggered leaf pack: calls=%d want 0", backend.calls)
 	}
 
-	// Build 4 sealed generations with heavy overwrites (disabled during setup,
-	// then enabled before final explicit Checkpoint()).
+	// Build moderate sealed debt (>= 2 gens, < 8 gens even after registering the
+	// last rotation across lanes) with heavy overwrites (disabled during setup,
+	// then enabled before checkpoint assertions).
 	t.Setenv(envDisableVlogGenerationLoop, "1")
 	const (
-		numGenerations  = 4
+		numGenerations  = 3
 		keysPerGen      = 1024
 		overwritePerGen = 768
 	)
@@ -1166,44 +1167,112 @@ func TestPrivateCOWCheckpointReclaimsDeadSealedGenerations(t *testing.T) {
 	if sealedBefore < privateCOWCheckpointLeafPackDebtGenerations {
 		t.Fatalf("expected >= %d sealed generations before checkpoint, got %d (bytes=%d)", privateCOWCheckpointLeafPackDebtGenerations, sealedBefore, bytesBefore)
 	}
+	if bytesBefore >= privateCOWCheckpointDirtyLeafPackDebtBytes {
+		t.Fatalf("expected moderate sealed byte debt below dirty threshold, got %d gens / %d bytes", sealedBefore, bytesBefore)
+	}
 
 	t.Setenv(envDisableVlogGenerationLoop, "0")
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		// On platforms without stable-relative-namespace promotion (e.g. macOS/Windows),
-		// verify Checkpoint() still triggers the pack+GC maintenance hook without failing
-		// the durable checkpoint boundary.
+	// 1. Dirty explicit Checkpoint() with sealed bytes below 96 MiB must flush
+	// dirty writes without running synchronous leaf-pack+GC, even when multiple
+	// append lanes create many small sealed generations.
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("dirty Checkpoint with moderate sealed debt: %v", err)
+	}
+	if backend.calls != 0 || backend.gcCalls != 0 {
+		sAfter, bAfter := backend.DB.LeafGenerationSealedDebt()
+		t.Fatalf("dirty Checkpoint below heavy debt threshold triggered leaf pack: calls=%d gcCalls=%d want 0,0 (sealedBefore=%d bytesBefore=%d sealedAfter=%d bytesAfter=%d)", backend.calls, backend.gcCalls, sealedBefore, bytesBefore, sAfter, bAfter)
+	}
+
+	// 2. Internal pressure checkpoint must NEVER trigger leaf-pack+GC even when
+	// sealed debt exceeds both idle and dirty thresholds.
+	backend.overrideDebt = true
+	backend.debtGenerations = 12
+	backend.debtBytes = privateCOWCheckpointDirtyLeafPackDebtBytes + (16 << 20)
+	if err := cache.checkpointCOWPressure(context.Background(), nil); err != nil {
+		t.Fatalf("checkpointCOWPressure with heavy sealed debt: %v", err)
+	}
+	if backend.calls != 0 || backend.gcCalls != 0 {
+		t.Fatalf("internal pressure checkpoint triggered leaf pack: calls=%d gcCalls=%d want 0,0", backend.calls, backend.gcCalls)
+	}
+
+	// 3. Dirty explicit Checkpoint() above heavy sealed byte debt (>= 96 MiB)
+	// MUST trigger synchronous pack+GC.
+	canPromotePack := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
+	writeRange("heavy-dirty", 0, 128, 0x55)
+	if !canPromotePack {
 		backend.forceNoop = true
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("dirty Checkpoint with heavy sealed debt: %v", err)
+	}
+	if backend.calls != 1 || backend.gcCalls != 1 {
+		t.Fatalf("dirty Checkpoint above heavy debt threshold did not invoke pack+GC: calls=%d gcCalls=%d want 1,1 (last=%+v skip=%q)", backend.calls, backend.gcCalls, backend.last, atomicValueString(&cache.vlogGenerationLeafPackLastSkipReason))
+	}
+	backend.overrideDebt = false
+
+	// 4. Clean/idle explicit Checkpoint() (!flushedDirty) with moderate sealed debt
+	// (>= 2 gens or >= 32 MiB) reclaims dead sealed generations cleanly.
+	if !canPromotePack {
 		if err := cache.Checkpoint(); err != nil {
-			t.Fatalf("Checkpoint with sealed debt (unsupported namespace): %v", err)
+			t.Fatalf("idle Checkpoint with sealed debt (unsupported namespace): %v", err)
 		}
-		if backend.calls != 1 || backend.gcCalls != 1 {
-			t.Fatalf("Checkpoint did not invoke pack+GC hook on sealed debt: calls=%d gcCalls=%d want 1,1", backend.calls, backend.gcCalls)
+		if backend.calls != 2 || backend.gcCalls != 2 {
+			t.Fatalf("idle Checkpoint did not invoke pack+GC hook on sealed debt: calls=%d gcCalls=%d want 2,2", backend.calls, backend.gcCalls)
 		}
 		if backend.lastOpts.MaxGenerations < privateCOWLeafPackDebtGenerationsBatch {
 			t.Fatalf("Checkpoint pack MaxGenerations=%d want >= %d", backend.lastOpts.MaxGenerations, privateCOWLeafPackDebtGenerationsBatch)
 		}
 		return
 	}
+	// On Linux step 3 already packed the sealed generations; rebuild moderate
+	// sealed debt (< 96 MiB) and verify an idle Checkpoint() reclaims it
+	// end-to-end while the preceding dirty Checkpoint() stays fast.
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	for round := 1; round <= 3; round++ {
+		writeRange(fmt.Sprintf("idle-gen-%02d", round), 0, keysPerGen, byte(0x30+round))
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		rotateAllLeafLanes()
+	}
+	for round := 1; round <= 3; round++ {
+		writeRange(fmt.Sprintf("idle-gen-%02d", round), 0, overwritePerGen, byte(0x90+round))
+	}
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	// Dirty Checkpoint() flushes the overwrites without packing (< 8 gens, < 96 MiB).
+	callsBeforeIdle := backend.calls
+	gcCallsBeforeIdle := backend.gcCalls
 	if err := cache.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint with sealed debt: %v", err)
+		t.Fatalf("dirty flush Checkpoint before idle pack: %v", err)
 	}
-	if backend.calls != 1 || !backend.last.Ran {
-		t.Fatalf("Checkpoint did not pack dead sealed generations: calls=%d ran=%v skip=%q", backend.calls, backend.last.Ran, backend.last.SkipReason)
+	if backend.calls != callsBeforeIdle {
+		t.Fatalf("dirty Checkpoint below heavy threshold packed: calls=%d want %d", backend.calls, callsBeforeIdle)
 	}
-	if backend.gcCalls != 1 {
-		t.Fatalf("Checkpoint did not run LeafGenerationGC after pack: gcCalls=%d want 1", backend.gcCalls)
+	sealedBeforeIdle, bytesBeforeIdle := backend.DB.LeafGenerationSealedDebt()
+	if sealedBeforeIdle < privateCOWCheckpointLeafPackDebtGenerations {
+		t.Fatalf("expected >= %d sealed generations before idle checkpoint, got %d", privateCOWCheckpointLeafPackDebtGenerations, sealedBeforeIdle)
+	}
+	// Follow-up clean/idle Checkpoint() packs and GCs all dead sealed generations.
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("idle Checkpoint with sealed debt: %v", err)
+	}
+	if backend.calls != callsBeforeIdle+1 || !backend.last.Ran {
+		t.Fatalf("idle Checkpoint did not pack dead sealed generations: calls=%d ran=%v skip=%q", backend.calls, backend.last.Ran, backend.last.SkipReason)
+	}
+	if backend.gcCalls != gcCallsBeforeIdle+1 {
+		t.Fatalf("idle Checkpoint did not run LeafGenerationGC after pack: gcCalls=%d want %d", backend.gcCalls, gcCallsBeforeIdle+1)
 	}
 	sealedAfter, bytesAfter := backend.DB.LeafGenerationSealedDebt()
-	if sealedAfter >= sealedBefore || bytesAfter >= bytesBefore {
-		t.Fatalf("Checkpoint did not reduce sealed debt: before=(%d gens, %d bytes) after=(%d gens, %d bytes)", sealedBefore, bytesBefore, sealedAfter, bytesAfter)
+	if sealedAfter >= sealedBeforeIdle || bytesAfter >= bytesBeforeIdle {
+		t.Fatalf("idle Checkpoint did not reduce sealed debt: before=(%d gens, %d bytes) after=(%d gens, %d bytes)", sealedBeforeIdle, bytesBeforeIdle, sealedAfter, bytesAfter)
 	}
 	// Verify overwritten and untouched keys remain readable after pack + GC.
-	gotOverwritten, err := cache.Get([]byte("gen-01-00000"))
-	if err != nil || !bytes.Equal(gotOverwritten, bytes.Repeat([]byte{0x81}, 128)) {
+	gotOverwritten, err := cache.Get([]byte("idle-gen-01-00000"))
+	if err != nil || !bytes.Equal(gotOverwritten, bytes.Repeat([]byte{0x91}, 128)) {
 		t.Fatalf("overwritten key mismatch after checkpoint pack: err=%v len=%d", err, len(gotOverwritten))
 	}
-	gotLive, err := cache.Get([]byte("gen-01-01023"))
-	if err != nil || !bytes.Equal(gotLive, bytes.Repeat([]byte{1}, 128)) {
+	gotLive, err := cache.Get([]byte("idle-gen-01-01023"))
+	if err != nil || !bytes.Equal(gotLive, bytes.Repeat([]byte{0x31}, 128)) {
 		t.Fatalf("live key mismatch after checkpoint pack: err=%v len=%d", err, len(gotLive))
 	}
 }

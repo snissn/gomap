@@ -546,7 +546,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		backend.ObserveNativeInstalledForTest(intent, result)
 	}
 	if err == nil && intent.RequestsExactSeal() {
-		err = db.Checkpoint() // all producer/raw/teardown progress gates have ended
+		err = db.checkpointCOWPressure(context.Background(), nil) // all producer/raw/teardown progress gates have ended
 		if err == nil {
 			result.Seal = intent.ExactSealedReceipt()
 			err = result.Seal.Wait(context.Background())

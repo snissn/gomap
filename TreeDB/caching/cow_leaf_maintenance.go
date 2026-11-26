@@ -30,6 +30,7 @@ const (
 	privateCOWLeafPackDefaultWriteBurstGrace    = 2 * time.Second
 	privateCOWCheckpointLeafPackDebtGenerations = 2
 	privateCOWCheckpointLeafPackDebtBytes       = 32 << 20
+	privateCOWCheckpointDirtyLeafPackDebtBytes  = 96 << 20
 	privateCOWCheckpointLeafPackMaxGenerations  = 32
 )
 
@@ -176,8 +177,12 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 // maybeRunPrivateCOWLeafPackAtCheckpointLocked reclaims dead sealed leaf-log
 // generations at explicit Checkpoint() boundaries when sealed debt is elevated.
 // Clean-load checkpoints have zero or one sealed generation and return in O(1)
-// without scanning the index or issuing I/O. Caller holds flushMu.
-func (db *DB) maybeRunPrivateCOWLeafPackAtCheckpointLocked(parentCtx context.Context) error {
+// without scanning the index or issuing I/O. Dirty checkpoints (which flushed
+// pending writes) require heavy debt before running synchronous pack+GC so
+// frequent post-burst drains stay fast, while idle/clean explicit checkpoints
+// reclaim once sealed debt exceeds the lower settle threshold. Caller holds
+// flushMu.
+func (db *DB) maybeRunPrivateCOWLeafPackAtCheckpointLocked(parentCtx context.Context, flushedDirty bool) error {
 	if !db.privateCOWLeafPackEnabled() || db.closing.Load() || db.suppressBackgroundVlogGenerationForMaintenancePhase() ||
 		db.coalesceDeferredVectorBuildVlogMaintenance() || db.maintenanceActive.Load() {
 		return nil
@@ -191,7 +196,11 @@ func (db *DB) maybeRunPrivateCOWLeafPackAtCheckpointLocked(parentCtx context.Con
 		return nil
 	}
 	sealedGenerations, sealedBytes := reader.LeafGenerationSealedDebt()
-	if sealedGenerations < privateCOWCheckpointLeafPackDebtGenerations && sealedBytes < privateCOWCheckpointLeafPackDebtBytes {
+	if flushedDirty {
+		if sealedBytes < privateCOWCheckpointDirtyLeafPackDebtBytes {
+			return nil
+		}
+	} else if sealedGenerations < privateCOWCheckpointLeafPackDebtGenerations && sealedBytes < privateCOWCheckpointLeafPackDebtBytes {
 		return nil
 	}
 	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
