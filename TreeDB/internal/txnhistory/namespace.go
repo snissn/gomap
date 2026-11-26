@@ -31,7 +31,7 @@ type Namespace struct {
 // Callers serialize it with validation and accepted publication.
 func (j *History) OnlyPointChanged(start uint64, point Dependency, dependencies, effects []Dependency) bool {
 	if j == nil || j.Check(start) != nil || point.Kind != PointEffect || point.Namespace.Kind != CollectionNamespace ||
-		j.index[j.slotIn(point.Namespace, string(point.Key))].seq <= start || j.pointCoveredByRange(start, point.Namespace, point.Key) {
+		!j.pointWrittenAfter(start, point.Namespace, string(point.Key)) || j.pointCoveredByRange(start, point.Namespace, point.Key) {
 		return false
 	}
 	for _, set := range [2][]Dependency{dependencies, effects} {

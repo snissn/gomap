@@ -368,6 +368,27 @@ func (f *File) InspectCOWLeafRecordPinned(ptr page.ValuePtr, limits COWReadLimit
 	return shape, nil, nil
 }
 
+// ValidateCachedCOWLeafShape checks whether a previously inspected, full-CRC
+// verified external-leaf shape from the same pinned segment identity satisfies
+// ptr and caller limits without rereading segment metadata. Any mismatch
+// returns false so the caller falls back to InspectCOWLeafRecordPinned for
+// canonical error reporting.
+func (f *File) ValidateCachedCOWLeafShape(ptr page.ValuePtr, shape COWRecordShape, limits COWReadLimits) bool {
+	limits = cowLeafReadLimits(limits)
+	if f == nil || f.ID != ptr.FileID {
+		return false
+	}
+	if f.cowCheckReadSource(ptr, limits, true) != nil {
+		return false
+	}
+	if !shape.valid || !shape.leaf || shape.ptr != ptr {
+		return false
+	}
+	return shape.RecordBytes <= limits.MaxRecordBytes &&
+		shape.RawBytes <= limits.MaxRawBytes &&
+		shape.ValueBytes <= limits.MaxValueBytes
+}
+
 func (f *File) cowAllowsCompactLeafPayload() bool {
 	if f.compactLeafPayloadAllowedSet {
 		return f.compactLeafPayloadAllowed

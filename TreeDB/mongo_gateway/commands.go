@@ -2654,10 +2654,11 @@ type mongoUpdateCoalescer struct {
 	workerBatches   atomic.Uint64
 	mu              sync.RWMutex
 	stopped         bool
-	enqueueMu       sync.Mutex
+	enqueueMu       sync.RWMutex
 	nowNano         func() int64
 	batchBuf        []mongoUpdateCoalescerRequest
 	updatesBuf      []mongoUpdateItem
+	dupSeen         map[string]struct{}
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -2880,25 +2881,21 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 		return false
 	}
 	for {
-		c.enqueueMu.Lock()
-		c.mu.RLock()
-		if c.stopped || c.requests == nil {
-			c.mu.RUnlock()
-			c.enqueueMu.Unlock()
+		c.enqueueMu.RLock()
+		if c.stoppedFlag.Load() || c.requests == nil {
+			c.enqueueMu.RUnlock()
 			return false
 		}
 		requests := c.requests
 		stoppedCh := c.stoppedCh
 		select {
 		case requests <- req:
-			c.mu.RUnlock()
-			c.enqueueMu.Unlock()
+			c.enqueueMu.RUnlock()
 			c.signalWake()
 			return true
 		default:
 		}
-		c.mu.RUnlock()
-		c.enqueueMu.Unlock()
+		c.enqueueMu.RUnlock()
 
 		c.signalWake()
 		select {
@@ -3167,7 +3164,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		return
 	}
 	if len(batch) == 1 ||
-		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
+		c.hasDuplicateKeys(batch) ||
 		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
 		!mongoUpdateCoalescerBatchCanUseBatch(batch) {
 		runMongoUpdateCoalescerSequential(batch)
@@ -3286,6 +3283,33 @@ func collectionUpdateBatchErrorForRequest(err error, updateIndex int) error {
 		return mongoUpdateErrorWithIndex(updateIndex, itemErr.Err)
 	}
 	return err
+}
+
+func (c *mongoUpdateCoalescer) hasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) <= 16 {
+		for i := 1; i < len(batch); i++ {
+			k := batch[i].item.key
+			for j := 0; j < i; j++ {
+				if bytes.Equal(batch[j].item.key, k) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if c.dupSeen == nil {
+		c.dupSeen = make(map[string]struct{}, len(batch))
+	} else {
+		clear(c.dupSeen)
+	}
+	for _, req := range batch {
+		key := string(req.item.key)
+		if _, ok := c.dupSeen[key]; ok {
+			return true
+		}
+		c.dupSeen[key] = struct{}{}
+	}
+	return false
 }
 
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {

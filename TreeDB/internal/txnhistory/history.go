@@ -23,7 +23,26 @@ const (
 	barrierLogicalReplacement barrierReason = iota + 1
 	barrierEffectCapacity
 	barrierByteCapacity
+
+	bulkPointChunkThreshold       = 64
+	bulkIndexSlot           int32 = -2
 )
+
+type bulkPointChunk struct {
+	seq         uint64
+	startSlot   int32
+	pointsCount int32
+	nsKindMask  uint8
+	singleNS    bool
+	ns          Namespace
+}
+
+func bulkChunkCapacity(n int) int {
+	if n < bulkPointChunkThreshold {
+		return 0
+	}
+	return n / bulkPointChunkThreshold
+}
 
 // BarrierStats distinguishes accepted conservative fallbacks from real point
 // overlap. Canceled preparation never advances these publication counters.
@@ -87,9 +106,12 @@ type History struct {
 	records                                      []mutation
 	index                                        []latest
 	staging                                      []effect
+	bulkChunks                                   []bulkPointChunk
 	pending                                      preparation
 	nextToken                                    uint64
 	head, count, points, ranges                  int
+	bulkHead, bulkCount, bulkPoints              int
+	bulkMaxSeq                                   uint64
 	floor, barrierSeq, rangeSeq, bytes, maxBytes uint64
 	seed                                         maphash.Seed
 	lease                                        Lease
@@ -101,7 +123,8 @@ type History struct {
 // admits before allocation. Finite callers use it to select a fitting ring
 // after record layouts change; n must satisfy New's ring-size contract.
 func ControlAllocationSizes(n int) [5]uint64 {
-	return [5]uint64{uint64(unsafe.Sizeof(History{})), uint64(n) * uint64(unsafe.Sizeof(mutation{})), uint64(2*n) * uint64(unsafe.Sizeof(latest{})), uint64(n) * uint64(unsafe.Sizeof(effect{})), 2 * uint64(unsafe.Sizeof(uintptr(0)))}
+	bulkBytes := uint64(bulkChunkCapacity(n)) * uint64(unsafe.Sizeof(bulkPointChunk{}))
+	return [5]uint64{uint64(unsafe.Sizeof(History{})), uint64(n) * uint64(unsafe.Sizeof(mutation{})), uint64(2*n) * uint64(unsafe.Sizeof(latest{})), uint64(n) * uint64(unsafe.Sizeof(effect{})), 2*uint64(unsafe.Sizeof(uintptr(0))) + bulkBytes}
 }
 
 func New(n int, maxBytes uint64, admit Admit) (*History, error) {
@@ -117,7 +140,11 @@ func New(n int, maxBytes uint64, admit Admit) (*History, error) {
 			return nil, err
 		}
 	}
-	return &History{records: make([]mutation, n), index: make([]latest, 2*n), staging: make([]effect, n), seed: maphash.MakeSeed(), lease: lease, admit: admit, maxBytes: maxBytes}, nil
+	var bulkChunks []bulkPointChunk
+	if bulkCap := bulkChunkCapacity(n); bulkCap > 0 {
+		bulkChunks = make([]bulkPointChunk, bulkCap)
+	}
+	return &History{records: make([]mutation, n), index: make([]latest, 2*n), staging: make([]effect, n), bulkChunks: bulkChunks, seed: maphash.MakeSeed(), lease: lease, admit: admit, maxBytes: maxBytes}, nil
 }
 func (j *History) clearPending(closeLease bool) {
 	clear(j.pending.effects)
@@ -173,8 +200,25 @@ func (j *History) Evict() {
 	if e.seq > j.floor {
 		j.floor = e.seq
 	}
-	if !e.rangeEffect && !e.barrier && e.indexSlot >= 0 {
-		j.removeSlot(int(e.indexSlot))
+	if !e.rangeEffect && !e.barrier {
+		if e.indexSlot >= 0 {
+			j.removeSlot(int(e.indexSlot))
+		} else if e.indexSlot == bulkIndexSlot {
+			j.bulkPoints--
+			if j.bulkCount > 0 {
+				ch := &j.bulkChunks[j.bulkHead]
+				ch.pointsCount--
+				ch.startSlot = int32((int(ch.startSlot) + 1) & (len(j.records) - 1))
+				if ch.pointsCount == 0 {
+					*ch = bulkPointChunk{}
+					j.bulkHead = (j.bulkHead + 1) & (len(j.bulkChunks) - 1)
+					j.bulkCount--
+					if j.bulkCount == 0 {
+						j.bulkMaxSeq = 0
+					}
+				}
+			}
+		}
 	}
 	if e.rangeEffect {
 		j.ranges--
@@ -189,6 +233,45 @@ func (j *History) Evict() {
 	}
 	if e.lease != nil {
 		e.lease.Close()
+	}
+}
+
+func (j *History) evictBulkPointsHead() {
+	ch := j.bulkChunks[j.bulkHead]
+	n := int(ch.pointsCount)
+	if n <= 0 {
+		j.Evict()
+		return
+	}
+	if ch.seq > j.floor {
+		j.floor = ch.seq
+	}
+	recordLen := len(j.records)
+	recordMask := recordLen - 1
+	start := j.head
+	lastSlot := (start + n - 1) & recordMask
+	releaseBytes := j.records[lastSlot].releaseBytes
+	lease := j.records[lastSlot].lease
+	if start+n <= recordLen {
+		clear(j.records[start : start+n])
+	} else {
+		clear(j.records[start:])
+		clear(j.records[:(start+n)&recordMask])
+	}
+	j.head = (start + n) & recordMask
+	j.count -= n
+	j.bulkPoints -= n
+	j.bulkChunks[j.bulkHead] = bulkPointChunk{}
+	j.bulkHead = (j.bulkHead + 1) & (len(j.bulkChunks) - 1)
+	j.bulkCount--
+	if j.bulkCount == 0 {
+		j.bulkMaxSeq = 0
+	}
+	if releaseBytes != 0 {
+		j.bytes -= releaseBytes
+	}
+	if lease != nil {
+		lease.Close()
 	}
 }
 
@@ -511,60 +594,124 @@ func (j *History) Install(p Prepared, seq uint64) bool {
 	// installation retires old records. Callers keep writer exclusion here and
 	// invoke Install outside the view-install latch; lease release may lock.
 	for j.count > 0 && (j.count+len(j.pending.effects) > len(j.records) || j.bytes > j.maxBytes-j.pending.bytes) {
-		j.Evict()
+		if j.records[j.head].indexSlot == bulkIndexSlot {
+			j.evictBulkPointsHead()
+		} else {
+			j.Evict()
+		}
 	}
 	recordMask := len(j.records) - 1
 	indexMask := uint32(len(j.index) - 1)
 	end := (j.head + j.count + len(j.pending.effects) - 1) & recordMask
 	j.bytes += j.pending.bytes
-	var cachedNS Namespace
-	var cachedNSHash uint64
-	hasCachedNS := false
-	for _, e := range j.pending.effects {
-		slot := (j.head + j.count) & recordMask
-		record := &j.records[slot]
-		*record = mutation{effect: e, seq: seq, chunkEnd: end, indexSlot: -1}
-		j.count++
-		if e.barrier {
-			if e.namespace == (Namespace{}) {
-				j.barrierSeq = seq
+	pointCount := len(j.pending.effects)
+	for pointCount > 0 && (j.pending.effects[pointCount-1].rangeEffect || j.pending.effects[pointCount-1].barrier) {
+		pointCount--
+	}
+	if pointCount >= bulkPointChunkThreshold && len(j.bulkChunks) > 0 && j.bulkCount < len(j.bulkChunks) {
+		// PrepareEffects strictly sorts all point effects by (namespace, key)
+		// before any ranges/barriers. Recording one sorted bulk chunk avoids
+		// O(N) hash-table inserts on install and O(N) backward-shift deletes on
+		// eviction while preserving exact point/range conflict detection via
+		// O(log N) binary search over active chunks.
+		chunkStart := (j.head + j.count) & recordMask
+		firstNS := j.pending.effects[0].namespace
+		singleNS := true
+		nsKindMask := uint8(0)
+		for i := 0; i < pointCount; i++ {
+			e := j.pending.effects[i]
+			slot := (j.head + j.count) & recordMask
+			j.records[slot] = mutation{effect: e, seq: seq, chunkEnd: end, indexSlot: bulkIndexSlot}
+			j.count++
+			nsKindMask |= uint8(1) << e.namespace.Kind
+			if singleNS && e.namespace != firstNS {
+				singleNS = false
 			}
-			j.rangeSeq = seq
-			switch e.barrierReason {
-			case barrierEffectCapacity:
-				j.barriers.EffectCapacity++
-			case barrierByteCapacity:
-				j.barriers.ByteCapacity++
-			case barrierLogicalReplacement:
-				j.barriers.LogicalReplacement++
+		}
+		bulkSlot := (j.bulkHead + j.bulkCount) & (len(j.bulkChunks) - 1)
+		j.bulkChunks[bulkSlot] = bulkPointChunk{
+			seq:         seq,
+			startSlot:   int32(chunkStart),
+			pointsCount: int32(pointCount),
+			nsKindMask:  nsKindMask,
+			singleNS:    singleNS,
+			ns:          firstNS,
+		}
+		j.bulkCount++
+		j.bulkPoints += pointCount
+		j.bulkMaxSeq = seq
+		for _, e := range j.pending.effects[pointCount:] {
+			slot := (j.head + j.count) & recordMask
+			j.records[slot] = mutation{effect: e, seq: seq, chunkEnd: end, indexSlot: -1}
+			j.count++
+			if e.barrier {
+				if e.namespace == (Namespace{}) {
+					j.barrierSeq = seq
+				}
+				j.rangeSeq = seq
+				switch e.barrierReason {
+				case barrierEffectCapacity:
+					j.barriers.EffectCapacity++
+				case barrierByteCapacity:
+					j.barriers.ByteCapacity++
+				case barrierLogicalReplacement:
+					j.barriers.LogicalReplacement++
+				}
+			} else if e.rangeEffect {
+				j.ranges++
+				j.rangeSeq = seq
 			}
-		} else if e.rangeEffect {
-			j.ranges++
-			j.rangeSeq = seq
-		} else {
-			if !hasCachedNS || e.namespace != cachedNS {
-				cachedNS = e.namespace
-				cachedNSHash = j.hashNamespace(e.namespace)
-				hasCachedNS = true
-			}
-			home := uint32(maphash.String(j.seed, e.key)^cachedNSHash) & indexMask
-			i := int(home)
-			for j.index[i].seq != 0 && (j.index[i].key != e.key || j.index[i].namespace != e.namespace) {
-				i = (i + 1) & int(indexMask)
-			}
-			if j.index[i].seq != 0 {
-				j.records[j.index[i].recordSlot].indexSlot = -1
+		}
+	} else {
+		var cachedNS Namespace
+		var cachedNSHash uint64
+		hasCachedNS := false
+		for _, e := range j.pending.effects {
+			slot := (j.head + j.count) & recordMask
+			record := &j.records[slot]
+			*record = mutation{effect: e, seq: seq, chunkEnd: end, indexSlot: -1}
+			j.count++
+			if e.barrier {
+				if e.namespace == (Namespace{}) {
+					j.barrierSeq = seq
+				}
+				j.rangeSeq = seq
+				switch e.barrierReason {
+				case barrierEffectCapacity:
+					j.barriers.EffectCapacity++
+				case barrierByteCapacity:
+					j.barriers.ByteCapacity++
+				case barrierLogicalReplacement:
+					j.barriers.LogicalReplacement++
+				}
+			} else if e.rangeEffect {
+				j.ranges++
+				j.rangeSeq = seq
 			} else {
-				j.points++
+				if !hasCachedNS || e.namespace != cachedNS {
+					cachedNS = e.namespace
+					cachedNSHash = j.hashNamespace(e.namespace)
+					hasCachedNS = true
+				}
+				home := uint32(maphash.String(j.seed, e.key)^cachedNSHash) & indexMask
+				i := int(home)
+				for j.index[i].seq != 0 && (j.index[i].key != e.key || j.index[i].namespace != e.namespace) {
+					i = (i + 1) & int(indexMask)
+				}
+				if j.index[i].seq != 0 {
+					j.records[j.index[i].recordSlot].indexSlot = -1
+				} else {
+					j.points++
+				}
+				j.index[i] = latest{
+					namespace:  e.namespace,
+					key:        e.key,
+					seq:        seq,
+					home:       home,
+					recordSlot: int32(slot),
+				}
+				record.indexSlot = int32(i)
 			}
-			j.index[i] = latest{
-				namespace:  e.namespace,
-				key:        e.key,
-				seq:        seq,
-				home:       home,
-				recordSlot: int32(slot),
-			}
-			record.indexSlot = int32(i)
 		}
 	}
 	j.records[end].releaseBytes = j.pending.bytes
@@ -642,6 +789,49 @@ func (j *History) chunkBounds(begin int) (pointsEnd, end int) {
 	}
 	return lo, end
 }
+func (j *History) pointWrittenAfter(start uint64, namespace Namespace, key string) bool {
+	if j.index[j.slotIn(namespace, key)].seq > start {
+		return true
+	}
+	if j.bulkCount == 0 || j.bulkMaxSeq <= start {
+		return false
+	}
+	nsBit := uint8(1) << namespace.Kind
+	recordMask := len(j.records) - 1
+	bulkMask := len(j.bulkChunks) - 1
+	for idx := j.bulkCount - 1; idx >= 0; idx-- {
+		ch := &j.bulkChunks[(j.bulkHead+idx)&bulkMask]
+		if ch.seq <= start {
+			break
+		}
+		if ch.nsKindMask&nsBit == 0 {
+			continue
+		}
+		if ch.singleNS && ch.ns != namespace {
+			continue
+		}
+		lo, hi := 0, int(ch.pointsCount)
+		base := int(ch.startSlot)
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			rec := &j.records[(base+mid)&recordMask]
+			c := compareNamespace(rec.namespace, namespace)
+			if c < 0 || (c == 0 && rec.key < key) {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		if lo < int(ch.pointsCount) {
+			rec := &j.records[(base+lo)&recordMask]
+			if rec.namespace == namespace && rec.key == key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (j *History) PointChanged(start uint64, key []byte) bool {
 	return j.PointChangedIn(start, Namespace{}, key)
 }
@@ -652,7 +842,7 @@ func (j *History) PointChangedIn(start uint64, namespace Namespace, key []byte) 
 	if start < j.floor || (namespace == (Namespace{}) && j.barrierSeq > start) {
 		return true
 	}
-	if j.index[j.slotIn(namespace, string(key))].seq > start {
+	if j.pointWrittenAfter(start, namespace, string(key)) {
 		return true
 	}
 	return j.pointCoveredByRange(start, namespace, key)
@@ -722,7 +912,7 @@ func (j *History) Counts() (points, ranges int, barrier bool) {
 	if j == nil {
 		return
 	}
-	return j.points, j.ranges, j.barrierSeq > j.floor
+	return j.points + j.bulkPoints, j.ranges, j.barrierSeq > j.floor
 }
 func (j *History) State() (count int, bytes, floor uint64) {
 	if j == nil {
@@ -735,7 +925,11 @@ func (j *History) Close() {
 		return
 	}
 	for j.count > 0 {
-		j.Evict()
+		if j.records[j.head].indexSlot == bulkIndexSlot {
+			j.evictBulkPointsHead()
+		} else {
+			j.Evict()
+		}
 	}
 	if j.pending.token != 0 {
 		j.clearPending(true)
@@ -743,6 +937,11 @@ func (j *History) Close() {
 	j.records = nil
 	j.index = nil
 	j.staging = nil
+	j.bulkChunks = nil
+	j.bulkHead = 0
+	j.bulkCount = 0
+	j.bulkPoints = 0
+	j.bulkMaxSeq = 0
 	j.admit = nil
 	if j.lease != nil {
 		j.lease.Close()

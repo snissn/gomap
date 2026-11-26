@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -564,7 +566,334 @@ func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte
 	return true, nil
 }
 
+const nativeUpdateCommitCoalescerMaxBatch = 64
+
+var errNativeCoalescedPreconditionChanged = errors.New("collections: native update precondition changed")
+
+type nativeUpdateCommitItem struct {
+	col         *Collection
+	id          []byte
+	expectedOld []byte
+	stagedNew   []byte
+	incarnation uint64
+	matched     bool
+	modified    bool
+	needRetry   bool
+	err         error
+	done        chan struct{}
+}
+
+var nativeUpdateCommitItemPool = sync.Pool{
+	New: func() any {
+		return &nativeUpdateCommitItem{
+			done: make(chan struct{}, 1),
+		}
+	},
+}
+
 func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte, bool, error)) (bool, bool, error) {
+	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() {
+		return c.nativeUpdateDocumentSingle(id, update)
+	}
+	coord := collectionSchemaCoordinatorForDBCollection(c.nativeJSON.db, c.name)
+	if coord == nil || coord.hasNativeVectorIndexes.Load() {
+		return c.nativeUpdateDocumentSingle(id, update)
+	}
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		if c.manager.isClosing() {
+			return false, false, backenddb.ErrClosed
+		}
+		unlockVector, _, err := c.prepareNativeProducerMutation()
+		if err != nil {
+			if nativeSingleMutationRetryable(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return false, false, err
+		}
+		tx, err := c.nativeJSON.beginPrepared(c.name)
+		if err != nil {
+			unlockVector()
+			if nativeSingleMutationRetryable(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return false, false, err
+		}
+		results, err := tx.UpdateBatch([]UpdateBatchItem{{DocumentID: id, Update: update}})
+		if err != nil {
+			err = errors.Join(err, tx.Close())
+			unlockVector()
+			if nativeSingleMutationRetryable(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			var itemErr *UpdateBatchItemError
+			if errors.As(err, &itemErr) && itemErr.Index == 0 {
+				err = itemErr.Err
+			}
+			return false, false, err
+		}
+		if len(results) != 1 {
+			closeErr := tx.Close()
+			unlockVector()
+			return false, false, errors.Join(fmt.Errorf("collections: update result count %d for single update", len(results)), closeErr)
+		}
+		if !results[0].Matched || !results[0].Modified || len(tx.members) == 0 {
+			closeErr := tx.Close()
+			unlockVector()
+			if closeErr != nil {
+				return false, false, closeErr
+			}
+			return results[0].Matched, results[0].Modified, nil
+		}
+
+		// User callback has finished concurrently on the caller's own goroutine
+		// while holding producer admission and cohort membership. Coalesce only
+		// the commit phase across concurrent callers without replaying callbacks
+		// unless a same-key precondition changed.
+		g := tx.binding(c.name)
+		canCoalesce := g != nil &&
+			g.typed == nil &&
+			len(g.probe.meta.VectorIndexes) == 0 &&
+			len(g.rows.rows) == 1 &&
+			bytes.Equal(g.rows.rows[0].id, id)
+		if !canCoalesce {
+			commitErr := tx.commitNativePlanWithJournal(false, nil, false, nil, nil, nil, nil, nil)
+			commitErr = errors.Join(commitErr, tx.Close())
+			unlockVector()
+			if nativeSingleMutationRetryable(commitErr) {
+				lastErr = commitErr
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			if commitErr != nil {
+				return false, false, commitErr
+			}
+			return true, true, nil
+		}
+
+		coord.nativeUpdateCommitMu.Lock()
+		if !coord.nativeUpdateCommitActive {
+			coord.nativeUpdateCommitActive = true
+			coord.nativeUpdateCommitMu.Unlock()
+			commitErr := tx.commitNativePlanWithJournal(false, nil, false, nil, nil, nil, nil, nil)
+			commitErr = errors.Join(commitErr, tx.Close())
+			// Drain queued follower commits while still holding unlockVector so
+			// coalesced commits never re-acquire vectorDDLMutationMu.RLock behind
+			// a waiting DDL writer.
+			coord.drainNativeUpdateCommitPending()
+			unlockVector()
+			if nativeSingleMutationRetryable(commitErr) {
+				lastErr = commitErr
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			if commitErr != nil {
+				return false, false, commitErr
+			}
+			return true, true, nil
+		}
+
+		row := &g.rows.rows[0]
+		item := nativeUpdateCommitItemPool.Get().(*nativeUpdateCommitItem)
+		item.col = c
+		item.id = id
+		item.expectedOld = append(item.expectedOld[:0], row.opening...)
+		item.stagedNew = append(item.stagedNew[:0], row.current...)
+		item.incarnation = g.incarnation
+		item.matched = false
+		item.modified = false
+		item.needRetry = false
+		item.err = nil
+		coord.nativeUpdateCommitPending = append(coord.nativeUpdateCommitPending, item)
+		coord.nativeUpdateCommitMu.Unlock()
+
+		// Release this caller's COW transaction/snapshot budget before waiting
+		// for the leader to commit the coalesced batch.
+		closeErr := tx.Close()
+		<-item.done
+		unlockVector()
+
+		matched, modified, needRetry, commitErr := item.matched, item.modified, item.needRetry, item.err
+		item.col = nil
+		item.id = nil
+		item.err = nil
+		if cap(item.expectedOld) > 64<<10 {
+			item.expectedOld = nil
+		}
+		if cap(item.stagedNew) > 64<<10 {
+			item.stagedNew = nil
+		}
+		nativeUpdateCommitItemPool.Put(item)
+
+		if closeErr != nil {
+			return false, false, errors.Join(commitErr, closeErr)
+		}
+		if needRetry {
+			lastErr = commitErr
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		if commitErr != nil {
+			return false, false, commitErr
+		}
+		return matched, modified, nil
+	}
+	return false, false, collectionMutationRetryExhausted(lastErr)
+}
+
+func (coord *collectionSchemaCoordinator) drainNativeUpdateCommitPending() {
+	var batchBuf [nativeUpdateCommitCoalescerMaxBatch]*nativeUpdateCommitItem
+	var itemsBuf [nativeUpdateCommitCoalescerMaxBatch]UpdateBatchItem
+	for {
+		coord.nativeUpdateCommitMu.Lock()
+		if len(coord.nativeUpdateCommitPending) == 0 {
+			coord.nativeUpdateCommitActive = false
+			coord.nativeUpdateCommitMu.Unlock()
+			return
+		}
+		firstCol := coord.nativeUpdateCommitPending[0].col
+		n := 0
+		keep := 0
+		pending := coord.nativeUpdateCommitPending
+		for _, item := range pending {
+			canBatch := n < nativeUpdateCommitCoalescerMaxBatch && item.col == firstCol
+			if canBatch && n > 0 {
+				for j := 0; j < n; j++ {
+					if bytes.Equal(batchBuf[j].id, item.id) {
+						canBatch = false
+						break
+					}
+				}
+			}
+			if canBatch {
+				batchBuf[n] = item
+				n++
+			} else {
+				pending[keep] = item
+				keep++
+			}
+		}
+		clear(pending[keep:])
+		coord.nativeUpdateCommitPending = pending[:keep]
+		coord.nativeUpdateCommitMu.Unlock()
+
+		batch := batchBuf[:n]
+		if firstCol.manager.isClosing() {
+			for _, it := range batch {
+				it.err = backenddb.ErrClosed
+				it.done <- struct{}{}
+			}
+			clear(batch)
+			continue
+		}
+		btx, err := firstCol.nativeJSON.beginPrepared(firstCol.name)
+		if err != nil {
+			retryable := nativeSingleMutationRetryable(err)
+			for _, it := range batch {
+				it.err = err
+				it.needRetry = retryable
+				it.done <- struct{}{}
+			}
+			clear(batch)
+			continue
+		}
+		bg := btx.binding(firstCol.name)
+		updateItems := itemsBuf[:n]
+		for i, it := range batch {
+			it := it
+			incarnationMatch := bg != nil && bg.incarnation == it.incarnation
+			updateItems[i] = UpdateBatchItem{
+				DocumentID: it.id,
+				Update: func(current []byte) ([]byte, bool, error) {
+					if !incarnationMatch || !bytes.Equal(current, it.expectedOld) {
+						return nil, false, errNativeCoalescedPreconditionChanged
+					}
+					return it.stagedNew, true, nil
+				},
+			}
+		}
+		results, _, err := firstCol.finishPreparedNativeUpdateBatchWithJournal(btx, updateItems, updateBatchModeAny, nil, nil, nil)
+		if err == nil && len(results) == n {
+			for i, it := range batch {
+				it.matched = results[i].Matched
+				it.modified = results[i].Modified
+				it.done <- struct{}{}
+			}
+		} else if errors.Is(err, ErrCommitAmbiguous) {
+			for _, it := range batch {
+				it.err = err
+				it.done <- struct{}{}
+			}
+		} else if n == 1 {
+			it := batch[0]
+			if errors.Is(err, errNativeCoalescedPreconditionChanged) || nativeSingleMutationRetryable(err) {
+				it.err = err
+				it.needRetry = true
+			} else {
+				var itemErr *UpdateBatchItemError
+				if errors.As(err, &itemErr) && itemErr.Index == 0 {
+					err = itemErr.Err
+				}
+				it.err = err
+			}
+			it.done <- struct{}{}
+		} else {
+			// Batch failed atomically; isolate per item without replaying
+			// callbacks unless a specific item's precondition changed.
+			for _, it := range batch {
+				it := it
+				if it.col.manager.isClosing() {
+					it.err = backenddb.ErrClosed
+					it.done <- struct{}{}
+					continue
+				}
+				itx, ierr := it.col.nativeJSON.beginPrepared(it.col.name)
+				if ierr != nil {
+					it.err = ierr
+					it.needRetry = nativeSingleMutationRetryable(ierr)
+					it.done <- struct{}{}
+					continue
+				}
+				ig := itx.binding(it.col.name)
+				incarnationMatch := ig != nil && ig.incarnation == it.incarnation
+				singleItem := [...]UpdateBatchItem{{
+					DocumentID: it.id,
+					Update: func(current []byte) ([]byte, bool, error) {
+						if !incarnationMatch || !bytes.Equal(current, it.expectedOld) {
+							return nil, false, errNativeCoalescedPreconditionChanged
+						}
+						return it.stagedNew, true, nil
+					},
+				}}
+				ires, _, ierr := it.col.finishPreparedNativeUpdateBatchWithJournal(itx, singleItem[:], updateBatchModeAny, nil, nil, nil)
+				if ierr == nil && len(ires) == 1 {
+					it.matched = ires[0].Matched
+					it.modified = ires[0].Modified
+				} else if errors.Is(ierr, errNativeCoalescedPreconditionChanged) || nativeSingleMutationRetryable(ierr) {
+					it.err = ierr
+					it.needRetry = true
+				} else {
+					var itemErr *UpdateBatchItemError
+					if errors.As(ierr, &itemErr) && itemErr.Index == 0 {
+						ierr = itemErr.Err
+					}
+					it.err = ierr
+				}
+				it.done <- struct{}{}
+			}
+		}
+		clear(updateItems)
+		clear(batch)
+	}
+}
+
+func (c *Collection) nativeUpdateDocumentSingle(id []byte, update func([]byte) ([]byte, bool, error)) (bool, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		results, err := c.nativeUpdateBatch([]UpdateBatchItem{{DocumentID: id, Update: update}})

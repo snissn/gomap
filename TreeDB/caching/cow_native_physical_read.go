@@ -72,33 +72,51 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspaceAdmitted(cache *cowCache, 
 		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
 	}
 	point.leafGen++
-	// Pass cache=nil and localBlock=false so dictionary capability, COWReadLimits
-	// inspection, and leafPageCache hit accounting are never bypassed.
-	entry, err := reader.GetEntryExactWithPinnedCOWLeafCached(key, point.key[:], point.leaf[:], nil, w.limits, func(ptr page.LeafLogPtr, leafDst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
-		return readInspectedPhysicalLeaf(cache, w, ptr, leafDst, true, false, independent, &record)
-	})
+	var out node.LeafEntry
+	// Borrow verified cached leaf pages under a read lock (zero-copy, zero-pread)
+	// while preserving dictionary capability, COWReadLimits, and leafPageCache
+	// accounting; any miss or policy mismatch falls back to full inspection.
+	err = reader.GetEntryExactWithPinnedCOWLeafView(
+		key, point.key[:], point.leaf[:], w.limits,
+		func(shape valuelog.COWRecordShape) bool {
+			if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
+				return false
+			}
+			if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
+				return false
+			}
+			return true
+		},
+		func(ptr page.LeafLogPtr, leafDst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
+			return readInspectedPhysicalLeaf(cache, w, ptr, leafDst, true, true, independent, &record)
+		},
+		func(entry node.LeafEntry) error {
+			// End every page alias before unlocking. Caller input and returned output are
+			// independent of the admitted workspace; pointer values retain no page bytes.
+			entry.Key = nil
+			value := entry.Value
+			entry.Value = nil
+			if copyValue && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+				if useDst {
+					entry.Value = append(dst[:0], value...)
+				} else {
+					if admitOutput != nil {
+						if err := admitOutput(memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
+							return err
+						}
+					}
+					entry.Value = make([]byte, len(value))
+					copy(entry.Value, value)
+				}
+			}
+			out = entry
+			return nil
+		},
+	)
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	// End every page alias before unlocking. Caller input and returned output are
-	// independent of the admitted workspace; pointer values retain no page bytes.
-	entry.Key = nil
-	value := entry.Value
-	entry.Value = nil
-	if copyValue && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
-		if useDst {
-			entry.Value = append(dst[:0], value...)
-		} else {
-			if admitOutput != nil {
-				if err := admitOutput(memtable.COWAllocationCharge(uint64(len(value)))); err != nil {
-					return node.LeafEntry{}, err
-				}
-			}
-			entry.Value = make([]byte, len(value))
-			copy(entry.Value, value)
-		}
-	}
-	return entry, nil
+	return out, nil
 }
 
 func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
@@ -218,7 +236,23 @@ func (b *cowBackendBasis) seekLiveKeyWithWorkspace(cache *cowCache, w *cowReadWo
 	if err != nil {
 		return nil, false, err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider != nil {
+		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
+	}
+	checkShape := func(shape valuelog.COWRecordShape) bool {
+		if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
+			return false
+		}
+		if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
+			return false
+		}
+		return true
+	}
 	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+		if data, hit, err := b.snapshot.CopyVerifiedCOWLeafCached(ptr, w.limits, checkShape, leafDst); err != nil || hit {
+			return data, err
+		}
 		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
 	}
 	curStart := start
@@ -283,7 +317,23 @@ func (b *cowBackendBasis) scanLiveKeysWithWorkspace(cache *cowCache, w *cowReadW
 	if err != nil {
 		return err
 	}
+	var independent *cowCacheDictionaryRead
+	if provider != nil {
+		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
+	}
+	checkShape := func(shape valuelog.COWRecordShape) bool {
+		if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
+			return false
+		}
+		if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
+			return false
+		}
+		return true
+	}
 	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+		if data, hit, err := b.snapshot.CopyVerifiedCOWLeafCached(ptr, w.limits, checkShape, leafDst); err != nil || hit {
+			return data, err
+		}
 		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
 	}
 	it, err := reader.OwnedPointerProjectionIteratorWithWorkspace(start, end, readLeaf, &w.projection, w.admitProjection)
