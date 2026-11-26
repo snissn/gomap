@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -127,8 +128,17 @@ func executeTextV2PhraseBlockMaxSearchAtSnapshot(
 		}
 		states = append(states, state)
 	}
+	canonicalStates := make([]*textV2ANDBlockMaxTermState, len(uniqueTerms))
+	for i, term := range uniqueTerms {
+		for _, state := range states {
+			if state.term == term {
+				canonicalStates[i] = state
+				break
+			}
+		}
+	}
 
-	cache := textV2SearchBlockCache{allowed: allowSet}
+	cache := textV2SearchBlockCache{allowed: allowSet, maxBlocks: 2}
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
 	positionScratch := make([]textV2PositionValue, len(scanTerms))
 	var posKeyScratch []byte
@@ -167,6 +177,8 @@ func executeTextV2PhraseBlockMaxSearchAtSnapshot(
 			continue
 		}
 
+		cache.evictBefore(first)
+
 		if allowSet != nil && !allowSet.intersects(first, last) {
 			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats, true); err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
@@ -175,14 +187,14 @@ func executeTextV2PhraseBlockMaxSearchAtSnapshot(
 		}
 
 		combinedUpperBound := 0.0
-		for _, state := range states {
+		for _, state := range canonicalStates {
 			combinedUpperBound += state.upperBound
 		}
 		if threshold, ok := top.threshold(); ok {
 			canSkip := combinedUpperBound < threshold
 			if !canSkip {
 				tightCombinedUpperBound := 0.0
-				for _, state := range states {
+				for _, state := range canonicalStates {
 					if err := tightenTextV2BlockMaxStateUpperBound(snap, catalog, ctx, &cache, allowSet, state, &response.Stats); err != nil {
 						return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 					}
@@ -203,7 +215,7 @@ func executeTextV2PhraseBlockMaxSearchAtSnapshot(
 		}
 
 		truncated, stale, err := visitTextV2PhraseBlockMaxOverlap(
-			snap, catalog, ctx, idx, states, &cache, allowSet,
+			snap, catalog, ctx, idx, states, canonicalStates, &cache, allowSet,
 			phraseTermIndexes, phrase.gaps, positionScratch, &posKeyScratch, &posValScratch,
 			slop, maxPostingsScanned, retainDetail, first, last, &top,
 			&hasLastOrdinal, &lastOrdinal, &response.Stats,
@@ -283,6 +295,7 @@ func visitTextV2PhraseBlockMaxOverlap(
 	ctx *textV2SearchContext,
 	idx TextIndexDefinition,
 	states []*textV2ANDBlockMaxTermState,
+	canonicalStates []*textV2ANDBlockMaxTermState,
 	cache *textV2SearchBlockCache,
 	allowSet *textV2SearchOrdinalAllowSet,
 	phraseTermIndexes []int,
@@ -314,6 +327,7 @@ func visitTextV2PhraseBlockMaxOverlap(
 			stats.CandidateScoreNanos += uint64(time.Since(scoreStart).Nanoseconds())
 		}
 	}()
+	var nextEvictOrdinal uint64
 	for {
 		var target uint64
 		for _, state := range states {
@@ -342,6 +356,15 @@ func visitTextV2PhraseBlockMaxOverlap(
 			continue
 		}
 		if allowSet == nil || allowSet.contains(target) {
+			if target >= nextEvictOrdinal {
+				cache.evictBefore(target)
+				normStart := textV2OrdinalBlockStart(target, textV2DefaultNormBlockSize)
+				if normStart > 0 && normStart <= math.MaxUint64-uint64(textV2DefaultNormBlockSize) {
+					nextEvictOrdinal = normStart + uint64(textV2DefaultNormBlockSize)
+				} else {
+					nextEvictOrdinal = math.MaxUint64
+				}
+			}
 			norm, ok, err := cache.normEntry(snap, catalog, ctx, target, stats)
 			if err != nil {
 				return false, false, err
@@ -363,7 +386,7 @@ func visitTextV2PhraseBlockMaxOverlap(
 				*hasLastOrdinal = true
 				*lastOrdinal = target
 
-				score, err := scoreTextV2ANDBlockMaxCandidate(states, ctx, norm)
+				score, err := scoreTextV2ANDBlockMaxCandidate(canonicalStates, ctx, norm)
 				if err != nil {
 					return false, false, err
 				}
@@ -431,19 +454,25 @@ func visitTextV2PhraseBlockMaxOverlap(
 								score:      score,
 							}
 							pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
-							if admitted && retainDetail {
-								detail := &textV2SearchCandidate{
-									ordinal:    target,
-									generation: norm.Generation,
-									documentID: docMap.appendTo(nil),
-									score:      score,
+							if admitted {
+								if docMap.known == "" {
+									// Detach admitted ID from cached docMap block so evicted blocks can be GC'd.
+									top.candidates[pos].documentID = docMap.appendTo(nil)
 								}
-								for _, state := range states {
-									if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
-										return false, false, err
+								if retainDetail {
+									detail := &textV2SearchCandidate{
+										ordinal:    target,
+										generation: norm.Generation,
+										documentID: top.candidates[pos].documentID,
+										score:      score,
 									}
+									for _, state := range states {
+										if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
+											return false, false, err
+										}
+									}
+									top.candidates[pos].detail = detail
 								}
-								top.candidates[pos].detail = detail
 							}
 							if stats != nil && thresholdChanged {
 								stats.TextBlockMaxThresholds++

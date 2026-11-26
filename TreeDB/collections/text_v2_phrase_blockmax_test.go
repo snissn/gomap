@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func assertTextV2PhraseOracleParity(t *testing.T, got, want TextSearchResponse) {
@@ -822,6 +823,201 @@ func TestTextV2PhraseBlockMaxNativeCOWHighDF(t *testing.T) {
 			t.Fatalf("native COW score_only stats=%+v want zero docs/details", got.Stats)
 		}
 	}
+}
+
+func TestTextV2PhraseBlockMaxCanonicalScoreOrderParity(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+
+	// Exact Codex reproducer: "alpha" and "beta" have DF=3 while "gamma" has DF=2,
+	// so DF-ordered scanTerms puts "gamma" first whereas canonical alphabetical
+	// uniqueTerms order is ["alpha", "beta", "gamma"]. IEEE-754 float64 addition
+	// is non-associative across 3 terms, so summing in scanTerms order can perturb
+	// equal-score ties between "a" and "b".
+	ids := [][]byte{[]byte("b"), []byte("a"), []byte("c")}
+	docs := [][]byte{
+		[]byte(`{"body":"alpha alpha beta gamma"}`),
+		[]byte(`{"body":"alpha beta beta gamma"}`),
+		[]byte(`{"body":"alpha beta note note note note note note note note note note note"}`),
+	}
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{
+		Name:           "lexical",
+		Version:        TextIndexVersionV2,
+		StorePositions: true,
+		Fields:         []TextIndexField{{Field: "body"}},
+	}, ids, docs)
+
+	opts := TextSearchOptions{
+		IndexName:  "lexical",
+		Phrase:     &TextSearchPhraseQuery{Query: "alpha beta gamma", Slop: 1},
+		TopK:       10,
+		ResultMode: TextSearchResultModeDetailed,
+		Explain:    true,
+	}
+	got, oracle := runTextV2PhraseWithOracle(t, col, opts, len(ids))
+	if len(got.Results) != 2 {
+		t.Fatalf("results=%+v want 2", got.Results)
+	}
+	if string(got.Results[0].DocumentID) != "a" || string(got.Results[1].DocumentID) != "b" {
+		t.Fatalf("order=[%q %q] want [a b] (scores=[%.17g %.17g], oracle=[%q:%.17g %q:%.17g])",
+			got.Results[0].DocumentID, got.Results[1].DocumentID,
+			got.Results[0].Score, got.Results[1].Score,
+			oracle.Results[0].DocumentID, oracle.Results[0].Score,
+			oracle.Results[1].DocumentID, oracle.Results[1].Score)
+	}
+	for i := range oracle.Results {
+		if got.Results[i].Score != oracle.Results[i].Score {
+			t.Fatalf("result[%d] score got=%.17g want bit-exact %.17g", i, got.Results[i].Score, oracle.Results[i].Score)
+		}
+	}
+	if got.Stats.TextBlockMaxFallbacks != 0 {
+		t.Fatalf("TextBlockMaxFallbacks=%d want 0", got.Stats.TextBlockMaxFallbacks)
+	}
+}
+
+func TestTextV2PhraseBlockMaxBoundedSidecarCache(t *testing.T) {
+	// 33 full norm/docMap blocks (4,224 docs > 2,000 ordinals across 32+ blocks)
+	// where every doc contains both terms non-adjacently (zero phrase matches).
+	const (
+		blocks    = 33
+		totalDocs = blocks * int(textV2DefaultNormBlockSize)
+	)
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+
+	ids := make([][]byte, totalDocs)
+	docs := make([][]byte, totalDocs)
+	for i := 0; i < totalDocs; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-%05d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"body":"elastic separator token electron item %d"}`, i))
+	}
+	def := TextIndexDefinition{
+		Name:           "lexical",
+		Version:        TextIndexVersionV2,
+		StorePositions: true,
+		Fields:         []TextIndexField{{Field: "body"}},
+	}
+	col := createTextSearchCollection2627(t, d, "docs", def, ids, docs)
+
+	// 1. Public end-to-end streaming phrase search over all 4,224 non-matching ordinals.
+	got, err := col.SearchText(TextSearchOptions{
+		IndexName:          "lexical",
+		Phrase:             &TextSearchPhraseQuery{Query: "elastic electron"},
+		TopK:               10,
+		MaxPostingsScanned: totalDocs * 4,
+		ResultMode:         TextSearchResultModeScoreOnly,
+	})
+	if err != nil {
+		t.Fatalf("SearchText zero-match high-DF failed: %v (stats=%+v)", err, got.Stats)
+	}
+	if len(got.Results) != 0 || got.Stats.TextBlockMaxFallbacks != 0 || got.Stats.FailClosed != 0 {
+		t.Fatalf("unexpected response results=%d stats=%+v", len(got.Results), got.Stats)
+	}
+	if got.Stats.TextNormLookups < blocks {
+		t.Fatalf("TextNormLookups=%d want >= %d", got.Stats.TextNormLookups, blocks)
+	}
+
+	// 2. Direct snapshot verification that cache.normBlocks and cache.docMapBlocks stay <= 2
+	// across every overlap step and every docMap/norm lookup over all 33 blocks.
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		uniqueTerms := []string{"elastic", "electron"}
+		ctx, err := newTextV2SearchContext(snap, catalog, def, uniqueTerms)
+		if err != nil {
+			t.Fatalf("newTextV2SearchContext: %v", err)
+		}
+		fieldCount := len(ctx.fieldNames)
+		scanTerms := orderTextV2SearchScanTerms(uniqueTerms, TextSearchOperatorAND, ctx.termStats)
+		phraseTermIndexes := textV2PhraseTermIndexes([]string{"elastic", "electron"}, scanTerms)
+		states := make([]*textV2ANDBlockMaxTermState, 0, len(scanTerms))
+		defer func() {
+			for _, state := range states {
+				_ = state.close()
+			}
+		}()
+		for _, term := range scanTerms {
+			state, err := newTextV2ANDBlockMaxTermState(snap, catalog, ctx, term, fieldCount)
+			if err != nil {
+				t.Fatalf("newTextV2ANDBlockMaxTermState(%q): %v", term, err)
+			}
+			states = append(states, state)
+		}
+		canonicalStates := make([]*textV2ANDBlockMaxTermState, len(uniqueTerms))
+		for i, term := range uniqueTerms {
+			for _, state := range states {
+				if state.term == term {
+					canonicalStates[i] = state
+					break
+				}
+			}
+		}
+
+		cache := textV2SearchBlockCache{maxBlocks: 2}
+		top := textV2SearchTopK{limit: 10, candidates: make([]textV2SearchTopCandidate, 0, 10)}
+		positionScratch := make([]textV2PositionValue, len(scanTerms))
+		var posKeyScratch, posValScratch []byte
+		var hasLastOrdinal bool
+		var lastOrdinal uint64
+		var stats TextSearchStats
+		overlaps := 0
+		peakNormBlocks := 0
+		peakDocMapBlocks := 0
+
+		for {
+			if err := normalizeTextV2ANDBlockMaxStates(ctx, states, fieldCount); err != nil {
+				t.Fatalf("normalize states: %v", err)
+			}
+			if textV2ANDBlockMaxAnyExhausted(states) {
+				break
+			}
+			first, last := textV2ANDBlockMaxCurrentOverlap(states)
+			if first > last {
+				progressed, err := skipTextV2ANDBlockMaxNonOverlappingBlocks(ctx, states, fieldCount, first, &stats)
+				if err != nil || !progressed {
+					t.Fatalf("skip non-overlapping progressed=%v err=%v", progressed, err)
+				}
+				continue
+			}
+			cache.evictBefore(first)
+			overlaps++
+			truncated, stale, err := visitTextV2PhraseBlockMaxOverlap(
+				snap, catalog, ctx, def, states, canonicalStates, &cache, nil,
+				phraseTermIndexes, []int{0}, positionScratch, &posKeyScratch, &posValScratch,
+				0, totalDocs*4, false, first, last, &top,
+				&hasLastOrdinal, &lastOrdinal, &stats,
+			)
+			if err != nil || truncated || stale {
+				t.Fatalf("visit overlap[%d] [%d,%d]: truncated=%v stale=%v err=%v", overlaps, first, last, truncated, stale, err)
+			}
+			// Also exercise docMap lookups in each visited block to prove docMapBlocks stays bounded too.
+			if _, ok, err := cache.identityEntry(snap, catalog, ctx, first); err != nil || !ok {
+				t.Fatalf("identityEntry(%d) ok=%v err=%v", first, ok, err)
+			}
+			if len(cache.normBlocks) > peakNormBlocks {
+				peakNormBlocks = len(cache.normBlocks)
+			}
+			if len(cache.docMapBlocks) > peakDocMapBlocks {
+				peakDocMapBlocks = len(cache.docMapBlocks)
+			}
+			if len(cache.normBlocks) > 2 || len(cache.docMapBlocks) > 2 {
+				t.Fatalf("overlap[%d] [%d,%d] unbounded cache: normBlocks=%d docMapBlocks=%d want <= 2",
+					overlaps, first, last, len(cache.normBlocks), len(cache.docMapBlocks))
+			}
+		}
+		if overlaps < blocks || stats.TextNormLookups < blocks {
+			t.Fatalf("overlaps=%d normLookups=%d want >= %d", overlaps, stats.TextNormLookups, blocks)
+		}
+		if stats.TextPhraseCandidatesChecked != uint64(totalDocs) {
+			t.Fatalf("TextPhraseCandidatesChecked=%d want %d", stats.TextPhraseCandidatesChecked, totalDocs)
+		}
+		if peakNormBlocks == 0 || peakDocMapBlocks == 0 || peakNormBlocks > 2 || peakDocMapBlocks > 2 {
+			t.Fatalf("peakNormBlocks=%d peakDocMapBlocks=%d want in [1,2]", peakNormBlocks, peakDocMapBlocks)
+		}
+		// Advancing frontier past all ordinals evicts all remaining cached blocks.
+		cache.evictBefore(uint64(totalDocs) + uint64(textV2DefaultNormBlockSize) + 1)
+		if len(cache.normBlocks) != 0 || len(cache.docMapBlocks) != 0 {
+			t.Fatalf("post-evict normBlocks=%d docMapBlocks=%d want 0", len(cache.normBlocks), len(cache.docMapBlocks))
+		}
+	})
 }
 
 func BenchmarkTextV2PhraseHighDFBlockMax(b *testing.B) {

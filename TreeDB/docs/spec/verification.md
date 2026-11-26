@@ -2275,7 +2275,9 @@ Coverage:
     `TestTextV2PhraseBlockMaxScalarPrefilter`,
     `TestTextV2PhraseBlockMaxMidScanFallback`,
     `TestTextV2PhraseBlockMaxFailClosedParity`,
-    `TestTextV2PhraseBlockMaxNativeCOWHighDF`, and
+    `TestTextV2PhraseBlockMaxNativeCOWHighDF`,
+    `TestTextV2PhraseBlockMaxCanonicalScoreOrderParity`,
+    `TestTextV2PhraseBlockMaxBoundedSidecarCache`, and
     `BenchmarkTextV2PhraseHighDFBlockMax` (streaming Block-Max WAND phrase
     intersection, score-before-position pruning, high-DF default
     `CandidateLimit` serving, exact legacy-oracle parity, monotonic mid-scan
