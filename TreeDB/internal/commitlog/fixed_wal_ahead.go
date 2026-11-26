@@ -155,9 +155,9 @@ func (j *CommandJournal) fixedWALAheadErrorLocked() error {
 	return j.fixedAheadErr
 }
 
-// This is reached before an append that still fits, using projected post-append
-// occupancy so large frames that cross the halfway mark start preparing the
-// successor before the next frame overflows.
+// This is reached before an append that still fits. Start preparing the
+// successor once flushed occupancy has reached half capacity, or when another
+// frame of the incoming size would overflow after this append.
 // The worker sees only immutable scalars and a duplicated retained parent.
 func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	w := j.writer
@@ -166,13 +166,16 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 		return nil
 	}
 	current := w.fixed
-	projected := current.physical
-	if incoming > 0 {
-		if end, err := fixedWALExtentEnd(current.physical, incoming); err == nil {
-			projected = end
+	halfReached := current.physical-fixedWALHeaderSize >= (current.capacity-fixedWALHeaderSize+1)/2
+	nextFrameOverflows := false
+	if !halfReached && incoming > 0 {
+		if projected, err := fixedWALExtentEnd(current.physical, incoming); err == nil {
+			if nextEnd, err := fixedWALExtentEnd(projected, incoming); err != nil || nextEnd > current.capacity {
+				nextFrameOverflows = true
+			}
 		}
 	}
-	if projected-fixedWALHeaderSize < (current.capacity-fixedWALHeaderSize+1)/2 {
+	if !halfReached && !nextFrameOverflows {
 		return nil
 	}
 	plan, err := fixedSuccessorSizePlan(current, w.fixedBudget, fixedWALPressureRotation, 0)

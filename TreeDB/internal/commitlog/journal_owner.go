@@ -640,8 +640,10 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 	physicalFits := j.writer.fixedFitsAppend(total)
 	logicalCrossing := j.segmentTargetBytes > 0 && activeBytes > 0 && (activeBytes >= j.segmentTargetBytes || total > j.segmentTargetBytes-activeBytes)
 	if !logicalCrossing && physicalFits {
-		if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
-			return j.writer.poisonCommandBuffer(err)
+		if j.segmentTargetBytes <= 0 || activeBytes+total < j.segmentTargetBytes {
+			if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
+				return j.writer.poisonCommandBuffer(err)
+			}
 		}
 		return nil
 	}
