@@ -32,9 +32,11 @@ var getManyEmptyValue = []byte{}
 type GetManyViewFunc = tree.GetManyViewFunc
 
 type foregroundReadObserver struct {
-	id     uint64
-	notify func()
-	begin  func() func()
+	id          uint64
+	notify      func()
+	begin       func() func()
+	beginDirect func()
+	endDirect   func()
 }
 
 var noForegroundReadEnd = func() {}
@@ -47,13 +49,33 @@ func (db *DB) RegisterForegroundReadObserver(notify func(), begin func() func())
 	if db == nil || notify == nil || begin == nil {
 		return func() {}
 	}
-	db.foregroundReadObserverMu.Lock()
-	db.foregroundReadObserverID++
-	registration := &foregroundReadObserver{
-		id:     db.foregroundReadObserverID,
+	return db.registerForegroundReadObserver(&foregroundReadObserver{
 		notify: notify,
 		begin:  begin,
+	})
+}
+
+// RegisterForegroundReadObserverHooks installs a zero-allocation observer for
+// logical collection reads routed through this raw backend. Callers pair each
+// begin call with at most one call to the exact end function captured from the
+// same observer pointer at begin time, so end must remain safe after concurrent
+// unregister or replacement. The returned registration function removes this
+// exact observer.
+func (db *DB) RegisterForegroundReadObserverHooks(notify func(), begin func(), end func()) func() {
+	if db == nil || notify == nil || begin == nil || end == nil {
+		return func() {}
 	}
+	return db.registerForegroundReadObserver(&foregroundReadObserver{
+		notify:      notify,
+		beginDirect: begin,
+		endDirect:   end,
+	})
+}
+
+func (db *DB) registerForegroundReadObserver(registration *foregroundReadObserver) func() {
+	db.foregroundReadObserverMu.Lock()
+	db.foregroundReadObserverID++
+	registration.id = db.foregroundReadObserverID
 	db.foregroundReadObserver.Store(registration)
 	db.foregroundReadObserverMu.Unlock()
 
@@ -85,17 +107,45 @@ func (db *DB) NotifyForegroundRead() {
 // snapshot's ownership. The returned end function is always non-nil and
 // idempotent when an observer is installed.
 func (db *DB) BeginForegroundRead() func() {
-	if end := db.beginForegroundRead(); end != nil {
-		return end
+	if db == nil {
+		return noForegroundReadEnd
+	}
+	observer := db.foregroundReadObserver.Load()
+	if observer == nil {
+		return noForegroundReadEnd
+	}
+	if observer.beginDirect != nil {
+		observer.beginDirect()
+		end := observer.endDirect
+		var once sync.Once
+		return func() {
+			once.Do(end)
+		}
+	}
+	if observer.begin != nil {
+		if end := observer.begin(); end != nil {
+			return end
+		}
 	}
 	return noForegroundReadEnd
 }
 
+// beginForegroundRead starts one foreground read and returns the exact paired
+// end function captured from the same loaded observer pointer. Callers must
+// ensure the returned function is invoked at most once.
 func (db *DB) beginForegroundRead() func() {
 	if db == nil {
 		return nil
 	}
-	if observer := db.foregroundReadObserver.Load(); observer != nil {
+	observer := db.foregroundReadObserver.Load()
+	if observer == nil {
+		return nil
+	}
+	if observer.beginDirect != nil {
+		observer.beginDirect()
+		return observer.endDirect
+	}
+	if observer.begin != nil {
 		return observer.begin()
 	}
 	return nil

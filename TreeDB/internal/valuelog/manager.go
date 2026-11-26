@@ -1510,6 +1510,7 @@ type Manager struct {
 	retryStop        chan struct{}
 	retryWorkers     sync.WaitGroup
 	closing          bool
+	closingAtomic    atomic.Bool
 	closeDone        chan struct{}
 	closeErr         error
 	closeRunning     bool
@@ -1517,7 +1518,9 @@ type Manager struct {
 	failedFiles      *File
 	producerMetadata *retainedalloc.Owner
 	producerCharge   uint64
+	_                [64]byte
 	wrapperBorrows   atomic.Int64 // original Snapshot containing aliases
+	_                [56]byte
 	fileAliases      atomic.Int64 // original File.manager containing aliases
 	// currentWritableByLane tracks segments that may still grow and therefore are
 	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
@@ -1964,6 +1967,7 @@ func (m *Manager) Close() error {
 	}
 	m.closeDone = make(chan struct{})
 	m.closing, m.closeRunning = true, true
+	m.closingAtomic.Store(true)
 	if m.retryStop != nil {
 		close(m.retryStop)
 	}
@@ -2055,8 +2059,13 @@ func (m *Manager) RefreshScanCount() uint64 {
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
 	m.refreshScans.Add(1)
-	dirs := []string{m.dir}
 	m.mu.RLock()
+	if m.closing {
+		m.mu.RUnlock()
+		return os.ErrClosed
+	}
+	dirs := make([]string, 0, 1+len(m.extraScanDirs))
+	dirs = append(dirs, m.dir)
 	if len(m.extraScanDirs) > 0 {
 		dirs = append(dirs, m.extraScanDirs...)
 	}
@@ -2704,15 +2713,15 @@ func (m *Manager) Release(set *Set) error {
 	if m == nil {
 		return rootpublication.ErrResourceOwnership
 	}
-	set.releaseMu.Lock()
-	defer set.releaseMu.Unlock()
 	refs := set.RefCount.Add(-1)
-	if refs < 0 {
-		return rootpublication.ErrResourceOwnership
-	}
 	if refs > 0 {
 		return nil
 	}
+	if refs < 0 {
+		return rootpublication.ErrResourceOwnership
+	}
+	set.releaseMu.Lock()
+	defer set.releaseMu.Unlock()
 	// This original containing borrow keeps Manager accounting alive while
 	// the last Set clears its File aliases, including terminal Close paths.
 	m.mu.Lock()

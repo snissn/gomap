@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -82,6 +84,96 @@ func (r *oneShotRead) close() error {
 	// neither that scrub nor failed-cleanup reuse here.
 	oneShotReadPool.Put(r)
 	return err
+}
+
+// OneShotReadView is a scoped, non-escaping point-read view valid only during
+// the execution of a DB.WithOneShotRead callback. Callers must not retain or
+// use a copy of this view after the callback returns.
+type OneShotReadView struct {
+	r   *oneShotRead
+	gen uint64
+}
+
+func (v OneShotReadView) active() bool {
+	return v.r != nil && v.r.snapshot.generation.Load() == v.gen && !v.r.snapshot.closed.Load()
+}
+
+// StateToken returns the immutable scalar state pinned by this one-shot read.
+func (v OneShotReadView) StateToken() (StateToken, bool) {
+	if !v.active() {
+		return StateToken{}, false
+	}
+	return stateTokenFromState(v.r.snapshot.state)
+}
+
+// Pager returns the pager pinned by this one-shot read.
+func (v OneShotReadView) Pager() *pager.Pager {
+	if !v.active() || v.r.snapshot.idx == nil {
+		return nil
+	}
+	return v.r.snapshot.idx.pager
+}
+
+// GetAppendAtRoot appends the value for key in rootID to dst and reports
+// whether the key was found. Alternate roots use a stack-local tree bound to
+// this one-shot read's pager and value reader so pooled one-shot state never
+// caches or retains alternate-root trees.
+func (v OneShotReadView) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte, bool, error) {
+	if !v.active() {
+		return dst, false, ErrClosed
+	}
+	if rootID == 0 {
+		return dst, false, nil
+	}
+	s := &v.r.snapshot
+	var out []byte
+	var err error
+	if s.state != nil && rootID == s.state.RootPageID {
+		out, err = s.tree.GetAppend(key, dst)
+	} else {
+		if s.idx == nil || s.idx.pager == nil {
+			return dst, false, ErrClosed
+		}
+		var tr tree.Tree
+		bindings := s.reader.appendReadBindings()
+		tr.ResetAppendReadBindings(s.idx.pager, &bindings, rootID)
+		out, err = tr.GetAppend(key, dst)
+	}
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return dst, false, nil
+	}
+	if err != nil {
+		return dst, false, err
+	}
+	return out, true, nil
+}
+
+// WithOneShotRead executes fn against a pooled private one-shot read view
+// bracketed by the installed foreground-read observer. The view is valid only
+// until fn returns and never exposes an exported *Snapshot.
+func (db *DB) WithOneShotRead(fn func(OneShotReadView) error) (err error) {
+	if db == nil {
+		return ErrClosed
+	}
+	if fn == nil {
+		return nil
+	}
+	r, err := db.acquireOneShotReadOrErr()
+	if err != nil {
+		return err
+	}
+	endForegroundRead := db.beginForegroundRead()
+	if endForegroundRead != nil {
+		defer endForegroundRead()
+	}
+	gen := r.snapshot.generation.Add(1)
+	defer func() {
+		r.snapshot.generation.Add(1)
+		if closeErr := r.close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	return fn(OneShotReadView{r: r, gen: gen})
 }
 
 func NewSnapshotPool() *SnapshotPool {

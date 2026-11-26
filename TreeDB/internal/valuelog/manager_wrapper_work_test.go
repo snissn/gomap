@@ -1,10 +1,13 @@
 package valuelog
 
 import (
+	"errors"
+	"sync"
+	"testing"
+
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"testing"
 )
 
 func TestManagerWrapperActualContainingBorrowDefersCloseRefund(t *testing.T) {
@@ -114,5 +117,123 @@ func TestManagerWrapperOriginalManyGovernors(t *testing.T) {
 		if budgets[i].Stats().TotalBytes != 0 {
 			t.Fatal("capture governor leaked")
 		}
+	}
+}
+
+func TestManagerWrapperConcurrentRetainReleaseRacingCloseAndRefresh(t *testing.T) {
+	for trial := 0; trial < 25; trial++ {
+		registry := rootpublication.NewIdentityPinRegistry()
+		budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		capture, err := registry.MetadataOwner().Enroll(budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := NewManagerWithStableResourcePinRegistry(t.TempDir(), registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.producerCharge == 0 {
+			t.Fatal("expected nonzero producer charge")
+		}
+		baseSet := m.CurrentSetNoRefresh()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				<-start
+				for i := 0; i < 200; i++ {
+					if m.RetainSnapshotWrapper() {
+						m.Acquire(baseSet)
+						if err := m.Release(baseSet); err != nil {
+							t.Errorf("trial %d Release(baseSet): %v", trial, err)
+						}
+						m.ReleaseSnapshotWrapper()
+					}
+					if id == 0 && i%25 == 0 {
+						_ = m.Refresh()
+					}
+				}
+			}(g)
+		}
+
+		var closeErr error
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr = m.Close()
+		}()
+
+		close(start)
+		wg.Wait()
+
+		if closeErr != nil {
+			t.Fatalf("trial %d Close: %v", trial, closeErr)
+		}
+		if err := m.Release(baseSet); err != nil {
+			t.Fatalf("trial %d final Release(baseSet): %v", trial, err)
+		}
+		if m.RetainSnapshotWrapper() {
+			t.Fatalf("trial %d RetainSnapshotWrapper succeeded after Close", trial)
+		}
+		if got := m.wrapperBorrows.Load(); got != 0 {
+			t.Fatalf("trial %d wrapperBorrows=%d want 0", trial, got)
+		}
+		if m.producerCharge != 0 || m.producerMetadata != nil {
+			t.Fatalf("trial %d terminal metadata not refunded: charge=%d owner=%v", trial, m.producerCharge, m.producerMetadata)
+		}
+		capture.Close()
+		budget.Close()
+		if got := budget.Stats().TotalBytes; got != 0 {
+			t.Fatalf("trial %d budget leaked %d bytes", trial, got)
+		}
+	}
+}
+
+func TestManagerReleaseSetConcurrentFastPathAndFinalDrop(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	set := m.CurrentSetNoRefresh()
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				m.Acquire(set)
+				if err := m.Release(set); err != nil {
+					t.Errorf("concurrent Release: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := set.RefCount.Load(); got != 1 {
+		t.Fatalf("set.RefCount=%d want 1 before final release", got)
+	}
+	if err := m.Release(set); err != nil {
+		t.Fatalf("final Release: %v", err)
+	}
+	if got := set.RefCount.Load(); got != 0 || set.Files != nil {
+		t.Fatalf("after final release: RefCount=%d Files=%v", got, set.Files)
+	}
+	if err := m.Release(set); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("over-release err=%v want ErrResourceOwnership", err)
 	}
 }

@@ -8414,6 +8414,10 @@ type foregroundReadObserverRegistrar interface {
 	RegisterForegroundReadObserver(func(), func() func()) func()
 }
 
+type foregroundReadObserverHooksRegistrar interface {
+	RegisterForegroundReadObserverHooks(func(), func(), func()) func()
+}
+
 func backendPublicationReady(backend BackendDB) error {
 	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
 		return checker.CheckCommandWALPublishReady()
@@ -8983,6 +8987,13 @@ func (s *foregroundReaderState) Store(count int64) {
 }
 
 func (s *foregroundReaderState) Add(delta int64) int64 {
+	if delta == 1 {
+		next := s.value.Add(1)
+		if uint32(next) == 0 {
+			panic("caching: invalid foreground reader count")
+		}
+		return int64(uint32(next))
+	}
 	for {
 		current := s.value.Load()
 		count := int64(uint32(current)) + delta
@@ -13576,7 +13587,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if registrar, ok := backend.(logicalOrderedRootObserverRegistrar); ok {
 		db.unregisterLogicalOrderedRootObserver = registrar.RegisterLogicalOrderedRootPublicationObserver(db.noteWrite)
 	}
-	if registrar, ok := backend.(foregroundReadObserverRegistrar); ok {
+	if registrar, ok := backend.(foregroundReadObserverHooksRegistrar); ok {
+		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserverHooks(db.noteRead, db.beginForegroundRead, db.endForegroundRead)
+	} else if registrar, ok := backend.(foregroundReadObserverRegistrar); ok {
 		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead, db.beginRawForegroundRead)
 	}
 
