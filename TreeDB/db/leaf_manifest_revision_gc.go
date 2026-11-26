@@ -112,7 +112,7 @@ func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	maxDiskRev, _, err := s.highestDurableManifestRevisionLocked()
+	maxDiskRev, _, err := s.highestDurableManifestRevisionBoundedLocked(ctx, opts.MaintenanceLimits)
 	if err != nil {
 		return err
 	}

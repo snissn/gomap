@@ -211,7 +211,7 @@ func TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind
 
 func TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision(t *testing.T) {
 	leafDir := t.TempDir()
-	staleName := "manifest.durable.tmp.0000000000000001"
+	staleName := "manifest.stage.tmp.0000000000000001"
 	stalePath := filepath.Join(leafDir, staleName)
 	if err := os.WriteFile(stalePath, []byte("unknown-stale-temp"), 0o600); err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	tempName := "manifest.durable.tmp.0000000000000002"
+	tempName := "manifest.stage.tmp.0000000000000002"
 	var deletion []string
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		switch {
@@ -458,7 +458,7 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if _, err := os.Stat(filepath.Join(crashDir, leafGenerationDurableManifestFileName(2))); !os.IsNotExist(err) {
 		t.Errorf("pre-rename revision appeared in modeled crash: %v", err)
 	}
-	temps, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.tmp.*"))
+	temps, err := filepath.Glob(filepath.Join(leafDir, "manifest.stage.tmp.*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func TestStableLeafGenerationManifestPreRenameRebindPreservesForeignChild(t *tes
 		t.Fatal(err)
 	}
 	first.Release()
-	path := filepath.Join(leafDir, "manifest.durable.tmp.0000000000000002")
+	path := filepath.Join(leafDir, "manifest.stage.tmp.0000000000000002")
 	const foreign = "foreign manifest"
 	var foreignIdentity os.FileInfo
 	cut := errors.New("pre-rename cut after rebind")
@@ -954,7 +954,7 @@ func TestStableLeafGenerationManifestCrashAtNamespaceCreateReopensCleanly(t *tes
 	if len(durableMatches) != 0 {
 		t.Fatalf("unfinished creation exposed durable manifest filenames: %v", durableMatches)
 	}
-	tmpMatches, globErr := filepath.Glob(filepath.Join(leafDir, "manifest.durable.tmp.*"))
+	tmpMatches, globErr := filepath.Glob(filepath.Join(leafDir, "manifest.stage.tmp.*"))
 	if globErr != nil {
 		t.Fatal(globErr)
 	}
@@ -977,6 +977,12 @@ func TestStableLeafGenerationManifestCrashAtNamespaceCreateReopensCleanly(t *tes
 	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
 		_ = reopened.Close()
 		t.Fatalf("reopen must not create manifest.json on stable platform: %v", err)
+	}
+	// Verify that an orphaned staging file never blocks subsequent manifest
+	// revision GC census scans.
+	if _, err := reopened.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		_ = reopened.Close()
+		t.Fatalf("LeafGenerationGC with orphaned staging file failed: %v", err)
 	}
 	closure, err := reopened.PrepareLeafGenerationManifestStableClosure()
 	if err != nil {

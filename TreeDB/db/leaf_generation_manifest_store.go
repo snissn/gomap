@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -66,13 +67,14 @@ type leafGenerationManifestStore struct {
 	parentErr          error
 	tempSeq            uint64
 
-	mu                 sync.Mutex
-	poisoned           bool
-	closed             bool
-	lastRevision       uint64
-	currentRevision    uint64
-	lastRevisionSeeded bool
-	evidence           []*leafGenerationManifestEvidence
+	mu                  sync.Mutex
+	poisoned            bool
+	closed              bool
+	lastRevision        uint64
+	currentRevision     uint64
+	legacyFloorRevision uint64
+	lastRevisionSeeded  bool
+	evidence            []*leafGenerationManifestEvidence
 }
 
 func newLeafGenerationManifestStore(leafDir string, registry *rootpublication.IdentityPinRegistry, mode leafGenerationManifestReplacementMode, poison func()) *leafGenerationManifestStore {
@@ -195,6 +197,51 @@ func (s *leafGenerationManifestStore) highestDurableManifestRevisionLocked() (ui
 	return maxRev, maxName, nil
 }
 
+func (s *leafGenerationManifestStore) highestDurableManifestRevisionBoundedLocked(ctx context.Context, limits LeafGenerationMaintenanceLimits) (uint64, string, error) {
+	if s == nil || s.parent == nil {
+		return 0, "", rootpublication.ErrResourceOwnership
+	}
+	if _, err := s.parent.Seek(0, io.SeekStart); err != nil {
+		return 0, "", err
+	}
+	defer func() { _, _ = s.parent.Seek(0, io.SeekStart) }()
+	var maxRev uint64
+	var maxName string
+	entries := 0
+	for {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return 0, "", err
+			}
+		}
+		batch, readErr := s.parent.ReadDir(64)
+		for _, entry := range batch {
+			entries++
+			if limits.enabled() && entries > limits.NativeEntries {
+				return 0, "", ErrLeafGenerationMaintenanceLimit
+			}
+			if entry.IsDir() {
+				continue
+			}
+			rev, ok := parseLeafGenerationDurableManifestFileName(entry.Name())
+			if !ok {
+				continue
+			}
+			if rev > maxRev {
+				maxRev = rev
+				maxName = entry.Name()
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return 0, "", readErr
+		}
+	}
+	return maxRev, maxName, nil
+}
+
 func (s *leafGenerationManifestStore) readStableManifestChildLocked(name string) (*leafGenerationManifest, error) {
 	if s == nil || s.parent == nil {
 		return nil, rootpublication.ErrResourceOwnership
@@ -266,8 +313,13 @@ func (s *leafGenerationManifestStore) seedStableRevisionLocked() error {
 	if err != nil {
 		return err
 	}
-	if ok && legacy.ManifestRevision > s.lastRevision {
-		s.lastRevision = legacy.ManifestRevision
+	if ok {
+		if legacy.ManifestRevision > s.legacyFloorRevision {
+			s.legacyFloorRevision = legacy.ManifestRevision
+		}
+		if legacy.ManifestRevision > s.lastRevision {
+			s.lastRevision = legacy.ManifestRevision
+		}
 	}
 	s.lastRevisionSeeded = true
 	return nil
@@ -318,6 +370,9 @@ func (s *leafGenerationManifestStore) Load() (*leafGenerationManifest, bool, err
 	manifest, ok, err := s.readOptionalStableManifestChildLocked(leafGenerationManifestFileName)
 	if err != nil || !ok {
 		return nil, false, err
+	}
+	if manifest.ManifestRevision > s.legacyFloorRevision {
+		s.legacyFloorRevision = manifest.ManifestRevision
 	}
 	if manifest.ManifestRevision > s.lastRevision {
 		s.lastRevision = manifest.ManifestRevision
@@ -425,7 +480,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	var tempName string
 	for attempt := 0; attempt < maxTempCreateAttempts; attempt++ {
 		s.tempSeq++
-		tempName = fmt.Sprintf("manifest.durable.tmp.%016x", s.tempSeq)
+		tempName = fmt.Sprintf("manifest.stage.tmp.%016x", s.tempSeq)
 		if custody != nil {
 			revisionFile, err = custody.openReplacementFile(0, s, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		} else {
@@ -663,7 +718,11 @@ func (s *leafGenerationManifestStore) abandonPreparedStableRevision(resourceID s
 			s.currentRevision = maxRev
 		}
 		if s.lastRevision == revision {
-			s.lastRevision = maxRev
+			if s.legacyFloorRevision > maxRev {
+				s.lastRevision = s.legacyFloorRevision
+			} else {
+				s.lastRevision = maxRev
+			}
 		}
 	}
 	return nil
