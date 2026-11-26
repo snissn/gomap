@@ -153,9 +153,9 @@ func TestTextV2HardeningCommandWALDefaultCreateReplay2734(t *testing.T) {
 	}
 	assertTextV2HardeningSearchIDs2734(t, got, []string{"d1"})
 	assertTextV2HardeningNoDocStats2734(t, got.Stats)
-	if _, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{Policy: TextIndexMaintenancePolicy{MinDeletedDocuments: 1}}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+	if _, err := col.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{Policy: TextIndexMaintenancePolicy{MinDeletedDocuments: 1}}); err != nil {
 		_ = d.Close()
-		t.Fatalf("MaintainTextIndex under command WAL err=%v want ErrCommandWALRejected", err)
+		t.Fatalf("MaintainTextIndex under command WAL: %v", err)
 	}
 
 	if _, err := col.Insert([]byte("d3"), []byte(`{"body":"refund policy","tenant":"tenant-a"}`)); err != nil {

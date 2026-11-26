@@ -718,6 +718,138 @@ func TestCommandWALFormatV1CollectionPersistPartitionLive(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatV1CollectionRewriteTextIndex(t *testing.T) {
+	want := CollectionRewriteTextIndexPayload{
+		Collection:             "docs",
+		IndexName:              "lexical",
+		TargetPostingsPerBlock: 256,
+		Force:                  true,
+		DisableTombstonePurge:  true,
+	}
+	payload, err := EncodeCollectionRewriteTextIndexPayload(want)
+	if err != nil {
+		t.Fatalf("EncodeCollectionRewriteTextIndexPayload: %v", err)
+	}
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		LSN:             18,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindCollectionRewriteTextIndex,
+		Scope:           CommandScopeCollection,
+		PayloadFormat:   PayloadFormatCollectionRewriteTextIndexV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrameV2: %v", err)
+	}
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	if got.Kind != CommandKindCollectionRewriteTextIndex ||
+		got.Scope != CommandScopeCollection ||
+		got.PayloadFormat != PayloadFormatCollectionRewriteTextIndexV1 {
+		t.Fatalf("decoded collection text rewrite mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionRewriteTextIndexPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionRewriteTextIndexPayload: %v", err)
+	}
+	if decoded != want {
+		t.Fatalf("decoded payload=%+v, want %+v", decoded, want)
+	}
+
+	// Defaults (flags=0, TargetPostingsPerBlock=0) round-trip cleanly.
+	minimal := CollectionRewriteTextIndexPayload{Collection: "docs", IndexName: "lexical"}
+	minPayload, err := EncodeCollectionRewriteTextIndexPayload(minimal)
+	if err != nil {
+		t.Fatalf("EncodeCollectionRewriteTextIndexPayload minimal: %v", err)
+	}
+	minDecoded, err := DecodeCollectionRewriteTextIndexPayload(minPayload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionRewriteTextIndexPayload minimal: %v", err)
+	}
+	if minDecoded != minimal {
+		t.Fatalf("minimal decoded=%+v, want %+v", minDecoded, minimal)
+	}
+
+	// Empty names fail closed.
+	if _, err := EncodeCollectionRewriteTextIndexPayload(CollectionRewriteTextIndexPayload{IndexName: "lexical"}); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "collection name") {
+		t.Fatalf("empty collection error=%v, want ErrCorrupt with collection name", err)
+	}
+	if _, err := EncodeCollectionRewriteTextIndexPayload(CollectionRewriteTextIndexPayload{Collection: "docs"}); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "index name") {
+		t.Fatalf("empty index error=%v, want ErrCorrupt with index name", err)
+	}
+
+	// Wrong scope / wrong payload format fail closed.
+	if _, err := EncodeCommandFrameV2(CommandEnvelope{
+		LSN:             19,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindCollectionRewriteTextIndex,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatCollectionRewriteTextIndexV1,
+		Payload:         payload,
+	}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("wrong-scope error=%v, want ErrCorrupt", err)
+	}
+	if _, err := EncodeCommandFrameV2(CommandEnvelope{
+		LSN:             20,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindCollectionRewriteTextIndex,
+		Scope:           CommandScopeCollection,
+		PayloadFormat:   PayloadFormatCollectionRebuildVectorIndexV1,
+		Payload:         payload,
+	}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("wrong-format error=%v, want ErrCorrupt", err)
+	}
+
+	// Unsupported payload version fails closed.
+	badVer := append([]byte(nil), payload...)
+	binary.LittleEndian.PutUint16(badVer[:2], 2)
+	if _, err := DecodeCollectionRewriteTextIndexPayload(badVer); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("bad version decode error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	if err := validateCollectionRewriteTextIndexPayload(badVer); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("bad version validate error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+
+	// Reserved flag bits fail closed.
+	badFlags := append([]byte(nil), payload...)
+	binary.LittleEndian.PutUint16(badFlags[2:4], 1<<2)
+	if _, err := DecodeCollectionRewriteTextIndexPayload(badFlags); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("reserved flags decode error=%v, want ErrCorrupt", err)
+	}
+	if err := validateCollectionRewriteTextIndexPayload(badFlags); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("reserved flags validate error=%v, want ErrCorrupt", err)
+	}
+
+	// Truncated and trailing payloads fail closed.
+	for _, cut := range []int{0, 2, 15, len(payload) - 1} {
+		if _, err := DecodeCollectionRewriteTextIndexPayload(payload[:cut]); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("truncated(%d) decode error=%v, want ErrCorrupt", cut, err)
+		}
+		if err := validateCollectionRewriteTextIndexPayload(payload[:cut]); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("truncated(%d) validate error=%v, want ErrCorrupt", cut, err)
+		}
+	}
+	trailing := append(append([]byte(nil), payload...), 0x00)
+	if _, err := DecodeCollectionRewriteTextIndexPayload(trailing); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("trailing decode error=%v, want ErrCorrupt", err)
+	}
+	if err := validateCollectionRewriteTextIndexPayload(trailing); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("trailing validate error=%v, want ErrCorrupt", err)
+	}
+
+	// Huge length overflow fails closed.
+	hugeLen := append([]byte(nil), payload...)
+	binary.LittleEndian.PutUint32(hugeLen[8:12], ^uint32(0))
+	if _, err := DecodeCollectionRewriteTextIndexPayload(hugeLen); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("huge collection len decode error=%v, want ErrCorrupt", err)
+	}
+	if err := validateCollectionRewriteTextIndexPayload(hugeLen); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("huge collection len validate error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
 	payload, err := EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":1,"name":"users"}`))
 	if err != nil {

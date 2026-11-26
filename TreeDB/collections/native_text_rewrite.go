@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 )
@@ -88,9 +89,6 @@ func (p *nativeTextRewritePublication) PrepareNativePublication(latest backenddb
 func (c *Collection) nativeRewriteTextIndex(ctx context.Context, indexName string, run textV2RewriteRunOptions) (stats TextIndexRewriteStats, before TextIndexStorageStats, reason string, resultErr error) {
 	if c.manager.isClosing() {
 		return stats, before, "", backenddb.ErrClosed
-	}
-	if c.nativeJSON.db.CommandWALEnabled() {
-		return stats, before, "", fmt.Errorf("%w: text-v2 rewrite is rejected under command_wal_v2 until collection text maintenance commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	if err := ctx.Err(); err != nil {
 		return stats, before, "", err
@@ -198,13 +196,46 @@ func (c *Collection) nativeRewriteTextIndex(ctx context.Context, indexName strin
 			domains = append(domains, nativeNamedDomainChange{name: name, policy: delta.policy, entries: delta.entries, expectedInterpretation: d.interpretation})
 			effects = append(effects, txnhistory.Effect{Namespace: txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: read.collection.incarnation, Domain: nativeJSONDomainNumber(read.meta, name), Interpretation: d.interpretation}, Kind: txnhistory.RangeEffect})
 		}
+		if len(domains) == 0 {
+			noopStats := plan.stats
+			noopStats.Noop = true
+			return noopStats, before, "no_delta_roots", nil
+		}
+		var payload []byte
+		if c.nativeJSON.db.CommandWALEnabled() && !run.DryRun {
+			payload, err = commitlog.EncodeCollectionRewriteTextIndexPayload(commitlog.CollectionRewriteTextIndexPayload{
+				Collection:             c.name,
+				IndexName:              def.Name,
+				TargetPostingsPerBlock: run.Rewrite.TargetPostingsPerBlock,
+				Force:                  run.Rewrite.Force,
+				DisableTombstonePurge:  run.Rewrite.DisableTombstonePurge,
+			})
+			if err != nil {
+				return stats, before, "", err
+			}
+			if err = admit(memtable.COWAllocationCharge(uint64(len(payload))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})))); err != nil {
+				return stats, before, "", err
+			}
+		}
 		custody, err := newNativeMutationCustody(0, 1, base.allocator)
 		if err != nil {
 			return stats, before, "", err
 		}
 		logical := &nativeTextRewritePublication{collection: read.collection, bootstrap: base, domains: domains, custody: custody}
 		pub := &backenddb.NativePreparedPublication{Basis: read.capture.State(), StartSequence: read.capture.LogicalSequence(), Reprepare: logical, Custody: custody, Effects: effects, Dependencies: dependencies}
-		result, err := c.nativeJSON.db.WriteNativePublication(pub, nil, false)
+		var intent *backenddb.CommandWALIntent
+		if len(payload) != 0 {
+			intent, err = c.nativeJSON.db.NewTrustedCommandWALIntent(
+				commitlog.CommandKindCollectionRewriteTextIndex,
+				commitlog.CommandScopeCollection,
+				commitlog.PayloadFormatCollectionRewriteTextIndexV1,
+				payload,
+			)
+			if err != nil {
+				return stats, before, "", errors.Join(err, cancelPrivateNativePublication(pub))
+			}
+		}
+		result, err := c.nativeJSON.db.WriteNativePublication(pub, intent, false)
 		if err != nil && (result.Assigned || result.LogicalInstalled) {
 			err = commitAmbiguousError("native text rewrite completion", err)
 		}

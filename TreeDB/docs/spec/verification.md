@@ -2282,6 +2282,17 @@ Coverage:
     intersection, score-before-position pruning, high-DF default
     `CandidateLimit` serving, exact legacy-oracle parity, monotonic mid-scan
     fallback, fail-closed limits, and native COW parity)
+- `TreeDB/internal/commitlog/command_frame_test.go`:
+  - `TestCommandWALFormatV1CollectionRewriteTextIndex`
+- `TreeDB/collections/text_v2_command_wal_rewrite_test.go`:
+  - `TestTextV2CommandWALRewriteAndMaintain5829`,
+    `TestTextV2CommandWALUnappliedReplayAndNoop5829`,
+    `TestTextV2CommandWALZeroWALFramesOnNoopAndBudget5829`,
+    `TestTextV2CommandWALReplayOptionsFidelity5829`,
+    `TestTextV2CommandWALUnifiedLexicalAndVector5829`,
+    `TestTextV2CommandWALNativeCOW5829`,
+    `TestTextV2CommandWALConcurrentSearchDuringRewrite5829`
+  - `BenchmarkTextV2RewriteCommandWAL`
 - `TreeDB/documentservice/rag_parity_test.go`:
   - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
   - `TestHTTPBooleanOperatorConflictParity4766`

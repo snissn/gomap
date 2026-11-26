@@ -3115,6 +3115,7 @@ Current command kinds:
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` or `CollectionTypedSourceByIDV1` | atomic explicit delete-and-reinsert source command |
 | 105 | `CollectionPersistPartitionLive` | collection | `CollectionRebuildVectorIndexV1` | deterministic standalone partition-live carrier publication; never authorizes a collection-row or column-graph rebuild |
+| 108 | `CollectionRewriteTextIndex` | collection | `CollectionRewriteTextIndexV1` | deterministic collection text-v2 index rewrite/merge maintenance command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 | 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
@@ -3135,6 +3136,7 @@ Current payload format IDs:
 | 11 | `CollectionTypedBatchByIDV1` |
 | 12 | `CollectionTypedSourceByIDV1` |
 | 13 | `CollectionTypedMetadataByIDV1` |
+| 18 | `CollectionRewriteTextIndexV1` |
 
 Format 13 is accepted only for collection update kind 102. Its little-endian
 payload is u16 version 1, u64 schema hash, u32 column count, u32 row count, then
@@ -3567,6 +3569,31 @@ longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
 undefined replay outcomes fail closed before advancing `AppliedCommandLSN`.
+
+`CollectionRewriteTextIndexV1` payload (command kind `CollectionRewriteTextIndex` = 108, scope `collection`, payload format 18):
+
+```text
+u16 Version                // 1
+u16 Flags                  // bit 0: Force, bit 1: DisableTombstonePurge (bits 2..15 reserved, must be 0)
+u32 TargetPostingsPerBlock // 0 uses default target postings per sealed block
+u32 CollectionLen          // non-zero
+u32 IndexNameLen           // non-zero
+bytes Collection[CollectionLen]
+bytes IndexName[IndexNameLen]
+```
+
+The collection and index names must be non-empty, unknown flag bits fail closed
+with `ErrCorrupt`, unsupported versions fail closed with
+`ErrCommandWALUnsupportedVersion`, and lengths must consume the payload exactly
+(no truncation or trailing bytes). Transient budgets (`MaxTerms`,
+`MaxPostingBlocks`, `MaxPostings`, `MaxDuration`), `DryRun`, and maintenance
+policy thresholds are evaluated before appending any WAL frame; dry-run,
+zero-debt fast-skip, below-threshold, budget-exhausted, and no-op runs append
+zero command-WAL frames. When a concrete rewrite applies, replay re-executes
+the logical text-v2 rewrite deterministically with the recorded options and
+unbounded budgets, publishing either the resulting ordered-root deltas or a
+no-op command-WAL boundary (`AppliedCommandLSN` advancement) if no rewrite work
+remains.
 
 Command kind `CollectionPersistPartitionLive` (105) deliberately reuses this
 bounded name payload, but its semantics are narrower than kind 103. Replay may
