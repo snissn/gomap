@@ -1379,9 +1379,20 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		install.recordConditionalInsideActivate = true
 	}
 
-	opts.releaseRootConstruction()
-	if inlinePrepareGuard != nil {
-		inlinePrepareGuard.Release()
+	releaseConstruction := func() {
+		opts.releaseRootConstruction()
+		if inlinePrepareGuard != nil {
+			inlinePrepareGuard.Release()
+			inlinePrepareGuard = nil
+		}
+	}
+	if needRootReuseLock {
+		// rootReuseMu.Lock() already fences subsequent writers from sampling
+		// db.meta.CommitSeq before EnqueueBuilt activates this root, so caller
+		// root construction locks can release before test hooks and EnqueueBuilt.
+		releaseConstruction()
+	} else {
+		defer releaseConstruction()
 	}
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
@@ -1407,6 +1418,12 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		receipt, enqueueErr = runtime.coordinator.EnqueueBuiltAcceptedCut(candidate, builder, *opts.acceptedPrefixCut)
 	} else {
 		receipt, enqueueErr = runtime.coordinator.EnqueueBuilt(candidate, builder)
+	}
+	if !needRootReuseLock {
+		// Release root construction locks only after EnqueueBuilt has activated
+		// next.CommitSeq (or failed), preventing a serialized writer such as
+		// ValueLogRewriteOnline from capturing the pre-activation baseSeq.
+		releaseConstruction()
 	}
 	if opts.publishTiming != nil {
 		opts.publishTiming.FinalizeEnqueueActivation += time.Since(enqueueStart)

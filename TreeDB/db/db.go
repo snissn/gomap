@@ -140,6 +140,8 @@ type DB struct {
 	snapshotAcquireEpoch              paddedAtomicUint64
 	snapshotAcquirePhaseMu            sync.Mutex
 	snapshotAcquirePhaseFloor         [2]atomic.Uint64
+	snapshotAcquireZeroEpochValid     bool
+	snapshotAcquireLastZeroEpoch      uint64
 	flushReadContentionLastEpoch      atomic.Uint64
 	flushReadContentionLastSampleNano atomic.Int64
 	flushReadContentionUntilNano      atomic.Int64
@@ -4084,6 +4086,14 @@ func (db *DB) tryAdvanceSnapshotAcquirePhase(visibleRetentionFloor uint64) {
 	}
 	db.snapshotAcquirePhaseMu.Lock()
 	defer db.snapshotAcquirePhaseMu.Unlock()
+	epochBefore := db.snapshotAcquireEpoch.Load()
+	if db.snapshotAcquireZeroEpochValid && epochBefore == db.snapshotAcquireLastZeroEpoch {
+		// No snapshot capture has incremented snapshotAcquireEpoch since both
+		// phases were last confirmed empty; avoid scanning all 64 padded shards.
+		db.snapshotAcquirePhaseFloor[0].Store(visibleRetentionFloor)
+		db.snapshotAcquirePhaseFloor[1].Store(visibleRetentionFloor)
+		return
+	}
 	active := db.snapshotAcquirePhase.Load() & 1
 	old := active ^ 1
 	if db.snapshotAcquirePhaseInFlight(old) != 0 {
@@ -4091,6 +4101,13 @@ func (db *DB) tryAdvanceSnapshotAcquirePhase(visibleRetentionFloor uint64) {
 	}
 	db.snapshotAcquirePhaseFloor[old].Store(visibleRetentionFloor)
 	db.snapshotAcquirePhase.Store(old)
+	if db.snapshotAcquirePhaseInFlight(active) == 0 && db.snapshotAcquireEpoch.Load() == epochBefore {
+		db.snapshotAcquirePhaseFloor[active].Store(visibleRetentionFloor)
+		db.snapshotAcquireLastZeroEpoch = epochBefore
+		db.snapshotAcquireZeroEpochValid = true
+	} else {
+		db.snapshotAcquireZeroEpochValid = false
+	}
 }
 
 // drainPriorSnapshotAcquires drains every in-flight snapshot capture that could
@@ -4100,6 +4117,7 @@ func (db *DB) tryAdvanceSnapshotAcquirePhase(visibleRetentionFloor uint64) {
 func (db *DB) drainPriorSnapshotAcquires(visibleRetentionFloor uint64) {
 	db.snapshotAcquirePhaseMu.Lock()
 	defer db.snapshotAcquirePhaseMu.Unlock()
+	db.snapshotAcquireZeroEpochValid = false
 	active := db.snapshotAcquirePhase.Load() & 1
 	old := active ^ 1
 	db.waitSnapshotAcquirePhaseZero(old)

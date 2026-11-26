@@ -84,11 +84,25 @@ func (db *DB) minPinnedSnapshotCommitSeqForDurablePublish(visibleRetentionFloor 
 	}
 	min := visibleRetentionFloor
 	db.snapshotAcquirePhaseMu.Lock()
-	for phase := uint32(0); phase < 2; phase++ {
-		if db.snapshotAcquirePhaseInFlight(phase) > 0 {
-			if floor := db.snapshotAcquirePhaseFloor[phase].Load(); floor < min {
+	epochBefore := db.snapshotAcquireEpoch.Load()
+	if !db.snapshotAcquireZeroEpochValid || epochBefore != db.snapshotAcquireLastZeroEpoch {
+		inFlight0 := db.snapshotAcquirePhaseInFlight(0)
+		inFlight1 := db.snapshotAcquirePhaseInFlight(1)
+		if inFlight0 > 0 {
+			if floor := db.snapshotAcquirePhaseFloor[0].Load(); floor < min {
 				min = floor
 			}
+		}
+		if inFlight1 > 0 {
+			if floor := db.snapshotAcquirePhaseFloor[1].Load(); floor < min {
+				min = floor
+			}
+		}
+		if inFlight0 == 0 && inFlight1 == 0 && db.snapshotAcquireEpoch.Load() == epochBefore {
+			db.snapshotAcquireLastZeroEpoch = epochBefore
+			db.snapshotAcquireZeroEpochValid = true
+		} else {
+			db.snapshotAcquireZeroEpochValid = false
 		}
 	}
 	db.snapshotAcquirePhaseMu.Unlock()
