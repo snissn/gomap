@@ -15,6 +15,14 @@ import (
 type LeafGenerationGCOptions struct {
 	MaintenanceLimits LeafGenerationMaintenanceLimits
 	DryRun            bool
+	// ConvergeFallback, when true on a destructive writable non-native-semantic
+	// LeafGenerationGC call, converges the alternate durable fallback root slot
+	// onto the current root (and refreshes conservative outer-leaf durable slot
+	// pins if deleted records remain unpruned) when unpinned dead generations
+	// are retained solely by an older recoverable fallback root, then runs a
+	// settle pass to reclaim them. Ordinary GC (false) retains existing
+	// fallback roots.
+	ConvergeFallback bool
 
 	// ProtectedRootIDs are additional ordinary root page IDs whose leaf-log
 	// children must be treated as live even when they are not reachable from the
@@ -95,7 +103,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	defer db.maintenanceMu.Unlock()
 
 	outcome, err := db.leafGenerationGCWithOutcome(ctx, opts, false)
-	if err != nil || opts.DryRun || db.nativeSemanticActive.Load() {
+	if err != nil || opts.DryRun || !opts.ConvergeFallback || db.nativeSemanticActive.Load() {
 		return outcome.stats, err
 	}
 	stats := outcome.stats

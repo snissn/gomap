@@ -67,9 +67,12 @@ func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 
 type LeafGenerationPackOptions struct {
 	// Set only by the named private-COW operation, never by an application callback.
-	privateCOWOwner   *transactionowner.Owner
-	MaintenanceLimits LeafGenerationMaintenanceLimits
-	GenerationIDs     []uint64
+	privateCOWOwner *transactionowner.Owner
+	// Set by CompactStorage, which manages leaf-page-log handoff and sequence
+	// advancement explicitly around the full compaction sequence.
+	skipLeafPageLogAdvance bool
+	MaintenanceLimits      LeafGenerationMaintenanceLimits
+	GenerationIDs          []uint64
 	// Sync is retained for API compatibility. Leaf-generation pack publication
 	// is always durable: copied records/pages, the promoted-directory entry, and
 	// the alternate meta page are synchronized before source generations can
@@ -439,7 +442,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			return stats, err
 		}
 		stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
-		if opts.privateCOWOwner == nil {
+		if opts.privateCOWOwner == nil && !opts.skipLeafPageLogAdvance {
 			if err := db.advanceLeafPageLogPastPackedSources(rawSourceIDs, stats.CreatedFileIDs); err != nil {
 				return stats, fmt.Errorf("leaf generation pack: advance leaf page log past packed sources: %w", err)
 			}

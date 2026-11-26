@@ -1801,6 +1801,7 @@ func (db *DB) compactStorageLeafGenerationPackRunOnceWithOwner(ctx context.Conte
 	var carryResult leafGenerationPackCarryResult
 	packOpts := leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs)
 	packOpts.privateCOWOwner = owner
+	packOpts.skipLeafPageLogAdvance = true
 	packStats, err := db.leafGenerationPackSelectedWithCarry(ctx, packOpts, selectedLeafGenerationPackPlan(selection), lockMaintenance, &carryResult)
 	if err != nil {
 		carry.invalidate()

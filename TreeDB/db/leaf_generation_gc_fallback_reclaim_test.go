@@ -42,6 +42,12 @@ func TestLeafGenerationGC_ConvergesFallbackSlotAndReclaimsDeadGeneration(t *test
 	d, leafLog, dir := openCommandWALLeafGCTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 64, 'a')
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint gen1: %v", err)
+	}
+	if err := d.refreshDurableRootFallback(); err != nil {
+		t.Fatalf("refreshDurableRootFallback gen1: %v", err)
+	}
 	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
 	rawFileID1 := page.ValueLogSegmentID(fileID1)
 	indexPath1 := leafGenerationRecordLengthIndexPath(dir, rawFileID1)
@@ -49,12 +55,23 @@ func TestLeafGenerationGC_ConvergesFallbackSlotAndReclaimsDeadGeneration(t *test
 	if err := leafLog.rotateLeaf(); err != nil {
 		t.Fatalf("rotateLeaf: %v", err)
 	}
+	// Single synchronous write batch publishes gen2 into one alternating durable
+	// meta slot while deterministically leaving the alternate durable slot on
+	// the gen1 root established above.
 	writeLeafGenerationKeys(t, d, "k", 64, 'b')
 	path2, fileID2 := currentLeafSegmentOrFatal(t, leafLog)
 	rawFileID2 := page.ValueLogSegmentID(fileID2)
-	if err := d.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+	d.maintenanceMu.Lock()
+	roots, err := d.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(context.Background())
+	d.maintenanceMu.Unlock()
+	if err != nil {
+		t.Fatalf("captureRecoverableRootSetForInspection: %v", err)
 	}
+	if len(roots.roots) < 2 {
+		roots.Release()
+		t.Fatalf("expected distinct current and fallback recoverable roots, got %d (%+v)", len(roots.roots), roots.roots)
+	}
+	roots.Release()
 
 	// Dry-run must not mutate durable slots and must report the older
 	// fallback-protected generation as retiring rather than eligible.
@@ -72,11 +89,27 @@ func TestLeafGenerationGC_ConvergesFallbackSlotAndReclaimsDeadGeneration(t *test
 		t.Fatalf("dry-run disturbed older generation: %v", err)
 	}
 
-	// A single destructive LeafGenerationGC call must converge the stale
-	// durable fallback slot, drop conservative outer-leaf pins if present, and
-	// reclaim the unreachable generation without requiring a manual fallback
-	// refresh or extra writes.
-	stats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	// Ordinary GC (ConvergeFallback: false) must preserve the fallback root
+	// and leave the generation in retiring rather than deleting it.
+	ordinaryStats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("ordinary LeafGenerationGC: %v", err)
+	}
+	if got, want := ordinaryStats.GenerationsRetiring, 1; got != want {
+		t.Fatalf("ordinary GenerationsRetiring=%d want %d (stats=%+v)", got, want, ordinaryStats)
+	}
+	if ordinaryStats.GenerationsDeleted != 0 || ordinaryStats.FilesDeleted != 0 {
+		t.Fatalf("ordinary GC unexpectedly deleted fallback-protected generation: %+v", ordinaryStats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("ordinary GC removed fallback-protected generation: %v", err)
+	}
+
+	// A single destructive LeafGenerationGC call with ConvergeFallback: true
+	// must converge the stale durable fallback slot, drop conservative
+	// outer-leaf pins if present, and reclaim the unreachable generation without
+	// requiring a manual fallback refresh or extra writes.
+	stats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{ConvergeFallback: true})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}
@@ -168,7 +201,7 @@ func TestLeafGenerationGC_PinnedSnapshotStillRetainsGenerationAcrossFallback(t *
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
-	heldStats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	heldStats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{ConvergeFallback: true})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC while snapshot pinned: %v", err)
 	}
@@ -191,7 +224,7 @@ func TestLeafGenerationGC_PinnedSnapshotStillRetainsGenerationAcrossFallback(t *
 	}
 	snap = nil
 
-	stats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	stats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{ConvergeFallback: true})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC after snapshot release: %v", err)
 	}
@@ -299,7 +332,7 @@ func TestLeafGenerationPackAndGC_ReclaimsSourcesWithoutManualFallbackRefresh(t *
 		t.Fatalf("Checkpoint after pack: %v", err)
 	}
 
-	gcStats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	gcStats, err := d.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{ConvergeFallback: true})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC after pack: %v", err)
 	}

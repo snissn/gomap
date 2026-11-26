@@ -971,7 +971,16 @@ durable slot onto the current root before settling GC. This uses the existing
 durable publication path, including for NoWAL, without appending a command frame
 or advancing command coverage. Held views and prepared publication members keep
 their independent resource pins. Ordinary checkpoint, rewrite, and GC retain
-their existing fallback roots; they do not perform this convergence.
+their existing fallback roots; they do not perform this convergence. When a
+caller explicitly requests `LeafGenerationGCOptions{ConvergeFallback: true}` on
+a destructive writable non-native-semantic `LeafGenerationGC` call (serialized
+under `maintenanceMu`), GC performs this same durable fallback convergence when
+pass 1 leaves unpinned dead generations in `retiring` solely because of an
+older recoverable root, and refreshes conservative outer-leaf durable slot pins
+when deleted records remain unpruned before a final settle pass. Dry-run
+`LeafGenerationGC`, read-only handles, active native-semantic owners, and held
+snapshot pins (`leafGenerationPins`) are excluded and never mutate durable
+slots or drop pinned generations.
 Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
 permanent errors fail compaction. Deferred or unsupported required work keeps
 all completion flags false. `PolicyFullyCompacted` means selected planner debt
