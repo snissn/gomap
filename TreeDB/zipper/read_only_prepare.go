@@ -851,6 +851,15 @@ func (r *ReadOnlyPrepareResult) ensureInitialCapacity(ops []batch.Entry, ranges 
 	}
 	if !r.discardLeafSpans {
 		spanHint := len(ops) + len(ranges)
+		if r.OmitOpKeys && !r.OmitKeys && len(ops) > 0 {
+			// Span-native execution plans keep one entry per touched leaf rather
+			// than one per point op; avoid pre-allocating a multi-megabyte slice
+			// for dense batches while still presizing small batches directly.
+			estimated := len(ranges) + len(ops)/16 + 16
+			if estimated < spanHint {
+				spanHint = estimated
+			}
+		}
 		leafSpanKeepCap := readOnlyPrepareResultReuseLeafSpanKeepCap
 		if r.OmitKeys {
 			leafSpanKeepCap = readOnlyPrepareResultReuseOmitKeysLeafSpanKeepCap

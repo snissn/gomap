@@ -2114,6 +2114,66 @@ func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackSta
 		return out, stats, nil
 	}
 
+	sorted := true
+	for i := 1; i < len(prefixes); i++ {
+		if compareTreeKey(prefixes[i-1], prefixes[i]) > 0 {
+			sorted = false
+			break
+		}
+	}
+	if sorted {
+		it := t.IteratorWithOptions(prefixes[0], nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+		defer func() { _ = it.Close() }()
+		for start := 0; start < len(prefixes); {
+			prefix := prefixes[start]
+			end := start + 1
+			for end < len(prefixes) && bytes.Equal(prefixes[end], prefix) {
+				end++
+			}
+			if !it.Valid() {
+				if err := it.Error(); err != nil {
+					return nil, stats, err
+				}
+				return out, stats, nil
+			}
+			if compareTreeKey(it.UnsafeKey(), prefix) < 0 {
+				it.Seek(prefix)
+			}
+			found := false
+			for {
+				if !it.Valid() {
+					if err := it.Error(); err != nil {
+						return nil, stats, err
+					}
+					return out, stats, nil
+				}
+				curr := it.UnsafeKey()
+				if compareTreeKey(curr, prefix) < 0 {
+					it.Seek(prefix)
+					continue
+				}
+				if !bytes.HasPrefix(curr, prefix) {
+					break
+				}
+				if !it.IsDeleted() {
+					found = true
+					break
+				}
+				it.Next()
+			}
+			if found {
+				for i := start; i < end; i++ {
+					out[i] = true
+				}
+			}
+			start = end
+		}
+		if err := it.Error(); err != nil {
+			return nil, stats, err
+		}
+		return out, stats, nil
+	}
+
 	type prefixProbeRef struct {
 		prefix []byte
 		idx    int
@@ -2135,7 +2195,15 @@ func (t *Tree) HasPrefixesWithStats(prefixes [][]byte) ([]bool, ProbeFallbackSta
 			end++
 		}
 
-		it.Seek(prefix)
+		if !it.Valid() {
+			if err := it.Error(); err != nil {
+				return nil, stats, err
+			}
+			return out, stats, nil
+		}
+		if compareTreeKey(it.UnsafeKey(), prefix) < 0 {
+			it.Seek(prefix)
+		}
 		found := false
 		for {
 			if !it.Valid() {

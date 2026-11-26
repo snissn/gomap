@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -27,7 +28,64 @@ const (
 	fixedWALDefaultCapacity       = 4_199_424
 	fixedWALDefaultPhysicalBudget = 64 << 20
 	fixedWALReadBufferSize        = 64 << 10
+	fixedWALPendingRetainMaxCap   = 8 << 20
+	fixedWALExtentBufPoolMaxCap   = 8 << 20
 )
+
+// Read-only zero block shared by writeInitializedFixedWAL to avoid allocating
+// 256 KiB per segment initialization.
+var fixedWALZeroBlock [256 << 10]byte
+
+var fixedWALExtentBufBucketCaps = [...]int{
+	256 << 10,
+	512 << 10,
+	1 << 20,
+	2 << 20,
+	4 << 20,
+	fixedWALExtentBufPoolMaxCap,
+}
+
+type fixedWALExtentBufLease struct {
+	buf []byte
+}
+
+var fixedWALExtentBufPools [len(fixedWALExtentBufBucketCaps)]sync.Pool
+
+func acquireFixedWALExtentBuf(size int) (*fixedWALExtentBufLease, []byte) {
+	for i, capLimit := range fixedWALExtentBufBucketCaps {
+		if size <= capLimit {
+			if v := fixedWALExtentBufPools[i].Get(); v != nil {
+				if lease, ok := v.(*fixedWALExtentBufLease); ok && lease != nil && cap(lease.buf) >= size && cap(lease.buf) <= fixedWALExtentBufPoolMaxCap {
+					return lease, lease.buf[:size]
+				}
+			}
+			lease := &fixedWALExtentBufLease{buf: make([]byte, capLimit)}
+			return lease, lease.buf[:size]
+		}
+	}
+	return nil, make([]byte, size)
+}
+
+func releaseFixedWALExtentBuf(lease *fixedWALExtentBufLease) {
+	if lease == nil || cap(lease.buf) > fixedWALExtentBufPoolMaxCap {
+		return
+	}
+	for i := len(fixedWALExtentBufBucketCaps) - 1; i >= 0; i-- {
+		if cap(lease.buf) >= fixedWALExtentBufBucketCaps[i] {
+			lease.buf = lease.buf[:0]
+			fixedWALExtentBufPools[i].Put(lease)
+			return
+		}
+	}
+}
+
+func transferFixedWALPendingBuf(dst, src *fixedWAL) {
+	if dst == nil || src == nil || len(src.pending) != 0 || cap(src.pending) <= cap(dst.pending) || cap(src.pending) > fixedWALPendingRetainMaxCap {
+		return
+	}
+	dst.pending = src.pending[:0]
+	src.pending = nil
+}
 
 // Initialization uses distinct operations so failure tests can inject an actual
 // partial reserve write or full-sync failure without changing append I/O.
@@ -272,13 +330,12 @@ func writeInitializedFixedWAL(file *os.File, capacity int64) (*fixedWAL, error) 
 	copy(header[8:24], state.identity[:])
 	binary.LittleEndian.PutUint64(header[24:32], uint64(capacity))
 	binary.LittleEndian.PutUint32(header[32:36], crc.Checksum(header[:32]))
-	block := make([]byte, 256<<10)
 	if err := fixedWALInitializeWrite(file, header, 0); err != nil {
 		return nil, err
 	}
 	for off := int64(len(header)); off < capacity; {
-		n := min(int64(len(block)), capacity-off)
-		if err := fixedWALInitializeWrite(file, block[:n], off); err != nil {
+		n := min(int64(len(fixedWALZeroBlock)), capacity-off)
+		if err := fixedWALInitializeWrite(file, fixedWALZeroBlock[:n], off); err != nil {
 			return nil, err
 		}
 		off += n
@@ -540,17 +597,23 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 	// Reuse its encode storage until synchronous WriteAt completes; captured
 	// syncs retain the file and physical prefix, never this mutable scratch.
 	imageSize := int(end - state.physical)
-	var image []byte
+	var (
+		image []byte
+		lease *fixedWALExtentBufLease
+	)
 	if w.commandBufRetain > 0 && imageSize > w.commandBufRetain {
-		image = make([]byte, imageSize)
+		lease, image = acquireFixedWALExtentBuf(imageSize)
+		if lease != nil {
+			defer releaseFixedWALExtentBuf(lease)
+		}
 	} else {
 		if cap(w.scratch) < imageSize {
 			w.scratch = make([]byte, imageSize)
 		}
 		image = w.scratch[:imageSize]
 	}
-	clear(image) // Reserved witness bytes and alignment padding stay canonical.
 	header := image[:fixedWALWitnessSize]
+	clear(header) // Reserved witness bytes stay canonical.
 	copy(header, fixedWALExtentMagic[:])
 	copy(header[8:24], state.identity[:])
 	binary.LittleEndian.PutUint64(header[24:32], uint64(state.physical))
@@ -562,7 +625,12 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 	binary.LittleEndian.PutUint32(header[72:76], crc.Checksum(frame))
 	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
 	copy(image[fixedWALWitnessSize:], frame)
-	footer := image[len(image)-fixedWALWitnessSize:]
+	padStart := fixedWALWitnessSize + len(frame)
+	footerStart := len(image) - fixedWALWitnessSize
+	if padStart < footerStart {
+		clear(image[padStart:footerStart]) // Alignment padding stays canonical zero.
+	}
+	footer := image[footerStart:]
 	copy(footer, header)
 	copy(footer, fixedWALEndMagic[:])
 	binary.LittleEndian.PutUint32(footer[92:96], crc.Checksum(footer[:92]))

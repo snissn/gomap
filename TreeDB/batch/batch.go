@@ -1351,7 +1351,7 @@ func DeleteRangeOverlapsSpan(r DeleteRange, low, high []byte) bool {
 // MVCCInputSummary is the actual pre-compaction logical input projection.
 func (b *Batch) MVCCInputSummary() mvccadmission.Summary { return b.mvccSummary }
 func (b *Batch) observeMVCCInput(e Entry) {
-	if e.Type == OpPut {
+	if e.Type == OpPut && e.MVCCInput.Present() {
 		b.mvccSummary.Observe(e.Key, e.MVCCInput)
 	} else {
 		b.mvccSummary.Refuse()

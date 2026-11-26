@@ -3,6 +3,7 @@ package page
 import (
 	"encoding/binary"
 	"errors"
+	"sync"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -90,6 +91,11 @@ const LegacyEntryRevision EntryRevision = 0
 
 var checksumZeroField = [4]byte{}
 var checksumZeroBlock = [1024]byte{}
+var checksumPagePool = sync.Pool{
+	New: func() any {
+		return new([PageSize]byte)
+	},
+}
 
 // Checksum returns the CRC-32/IEEE checksum of data.
 func Checksum(data []byte) uint32 {
@@ -118,6 +124,18 @@ func CalculateChecksumWithZeroGap(prefix []byte, gapLen int, suffix []byte) uint
 	}
 	if gapLen < 0 {
 		panic("page: checksum zero-gap length is negative")
+	}
+	totalLen := len(prefix) + gapLen + len(suffix)
+	if totalLen <= PageSize {
+		buf := checksumPagePool.Get().(*[PageSize]byte)
+		copy(buf[:8], prefix[:8])
+		buf[8], buf[9], buf[10], buf[11] = 0, 0, 0, 0
+		copy(buf[12:len(prefix)], prefix[12:])
+		clear(buf[len(prefix) : len(prefix)+gapLen])
+		copy(buf[len(prefix)+gapLen:totalLen], suffix)
+		sum := crc.Checksum(buf[:totalLen])
+		checksumPagePool.Put(buf)
+		return sum
 	}
 	sum := crc.Update(0, prefix[0:8])
 	sum = crc.Update(sum, checksumZeroField[:])

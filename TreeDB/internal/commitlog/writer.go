@@ -761,6 +761,7 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 		}
 	}
 	old, oldFixed := w.f, w.fixed
+	transferFixedWALPendingBuf(state, oldFixed)
 	w.f = file
 	w.fixed = state
 	w.containerSelection = selection
@@ -870,7 +871,7 @@ func (w *Writer) Append(record Record) error {
 	copy(buf[off+headerSize+len(record.Key):], record.Value)
 
 	if !w.compress {
-		return w.writeRawSegmentWithChecksum(buf, crc.ChecksumParts(buf[:batchHeaderSize], buf[batchHeaderSize:]))
+		return w.writeRawSegmentWithChecksum(buf, crc.Checksum(buf))
 	}
 	return w.writeSegment(buf)
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -105,6 +106,161 @@ type insertBatchPlanner struct {
 	directBufferedRuns      bool
 	prebuildUniqueValueRuns bool
 	pointerizePrimary       bool
+	enablePlanScratch       bool
+}
+
+const (
+	insertBatchPlanScratchMaxItems     = 1 << 16
+	insertBatchPlanScratchMaxArenaCap  = 8 << 20
+	insertBatchPlanScratchMaxValueRefs = 1 << 18
+)
+
+type insertBatchPlanScratch struct {
+	templateHashOffsets     []int
+	templatePrepared        [][]byte
+	templateConversionArena []byte
+
+	items        []insertBatchItem
+	encoder      indexEncodeArena
+	uniqueProbes []uniqueProbeCandidate
+
+	uniquePrefixArena []byte
+	uniquePrefixes    [][]byte
+
+	groupedItemBucket []uint16
+	groupedEntryItems []int
+	groupedOrder      []int
+
+	secondaryKeyArenas [][]byte
+	nextSecondaryArena int
+}
+
+var insertBatchPlanScratchPool sync.Pool
+
+func acquireInsertBatchPlanScratch() *insertBatchPlanScratch {
+	if v := insertBatchPlanScratchPool.Get(); v != nil {
+		if s, ok := v.(*insertBatchPlanScratch); ok && s != nil {
+			s.nextSecondaryArena = 0
+			return s
+		}
+	}
+	return &insertBatchPlanScratch{}
+}
+
+func (s *insertBatchPlanScratch) allocSecondaryKeyArena(keyBytes int) []byte {
+	if s == nil {
+		return make([]byte, 0, keyBytes)
+	}
+	idx := s.nextSecondaryArena
+	s.nextSecondaryArena++
+	if idx < len(s.secondaryKeyArenas) && cap(s.secondaryKeyArenas[idx]) >= keyBytes {
+		return s.secondaryKeyArenas[idx][:0]
+	}
+	arena := make([]byte, 0, keyBytes)
+	if idx < len(s.secondaryKeyArenas) {
+		s.secondaryKeyArenas[idx] = arena
+	} else {
+		s.secondaryKeyArenas = append(s.secondaryKeyArenas, arena)
+	}
+	return arena
+}
+
+func (s *insertBatchPlanScratch) saveSecondaryKeyArena(idx int, arena []byte) {
+	if s == nil || idx < 0 || idx >= len(s.secondaryKeyArenas) {
+		return
+	}
+	s.secondaryKeyArenas[idx] = arena
+}
+
+func releaseInsertBatchPlanScratch(s *insertBatchPlanScratch) {
+	if s == nil {
+		return
+	}
+	if cap(s.templateHashOffsets) > insertBatchPlanScratchMaxItems {
+		s.templateHashOffsets = nil
+	} else {
+		s.templateHashOffsets = s.templateHashOffsets[:0]
+	}
+	if cap(s.templatePrepared) > insertBatchPlanScratchMaxItems {
+		s.templatePrepared = nil
+	} else if s.templatePrepared != nil {
+		clear(s.templatePrepared[:cap(s.templatePrepared)])
+		s.templatePrepared = s.templatePrepared[:0]
+	}
+	if cap(s.templateConversionArena) > insertBatchPlanScratchMaxArenaCap {
+		s.templateConversionArena = nil
+	} else {
+		s.templateConversionArena = s.templateConversionArena[:0]
+	}
+	if cap(s.items) > insertBatchPlanScratchMaxItems {
+		s.items = nil
+	} else if s.items != nil {
+		clear(s.items[:cap(s.items)])
+		s.items = s.items[:0]
+	}
+	if cap(s.encoder.buf) > insertBatchPlanScratchMaxArenaCap {
+		s.encoder.buf = nil
+	} else {
+		s.encoder.buf = s.encoder.buf[:0]
+	}
+	if cap(s.encoder.scratch) > insertBatchPlanScratchMaxArenaCap {
+		s.encoder.scratch = nil
+	} else {
+		s.encoder.scratch = s.encoder.scratch[:0]
+	}
+	if cap(s.encoder.states) > insertBatchPlanScratchMaxValueRefs {
+		s.encoder.states = nil
+	} else if s.encoder.states != nil {
+		clear(s.encoder.states[:cap(s.encoder.states)])
+		s.encoder.states = s.encoder.states[:0]
+	}
+	if cap(s.encoder.valueRefs) > insertBatchPlanScratchMaxValueRefs {
+		s.encoder.valueRefs = nil
+	} else if s.encoder.valueRefs != nil {
+		clear(s.encoder.valueRefs[:cap(s.encoder.valueRefs)])
+		s.encoder.valueRefs = s.encoder.valueRefs[:0]
+	}
+	if cap(s.uniqueProbes) > insertBatchPlanScratchMaxValueRefs {
+		s.uniqueProbes = nil
+	} else if s.uniqueProbes != nil {
+		clear(s.uniqueProbes[:cap(s.uniqueProbes)])
+		s.uniqueProbes = s.uniqueProbes[:0]
+	}
+	if cap(s.uniquePrefixArena) > insertBatchPlanScratchMaxArenaCap {
+		s.uniquePrefixArena = nil
+	} else {
+		s.uniquePrefixArena = s.uniquePrefixArena[:0]
+	}
+	if cap(s.uniquePrefixes) > insertBatchPlanScratchMaxValueRefs {
+		s.uniquePrefixes = nil
+	} else if s.uniquePrefixes != nil {
+		clear(s.uniquePrefixes[:cap(s.uniquePrefixes)])
+		s.uniquePrefixes = s.uniquePrefixes[:0]
+	}
+	if cap(s.groupedItemBucket) > insertBatchPlanScratchMaxValueRefs {
+		s.groupedItemBucket = nil
+	} else {
+		s.groupedItemBucket = s.groupedItemBucket[:0]
+	}
+	if cap(s.groupedEntryItems) > insertBatchPlanScratchMaxValueRefs {
+		s.groupedEntryItems = nil
+	} else {
+		s.groupedEntryItems = s.groupedEntryItems[:0]
+	}
+	if cap(s.groupedOrder) > insertBatchPlanScratchMaxValueRefs {
+		s.groupedOrder = nil
+	} else {
+		s.groupedOrder = s.groupedOrder[:0]
+	}
+	for i := range s.secondaryKeyArenas {
+		if cap(s.secondaryKeyArenas[i]) > insertBatchPlanScratchMaxArenaCap {
+			s.secondaryKeyArenas[i] = nil
+		} else {
+			s.secondaryKeyArenas[i] = s.secondaryKeyArenas[i][:0]
+		}
+	}
+	s.nextSecondaryArena = 0
+	insertBatchPlanScratchPool.Put(s)
 }
 
 type insertBatchPlan struct {
@@ -121,6 +277,19 @@ type insertBatchPlan struct {
 	templateLearned            []templateV1LearnedTemplate
 	templateResolver           templateV1Resolver
 	stats                      insertBatchPlanStats
+	scratch                    *insertBatchPlanScratch
+}
+
+func (plan *insertBatchPlan) releaseScratch() {
+	if plan == nil || plan.scratch == nil {
+		return
+	}
+	s := plan.scratch
+	plan.scratch = nil
+	plan.uniqueProbeCandidates = nil
+	plan.uniqueProbeRuns = nil
+	plan.allUniqueProbeRuns = nil
+	releaseInsertBatchPlanScratch(s)
 }
 
 type insertBatchPlanStats struct {
@@ -246,8 +415,17 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		Documents: len(documents),
 		Indexes:   len(runtimes),
 	}
+	var scratch *insertBatchPlanScratch
+	if p.enablePlanScratch && !p.directBufferedRuns {
+		scratch = acquireInsertBatchPlanScratch()
+		defer func() {
+			if scratch != nil {
+				releaseInsertBatchPlanScratch(scratch)
+			}
+		}()
+	}
 	phaseStart := time.Now()
-	preparedDocuments, templateRecords, templateLearned, templateResolver, err := prepareInsertDocuments(documents, p.options)
+	preparedDocuments, templateRecords, templateLearned, templateResolver, err := prepareInsertDocumentsWithScratch(documents, p.options, scratch)
 	stats.PrepareDocuments = time.Since(phaseStart)
 	if err != nil {
 		return nil, err
@@ -263,7 +441,16 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if p.directBufferedRuns && len(preparedDocuments) == 1 {
 		return p.planSingleDirectBufferedInsertWithPreflight(resultIDs[0], preparedDocuments[0], runtimes, persistIndexState, templateRecords, templateLearned, preflight, stats)
 	}
-	items := make([]insertBatchItem, len(preparedDocuments))
+	var items []insertBatchItem
+	if scratch != nil && cap(scratch.items) >= len(preparedDocuments) {
+		items = scratch.items[:len(preparedDocuments)]
+		clear(items)
+	} else {
+		items = make([]insertBatchItem, len(preparedDocuments))
+		if scratch != nil {
+			scratch.items = items
+		}
+	}
 	for i := range preparedDocuments {
 		id := resultIDs[i]
 		items[i] = insertBatchItem{
@@ -285,7 +472,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 
 	phaseStart = time.Now()
-	uniqueProbes, err := p.planIndexStateAndUniqueProbes(items, runtimes)
+	uniqueProbes, err := p.planIndexStateAndUniqueProbesWithScratch(items, runtimes, scratch)
 	stats.IndexStateExtraction = time.Since(phaseStart)
 	if err != nil {
 		return nil, err
@@ -299,7 +486,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	var allUniqueProbeRuns []collectionUniqueProbeRun
 	allUniqueProbeRunsBuilt := true
 	if len(uniqueProbes) > 0 {
-		allUniqueProbeRuns, err = buildUniqueProbeRunsFromSorted(uniqueProbes, nil)
+		allUniqueProbeRuns, err = buildUniqueProbeRunsFromSortedWithScratch(uniqueProbes, nil, scratch)
 		if err != nil {
 			return nil, err
 		}
@@ -324,9 +511,13 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		templateLearned:            templateLearned,
 		templateResolver:           templateResolver,
 		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
+		scratch:                    scratch,
 	}
+	// Ownership transferred to plan; release on error if run building fails.
+	scratch = nil
 	if p.directBufferedRuns {
 		if err := p.buildDirectBufferedInsertPlan(plan, items, primaryOrder, runtimes, persistIndexState, templateRecords); err != nil {
+			plan.releaseScratch()
 			return nil, err
 		}
 		if plan.directBufferedInsert != nil {
@@ -337,12 +528,16 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if len(templateRecords) > 0 {
 		phaseStart = time.Now()
 		if err := p.emitTemplateRun(plan, templateRecords); err != nil {
+			resetCollectionRunTables(plan.runs)
+			plan.releaseScratch()
 			return nil, err
 		}
 		plan.stats.TemplateRunBuild = time.Since(phaseStart)
 	}
 	phaseStart = time.Now()
 	if err := p.emitPrimaryRun(plan, items, primaryOrder); err != nil {
+		resetCollectionRunTables(plan.runs)
+		plan.releaseScratch()
 		return nil, err
 	}
 	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
@@ -350,12 +545,16 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		if persistIndexState {
 			phaseStart = time.Now()
 			if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
+				resetCollectionRunTables(plan.runs)
+				plan.releaseScratch()
 				return nil, err
 			}
 			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
 		}
 		phaseStart = time.Now()
 		if err := p.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
+			resetCollectionRunTables(plan.runs)
+			plan.releaseScratch()
 			return nil, err
 		}
 		plan.stats.SecondaryRunBuild = time.Since(phaseStart)
@@ -661,6 +860,10 @@ func indexComponentPaths(components []IndexComponent) [][]string {
 }
 
 func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchItem, runtimes []indexRuntime) ([]uniqueProbeCandidate, error) {
+	return p.planIndexStateAndUniqueProbesWithScratch(items, runtimes, nil)
+}
+
+func (p insertBatchPlanner) planIndexStateAndUniqueProbesWithScratch(items []insertBatchItem, runtimes []indexRuntime, scratch *insertBatchPlanScratch) ([]uniqueProbeCandidate, error) {
 	if len(runtimes) == 0 {
 		return nil, nil
 	}
@@ -673,16 +876,47 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 	}
 	var uniqueProbes []uniqueProbeCandidate
 	if hasUnique {
-		uniqueProbes = make([]uniqueProbeCandidate, 0, len(items))
+		if scratch != nil && cap(scratch.uniqueProbes) >= len(items) {
+			uniqueProbes = scratch.uniqueProbes[:0]
+		} else {
+			uniqueProbes = make([]uniqueProbeCandidate, 0, len(items))
+		}
 	}
-	encoder := indexEncodeArena{
-		buf:       make([]byte, 0, estimateBatchIndexEncodeArenaBytes(items, len(runtimes))),
-		states:    make([][][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
-		valueRefs: make([][]byte, 0, estimateBatchIndexValueRefCount(items, len(runtimes))),
+	arenaBytes := estimateBatchIndexEncodeArenaBytes(items, len(runtimes))
+	valueRefsNeed := estimateBatchIndexValueRefCount(items, len(runtimes))
+	var encoder indexEncodeArena
+	if scratch != nil {
+		encoder = scratch.encoder
+		if cap(encoder.buf) < arenaBytes {
+			encoder.buf = make([]byte, 0, arenaBytes)
+		} else {
+			encoder.buf = encoder.buf[:0]
+		}
+		encoder.scratch = encoder.scratch[:0]
+		if cap(encoder.states) < valueRefsNeed {
+			encoder.states = make([][][]byte, 0, valueRefsNeed)
+		} else {
+			encoder.states = encoder.states[:0]
+		}
+		if cap(encoder.valueRefs) < valueRefsNeed {
+			encoder.valueRefs = make([][]byte, 0, valueRefsNeed)
+		} else {
+			encoder.valueRefs = encoder.valueRefs[:0]
+		}
+	} else {
+		encoder = indexEncodeArena{
+			buf:       make([]byte, 0, arenaBytes),
+			states:    make([][][]byte, 0, valueRefsNeed),
+			valueRefs: make([][]byte, 0, valueRefsNeed),
+		}
 	}
 	for i := range items {
 		state, err := p.itemIndexState(items[i].id, items[i].document, runtimes, &encoder)
 		if err != nil {
+			if scratch != nil {
+				scratch.encoder = encoder
+				scratch.uniqueProbes = uniqueProbes
+			}
 			return nil, err
 		}
 		items[i].state = state
@@ -701,6 +935,10 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbes(items []insertBatchIte
 				})
 			}
 		}
+	}
+	if scratch != nil {
+		scratch.encoder = encoder
+		scratch.uniqueProbes = uniqueProbes
 	}
 	return uniqueProbes, nil
 }
@@ -842,11 +1080,29 @@ func uniqueProbeRunsForPreflight(runs []collectionUniqueProbeRun, preflight inse
 }
 
 func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIndex func(indexName string) bool) ([]collectionUniqueProbeRun, error) {
+	return buildUniqueProbeRunsFromSortedWithScratch(candidates, includeIndex, nil)
+}
+
+func buildUniqueProbeRunsFromSortedWithScratch(candidates []uniqueProbeCandidate, includeIndex func(indexName string) bool, scratch *insertBatchPlanScratch) ([]collectionUniqueProbeRun, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	runs := make([]collectionUniqueProbeRun, 0)
-	prefixArena := make([]byte, 0, estimateUniqueProbePrefixBytes(candidates))
+	runs := make([]collectionUniqueProbeRun, 0, 2)
+	arenaNeed := estimateUniqueProbePrefixBytes(candidates)
+	var prefixArena []byte
+	if scratch != nil && cap(scratch.uniquePrefixArena) >= arenaNeed {
+		prefixArena = scratch.uniquePrefixArena[:0]
+	} else {
+		prefixArena = make([]byte, 0, arenaNeed)
+	}
+	var allPrefixes [][]byte
+	if scratch != nil {
+		if cap(scratch.uniquePrefixes) >= len(candidates) {
+			allPrefixes = scratch.uniquePrefixes[:0]
+		} else {
+			allPrefixes = make([][]byte, 0, len(candidates))
+		}
+	}
 	for start := 0; start < len(candidates); {
 		indexName := candidates[start].indexName
 		end := start + 1
@@ -857,24 +1113,47 @@ func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIn
 			start = end
 			continue
 		}
-		run := collectionUniqueProbeRun{
-			indexName: indexName,
-			prefixes:  make([][]byte, 0, end-start),
+		var runPrefixes [][]byte
+		pStart := len(allPrefixes)
+		if scratch == nil {
+			runPrefixes = make([][]byte, 0, end-start)
 		}
 		for i := start; i < end; i++ {
 			candidate := &candidates[i]
-			if len(run.prefixes) == 0 || !bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) {
+			empty := len(runPrefixes) == 0
+			if scratch != nil {
+				empty = len(allPrefixes) == pStart
+			}
+			if empty || !bytes.Equal(candidate.encodedValue, candidates[i-1].encodedValue) {
 				var prefix []byte
 				var err error
 				prefixArena, prefix, err = appendIndexValuePrefixSlice(prefixArena, candidate.encodedValue)
 				if err != nil {
+					if scratch != nil {
+						scratch.uniquePrefixArena = prefixArena
+						scratch.uniquePrefixes = allPrefixes
+					}
 					return nil, err
 				}
-				run.prefixes = append(run.prefixes, prefix)
+				if scratch != nil {
+					allPrefixes = append(allPrefixes, prefix)
+				} else {
+					runPrefixes = append(runPrefixes, prefix)
+				}
 			}
 		}
-		runs = append(runs, run)
+		if scratch != nil {
+			runPrefixes = allPrefixes[pStart:len(allPrefixes):len(allPrefixes)]
+		}
+		runs = append(runs, collectionUniqueProbeRun{
+			indexName: indexName,
+			prefixes:  runPrefixes,
+		})
 		start = end
+	}
+	if scratch != nil {
+		scratch.uniquePrefixArena = prefixArena
+		scratch.uniquePrefixes = allPrefixes
 	}
 	return runs, nil
 }
@@ -1531,7 +1810,11 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		if alreadySorted {
 			table := newCollectionRunTable(entryCount)
-			keyArena := make([]byte, 0, keyBytes)
+			arenaIdx := -1
+			if plan.scratch != nil {
+				arenaIdx = plan.scratch.nextSecondaryArena
+			}
+			keyArena := plan.scratch.allocSecondaryKeyArena(keyBytes)
 			itemPos := 0
 			valuePos := 0
 			if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
@@ -1549,8 +1832,10 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 				}
 				return nil, nil, errors.New("collections: secondary index entry count mismatch")
 			}); err != nil {
+				plan.scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 				return err
 			}
+			plan.scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 			table.Freeze()
 			run := collectionRootRun{
 				name:           p.collection + "/index/" + runtime.def.name,
@@ -1574,7 +1859,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			continue
 		}
 
-		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, runtime.def.valueType, documentIDOrder, entryCount, keyBytes); err != nil {
+		if table, ok, err := p.emitGroupedSecondaryRunTableWithScratch(plan.scratch, items, runtimeIdx, runtime.def.name, runtime.def.valueType, documentIDOrder, entryCount, keyBytes); err != nil {
 			resetCollectionRunTables(plan.runs)
 			return err
 		} else if ok {
@@ -1601,19 +1886,25 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 
 		keys := make([][]byte, 0, entryCount)
-		keyArena := make([]byte, 0, keyBytes)
+		arenaIdx := -1
+		if plan.scratch != nil {
+			arenaIdx = plan.scratch.nextSecondaryArena
+		}
+		keyArena := plan.scratch.allocSecondaryKeyArena(keyBytes)
 		for i := range items {
 			idx := orderedItemIndex(documentIDOrder, i)
 			for _, encoded := range items[idx].state.valuesAt(runtimeIdx) {
 				var key []byte
 				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, runtime.def.valueType, encoded, items[idx].id)
 				if err != nil {
+					plan.scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 					resetCollectionRunTables(plan.runs)
 					return err
 				}
 				keys = append(keys, key)
 			}
 		}
+		plan.scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 		if len(keys) == 0 {
 			continue
 		}
@@ -1653,72 +1944,144 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 }
 
 type secondaryValueGroup struct {
-	encoded     []byte
-	documentIDs [][]byte
+	encoded []byte
+	count   int
+	origIdx uint16
 }
 
 func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem, runtimeIdx int, indexName string, valueType IndexValueType, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
+	return p.emitGroupedSecondaryRunTableWithScratch(nil, items, runtimeIdx, indexName, valueType, documentIDOrder, entryCount, keyBytes)
+}
+
+func (p insertBatchPlanner) emitGroupedSecondaryRunTableWithScratch(scratch *insertBatchPlanScratch, items []insertBatchItem, runtimeIdx int, indexName string, valueType IndexValueType, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
 	if entryCount <= 0 {
 		return nil, false, nil
 	}
-	groups := make([]secondaryValueGroup, 0, min(entryCount, secondaryGroupedRunMaxDistinctValues))
+	var groupsBuf [secondaryGroupedRunMaxDistinctValues]secondaryValueGroup
+	groups := groupsBuf[:0]
+
+	var itemBuckets []uint16
+	var entryItems []int
+	if scratch != nil && cap(scratch.groupedItemBucket) >= entryCount {
+		itemBuckets = scratch.groupedItemBucket[:0]
+	} else {
+		itemBuckets = make([]uint16, 0, entryCount)
+	}
+	if scratch != nil && cap(scratch.groupedEntryItems) >= entryCount {
+		entryItems = scratch.groupedEntryItems[:0]
+	} else {
+		entryItems = make([]int, 0, entryCount)
+	}
+	saveBucketScratch := func() {
+		if scratch != nil {
+			scratch.groupedItemBucket = itemBuckets[:0]
+			scratch.groupedEntryItems = entryItems[:0]
+		}
+	}
+
+	lastGroupIdx := -1
 	for i := range items {
 		idx := orderedItemIndex(documentIDOrder, i)
 		item := &items[idx]
 		for _, encoded := range item.state.valuesAt(runtimeIdx) {
 			groupIdx := -1
-			for j := range groups {
-				if bytes.Equal(groups[j].encoded, encoded) {
-					groupIdx = j
-					break
+			if lastGroupIdx >= 0 && bytes.Equal(groups[lastGroupIdx].encoded, encoded) {
+				groupIdx = lastGroupIdx
+			} else {
+				n := len(encoded)
+				for j := range groups {
+					if len(groups[j].encoded) == n && bytes.Equal(groups[j].encoded, encoded) {
+						groupIdx = j
+						break
+					}
 				}
 			}
 			if groupIdx < 0 {
 				if len(groups) >= secondaryGroupedRunMaxDistinctValues {
+					saveBucketScratch()
 					return nil, false, nil
 				}
-				groups = append(groups, secondaryValueGroup{encoded: encoded})
-				groupIdx = len(groups) - 1
+				groupIdx = len(groups)
+				groups = append(groups, secondaryValueGroup{
+					encoded: encoded,
+					origIdx: uint16(groupIdx),
+				})
 			}
-			groups[groupIdx].documentIDs = append(groups[groupIdx].documentIDs, item.id)
+			lastGroupIdx = groupIdx
+			groups[groupIdx].count++
+			itemBuckets = append(itemBuckets, uint16(groupIdx))
+			entryItems = append(entryItems, idx)
 		}
 	}
 	if len(groups) == 0 || len(groups) == entryCount {
+		saveBucketScratch()
 		return nil, false, nil
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		return compareIndexValuePrefixEncoded(groups[i].encoded, groups[j].encoded) < 0
 	})
 
+	var offsets [secondaryGroupedRunMaxDistinctValues]int
+	off := 0
+	for rank := range groups {
+		offsets[groups[rank].origIdx] = off
+		off += groups[rank].count
+	}
+	var ordered []int
+	if scratch != nil && cap(scratch.groupedOrder) >= len(itemBuckets) {
+		ordered = scratch.groupedOrder[:len(itemBuckets)]
+	} else {
+		ordered = make([]int, len(itemBuckets))
+	}
+	for pos, b := range itemBuckets {
+		dst := offsets[b]
+		offsets[b] = dst + 1
+		ordered[dst] = entryItems[pos]
+	}
+	if scratch != nil {
+		scratch.groupedItemBucket = itemBuckets[:0]
+		scratch.groupedEntryItems = entryItems[:0]
+		scratch.groupedOrder = ordered
+	}
+
 	table := newCollectionRunTable(entryCount)
-	keyArena := make([]byte, 0, keyBytes)
+	arenaIdx := -1
+	if scratch != nil {
+		arenaIdx = scratch.nextSecondaryArena
+	}
+	keyArena := scratch.allocSecondaryKeyArena(keyBytes)
 	groupPos := 0
-	documentPos := 0
+	groupRem := groups[0].count
+	orderedPos := 0
 	if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
 		for groupPos < len(groups) {
-			group := &groups[groupPos]
-			if documentPos < len(group.documentIDs) {
-				documentID := group.documentIDs[documentPos]
-				documentPos++
-				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, valueType, group.encoded, documentID)
+			if groupRem > 0 {
+				documentID := items[ordered[orderedPos]].id
+				orderedPos++
+				groupRem--
+				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, valueType, groups[groupPos].encoded, documentID)
 				return key, nil, err
 			}
 			groupPos++
-			documentPos = 0
+			if groupPos < len(groups) {
+				groupRem = groups[groupPos].count
+			}
 		}
 		return nil, nil, fmt.Errorf(
-			"collections: grouped secondary index entry count mismatch collection=%q index=%q runtimeIdx=%d entryCount=%d groups=%d groupPos=%d documentPos=%d",
+			"collections: grouped secondary index entry count mismatch collection=%q index=%q runtimeIdx=%d entryCount=%d groups=%d groupPos=%d orderedPos=%d",
 			p.collection,
 			indexName,
 			runtimeIdx,
 			entryCount,
 			len(groups),
 			groupPos,
-			documentPos,
+			orderedPos,
 		)
 	}); err != nil {
+		scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 		return nil, false, err
 	}
+	scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 	table.Freeze()
 	return table, true, nil
 }
