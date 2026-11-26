@@ -2266,7 +2266,12 @@ uses `manifest_revision` as its immutable generation. The replacement also
 persists an immutable `manifest.durable.<revision>.json` revision. Durable-root
 publication consumes that exact stable token in `DependencyManifestV1`; the
 fixed `manifest.json` path is a compatibility view, not the selected revision's
-identity.
+identity. Independent durable-root dependency syncs
+(`StableResourceSet.SyncThrough`), distinct directory namespace stabilizations
+(`StabilizeStableNamespaceTokens`), and multi-segment advisory `.lenidx`
+rebuild syncs may execute concurrently across distinct handles/directories when
+`durabilitycut` is disabled, preserving deterministic error ordering and strict
+sequential execution when `durabilitycut` is enabled.
 
 An ordinary successor may reuse its inherited revision while the candidate's
 external leaf files are covered by it. A successor that needs a new raw file

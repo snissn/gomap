@@ -1361,28 +1361,103 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
-	if doc, rejected, err := rejectTransactionalCommand(command, "update"); rejected {
-		return doc, err
+	var (
+		collection string
+		db         string
+		updates    []wire.Document
+		ordered    = true
+		hasMaxTime bool
+		fastParsed bool
+		singleSeq  [1]wire.Document
+	)
+	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: command}); ok {
+		var (
+			hasUpdate, hasDB, hasUpdatesField, hasOrdered, hasTxn bool
+			scanOK                                                = true
+		)
+		for len(contents) != 0 {
+			elem, next, elemOK := bsoncore.ReadElement(contents)
+			if !elemOK {
+				scanOK = false
+				break
+			}
+			kb := elem.KeyBytes()
+			switch string(kb) {
+			case "startTransaction", "autocommit", "txnNumber":
+				hasTxn = true
+			case "update":
+				if !hasUpdate {
+					if v, vOK := elem.Value().StringValueOK(); vOK && v != "" {
+						collection = v
+						hasUpdate = true
+					} else {
+						scanOK = false
+					}
+				}
+			case "$db":
+				if !hasDB {
+					if v, vOK := elem.Value().StringValueOK(); vOK && v != "" {
+						db = v
+						hasDB = true
+					} else {
+						scanOK = false
+					}
+				}
+			case "updates":
+				hasUpdatesField = true
+			case "ordered":
+				if !hasOrdered {
+					if b, bOK := elem.Value().BooleanOK(); bOK {
+						ordered = b
+						hasOrdered = true
+					} else {
+						scanOK = false
+					}
+				}
+			case "maxTimeMS":
+				hasMaxTime = true
+			}
+			if !scanOK {
+				break
+			}
+			contents = next
+		}
+		if scanOK && !hasTxn && hasUpdate && hasDB && !hasUpdatesField && len(sequences) == 1 && sequences[0].Identifier == "updates" && len(sequences[0].Documents) > 0 {
+			if len(sequences[0].Documents) == 1 {
+				singleSeq[0] = sequences[0].Documents[0]
+				updates = singleSeq[:]
+			} else {
+				updates = sequences[0].Documents
+			}
+			fastParsed = true
+		}
 	}
-	collection, err := commandString(command, "update")
-	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
-	}
-	db, err := commandString(command, "$db")
-	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	if !fastParsed {
+		if doc, rejected, err := rejectTransactionalCommand(command, "update"); rejected {
+			return doc, err
+		}
+		var err error
+		collection, err = commandString(command, "update")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		}
+		db, err = commandString(command, "$db")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		}
+		updates, err = commandDocuments(command, sequences, "updates")
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		}
+		ordered, _, err = mongoCommandOrdered(command)
+		if err != nil {
+			return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		}
+		hasMaxTime = true
 	}
 	name, err := gatewayCollectionName(db, collection)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
-	updates, err := commandDocuments(command, sequences, "updates")
-	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
-	}
-	ordered, _, err := mongoCommandOrdered(command)
-	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	if len(updates) > defaultMaxWriteBatchSize {
 		return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("Mongo gateway update exceeds maxWriteBatchSize %d", defaultMaxWriteBatchSize))
@@ -1393,13 +1468,37 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 	// Parse the entire command before opening/creating a collection or applying a
 	// mutation.  This is deliberately stricter than the legacy streaming parser:
 	// malformed later specifications never leave a partial command behind.
-	parsed := make([]mongoUpdateItem, len(updates))
-	budget, err := s.newMongoWriteBudgetForCommand(ctx, command)
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	var singleParsed [1]mongoUpdateItem
+	var parsed []mongoUpdateItem
+	if len(updates) <= len(singleParsed) {
+		parsed = singleParsed[:len(updates)]
+	} else {
+		parsed = make([]mongoUpdateItem, len(updates))
 	}
+	var budget *mongoWriteBudget
+	if hasMaxTime {
+		budget, err = s.newMongoWriteBudgetForCommand(ctx, command)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+	} else {
+		budget = s.newMongoWriteBudget()
+		if ctx != nil {
+			if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
+				budget.deadline = deadline
+			}
+		}
+	}
+	var singleKeyBuf [32]byte
+	var singleFieldsBuf [4]collections.BSONSetField
 	for i, update := range updates {
-		item, parseErr := parseMongoUpdateItem(i, update)
+		var item mongoUpdateItem
+		var parseErr error
+		if len(updates) == 1 {
+			item, parseErr = parseMongoUpdateItemInto(i, update, singleKeyBuf[:0], singleFieldsBuf[:0])
+		} else {
+			item, parseErr = parseMongoUpdateItem(i, update)
+		}
 		if parseErr != nil {
 			return mongoUpdateParseCommandError(parseErr)
 		}
@@ -1466,8 +1565,17 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 	// Only one existing-collection exact-ID structured set can cover the whole
 	// RPC. Multi-spec/DDL/upsert/selector routes keep their fresh final fence.
 	if journal != nil && !missingCollection && len(parsed) == 1 && !parsed[0].multi &&
-		mongoUpdateCanUseBSONSet(col, parsed[0]) && mongoUpdateCanUseBatch(col, parsed[0]) {
-		budget.journal = journal
+		parsed[0].exactID && !parsed[0].upsert && parsed[0].bsonSetFieldsOK &&
+		!mongoBSONSetFieldsNeedNestingValidation(parsed[0].bsonSetFields) {
+		canShareJournal := false
+		col.WithMetaView(func(meta *collections.CollectionMeta) {
+			if meta.Options.DocumentFormat == collections.DocumentFormatBSON && mongoUpdateCanUseBatchMetaPtr(meta, parsed[0]) {
+				canShareJournal = true
+			}
+		})
+		if canShareJournal {
+			budget.journal = journal
+		}
 	}
 	return s.runMongoUpdateCommand(name, col, parsed, ordered)
 }
@@ -1893,6 +2001,10 @@ func (e mongoUpdateParseError) Error() string {
 }
 
 func parseFastPureSetUpdateDoc(updateDoc wire.Document) (fields []collections.BSONSetField, setFieldsOK, bsonSetFieldsOK, handled bool) {
+	return parseFastPureSetUpdateDocInto(updateDoc, nil)
+}
+
+func parseFastPureSetUpdateDocInto(updateDoc wire.Document, fieldsBuf []collections.BSONSetField) (fields []collections.BSONSetField, setFieldsOK, bsonSetFieldsOK, handled bool) {
 	first, remaining, err := mongoMutationFirstRawElement(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: updateDoc})
 	if err != nil || first == nil || len(remaining) != 0 {
 		return nil, false, false, false
@@ -1917,7 +2029,11 @@ func parseFastPureSetUpdateDoc(updateDoc wire.Document) (fields []collections.BS
 		allJSONSupported = true
 		seen             map[string]int
 	)
-	fields = make([]collections.BSONSetField, 0, 2)
+	if cap(fieldsBuf) > 0 {
+		fields = fieldsBuf[:0]
+	} else {
+		fields = make([]collections.BSONSetField, 0, 2)
+	}
 	for len(contents) != 0 {
 		elem, next, ok := bsoncore.ReadElement(contents)
 		if !ok {
@@ -1984,6 +2100,10 @@ func parseFastPureSetUpdateDoc(updateDoc wire.Document) (fields []collections.BS
 }
 
 func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
+	return parseMongoUpdateItemInto(index, update, nil, nil)
+}
+
+func parseMongoUpdateItemInto(index int, update wire.Document, keyBuf []byte, fieldsBuf []collections.BSONSetField) (mongoUpdateItem, error) {
 	var (
 		hasArrayFilters bool
 		hasCollation    bool
@@ -2127,7 +2247,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	}
 	var key []byte
 	if directID {
-		key, err = encodePrimaryKey(id)
+		key, err = encodePrimaryKeyInto(keyBuf, id)
 		if err != nil {
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
@@ -2147,7 +2267,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
 	}
-	if bsonSetFields, setFieldsOK, bsonSetFieldsOK, handled := parseFastPureSetUpdateDoc(updateDoc); handled {
+	if bsonSetFields, setFieldsOK, bsonSetFieldsOK, handled := parseFastPureSetUpdateDocInto(updateDoc, fieldsBuf); handled {
 		return mongoUpdateItem{
 			index:           index,
 			key:             key,
@@ -2519,11 +2639,18 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 }
 
 func runMongoUpdateBatchResultsWithJournal(col *collections.Collection, updates []mongoUpdateItem, journal *standaloneOperationJournalOutcome) ([]collections.UpdateBatchResult, bool, error) {
-	if !mongoUpdateItemsCanUseBatch(col, updates) {
+	canBatch, canBSONSet := mongoUpdateItemsBatchCapabilities(col, updates)
+	if !canBatch {
 		return make([]collections.UpdateBatchResult, len(updates)), false, nil
 	}
-	if mongoUpdateItemsCanUseBSONSet(col, updates) {
-		items := make([]collections.BSONSetUpdateBatchItem, len(updates))
+	if canBSONSet {
+		var inlineItems [32]collections.BSONSetUpdateBatchItem
+		var items []collections.BSONSetUpdateBatchItem
+		if len(updates) <= len(inlineItems) {
+			items = inlineItems[:len(updates)]
+		} else {
+			items = make([]collections.BSONSetUpdateBatchItem, len(updates))
+		}
 		for i, update := range updates {
 			items[i] = collections.BSONSetUpdateBatchItem{
 				DocumentID: update.key,
@@ -3344,13 +3471,16 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 	if len(batch) == 0 || batch[0].col == nil {
 		return false
 	}
-	meta := batch[0].col.MetaView()
-	for _, req := range batch {
-		if !mongoUpdateCanUseBatchMeta(meta, req.item) {
-			return false
+	ok := true
+	batch[0].col.WithMetaView(func(meta *collections.CollectionMeta) {
+		for _, req := range batch {
+			if !mongoUpdateCanUseBatchMetaPtr(meta, req.item) {
+				ok = false
+				return
+			}
 		}
-	}
-	return true
+	})
+	return ok
 }
 
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
@@ -3364,24 +3494,52 @@ func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
-func mongoUpdateItemsCanUseBatch(col *collections.Collection, updates []mongoUpdateItem) bool {
+func mongoUpdateItemsBatchCapabilities(col *collections.Collection, updates []mongoUpdateItem) (canBatch, canBSONSet bool) {
 	if col == nil {
-		return false
+		return false, false
 	}
-	meta := col.MetaView()
+	var format collections.DocumentFormat
+	canBatch = true
+	col.WithMetaView(func(meta *collections.CollectionMeta) {
+		format = meta.Options.DocumentFormat
+		if format == collections.DocumentFormatDefault {
+			format = collections.DocumentFormatJSON
+		}
+		for _, update := range updates {
+			if !mongoUpdateCanUseBatchMetaPtr(meta, update) {
+				canBatch = false
+				return
+			}
+		}
+	})
+	if !canBatch {
+		return false, false
+	}
+	if format != collections.DocumentFormatBSON {
+		return true, false
+	}
 	for _, update := range updates {
-		if !mongoUpdateCanUseBatchMeta(meta, update) {
-			return false
+		if !update.exactID || !update.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields) {
+			return true, false
 		}
 	}
-	return true
+	return true, true
+}
+
+func mongoUpdateItemsCanUseBatch(col *collections.Collection, updates []mongoUpdateItem) bool {
+	canBatch, _ := mongoUpdateItemsBatchCapabilities(col, updates)
+	return canBatch
 }
 
 func mongoUpdateCanUseBatch(col *collections.Collection, update mongoUpdateItem) bool {
 	if col == nil {
 		return false
 	}
-	return mongoUpdateCanUseBatchMeta(col.MetaView(), update)
+	ok := false
+	col.WithMetaView(func(meta *collections.CollectionMeta) {
+		ok = mongoUpdateCanUseBatchMetaPtr(meta, update)
+	})
+	return ok
 }
 
 func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoUpdateItem) bool {
@@ -3425,7 +3583,10 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 	if col == nil {
 		return collections.DocumentFormatDefault
 	}
-	format := col.MetaView().Options.DocumentFormat
+	format := collections.DocumentFormatDefault
+	col.WithMetaView(func(meta *collections.CollectionMeta) {
+		format = meta.Options.DocumentFormat
+	})
 	if format == collections.DocumentFormatDefault {
 		return collections.DocumentFormatJSON
 	}
@@ -3433,7 +3594,11 @@ func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collection
 }
 
 func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if !update.exactID || update.upsert {
+	return mongoUpdateCanUseBatchMetaPtr(&meta, update)
+}
+
+func mongoUpdateCanUseBatchMetaPtr(meta *collections.CollectionMeta, update mongoUpdateItem) bool {
+	if meta == nil || !update.exactID || update.upsert {
 		return false
 	}
 	format := meta.Options.DocumentFormat
@@ -3447,7 +3612,7 @@ func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpd
 	} else if !update.setFieldsOK {
 		return false
 	}
-	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta, update)
+	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMetaPtr(meta, update)
 }
 
 func mongoUpdateSetFieldsTouchTopLevel(update mongoUpdateItem, topLevel string) bool {
@@ -3470,7 +3635,11 @@ func mongoUpdateSetFieldsTouchTopLevel(update mongoUpdateItem, topLevel string) 
 }
 
 func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if len(update.bsonSetFields) == 0 && update.setFields == nil {
+	return mongoUpdateSetFieldsTouchSecondaryUniqueIndexMetaPtr(&meta, update)
+}
+
+func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMetaPtr(meta *collections.CollectionMeta, update mongoUpdateItem) bool {
+	if meta == nil || (len(update.bsonSetFields) == 0 && update.setFields == nil) {
 		return true
 	}
 	for _, idx := range meta.Indexes {
@@ -8056,6 +8225,10 @@ func validateSetFieldName(key string) error {
 // EncodePrimaryKey encodes a MongoDB _id value into the canonical TreeDB
 // collection primary key used by the Mongo gateway.
 func EncodePrimaryKey(value bson.RawValue) ([]byte, error) {
+	return encodePrimaryKeyInto(nil, value)
+}
+
+func encodePrimaryKeyInto(dst []byte, value bson.RawValue) ([]byte, error) {
 	if value.IsZero() {
 		return nil, errors.New("Mongo document _id is required")
 	}
@@ -8065,7 +8238,13 @@ func EncodePrimaryKey(value bson.RawValue) ([]byte, error) {
 	if err := value.Validate(); err != nil {
 		return nil, err
 	}
-	key := make([]byte, 0, 2+len(value.Value))
+	need := 2 + len(value.Value)
+	var key []byte
+	if cap(dst) >= need {
+		key = dst[:0]
+	} else {
+		key = make([]byte, 0, need)
+	}
 	key = append(key, primaryKeyPrefixBSONValue, byte(value.Type))
 	key = append(key, value.Value...)
 	return key, nil

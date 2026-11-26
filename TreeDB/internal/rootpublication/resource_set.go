@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"hash/fnv"
 	"os"
@@ -4362,6 +4363,12 @@ func (set *StableResourceSet) SyncThrough() error {
 	if ResourceOwnerState(set.owner.Load()) == ResourceOwnerReleased {
 		return ErrResourceOwnership
 	}
+	type syncItem struct {
+		token    *StableResourceToken
+		frontier DurableFrontier
+	}
+	var inlineItems [8]syncItem
+	items := inlineItems[:0]
 	var errs []error
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		token := activeEntryToken(*entry)
@@ -4369,11 +4376,47 @@ func (set *StableResourceSet) SyncThrough() error {
 			errs = append(errs, ErrResourceOwnership)
 			return true
 		}
-		if err := token.syncThrough(entry.frontier); err != nil {
-			errs = append(errs, fmt.Errorf("sync stable resource %+v: %w", token.logicalKey(), err))
-		}
+		items = append(items, syncItem{token: token, frontier: entry.frontier})
 		return true
 	})
+	canParallel := len(items) > 1 && !durabilitycut.Enabled()
+	if canParallel {
+		for i := 0; i < len(items) && canParallel; i++ {
+			ti := items[i].token
+			for j := 0; j < i; j++ {
+				tj := items[j].token
+				if ti == tj || ti.identity == tj.identity || (ti.importedSource != nil && ti.importedSource == tj.importedSource) {
+					canParallel = false
+					break
+				}
+			}
+		}
+	}
+	if canParallel {
+		itemErrs := make([]error, len(items))
+		var wg sync.WaitGroup
+		wg.Add(len(items))
+		for i, item := range items {
+			go func(idx int, it syncItem) {
+				defer wg.Done()
+				if err := it.token.syncThrough(it.frontier); err != nil {
+					itemErrs[idx] = fmt.Errorf("sync stable resource %+v: %w", it.token.logicalKey(), err)
+				}
+			}(i, item)
+		}
+		wg.Wait()
+		for _, err := range itemErrs {
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for _, item := range items {
+		if err := item.token.syncThrough(item.frontier); err != nil {
+			errs = append(errs, fmt.Errorf("sync stable resource %+v: %w", item.token.logicalKey(), err))
+		}
+	}
 	return errors.Join(errs...)
 }
 

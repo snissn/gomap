@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -55,7 +56,14 @@ func (p *nativeJSONRows) insertTouched(id, value []byte, admit func(uint64) erro
 }
 
 func (p *nativeJSONRows) insertTouchedOwnedValue(id, value []byte, valueOwnedAndAdmitted bool, admit func(uint64) error) (*nativeJSONRow, error) {
-	charge := memtable.COWAllocationCharge(uint64(len(id)))
+	return p.insertTouchedOwned(id, value, false, valueOwnedAndAdmitted, admit)
+}
+
+func (p *nativeJSONRows) insertTouchedOwned(id, value []byte, idOwnedAndAdmitted, valueOwnedAndAdmitted bool, admit func(uint64) error) (*nativeJSONRow, error) {
+	var charge uint64
+	if !idOwnedAndAdmitted {
+		charge = memtable.COWAllocationCharge(uint64(len(id)))
+	}
 	if !(valueOwnedAndAdmitted && value != nil) {
 		valCharge := memtable.COWAllocationCharge(uint64(len(value)))
 		if valCharge > ^uint64(0)-charge {
@@ -80,8 +88,10 @@ func (p *nativeJSONRows) insertTouchedOwnedValue(id, value []byte, valueOwnedAnd
 			charge += growCharge
 		}
 	}
-	if err := admit(charge); err != nil {
-		return nil, err
+	if charge != 0 {
+		if err := admit(charge); err != nil {
+			return nil, err
+		}
 	}
 	if useInline {
 		p.rows = p.singleRow[:0]
@@ -99,7 +109,11 @@ func (p *nativeJSONRows) insertTouchedOwnedValue(id, value []byte, valueOwnedAnd
 	} else {
 		owned = bytes.Clone(value)
 	}
-	p.rows[i] = nativeJSONRow{id: bytes.Clone(id), opening: owned, current: owned}
+	ownedID := id
+	if !idOwnedAndAdmitted {
+		ownedID = bytes.Clone(id)
+	}
+	p.rows[i] = nativeJSONRow{id: ownedID, opening: owned, current: owned}
 	return &p.rows[i], nil
 }
 
@@ -816,6 +830,324 @@ func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, i
 		}
 	}
 	return true, nil
+}
+
+func (t *NativeJSONTxn) prefetchNativeBSONSetBatchRows(g *nativeJSONTxnBinding, items []BSONSetUpdateBatchItem) (bool, error) {
+	n := len(items)
+	if n <= 1 || len(g.rows.rows) != 0 || g.probe.domain.domain == nil || g.probe.domain.domain.baseRoot == 0 {
+		return false, nil
+	}
+	batchReader, ok := g.probe.capture.(nativePhysicalAdmittedBatchEntryReader)
+	if !ok {
+		return false, nil
+	}
+	var totalIDBytes uint64
+	for i := range items {
+		id := items[i].DocumentID
+		if len(id) == 0 {
+			return false, nil
+		}
+		if uint64(len(id)) > ^uint64(0)-totalIDBytes {
+			return false, memtable.ErrCOWCapacity
+		}
+		totalIDBytes += uint64(len(id))
+	}
+	depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
+	needCap := len(t.dependencies) + n
+	var depBacking uint64
+	if needCap > cap(t.dependencies) {
+		if uint64(needCap) > ^uint64(0)/depSize {
+			return false, memtable.ErrCOWCapacity
+		}
+		depBacking = memtable.COWAllocationCharge(uint64(needCap) * depSize)
+	}
+	idArenaCharge := memtable.COWAllocationCharge(totalIDBytes)
+	if idArenaCharge > ^uint64(0)-depBacking || depBacking+idArenaCharge > ^uint64(0)-t.charge {
+		return false, memtable.ErrCOWCapacity
+	}
+	if err := t.lease.Resize(t.charge + depBacking + idArenaCharge); err != nil {
+		return false, err
+	}
+	t.charge += depBacking + idArenaCharge
+	if needCap > cap(t.dependencies) {
+		next := make([]txnhistory.Dependency, len(t.dependencies), needCap)
+		copy(next, t.dependencies)
+		t.dependencies = next
+	}
+	idArena := make([]byte, totalIDBytes)
+	ns := g.namespace()
+	idOff := 0
+	var inlineOwnedIDs [32][]byte
+	var ownedIDs [][]byte
+	if n <= len(inlineOwnedIDs) {
+		ownedIDs = inlineOwnedIDs[:n]
+	} else {
+		ownedIDs = make([][]byte, n)
+	}
+	for i := range items {
+		id := items[i].DocumentID
+		dstID := idArena[idOff : idOff+len(id) : idOff+len(id)]
+		copy(dstID, id)
+		idOff += len(id)
+		ownedIDs[i] = dstID
+		t.dependencies = append(t.dependencies, txnhistory.Dependency{
+			Namespace: ns,
+			Kind:      txnhistory.PointEffect,
+			Key:       dstID,
+		})
+	}
+
+	admitStage := func(bytes uint64) error { return t.admitStage(g, bytes) }
+	if cap(g.rows.rows) < n {
+		rowSize := uint64(unsafe.Sizeof(nativeJSONRow{}))
+		if uint64(n) > ^uint64(0)/rowSize {
+			return true, memtable.ErrCOWCapacity
+		}
+		if err := admitStage(memtable.COWAllocationCharge(uint64(n) * rowSize)); err != nil {
+			return true, err
+		}
+		g.rows.rows = make([]nativeJSONRow, 0, n)
+	}
+	var inlineMissIdx [32]int
+	var inlineMissKeys [32][]byte
+	var inlineMissEntries [32]node.LeafEntry
+	var inlineMissFound [32]bool
+	var missIdx []int
+	var missKeys [][]byte
+	if n <= len(inlineMissIdx) {
+		missIdx = inlineMissIdx[:0]
+		missKeys = inlineMissKeys[:0]
+	} else {
+		missIdx = make([]int, 0, n)
+		missKeys = make([][]byte, 0, n)
+	}
+	for i := range items {
+		id := ownedIDs[i]
+		entry, resolved, memErr := g.probe.domain.memoryEntry(id)
+		if memErr != nil {
+			return true, memErr
+		}
+		if resolved {
+			var (
+				value                 []byte
+				valueOwnedAndAdmitted bool
+				err                   error
+			)
+			if entry.Flags&node.FlagTombstone != 0 {
+				value = nil
+			} else if entry.Flags&node.FlagPointer != 0 {
+				value, err = g.probe.readValue(entry.ValuePtr, admitStage)
+				if err != nil {
+					return true, err
+				}
+				valueOwnedAndAdmitted = value != nil
+			} else {
+				value = entry.Value
+			}
+			if _, err := g.rows.insertTouchedOwned(id, value, true, valueOwnedAndAdmitted, admitStage); err != nil {
+				return true, err
+			}
+			continue
+		}
+		missIdx = append(missIdx, i)
+		missKeys = append(missKeys, id)
+	}
+	if len(missKeys) > 0 {
+		var missEntries []node.LeafEntry
+		var missFound []bool
+		if len(missKeys) <= len(inlineMissEntries) {
+			missEntries = inlineMissEntries[:len(missKeys)]
+			missFound = inlineMissFound[:len(missKeys)]
+		} else {
+			missEntries = make([]node.LeafEntry, len(missKeys))
+			missFound = make([]bool, len(missKeys))
+		}
+		if err := batchReader.NativeEntriesAtRootAdmitted(g.probe.domain.domain.baseRoot, missKeys, missEntries, missFound, admitStage); err != nil {
+			return true, err
+		}
+		for m, idx := range missIdx {
+			id := ownedIDs[idx]
+			var (
+				value                 []byte
+				valueOwnedAndAdmitted bool
+				err                   error
+			)
+			if missFound[m] {
+				entry := missEntries[m]
+				if entry.Flags&node.FlagTombstone != 0 {
+					value = nil
+				} else if entry.Flags&node.FlagPointer != 0 {
+					value, err = g.probe.readValue(entry.ValuePtr, admitStage)
+					if err != nil {
+						return true, err
+					}
+					valueOwnedAndAdmitted = value != nil
+				} else {
+					value = entry.Value
+					valueOwnedAndAdmitted = value != nil
+				}
+			}
+			if _, err := g.rows.insertTouchedOwned(id, value, true, valueOwnedAndAdmitted, admitStage); err != nil {
+				return true, err
+			}
+		}
+	}
+	return true, nil
+}
+
+func (t *NativeJSONTxn) updatePrimaryOnlyBSONSetBatchInto(name string, input []BSONSetUpdateBatchItem) (result []UpdateBatchResult, resultErr error) {
+	if t == nil {
+		return nil, backenddb.ErrClosed
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.core == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if t.failure != nil {
+		return nil, t.failure
+	}
+	defer func() {
+		if resultErr != nil {
+			t.failure = resultErr
+		}
+	}()
+	g := t.binding(name)
+	if g == nil || !nativeBSONSetMeta(&g.probe.meta) {
+		return nil, errBSONSetRequiresBSONFormat
+	}
+	if len(input) == 0 {
+		return nil, nil
+	}
+	if err := t.admitRowControls(g, len(input)); err != nil {
+		return nil, err
+	}
+	controls, err := nativeTypedCheckedMul(uint64(len(input)), 2*preparedSemanticStreamMapEntryReserveBytes)
+	if err != nil {
+		return nil, err
+	}
+	var docIDCharge uint64
+	for _, item := range input {
+		n, err := nativeTypedCheckedMul(uint64(len(item.Fields)), uint64(unsafe.Sizeof(BSONSetField{}))+preparedSemanticStreamMapEntryReserveBytes+2)
+		if err != nil {
+			return nil, err
+		}
+		if err = nativeTypedCheckedAdd(&controls, n); err != nil {
+			return nil, err
+		}
+		ids := memtable.COWAllocationCharge(uint64(len(item.DocumentID)))
+		if ids > (^uint64(0)-docIDCharge)/2 {
+			return nil, memtable.ErrCOWCapacity
+		}
+		docIDCharge += 2 * ids
+	}
+	if err := t.admitStage(g, memtable.COWAllocationCharge(controls)); err != nil {
+		return nil, err
+	}
+	if err := t.admitRowControlsAndExtra(g, len(input), docIDCharge); err != nil {
+		return nil, err
+	}
+	var specsBuf [32]bsonSetUpdate
+	var specs []bsonSetUpdate
+	if len(input) <= len(specsBuf) {
+		specs = specsBuf[:0]
+	} else {
+		specs = make([]bsonSetUpdate, 0, len(input))
+	}
+	specs, err = prepareBSONSetUpdateSpecsInto(input, specs)
+	if err != nil {
+		return nil, err
+	}
+
+	g.resolvedFinal = nativeJSONResolvedFinalRows{}
+	g.primaryOnlyBSONSet = false
+
+	result = make([]UpdateBatchResult, len(input))
+	var singleDoc [1]commitlog.CollectionDocument
+	var docs []commitlog.CollectionDocument
+	if len(input) <= len(singleDoc) {
+		docs = singleDoc[:0]
+	} else {
+		docs = make([]commitlog.CollectionDocument, 0, len(input))
+	}
+	var prefetched bool
+	if len(input) > 1 {
+		prefetched, err = t.prefetchNativeBSONSetBatchRows(g, input)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range input {
+		var row *nativeJSONRow
+		if prefetched {
+			row = g.rows.find(input[i].DocumentID)
+		} else {
+			row, err = t.touchNativeRow(g, input[i].DocumentID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if row == nil || row.current == nil {
+			continue
+		}
+		result[i].Matched = true
+		spec := specs[i]
+		n := uint64(len(row.current)) + uint64(bsonSetReplacementSlackBytes)
+		for _, field := range spec.fields {
+			for _, size := range [...]uint64{2, uint64(len(field.Key)), uint64(len(field.Value.Value))} {
+				if err := nativeTypedCheckedAdd(&n, size); err != nil {
+					return nil, updateBatchItemError(i, err)
+				}
+			}
+		}
+		if n > uint64(int(^uint(0)>>1)) {
+			return nil, updateBatchItemError(i, memtable.ErrCOWCapacity)
+		}
+		if err := t.admitStage(g, memtable.COWAllocationCharge(n)); err != nil {
+			return nil, updateBatchItemError(i, err)
+		}
+		_, document, modified, err := callBSONSetUpdateAppendReplacement(spec, make([]byte, 0, int(n)), row.current)
+		if err != nil {
+			return nil, updateBatchItemError(i, err)
+		}
+		if !modified {
+			continue
+		}
+		if len(document) == 0 {
+			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
+		}
+		if len(row.current) < 4 || int(binary.LittleEndian.Uint32(row.current[:4])) != len(row.current) {
+			if err := validateBSONReplacementPreservesID(row.current, document, collectionOptions{documentFormat: DocumentFormatBSON}); err != nil {
+				return nil, updateBatchItemError(i, err)
+			}
+		}
+		row.current = document
+		row.currentState = nil
+		result[i].Modified = true
+		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: row.current})
+	}
+	if len(docs) == 0 {
+		return result, nil
+	}
+	if err = t.admitMemberPayload(g, docs, nil); err != nil {
+		return nil, err
+	}
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload(g.name, docs)
+	if err != nil {
+		return nil, err
+	}
+	if err = t.appendNativeMember(g, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload); err != nil {
+		return nil, err
+	}
+	allInPlace := len(g.rows.rows) > 0
+	for _, row := range g.rows.rows {
+		if row.opening == nil || row.current == nil {
+			allInPlace = false
+			break
+		}
+	}
+	g.primaryOnlyBSONSet = allInPlace
+	return result, nil
 }
 
 func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, id []byte, insert bool) (*nativeJSONRow, error) {

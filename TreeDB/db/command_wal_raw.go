@@ -1717,6 +1717,21 @@ func (db *DB) FinalizeNativeRawUnderGuard(guard *CommandWALStagingGuardV1, outer
 	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, outer, false)
 }
 
+var (
+	emptyRawKVBatchPayloadV1 = func() []byte {
+		payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+		if err != nil {
+			panic(err)
+		}
+		return payload
+	}()
+	errRawKVScanNonEmpty = errors.New("raw kv scan non-empty")
+)
+
+func emptyRawKVRIDLookup(page.ValuePtr) (uint64, bool) {
+	return 0, false
+}
+
 func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int, outer *CommandWALIntent, inlineOnly bool) error {
 	if db.closing.Load() {
 		return ErrClosed
@@ -1729,6 +1744,19 @@ func (db *DB) finalizeRawKVEntryScanForOwnedCachedPublication(prepare func() err
 	}
 	if err := prepare(); err != nil {
 		return err
+	}
+	if opHint == 0 {
+		empty := true
+		scanErr := scanEntries(func(batchpkg.Entry) error {
+			empty = false
+			return errRawKVScanNonEmpty
+		})
+		if scanErr == nil && empty {
+			return finalize(emptyRawKVBatchPayloadV1, emptyRawKVRIDLookup)
+		}
+		if scanErr != nil && !errors.Is(scanErr, errRawKVScanNonEmpty) {
+			return scanErr
+		}
 	}
 	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint, false)
 	if intent == nil || err != nil {

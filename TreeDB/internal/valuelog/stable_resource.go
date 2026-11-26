@@ -2352,6 +2352,8 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.creationUnsupported, w.creationUncertified = false, false
 	w.bw = nil
 	w.size = preparedInfo.Size()
+	w.writtenFileBytes = w.size
+	w.writebackBytes = w.size
 	w.fileID = fileID
 	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]

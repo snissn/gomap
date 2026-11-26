@@ -4530,6 +4530,46 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 	return *meta
 }
 
+// WithMetaView synchronously passes a read-only view of the collection's
+// current metadata to fn without allocating a deep copy on the native COW hot
+// path. Callers must not mutate meta or retain slices derived from it after fn
+// returns.
+func (c *Collection) WithMetaView(fn func(meta *CollectionMeta)) {
+	if c == nil || fn == nil {
+		return
+	}
+	if c.nativeJSON != nil {
+		if c.nativeJSON.db != nil {
+			handled := c.nativeJSON.db.WithNativeSemanticStateReadOnly(func(state backenddb.NativeSemanticState) bool {
+				engine, ok := state.(*nativeEngineVersion)
+				if !ok || engine == nil || engine.inventory != nil {
+					return false
+				}
+				colState, ok := engine.names.Get(c.meta.Name)
+				if !ok || colState == nil || colState.schema == nil || colState.schema.meta == nil {
+					return false
+				}
+				fn(colState.schema.meta)
+				return true
+			})
+			if handled {
+				return
+			}
+		}
+		if read, err := c.nativeJSON.captureCatalog(c.meta.Name); err == nil {
+			fn(read.collection.schema.meta)
+			_ = read.Close()
+			return
+		}
+		meta := c.meta.copy()
+		fn(meta)
+		return
+	}
+	c.catalogMu.RLock()
+	fn(&c.meta)
+	c.catalogMu.RUnlock()
+}
+
 // SameCachedCatalog reports whether both handles are cached against the same
 // collection catalog state. Native handles authenticate their logical
 // incarnation/schema under complete-cut captures. DATA pages can be reused after their snapshots are
@@ -4537,6 +4577,9 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 func (c *Collection) SameCachedCatalog(other *Collection) bool {
 	if c == nil || other == nil {
 		return false
+	}
+	if c == other {
+		return c.manager == nil || !c.manager.isClosing()
 	}
 	if c.nativeJSON != nil || other.nativeJSON != nil {
 		if c.nativeJSON == nil || other.nativeJSON == nil || c.nativeJSON.db != other.nativeJSON.db || c.name != other.name || c.manager.isClosing() || other.manager.isClosing() {

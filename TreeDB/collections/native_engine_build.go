@@ -69,6 +69,20 @@ func nativeEngineBuildMaxSourceEntries(captured *nativeEngineVersion, target uin
 			domainSet = c.domains
 		}
 		domainSet.Scan(func(_ string, d *nativeDomainState) bool {
+			if d.baseRoot == 0 {
+				sources := 0
+				if d.pending != nil && d.pending.Len() > 0 {
+					sources++
+				}
+				for pos := d.captured; pos != nil; pos = pos.older {
+					if pos.source != nil && pos.source.root != nil && pos.source.root.Len() > 0 {
+						sources++
+					}
+				}
+				if sources <= 1 {
+					return true
+				}
+			}
 			if d.pending != nil {
 				if n := d.pending.Len(); n > maxEntries {
 					maxEntries = n

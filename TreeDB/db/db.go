@@ -5255,6 +5255,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
 		db.mu.RLock()
 		visibleCommitSeq := db.meta.CommitSeq
+		visibleAppliedLSN := db.meta.AppliedCommandLSN
 		db.mu.RUnlock()
 		db.writeMu.Unlock()
 		// Let post-cut writers enter while the coordinator makes the captured
@@ -5270,7 +5271,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 			return publicRootPublicationErrorV1(err)
 		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
-		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefixWithDurableApplied(commitlog.SealedRotationDebt{}, visibleAppliedLSN)
 		if err != nil {
 			return err
 		}
@@ -5363,6 +5364,10 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 // latest assigned LSN, dependency debt, active segment sync, and frontier
 // publication describe one append-serialization cut.
 func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDebt) (rotated, advanced bool, err error) {
+	return db.closeCommandWALCheckpointPrefixWithDurableApplied(sealed, 0)
+}
+
+func (db *DB) closeCommandWALCheckpointPrefixWithDurableApplied(sealed commitlog.SealedRotationDebt, durableAppliedLSN uint64) (rotated, advanced bool, err error) {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return false, false, nil
 	}
@@ -5381,17 +5386,24 @@ func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDeb
 	// establish that recovery baseline; an explicit durable append/barrier may
 	// independently advance commandWALDurableLSN through its own contract.
 	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+	coveredByDurableRoot := db.durability == DurabilityWALOnRelaxed &&
+		!durabilitycut.Enabled() &&
+		!db.testFailCommandWALFlush.Load() &&
+		durableAppliedLSN >= frontier
 	if advanced {
 		if err := db.syncCommandWALDependenciesWithSealedDebt(frontier, nil, sealed); err != nil {
 			return false, false, err
 		}
 	}
 	if db.CommandWALActiveBytes() > 0 {
-		if err := db.RotateCommandWALActiveSegment(true); err != nil {
+		// When relaxed mode's active WAL segment is already 100% covered by the
+		// durable root that just crossed WaitThrough, rotate without fsyncing the
+		// superseded segment right before cleanup unlinks it.
+		if err := db.RotateCommandWALActiveSegment(!coveredByDurableRoot); err != nil {
 			return false, false, err
 		}
 		rotated = true
-	} else if advanced {
+	} else if advanced && !coveredByDurableRoot {
 		// Automatic rotations retain exact stable handles in dependency debt.
 		// Sync the current (possibly empty) active target as the final journal
 		// boundary after those older exact handles have crossed their barriers.

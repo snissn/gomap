@@ -365,6 +365,19 @@ func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
 	}
 	return db.nativeSemanticBridge.CaptureNativeCut()
 }
+
+func (db *DB) WithNativeSemanticStateReadOnly(fn func(NativeSemanticState) bool) bool {
+	if !db.HasNativeSemanticBridge() || fn == nil {
+		return false
+	}
+	reader, ok := db.nativeSemanticBridge.(interface {
+		WithNativeSemanticStateReadOnly(func(NativeSemanticState) bool) bool
+	})
+	if !ok {
+		return false
+	}
+	return reader.WithNativeSemanticStateReadOnly(fn)
+}
 func (db *DB) BeginNativeConditionalTxn() (NativeConditionalTxn, error) {
 	if !db.HasNativeSemanticBridge() {
 		return nil, ErrNativeSemanticUnsupported

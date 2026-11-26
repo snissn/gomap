@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -724,10 +725,12 @@ func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
 		return
 	}
 	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
+	if len(rawFileIDs) == 0 {
+		return
+	}
 	var reports []error
 	var firstSourceErr error
-	for _, rawFileID := range rawFileIDs {
-		sourceErr, indexErr := db.persistLeafGenerationRecordLengthIndex(rawFileID)
+	recordResult := func(rawFileID uint32, sourceErr, indexErr error) {
 		switch {
 		case sourceErr != nil:
 			err := fmt.Errorf("read leaf generation record lengths for raw file %d: %w", rawFileID, sourceErr)
@@ -737,6 +740,27 @@ func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
 			}
 		case indexErr != nil:
 			reports = append(reports, fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", rawFileID, indexErr))
+		}
+	}
+	if len(rawFileIDs) > 1 && !durabilitycut.Enabled() {
+		sourceErrs := make([]error, len(rawFileIDs))
+		indexErrs := make([]error, len(rawFileIDs))
+		var wg sync.WaitGroup
+		wg.Add(len(rawFileIDs))
+		for i, rawFileID := range rawFileIDs {
+			go func(idx int, fid uint32) {
+				defer wg.Done()
+				sourceErrs[idx], indexErrs[idx] = db.persistLeafGenerationRecordLengthIndex(fid)
+			}(i, rawFileID)
+		}
+		wg.Wait()
+		for i, rawFileID := range rawFileIDs {
+			recordResult(rawFileID, sourceErrs[i], indexErrs[i])
+		}
+	} else {
+		for _, rawFileID := range rawFileIDs {
+			sourceErr, indexErr := db.persistLeafGenerationRecordLengthIndex(rawFileID)
+			recordResult(rawFileID, sourceErr, indexErr)
 		}
 	}
 	// Retain the authoritative source failure before calling user code. Only

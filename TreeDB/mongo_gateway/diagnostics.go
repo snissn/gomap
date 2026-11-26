@@ -4,11 +4,13 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 // Diagnostics deliberately reports only values that this standalone gateway can
@@ -21,10 +23,22 @@ type mongoCommandDiagnostic struct {
 	LatencyNanos int64
 }
 
+type mongoCommandDiagnosticCounters struct {
+	Count        atomic.Int64
+	Errors       atomic.Int64
+	LatencyNanos atomic.Int64
+}
+
 type mongoNamespaceDiagnostic struct {
 	Count        int64
 	Errors       int64
 	LatencyNanos int64
+}
+
+type mongoNamespaceDiagnosticCounters struct {
+	Count        atomic.Int64
+	Errors       atomic.Int64
+	LatencyNanos atomic.Int64
 }
 
 var errDiagnosticLiveDocumentCap = errors.New("Mongo gateway diagnostics live document count exceeds bounded scan limit")
@@ -50,6 +64,19 @@ func commandResponseOK(response wire.Document) bool {
 	if response == nil {
 		return false
 	}
+	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: response}); ok {
+		for len(contents) != 0 {
+			elem, next, elemOK := bsoncore.ReadElement(contents)
+			if !elemOK {
+				break
+			}
+			if string(elem.KeyBytes()) == "ok" {
+				v, valid := elem.Value().DoubleOK()
+				return valid && v == 1
+			}
+			contents = next
+		}
+	}
 	ok, valid := bson.Raw(response).Lookup("ok").DoubleOK()
 	return valid && ok == 1
 }
@@ -58,34 +85,93 @@ func (s *Server) noteDiagnosticCommand(name string, command wire.Document, elaps
 	if s == nil {
 		return
 	}
+	admitted := diagnosticCommandAdmitted(name)
+	var dbName, colName string
+	if !failed && diagnosticCollectionScopedCommand(name) {
+		dbName, colName = diagnosticCommandNamespaceParts(name, command)
+	}
+	elapsedNanos := elapsed.Nanoseconds()
+
+	// Fast path: read-locked lookup + atomic increments (zero write lock, zero
+	// string concatenation for steady-state commands and namespaces).
+	s.diagnosticsMu.RLock()
+	var cmdCounters *mongoCommandDiagnosticCounters
+	if admitted && s.diagnosticsCommands != nil {
+		cmdCounters = s.diagnosticsCommands[name]
+	}
+	var nsCounters *mongoNamespaceDiagnosticCounters
+	needNamespace := dbName != "" && colName != ""
+	if needNamespace && s.diagnosticsNamespacesByDB != nil {
+		if byCol := s.diagnosticsNamespacesByDB[dbName]; byCol != nil {
+			nsCounters = byCol[colName]
+		}
+	}
+	if (!admitted || cmdCounters != nil) && (!needNamespace || nsCounters != nil) {
+		if admitted {
+			cmdCounters.Count.Add(1)
+			cmdCounters.LatencyNanos.Add(elapsedNanos)
+			if failed {
+				cmdCounters.Errors.Add(1)
+			}
+		} else {
+			s.diagnosticsDroppedCommands.Add(1)
+		}
+		if needNamespace {
+			nsCounters.Count.Add(1)
+			nsCounters.LatencyNanos.Add(elapsedNanos)
+		}
+		s.diagnosticsMu.RUnlock()
+		return
+	}
+	s.diagnosticsMu.RUnlock()
+
+	// Slow path: register first-seen command or namespace under write lock.
 	s.diagnosticsMu.Lock()
 	if s.diagnosticsCommands == nil {
-		s.diagnosticsCommands = make(map[string]mongoCommandDiagnostic)
+		s.diagnosticsCommands = make(map[string]*mongoCommandDiagnosticCounters)
 	}
 	if s.diagnosticsNamespaces == nil {
-		s.diagnosticsNamespaces = make(map[string]mongoNamespaceDiagnostic)
+		s.diagnosticsNamespaces = make(map[string]*mongoNamespaceDiagnosticCounters)
 	}
-	if diagnosticCommandAdmitted(name) {
+	if s.diagnosticsNamespacesByDB == nil {
+		s.diagnosticsNamespacesByDB = make(map[string]map[string]*mongoNamespaceDiagnosticCounters)
+	}
+	if admitted {
 		metric := s.diagnosticsCommands[name]
-		metric.Count++
-		metric.LatencyNanos += elapsed.Nanoseconds()
+		if metric == nil {
+			metric = &mongoCommandDiagnosticCounters{}
+			s.diagnosticsCommands[name] = metric
+		}
+		metric.Count.Add(1)
+		metric.LatencyNanos.Add(elapsedNanos)
 		if failed {
-			metric.Errors++
+			metric.Errors.Add(1)
 		}
-		s.diagnosticsCommands[name] = metric
 	} else {
-		s.diagnosticsDroppedCommands++
+		s.diagnosticsDroppedCommands.Add(1)
 	}
-	if namespace := diagnosticCommandNamespace(name, command); namespace != "" && !failed {
-		if _, exists := s.diagnosticsNamespaces[namespace]; !exists && len(s.diagnosticsNamespaces) >= s.maxFindScanDocuments() {
-			s.diagnosticsDroppedNamespaces++
-			s.diagnosticsMu.Unlock()
-			return
+	if needNamespace {
+		byCol := s.diagnosticsNamespacesByDB[dbName]
+		var ns *mongoNamespaceDiagnosticCounters
+		if byCol != nil {
+			ns = byCol[colName]
 		}
-		ns := s.diagnosticsNamespaces[namespace]
-		ns.Count++
-		ns.LatencyNanos += elapsed.Nanoseconds()
-		s.diagnosticsNamespaces[namespace] = ns
+		if ns == nil {
+			if len(s.diagnosticsNamespaces) >= s.maxFindScanDocuments() {
+				s.diagnosticsDroppedNamespaces.Add(1)
+				s.diagnosticsMu.Unlock()
+				return
+			}
+			ns = &mongoNamespaceDiagnosticCounters{}
+			if byCol == nil {
+				byCol = make(map[string]*mongoNamespaceDiagnosticCounters)
+				s.diagnosticsNamespacesByDB[dbName] = byCol
+			}
+			byCol[colName] = ns
+			s.diagnosticsNamespaces[dbName+"."+colName] = ns
+		}
+		ns.Count.Add(1)
+		ns.LatencyNanos.Add(elapsedNanos)
 	}
 	s.diagnosticsMu.Unlock()
 }
@@ -95,6 +181,50 @@ func diagnosticCommandAdmitted(name string) bool {
 	return admitted
 }
 
+func diagnosticCommandNamespaceParts(name string, command wire.Document) (db, collection string) {
+	field := name
+	if name == "getMore" {
+		field = "collection"
+	}
+	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: command}); ok {
+		var hasDB, hasCol bool
+		for len(contents) != 0 {
+			elem, next, ok := bsoncore.ReadElement(contents)
+			if !ok {
+				break
+			}
+			kb := elem.KeyBytes()
+			if !hasDB && string(kb) == "$db" {
+				if v, ok := elem.Value().StringValueOK(); ok {
+					db = v
+					hasDB = true
+				}
+			} else if !hasCol && string(kb) == field {
+				if v, ok := elem.Value().StringValueOK(); ok {
+					collection = v
+					hasCol = true
+				}
+			}
+			if hasDB && hasCol {
+				return db, collection
+			}
+			contents = next
+		}
+		if hasDB && hasCol {
+			return db, collection
+		}
+	}
+	db, ok := bson.Raw(command).Lookup("$db").StringValueOK()
+	if !ok || db == "" {
+		return "", ""
+	}
+	collection, ok = bson.Raw(command).Lookup(field).StringValueOK()
+	if !ok || collection == "" {
+		return "", ""
+	}
+	return db, collection
+}
+
 func diagnosticCommandNamespace(name string, command wire.Document) string {
 	// Only commands whose primary argument is a collection name contribute to
 	// namespace totals. Several supported administrative commands use the
@@ -102,16 +232,8 @@ func diagnosticCommandNamespace(name string, command wire.Document) string {
 	if !diagnosticCollectionScopedCommand(name) {
 		return ""
 	}
-	db, ok := bson.Raw(command).Lookup("$db").StringValueOK()
-	if !ok || db == "" {
-		return ""
-	}
-	field := name
-	if name == "getMore" {
-		field = "collection"
-	}
-	collection, ok := bson.Raw(command).Lookup(field).StringValueOK()
-	if !ok || collection == "" {
+	db, collection := diagnosticCommandNamespaceParts(name, command)
+	if db == "" || collection == "" {
 		return ""
 	}
 	return db + "." + collection
@@ -133,17 +255,25 @@ func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoC
 	if !s.diagnosticsStartedAt.IsZero() {
 		uptime = int64(time.Since(s.diagnosticsStartedAt).Seconds())
 	}
-	s.diagnosticsMu.Lock()
+	s.diagnosticsMu.RLock()
 	commands = make(map[string]mongoCommandDiagnostic, len(s.diagnosticsCommands))
 	for name, metric := range s.diagnosticsCommands {
-		commands[name] = metric
+		commands[name] = mongoCommandDiagnostic{
+			Count:        metric.Count.Load(),
+			Errors:       metric.Errors.Load(),
+			LatencyNanos: metric.LatencyNanos.Load(),
+		}
 	}
 	namespaces = make(map[string]mongoNamespaceDiagnostic, len(s.diagnosticsNamespaces))
 	for name, metric := range s.diagnosticsNamespaces {
-		namespaces[name] = metric
+		namespaces[name] = mongoNamespaceDiagnostic{
+			Count:        metric.Count.Load(),
+			Errors:       metric.Errors.Load(),
+			LatencyNanos: metric.LatencyNanos.Load(),
+		}
 	}
-	droppedCommands, droppedNamespaces = s.diagnosticsDroppedCommands, s.diagnosticsDroppedNamespaces
-	s.diagnosticsMu.Unlock()
+	droppedCommands, droppedNamespaces = s.diagnosticsDroppedCommands.Load(), s.diagnosticsDroppedNamespaces.Load()
+	s.diagnosticsMu.RUnlock()
 	return uptime, commands, namespaces, droppedCommands, droppedNamespaces
 }
 

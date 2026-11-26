@@ -682,11 +682,24 @@ func (l *leafPageLogWithRecordLengthHints) noteLeafPageBatchPointers(leafPages [
 	if len(ptrs) != len(leafPages) {
 		return fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
 	}
+	if l.db == nil {
+		return nil
+	}
 	for i, ptr := range ptrs {
 		// Batch logs guarantee returned pointers are positional: ptrs[i]
 		// references leafPages[i].
-		l.noteLeafPagePointer(leafPages[i], ptr)
+		l.db.storeLeafPageReadCache(ptr, leafPages[i])
 	}
+	var fallbackRecordLen uint32
+	if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
+		for _, ptr := range ptrs {
+			if ptr.RecordLength() == 0 {
+				fallbackRecordLen = provider.LastLeafPageRecordLength()
+				break
+			}
+		}
+	}
+	l.db.noteLeafGenerationRecordLengthsBatch(ptrs, fallbackRecordLen)
 	return nil
 }
 

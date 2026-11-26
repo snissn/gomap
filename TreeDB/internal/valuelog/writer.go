@@ -21,8 +21,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+const valuelogWritebackStrideBytes = 2 << 20
 
 const headerWithoutCRC = HeaderSize - 4
 
@@ -113,6 +116,8 @@ type Writer struct {
 	stableResourceObserved bool
 	bw                     *bufio.Writer
 	size                   int64
+	writtenFileBytes       int64
+	writebackBytes         int64
 	fileID                 uint32
 	appendBuf              []byte
 	appendMax              int
@@ -307,6 +312,11 @@ func (w *Writer) writeAllToFile(buf []byte) error {
 		if n == 0 {
 			return errors.New("valuelog: short write")
 		}
+	}
+	w.writtenFileBytes += int64(written)
+	if !durabilitycut.Enabled() && w.syncFn == nil && w.writtenFileBytes-w.writebackBytes >= valuelogWritebackStrideBytes {
+		w.writebackBytes = w.writtenFileBytes
+		_ = stableio.BeginWriteback(w.f, uint64(w.writtenFileBytes))
 	}
 	return nil
 }
@@ -746,6 +756,8 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		return nil, err
 	}
 	w.size = info.Size()
+	w.writtenFileBytes = w.size
+	w.writebackBytes = w.size
 	w.fileID = fileID
 	w.appendMax = defaultBufferSize
 	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes

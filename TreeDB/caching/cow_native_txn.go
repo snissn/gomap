@@ -15,8 +15,8 @@ import (
 
 // nativeConditionalTxn adapts only method names; its sole opening owner is P1.
 type nativeConditionalTxn struct {
-	*ConditionalTxn
-	lease *memtable.COWExternalLease
+	ConditionalTxn
+	nativeClosed bool
 }
 
 // BeginNativeConditionalTxn uses the original P1 opening Snapshot, sequence,
@@ -34,17 +34,12 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 	if db == nil || db.cow == nil {
 		return nil, ErrCOWUnsupported
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ConditionalTxn{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{})))
-	lease, err := db.cow.budget.AcquireExternal(charge)
-	if err != nil {
+	extraCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{})))
+	tx := &nativeConditionalTxn{}
+	if err := db.initOwnedCOWTxnWithOptions(&tx.ConditionalTxn, db.cow.txnOwner, false, nil, extraCharge, true); err != nil {
 		return nil, err
 	}
-	tx := new(ConditionalTxn)
-	if err := db.InitOwnedCOWTxn(tx, db.cow.txnOwner, nil); err != nil {
-		lease.Close()
-		return nil, err
-	}
-	return &nativeConditionalTxn{ConditionalTxn: tx, lease: lease}, nil
+	return tx, nil
 }
 
 // A successful drain cannot reclaim unchanged owners retained by a reader.
@@ -330,25 +325,25 @@ func (db *DB) nativePressureDrainEnabled() bool {
 }
 
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {
+	if tx == nil || tx.nativeClosed || tx.closed || tx.snap == nil {
 		return nil
 	}
 	return tx.snap.NativeSemanticState()
 }
 func (tx *nativeConditionalTxn) Snapshot() *backenddb.Snapshot {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil || tx.snap.cowCut == nil {
+	if tx == nil || tx.nativeClosed || tx.closed || tx.snap == nil || tx.snap.cowCut == nil {
 		return nil
 	}
 	return tx.snap.cowCut.basis.snapshot
 }
 func (tx *nativeConditionalTxn) LogicalSequence() uint64 {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed {
+	if tx == nil || tx.nativeClosed || tx.closed {
 		return 0
 	}
 	return tx.startSeq
 }
 func (tx *nativeConditionalTxn) AdmitNativeBytes(bytes uint64) (backenddb.NativeAllocationReceipt, error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return nil, backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {
@@ -357,13 +352,13 @@ func (tx *nativeConditionalTxn) AdmitNativeBytes(bytes uint64) (backenddb.Native
 	return tx.db.cow.budget.AdmitNativeBytes(bytes)
 }
 func (tx *nativeConditionalTxn) NativeAllocator() backenddb.NativeSemanticAllocator {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.db == nil {
+	if tx == nil || tx.nativeClosed || tx.closed || tx.db == nil {
 		return nil
 	}
 	return tx.db.cow.budget
 }
 func (tx *nativeConditionalTxn) NativeMaintenanceAllocator() backenddb.NativeSemanticAllocator {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.db == nil {
+	if tx == nil || tx.nativeClosed || tx.closed || tx.db == nil {
 		return nil
 	}
 	return tx.db.cow.maintenance
@@ -372,7 +367,7 @@ func (tx *nativeConditionalTxn) NativeMaintenanceAllocator() backenddb.NativeSem
 // CheckNativeRetryCatalog proves continuity through this new opening and up
 // to the current accepted cut. The new opening owns its own commit check.
 func (tx *nativeConditionalTxn) CheckNativeRetryCatalog(start uint64, name []byte) error {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return backenddb.ErrConditionalTxnClosed
 	}
 	if err := tx.ensureOpen(); err != nil {
@@ -393,7 +388,7 @@ func (tx *nativeConditionalTxn) CheckNativeRetryCatalog(start uint64, name []byt
 }
 
 func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPublication, intent *backenddb.CommandWALIntent, sync bool) (result backenddb.NativePublicationResult, err error) {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return result, backenddb.ErrConditionalTxnClosed
 	}
 	if err = tx.ensureOpen(); err != nil {
@@ -426,24 +421,20 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 // Close detaches the original facade/core aliases before the independent
 // containing-allocation receipt is refunded. Repeated observation is harmless.
 func (tx *nativeConditionalTxn) Close() error {
-	if tx == nil || tx.ConditionalTxn == nil {
+	if tx == nil || tx.nativeClosed {
 		return nil
 	}
-	core, lease := tx.ConditionalTxn, tx.lease
-	tx.ConditionalTxn, tx.lease = nil, nil
+	tx.nativeClosed = true
 	// Enqueue native private edges before the original opening cut ends.
 	var releaseErr error
-	if core.batch != nil {
-		releaseErr = core.batch.releaseNativePublication()
+	if tx.batch != nil {
+		releaseErr = tx.batch.releaseNativePublication()
 	}
-	err := joinCOWCleanupError(core.Close(), releaseErr)
-	core = nil
-	lease.Close()
-	return err
+	return joinCOWCleanupError(tx.ConditionalTxn.Close(), releaseErr)
 }
 
 func (tx *nativeConditionalTxn) NativeRawEntries() []batch.Entry {
-	if tx == nil || tx.ConditionalTxn == nil || tx.closed {
+	if tx == nil || tx.nativeClosed || tx.closed {
 		return nil
 	}
 	return tx.batch.EntriesForTxn()

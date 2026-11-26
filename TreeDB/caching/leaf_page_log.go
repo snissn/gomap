@@ -160,6 +160,23 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	}
 }
 
+func (db *DB) noteLeafGenerationRecordLengths(ptrs []page.ValuePtr) {
+	if db == nil || db.backend == nil || len(ptrs) == 0 {
+		return
+	}
+	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLengths([]page.ValuePtr) }); ok {
+		notifier.NoteLeafGenerationRecordLengths(ptrs)
+		return
+	}
+	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLength(page.ValuePtr) }); ok {
+		for _, ptr := range ptrs {
+			if ptr.FileID != 0 && ptr.Offset != 0 {
+				notifier.NoteLeafGenerationRecordLength(ptr)
+			}
+		}
+	}
+}
+
 func (l *cachingLeafPageLog) Close() error {
 	if l == nil || l.db == nil || l.lane == nil {
 		return nil
@@ -321,8 +338,8 @@ func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([
 			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
-		l.db.noteLeafGenerationRecordLength(ptr)
 	}
+	l.db.noteLeafGenerationRecordLengths(valuePtrs)
 	releaseResources = false
 	return leafPtrs, resources, nil
 }
@@ -438,8 +455,8 @@ func (l *cachingLeafPageLog) appendPreparedLeafPages(leafPages [][]byte, prepare
 			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
-		l.db.noteLeafGenerationRecordLength(ptr)
 	}
+	l.db.noteLeafGenerationRecordLengths(valuePtrs)
 	releaseResources = false
 	return leafPtrs, resources, nil
 }

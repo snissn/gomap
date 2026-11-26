@@ -167,11 +167,12 @@ type Server struct {
 	authorizationAllowed         atomic.Uint64
 	authorizationDenied          atomic.Uint64
 	diagnosticsStartedAt         time.Time
-	diagnosticsMu                sync.Mutex
-	diagnosticsCommands          map[string]mongoCommandDiagnostic
-	diagnosticsNamespaces        map[string]mongoNamespaceDiagnostic
-	diagnosticsDroppedCommands   int64
-	diagnosticsDroppedNamespaces int64
+	diagnosticsMu                sync.RWMutex
+	diagnosticsCommands          map[string]*mongoCommandDiagnosticCounters
+	diagnosticsNamespaces        map[string]*mongoNamespaceDiagnosticCounters
+	diagnosticsNamespacesByDB    map[string]map[string]*mongoNamespaceDiagnosticCounters
+	diagnosticsDroppedCommands   atomic.Int64
+	diagnosticsDroppedNamespaces atomic.Int64
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool
@@ -211,17 +212,18 @@ type serverCursor struct {
 
 func NewServer() *Server {
 	s := &Server{
-		MaxMessageLength:         wire.DefaultMaxMessageLength,
-		UpdateCoalescingMaxDelay: defaultUpdateCoalescingDelay,
-		UpdateCoalescingMaxBatch: defaultUpdateCoalescingBatch,
-		UpdateCoalescingIdleTTL:  defaultUpdateCoalescingIdleTTL,
-		InsertCoalescingMaxDelay: defaultInsertCoalescingDelay,
-		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
-		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
-		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
-		diagnosticsStartedAt:     time.Now(),
-		diagnosticsCommands:      make(map[string]mongoCommandDiagnostic),
-		diagnosticsNamespaces:    make(map[string]mongoNamespaceDiagnostic),
+		MaxMessageLength:          wire.DefaultMaxMessageLength,
+		UpdateCoalescingMaxDelay:  defaultUpdateCoalescingDelay,
+		UpdateCoalescingMaxBatch:  defaultUpdateCoalescingBatch,
+		UpdateCoalescingIdleTTL:   defaultUpdateCoalescingIdleTTL,
+		InsertCoalescingMaxDelay:  defaultInsertCoalescingDelay,
+		InsertCoalescingMaxBatch:  defaultInsertCoalescingBatch,
+		InsertCoalescingIdleTTL:   defaultInsertCoalescingIdleTTL,
+		ClusterIdempotencyNonce:   newClusterIdempotencyNonce(),
+		diagnosticsStartedAt:      time.Now(),
+		diagnosticsCommands:       make(map[string]*mongoCommandDiagnosticCounters),
+		diagnosticsNamespaces:     make(map[string]*mongoNamespaceDiagnosticCounters),
+		diagnosticsNamespacesByDB: make(map[string]map[string]*mongoNamespaceDiagnosticCounters),
 	}
 	s.nextResponseID.Store(0)
 	return s

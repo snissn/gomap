@@ -1027,6 +1027,7 @@ func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSna
 	if s == nil {
 		return rootDomainSnapshot{}
 	}
+	s.ensureCOWDomains()
 	shardIdx := 0
 	if s.db != nil {
 		shardIdx = s.db.shardIndex(key)
@@ -1046,6 +1047,7 @@ func rootDomainIteratorSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapsho
 	if s == nil {
 		return rootDomainSnapshot{}
 	}
+	s.ensureCOWDomains()
 	snap := s.rootIterator
 	if rootDomainApplyPublishedRef(s, &snap, rootDomainIteratorPublishedRef(s.publishedRoots)) {
 		return snap

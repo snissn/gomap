@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 	"unsafe"
@@ -2350,6 +2351,7 @@ func StabilizeStableNamespaceTokens(tokens ...*StableNamespaceToken) error {
 		}
 		groups[groupIndex].tokens = append(groups[groupIndex].tokens, token)
 	}
+	pendingGroups := make([][]*StableNamespaceToken, 0, len(groups))
 	for _, group := range groups {
 		pending := make([]*StableNamespaceToken, 0, len(group.tokens))
 		for _, token := range group.tokens {
@@ -2361,9 +2363,41 @@ func StabilizeStableNamespaceTokens(tokens ...*StableNamespaceToken) error {
 				pending = append(pending, token)
 			}
 		}
-		if len(pending) == 0 {
-			continue
+		if len(pending) > 0 {
+			pendingGroups = append(pendingGroups, pending)
 		}
+	}
+	if len(pendingGroups) == 0 {
+		return nil
+	}
+	if len(pendingGroups) > 1 && !durabilitycut.Enabled() {
+		syncErrs := make([]error, len(pendingGroups))
+		var wg sync.WaitGroup
+		wg.Add(len(pendingGroups))
+		for i, pending := range pendingGroups {
+			go func(idx int, batch []*StableNamespaceToken) {
+				defer wg.Done()
+				syncErrs[idx] = batch[0].syncSharedPersistence()
+			}(i, pending)
+		}
+		wg.Wait()
+		var firstErr error
+		for i, pending := range pendingGroups {
+			if syncErrs[i] != nil {
+				if firstErr == nil {
+					firstErr = syncErrs[i]
+				}
+				continue
+			}
+			for _, token := range pending {
+				if err := token.markStableAfterSharedSync(); err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
+	}
+	for _, pending := range pendingGroups {
 		if err := pending[0].syncSharedPersistence(); err != nil {
 			return err
 		}

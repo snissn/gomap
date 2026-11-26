@@ -220,7 +220,12 @@ func isCanonicalNativeBSONMeta(meta *CollectionMeta) bool {
 	}
 	for i := range meta.Indexes {
 		idx := &meta.Indexes[i]
-		if len(idx.Components) != 0 || idx.ValueType != IndexValueBSONOrderedV2 {
+		if len(idx.Components) != 0 {
+			return false
+		}
+		switch idx.ValueType {
+		case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble, IndexValueBSONOrderedV2:
+		default:
 			return false
 		}
 		if i > 0 && meta.Indexes[i-1].Name >= idx.Name {
