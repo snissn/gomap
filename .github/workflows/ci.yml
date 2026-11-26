@@ -2,6 +2,10 @@ name: "CI"
 
 on:
   pull_request:
+    # 'edited' is intentionally omitted: GitHub fires 'edited' for PR body edits too,
+    # and skipping CI Gate on body edits would overwrite a passing/failing CI Gate with
+    # conclusion=skipped. Apply the 'ci:full' label to trigger Tier 2 immediately on an
+    # already-open PR without pushing (or put '[ci full]' in the title before opening/pushing).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
   push:
     branches: [main]
@@ -34,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      plan_artifact: ${{ steps.scope.outputs.plan_artifact }}
       tier: ${{ steps.scope.outputs.tier }}
       ci_full: ${{ steps.scope.outputs.ci_full }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -99,11 +104,12 @@ jobs:
             --output "$RUNNER_TEMP/ci-scope-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --step-summary "$GITHUB_STEP_SUMMARY"
+          echo "plan_artifact=ci-scope-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Upload CI scope plan
         uses: actions/upload-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.scope.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope-plan.json
           retention-days: 3
           if-no-files-found: error
@@ -156,7 +162,7 @@ jobs:
       - name: Download CI scope plan
         uses: actions/download-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
       - name: Setup Go
@@ -200,7 +206,7 @@ jobs:
       - name: Download CI scope plan
         uses: actions/download-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
       - name: Setup Go
@@ -273,7 +279,7 @@ jobs:
       - name: Download CI scope plan
         uses: actions/download-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
       - name: Setup Go
@@ -336,7 +342,7 @@ jobs:
       - name: Download CI scope plan
         uses: actions/download-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
       - name: Setup Go
@@ -390,7 +396,7 @@ jobs:
       - name: Download CI scope plan
         uses: actions/download-artifact@v4
         with:
-          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
       - name: Setup Go

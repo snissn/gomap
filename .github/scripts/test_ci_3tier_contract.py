@@ -121,6 +121,18 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertIn("ci-gate", doc["jobs"])
         self.assertEqual(doc["jobs"]["ci-gate"]["name"], "CI Gate")
         self.assertIn("full-sweep", doc["jobs"]["ci-gate"]["needs"])
+        # Producer artifact identity is exported by preflight so selective reruns succeed
+        self.assertIn("plan_artifact", doc["jobs"]["preflight"]["outputs"])
+        download_steps = [
+            step
+            for job in doc["jobs"].values()
+            if isinstance(job, dict)
+            for step in job.get("steps", [])
+            if str(step.get("uses", "")).startswith("actions/download-artifact@")
+        ]
+        self.assertEqual(len(download_steps), 5)
+        for step in download_steps:
+            self.assertEqual(step["with"]["name"], "${{ needs.preflight.outputs.plan_artifact }}")
         # Cross-compile steps and retained script suites exist
         vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet-and-cross-compile"]["steps"])
         self.assertIn("--kind cross-darwin", vet_script)
