@@ -176,7 +176,7 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 		if err = nativeTypedProfile(m.db, *c.schema.meta); err != nil {
 			return nil, err
 		}
-		if !isCanonicalNativeBSONMeta(c.schema.meta) {
+		if !c.schema.canonicalBSON {
 			if _, err = nativeJSONMeta(*c.schema.meta); err != nil {
 				return nil, err
 			}
@@ -185,7 +185,7 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 		g.incarnation = c.incarnation
 		g.probe.collection = c
 		g.probe.meta = *c.schema.meta
-		t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(g.name)})
+		t.dependencies = append(t.dependencies, txnhistory.Dependency{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: nativeBorrowedStringBytes(g.name)})
 		if domain, ok := c.domains.Get("primary"); ok {
 			g.probe.domain, err = newNativeDomainRead(domain, core.Snapshot())
 			if err != nil {

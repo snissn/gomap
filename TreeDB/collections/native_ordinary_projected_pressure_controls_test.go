@@ -19,6 +19,7 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 	opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxGenerationBytes = 64 << 20
 	// Keep the seeded generation active until the explicit relief request.
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

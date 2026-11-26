@@ -43,6 +43,7 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 	opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxGenerationBytes = 64 << 20
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	opts.BackgroundIndexVacuumInterval = -1

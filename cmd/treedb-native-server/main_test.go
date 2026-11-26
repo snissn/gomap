@@ -46,6 +46,7 @@ func TestParsePublicProfileFlagRejectsDeprecatedProfiles(t *testing.T) {
 
 func TestNativeServerCOWMemoryOptions(t *testing.T) {
 	large := treedb.DefaultCOWMemtableLimits()
+	large.MaxGenerationBytes = 256 << 20
 	large.MaxInFlightBytes = 512 << 20
 	large.MaxTotalBytes = 1 << 30
 	large.MaxRetiredBytes = 1 << 30

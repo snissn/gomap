@@ -653,6 +653,171 @@ type nativePhysicalAdmittedEntryReader interface {
 	NativeEntryAtRootAdmitted(root uint64, key []byte, admitOutput func(uint64) error) (node.LeafEntry, error)
 }
 
+type nativePhysicalAdmittedBatchEntryReader interface {
+	NativeEntriesAtRootAdmitted(root uint64, keys [][]byte, dst []node.LeafEntry, found []bool, admitOutput func(uint64) error) error
+}
+
+func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, items []UpdateBatchItem) (bool, error) {
+	n := len(items)
+	if n <= 1 || len(g.rows.rows) != 0 || g.probe.domain.domain == nil || g.probe.domain.domain.baseRoot == 0 {
+		return false, nil
+	}
+	batchReader, ok := g.probe.capture.(nativePhysicalAdmittedBatchEntryReader)
+	if !ok {
+		return false, nil
+	}
+	var totalIDBytes uint64
+	for i := range items {
+		id := items[i].DocumentID
+		if len(id) == 0 {
+			return false, nil
+		}
+		if uint64(len(id)) > ^uint64(0)-totalIDBytes {
+			return false, memtable.ErrCOWCapacity
+		}
+		totalIDBytes += uint64(len(id))
+	}
+	depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
+	needCap := len(t.dependencies) + n
+	var depBacking uint64
+	if needCap > cap(t.dependencies) {
+		if uint64(needCap) > ^uint64(0)/depSize {
+			return false, memtable.ErrCOWCapacity
+		}
+		depBacking = memtable.COWAllocationCharge(uint64(needCap) * depSize)
+	}
+	idArenaCharge := memtable.COWAllocationCharge(totalIDBytes)
+	if idArenaCharge > ^uint64(0)-depBacking || depBacking+idArenaCharge > ^uint64(0)-t.charge {
+		return false, memtable.ErrCOWCapacity
+	}
+	if err := t.lease.Resize(t.charge + depBacking + idArenaCharge); err != nil {
+		return false, err
+	}
+	t.charge += depBacking + idArenaCharge
+	if needCap > cap(t.dependencies) {
+		next := make([]txnhistory.Dependency, len(t.dependencies), needCap)
+		copy(next, t.dependencies)
+		t.dependencies = next
+	}
+	idArena := make([]byte, totalIDBytes)
+	ns := g.namespace()
+	idOff := 0
+	for i := range items {
+		id := items[i].DocumentID
+		dstID := idArena[idOff : idOff+len(id) : idOff+len(id)]
+		copy(dstID, id)
+		idOff += len(id)
+		t.dependencies = append(t.dependencies, txnhistory.Dependency{
+			Namespace: ns,
+			Kind:      txnhistory.PointEffect,
+			Key:       dstID,
+		})
+	}
+
+	admitStage := func(bytes uint64) error { return t.admitStage(g, bytes) }
+	if cap(g.rows.rows) < n {
+		rowSize := uint64(unsafe.Sizeof(nativeJSONRow{}))
+		if uint64(n) > ^uint64(0)/rowSize {
+			return true, memtable.ErrCOWCapacity
+		}
+		if err := admitStage(memtable.COWAllocationCharge(uint64(n) * rowSize)); err != nil {
+			return true, err
+		}
+		g.rows.rows = make([]nativeJSONRow, 0, n)
+	}
+	var inlineMissIdx [32]int
+	var inlineMissKeys [32][]byte
+	var inlineMissEntries [32]node.LeafEntry
+	var inlineMissFound [32]bool
+	var missIdx []int
+	var missKeys [][]byte
+	if n <= len(inlineMissIdx) {
+		missIdx = inlineMissIdx[:0]
+		missKeys = inlineMissKeys[:0]
+	} else {
+		missIdx = make([]int, 0, n)
+		missKeys = make([][]byte, 0, n)
+	}
+	for i := range items {
+		id := items[i].DocumentID
+		if g.rows.find(id) != nil {
+			continue
+		}
+		entry, resolved, memErr := g.probe.domain.memoryEntry(id)
+		if memErr != nil {
+			return true, memErr
+		}
+		if resolved {
+			var (
+				value                 []byte
+				valueOwnedAndAdmitted bool
+				err                   error
+			)
+			if entry.Flags&node.FlagTombstone != 0 {
+				value = nil
+			} else if entry.Flags&node.FlagPointer != 0 {
+				value, err = g.probe.readValue(entry.ValuePtr, admitStage)
+				if err != nil {
+					return true, err
+				}
+				valueOwnedAndAdmitted = value != nil
+			} else {
+				value = entry.Value
+			}
+			if _, err := g.rows.insertTouchedOwnedValue(id, value, valueOwnedAndAdmitted, admitStage); err != nil {
+				return true, err
+			}
+			continue
+		}
+		missIdx = append(missIdx, i)
+		missKeys = append(missKeys, id)
+	}
+	if len(missKeys) > 0 {
+		var missEntries []node.LeafEntry
+		var missFound []bool
+		if len(missKeys) <= len(inlineMissEntries) {
+			missEntries = inlineMissEntries[:len(missKeys)]
+			missFound = inlineMissFound[:len(missKeys)]
+		} else {
+			missEntries = make([]node.LeafEntry, len(missKeys))
+			missFound = make([]bool, len(missKeys))
+		}
+		if err := batchReader.NativeEntriesAtRootAdmitted(g.probe.domain.domain.baseRoot, missKeys, missEntries, missFound, admitStage); err != nil {
+			return true, err
+		}
+		for m, idx := range missIdx {
+			id := items[idx].DocumentID
+			if g.rows.find(id) != nil {
+				continue
+			}
+			var (
+				value                 []byte
+				valueOwnedAndAdmitted bool
+				err                   error
+			)
+			if missFound[m] {
+				entry := missEntries[m]
+				if entry.Flags&node.FlagTombstone != 0 {
+					value = nil
+				} else if entry.Flags&node.FlagPointer != 0 {
+					value, err = g.probe.readValue(entry.ValuePtr, admitStage)
+					if err != nil {
+						return true, err
+					}
+					valueOwnedAndAdmitted = value != nil
+				} else {
+					value = entry.Value
+					valueOwnedAndAdmitted = value != nil
+				}
+			}
+			if _, err := g.rows.insertTouchedOwnedValue(id, value, valueOwnedAndAdmitted, admitStage); err != nil {
+				return true, err
+			}
+		}
+	}
+	return true, nil
+}
+
 func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, id []byte, insert bool) (*nativeJSONRow, error) {
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
@@ -936,6 +1101,13 @@ func (t *NativeJSONTxn) updateBatchInto(name string, items []UpdateBatchItem, pr
 		}
 		changedIndices = make([]int, 0, len(items))
 	}
+	var prefetched bool
+	if primaryOnlyBSONSet && len(items) > 1 {
+		prefetched, err = t.prefetchNativeUpdateBatchRows(g, items)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for i := range items {
 		var item UpdateBatchItem
 		if primaryOnlyBSONSet {
@@ -943,9 +1115,14 @@ func (t *NativeJSONTxn) updateBatchInto(name string, items []UpdateBatchItem, pr
 		} else {
 			item = owned[i].UpdateBatchItem
 		}
-		row, err := t.touchNativeRow(g, item.DocumentID)
-		if err != nil {
-			return nil, err
+		var row *nativeJSONRow
+		if prefetched {
+			row = g.rows.find(item.DocumentID)
+		} else {
+			row, err = t.touchNativeRow(g, item.DocumentID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if row.current == nil {
 			continue

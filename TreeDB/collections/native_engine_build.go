@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -39,22 +40,57 @@ func (a *nativeBuildAllocation) AdmitNativeBytes(n uint64) (*memtable.COWExterna
 // original system-catalog and durable-resource closure must join the same group
 // before any caller may activate the higher-level interface.
 type nativeEngineBuild struct {
-	typed             []nativeTypedBuildWork
-	typedResources    *rootpublication.StableResourceSetBuilder
-	typedClosure      *rootpublication.StableResourceSet
-	typedRequirements rootpublication.StableLogicalObligationRequirements
-	domains           []*nativeDomainBuild
-	built             []nativeBuiltDomain
-	catalog           *nativeDomainBuild
-	catalogBuilt      nativeBuiltDomain
-	allocation        nativeBuildAllocation
-	collections       int
-	handoffs          int
-	partial           *nativeEngineVersion
-	failure           error
-	started           bool
-	complete          bool
-	refund            *cowbtree.OwnedMapRefund
+	typed              []nativeTypedBuildWork
+	typedResources     *rootpublication.StableResourceSetBuilder
+	typedClosure       *rootpublication.StableResourceSet
+	typedRequirements  rootpublication.StableLogicalObligationRequirements
+	domains            []*nativeDomainBuild
+	built              []nativeBuiltDomain
+	catalog            *nativeDomainBuild
+	catalogBuilt       nativeBuiltDomain
+	sharedDelta        *batch.Batch
+	sharedDeltaEntries int
+	sharedDeltaCharge  uint64
+	allocation         nativeBuildAllocation
+	collections        int
+	handoffs           int
+	partial            *nativeEngineVersion
+	failure            error
+	started            bool
+	complete           bool
+	refund             *cowbtree.OwnedMapRefund
+}
+
+func nativeEngineBuildMaxSourceEntries(captured *nativeEngineVersion, target uint64) int {
+	maxEntries := 0
+	scanNativeBuildCollections(captured, target, func(id uint64, c *nativeCollectionState) bool {
+		domainSet := c.pending
+		if id == target {
+			domainSet = c.domains
+		}
+		domainSet.Scan(func(_ string, d *nativeDomainState) bool {
+			if d.pending != nil {
+				if n := d.pending.Len(); n > maxEntries {
+					maxEntries = n
+				}
+			}
+			for pos := d.captured; pos != nil; pos = pos.older {
+				if pos.source != nil && pos.source.root != nil {
+					if n := pos.source.root.Len(); n > maxEntries {
+						maxEntries = n
+					}
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return maxEntries
+}
+
+func nativeSharedDeltaCharge(entries int) uint64 {
+	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(batch.Batch{}))) +
+		memtable.COWAllocationCharge(uint64(entries)*uint64(unsafe.Sizeof(batch.Entry{})))
 }
 
 // prepareNativeEngineBuild reserves all domain scratch and BOTH sparse
@@ -124,7 +160,41 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
 		}
 	}
-	lease, err := captured.maintenance.AdmitNativeBytes(bytes)
+	sharedEntries := 0
+	var sharedCharge uint64
+	if domains > 0 {
+		maxSource := nativeEngineBuildMaxSourceEntries(captured, target)
+		if maxSource > nativeBuildBatchEntries {
+			entrySize := uint64(unsafe.Sizeof(batch.Entry{}))
+			budgetEntries := (captured.maintenance.Limits().MaxInFlightBytes / 16) / entrySize
+			capEntries := min(uint64(maxSource), uint64(nativeBuildMaxBatchEntries), budgetEntries)
+			if capEntries > nativeBuildBatchEntries {
+				sharedEntries = int(capEntries)
+			}
+		}
+	}
+	var lease *memtable.COWExternalLease
+	for {
+		sharedCharge = 0
+		if sharedEntries > nativeBuildBatchEntries {
+			c := nativeSharedDeltaCharge(sharedEntries)
+			if c <= ^uint64(0)-bytes && c <= ^uint64(0)-floor {
+				sharedCharge = c
+			} else {
+				sharedEntries = 0
+			}
+		} else {
+			sharedEntries = 0
+		}
+		lease, err = captured.maintenance.AdmitNativeBytes(bytes + sharedCharge)
+		if err == nil || sharedEntries == 0 || !errors.Is(err, memtable.ErrCOWCapacity) {
+			break
+		}
+		sharedEntries /= 2
+		if sharedEntries <= nativeBuildBatchEntries {
+			sharedEntries = 0
+		}
+	}
 	if err != nil {
 		err = fmt.Errorf("collections: native build reservation bytes=%d floor=%d typed_bytes=%d typed_floor=%d: %w", bytes, floor, typedBytes, typedFloor, err)
 		if errors.Is(err, memtable.ErrCOWCapacity) {
@@ -132,6 +202,7 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 		}
 		return nil, err
 	}
+	floor += sharedCharge
 	if operation != nil {
 		if err := operation.ctx.Err(); err != nil {
 			// The reservation is still private: no original build or output
@@ -140,13 +211,21 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 			return nil, backenddb.NativeSemanticBuildRetryableRefusal{Cause: err}
 		}
 	}
+	var sharedDelta *batch.Batch
+	if sharedEntries > nativeBuildBatchEntries {
+		sharedDelta = batch.NewBoundedRetainingLargeEntries(nil, int(^uint(0)>>1), sharedEntries)
+	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
 	b := &nativeEngineBuild{
-		domains: make([]*nativeDomainBuild, 0, domains),
-		built:   make([]nativeBuiltDomain, 0, domains), collections: collections,
-		allocation: nativeBuildAllocation{NativeSemanticAllocator: captured.maintenance, parent: lease, floor: floor},
-		refund:     refund,
+		domains:            make([]*nativeDomainBuild, 0, domains),
+		built:              make([]nativeBuiltDomain, 0, domains),
+		collections:        collections,
+		sharedDelta:        sharedDelta,
+		sharedDeltaEntries: sharedEntries,
+		sharedDeltaCharge:  sharedCharge,
+		allocation:         nativeBuildAllocation{NativeSemanticAllocator: captured.maintenance, parent: lease, floor: floor},
+		refund:             refund,
 	}
 	captured.build = b
 	if operation != nil {
@@ -299,13 +378,31 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		if b.hasTypedCollection(b.built[i].collection) && nativeTypedPhysicalDomain(b.built[i].name) {
 			continue
 		}
-		root, err := work.materialize(group)
+		root, err := work.materializeWithDelta(group, b.sharedDelta, b.sharedDeltaEntries)
 		if err != nil {
 			b.failure = fmt.Errorf("native materialize domain index=%d collection=%d: %w", i, b.built[i].collection, err)
 			return b.failure
 		}
 		b.built[i].root = root
 		binary.BigEndian.PutUint64(b.built[i].rootValue[:], root)
+	}
+	if b.sharedDelta != nil {
+		b.sharedDelta.CloseWithoutPooling()
+		b.sharedDelta = nil
+		b.sharedDeltaEntries = 0
+		if b.sharedDeltaCharge != 0 {
+			if b.sharedDeltaCharge > b.allocation.floor {
+				b.failure = fmt.Errorf("native materialize shared delta exceeds floor: %w", memtable.ErrCOWCapacity)
+				return b.failure
+			}
+			floor := b.allocation.floor - b.sharedDeltaCharge
+			if err := b.allocation.parent.ShrinkNativeBytes(b.sharedDeltaCharge, floor); err != nil {
+				b.failure = fmt.Errorf("native materialize shared delta shrink: %w", err)
+				return b.failure
+			}
+			b.allocation.floor = floor
+			b.sharedDeltaCharge = 0
+		}
 	}
 	if len(b.typed) != 0 {
 		physical, ok := group.(*backenddb.RootPublicationBuildGroup)
@@ -430,6 +527,12 @@ func (b *nativeEngineBuild) finish() (done cowbtree.OwnedMapCompletion, err erro
 		}
 		b.domains[i] = nil
 		work = nil
+	}
+	if b.sharedDelta != nil {
+		b.sharedDelta.CloseWithoutPooling()
+		b.sharedDelta = nil
+		b.sharedDeltaEntries = 0
+		b.sharedDeltaCharge = 0
 	}
 	b.domains = nil
 	b.allocation = nativeBuildAllocation{}

@@ -14,9 +14,10 @@ import (
 // nativeSchemaState is shared until explicit schema/interpretation replacement.
 // Ordinary domain mutations retain one descriptor, never copy this metadata.
 type nativeSchemaState struct {
-	refs   atomic.Int64
-	meta   *CollectionMeta
-	refund *cowbtree.OwnedMapRefund
+	refs          atomic.Int64
+	meta          *CollectionMeta
+	refund        *cowbtree.OwnedMapRefund
+	canonicalBSON bool
 }
 
 func newNativeSchemaState(meta *CollectionMeta, admit cowbtree.OwnedMapAdmit) (*nativeSchemaState, error) {
@@ -42,7 +43,7 @@ func newNativeSchemaState(meta *CollectionMeta, admit cowbtree.OwnedMapAdmit) (*
 	// descriptor has no uncharged caller/catalog substring dependency.
 	copied := meta.copy()
 	nativeSchemaOwnStrings(reflect.ValueOf(copied))
-	s := &nativeSchemaState{meta: copied, refund: refund}
+	s := &nativeSchemaState{meta: copied, refund: refund, canonicalBSON: isCanonicalNativeBSONMeta(copied)}
 	s.refs.Store(1)
 	return s, nil
 }

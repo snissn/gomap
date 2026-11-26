@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"time"
 	"unsafe"
 	"weak"
@@ -12,9 +13,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type nativeBulkUniqueCheck struct {
+	domainName string
+	indexName  string
+	valueType  IndexValueType
+	startDep   int
+	depCount   int
+	// entries holds the sorted secondary keys (encodedValue || docID) so
+	// conflict checks can compare owners without retaining changed/runtimes.
+	entries []directBufferedSecondaryRootEntry
+}
 
 // nativeBulkInsertPreimage holds strictly COW-admitted, schema-validated insert
 // artifacts computed outside the per-collection bulk commit gate so concurrent
@@ -34,9 +47,7 @@ type nativeBulkInsertPreimage struct {
 	dependencies  []txnhistory.Dependency
 	payload       []byte
 	direct        *directBufferedInsertPlan
-	hasUnique     bool
-	runtimes      []indexRuntime
-	changed       []preparedBatchUpdate
+	uniqueChecks  []nativeBulkUniqueCheck
 }
 
 func (p *nativeBulkInsertPreimage) Close() {
@@ -174,26 +185,32 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	if err != nil {
 		return nil, err
 	}
-	perRow := uint64(unsafe.Sizeof(insertBatchItem{})) +
+	tempPerRow := uint64(unsafe.Sizeof(insertBatchItem{})) +
 		uint64(unsafe.Sizeof(int(0))) +
 		uint64(unsafe.Sizeof(preparedBatchUpdate{})) +
-		uint64(unsafe.Sizeof(commitlog.CollectionDocument{})) +
-		uint64(unsafe.Sizeof(memtable.COWMutation{})) +
+		uint64(unsafe.Sizeof(commitlog.CollectionDocument{}))
+	retainedPerRow := uint64(unsafe.Sizeof(memtable.COWMutation{})) +
 		uint64(unsafe.Sizeof(txnhistory.Effect{})) +
 		uint64(unsafe.Sizeof(txnhistory.Dependency{}))
-	if uint64(n) > ^uint64(0)/perRow {
+	if uint64(n) > ^uint64(0)/tempPerRow || uint64(n) > ^uint64(0)/retainedPerRow {
+		return nil, memtable.ErrCOWCapacity
+	}
+	tempRowCharge := memtable.COWAllocationCharge(uint64(n) * tempPerRow)
+	retainedRowCharge := memtable.COWAllocationCharge(uint64(n) * retainedPerRow)
+	if tempRowCharge > ^uint64(0)-retainedRowCharge {
 		return nil, memtable.ErrCOWCapacity
 	}
 	initialCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBulkInsertPreimage{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONLogicalInsert{}))) +
 		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(txnhistory.Dependency{}))+uint64(len(name))) +
 		fixedHeaderCharge +
-		memtable.COWAllocationCharge(uint64(n)*perRow) +
+		tempRowCharge + retainedRowCharge +
 		memtable.COWAllocationCharge(totalIDBytes) +
 		memtable.COWAllocationCharge(totalDocBytes)
 	if err = p.admit(initialCharge); err != nil {
 		return nil, err
 	}
+	tempCharge := tempRowCharge
 
 	planner, err := nativeJSONInsertPlanner(meta)
 	if err != nil {
@@ -327,6 +344,14 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			}
 			return nil, err
 		}
+		tempCharge += parserScratchCharge
+		admitTemp := func(bytes uint64) error {
+			if err := p.admit(bytes); err != nil {
+				return err
+			}
+			tempCharge += bytes
+			return nil
+		}
 		for _, alloc := range []struct {
 			count int
 			size  uint64
@@ -336,7 +361,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			{stateCount, uint64(unsafe.Sizeof([][]byte{}))},
 			{stateCount, uint64(unsafe.Sizeof([]byte{}))},
 		} {
-			if err = admitNativeInsertArray(alloc.count, alloc.size, p.admit); err != nil {
+			if err = admitNativeInsertArray(alloc.count, alloc.size, admitTemp); err != nil {
 				return nil, err
 			}
 		}
@@ -356,7 +381,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 				need := len(runtimes) * perIdxNeed
 				if need > cap(encoder.buf)-len(encoder.buf) {
 					chunkCap := max(need, 64<<10)
-					if err = p.admit(memtable.COWAllocationCharge(uint64(chunkCap))); err != nil {
+					if err = admitTemp(memtable.COWAllocationCharge(uint64(chunkCap))); err != nil {
 						return nil, err
 					}
 					encoder.buf = make([]byte, 0, chunkCap)
@@ -378,12 +403,48 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	if err = p.admit(planCharge); err != nil {
 		return nil, err
 	}
-	if err = rejectBatchUniqueConflicts(runtimes, changed); err != nil {
-		return nil, err
-	}
 	direct, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed, stateEntries, roots)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate intra-batch unique conflicts directly over the already-sorted
+	// secondary runs (zero map allocations) and compute the off-gate unique
+	// range dependency backing.
+	var (
+		uniqueDepCount int
+		uniqueEndBytes uint64
+		uniqueRuns     int
+	)
+	for _, run := range direct.secondaryRootPlans {
+		rt := runtimes[run.runtimeIdx]
+		if !rt.def.unique || len(run.entries) == 0 {
+			continue
+		}
+		uniqueRuns++
+		var prevPrefix, prevDocID []byte
+		for i, row := range run.entries {
+			prefix, docID, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			if len(prefix) > 65535 {
+				return nil, errors.New("collections: index key too large")
+			}
+			if i > 0 && bytes.Equal(prefix, prevPrefix) && !bytes.Equal(docID, prevDocID) {
+				return nil, fmt.Errorf("%w %q: document ids %q and %q", ErrUniqueIndexConflict, rt.def.name, prevDocID, docID)
+			}
+			prevPrefix, prevDocID = prefix, docID
+			if uniqueDepCount == int(^uint(0)>>1) {
+				return nil, memtable.ErrCOWCapacity
+			}
+			uniqueDepCount++
+			endLen := uint64(uniquePrefixEndLen(prefix))
+			if endLen > ^uint64(0)-uniqueEndBytes {
+				return nil, memtable.ErrCOWCapacity
+			}
+			uniqueEndBytes += endLen
+		}
 	}
 
 	primary := make([]memtable.COWMutation, len(direct.primaryEntries))
@@ -392,7 +453,21 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		return nil, err
 	}
 
-	dependencies := make([]txnhistory.Dependency, 1+len(primary))
+	if uniqueDepCount > 0 {
+		if err = admitNativeInsertArray(uniqueDepCount, uint64(unsafe.Sizeof(txnhistory.Dependency{})), p.admit); err != nil {
+			return nil, err
+		}
+		if err = admitNativeInsertArray(uniqueRuns, uint64(unsafe.Sizeof(nativeBulkUniqueCheck{})), p.admit); err != nil {
+			return nil, err
+		}
+		if uniqueEndBytes > 0 {
+			if err = p.admit(memtable.COWAllocationCharge(uniqueEndBytes)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	dependencies := make([]txnhistory.Dependency, 1+len(primary)+uniqueDepCount)
 	dependencies[0] = txnhistory.Dependency{
 		Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace},
 		Kind:      txnhistory.PointEffect,
@@ -409,6 +484,53 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			Namespace: primaryNS,
 			Kind:      txnhistory.PointEffect,
 			Key:       primary[i].Key,
+		}
+	}
+	var uniqueChecks []nativeBulkUniqueCheck
+	if uniqueDepCount > 0 {
+		uniqueChecks = make([]nativeBulkUniqueCheck, 0, uniqueRuns)
+		uniqueEndArena := make([]byte, 0, uniqueEndBytes)
+		depOff := 1 + len(primary)
+		for _, run := range direct.secondaryRootPlans {
+			rt := runtimes[run.runtimeIdx]
+			if !rt.def.unique || len(run.entries) == 0 {
+				continue
+			}
+			ns := txnhistory.Namespace{
+				Kind:           txnhistory.CollectionNamespace,
+				Collection:     incarnation,
+				Domain:         nativeJSONSecondaryDomainNumber(meta, run.runtimeIdx),
+				Interpretation: 1,
+			}
+			startDep := depOff
+			for _, row := range run.entries {
+				prefix, _, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
+				if keyErr != nil {
+					return nil, keyErr
+				}
+				var end []byte
+				if endLen := uniquePrefixEndLen(prefix); endLen > 0 {
+					eStart := len(uniqueEndArena)
+					uniqueEndArena = append(uniqueEndArena, prefix[:endLen]...)
+					uniqueEndArena[len(uniqueEndArena)-1]++
+					end = uniqueEndArena[eStart:len(uniqueEndArena):len(uniqueEndArena)]
+				}
+				dependencies[depOff] = txnhistory.Dependency{
+					Namespace: ns,
+					Kind:      txnhistory.RangeEffect,
+					Key:       prefix,
+					End:       end,
+				}
+				depOff++
+			}
+			uniqueChecks = append(uniqueChecks, nativeBulkUniqueCheck{
+				domainName: "index/" + rt.def.name,
+				indexName:  rt.def.name,
+				valueType:  rt.def.valueType,
+				startDep:   startDep,
+				depCount:   len(run.entries),
+				entries:    run.entries,
+			})
 		}
 	}
 
@@ -429,11 +551,17 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		return nil, err
 	}
 
-	hasUnique := false
-	for _, rt := range runtimes {
-		if rt.def.unique {
-			hasUnique = true
-			break
+	// Release dead temporary scratch (items, order, changed, docs, parser
+	// scratch, encoder arena) before returning so concurrent bulk preimages
+	// retain only live admitted bytes while waiting on coord.nativeBulkInsertMu.
+	items = nil
+	order = nil
+	changed = nil
+	docs = nil
+	if tempCharge > 0 && tempCharge <= p.charge {
+		nextCharge := p.charge - tempCharge
+		if resizeErr := p.lease.Resize(nextCharge); resizeErr == nil {
+			p.charge = nextCharge
 		}
 	}
 
@@ -443,11 +571,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	p.effects = effects
 	p.dependencies = dependencies[:len(dependencies):len(dependencies)]
 	p.payload = payload
-	p.hasUnique = hasUnique
-	if hasUnique {
-		p.runtimes = runtimes
-		p.changed = changed
-	}
+	p.uniqueChecks = uniqueChecks
 	if wantStats {
 		p.direct = direct
 	}
@@ -554,19 +678,20 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 		}
 	}
 
-	// Reuse off-gate prebuilt primary point dependencies when the transaction
+	// Reuse off-gate prebuilt primary + unique dependencies when the transaction
 	// holds only the initial catalog dependency (avoiding COWBudget.mu and slice
 	// allocation inside coord.nativeBulkInsertMu). pre.Close runs after tx.Close.
-	if len(pre.dependencies) == 1+n &&
+	if len(pre.dependencies) >= 1+n &&
 		len(t.dependencies) == 1 &&
 		t.dependencies[0].Namespace.Kind == txnhistory.CatalogNamespace &&
 		t.dependencies[0].Kind == txnhistory.PointEffect &&
 		bytes.Equal(t.dependencies[0].Key, pre.dependencies[0].Key) {
 		t.dependencies = pre.dependencies
 	} else {
-		// Batch-admit all primary point dependencies in one Resize instead of N calls.
+		// Batch-admit all primary + unique dependencies in one Resize instead of N calls.
+		extraDeps := pre.dependencies[1:]
 		depSize := uint64(unsafe.Sizeof(txnhistory.Dependency{}))
-		needCap := len(t.dependencies) + n
+		needCap := len(t.dependencies) + len(extraDeps)
 		if needCap > cap(t.dependencies) {
 			if uint64(needCap) > ^uint64(0)/depSize {
 				return true, memtable.ErrCOWCapacity
@@ -583,19 +708,11 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 			copy(next, t.dependencies)
 			t.dependencies = next
 		}
-		ns := g.namespace()
-		for i := 0; i < n; i++ {
-			// Key slices belong to pre.idArena which stays live and admitted until after tx.Close().
-			t.dependencies = append(t.dependencies, txnhistory.Dependency{
-				Namespace: ns,
-				Kind:      txnhistory.PointEffect,
-				Key:       pre.primary[i].Key,
-			})
-		}
+		t.dependencies = append(t.dependencies, extraDeps...)
 	}
 
-	if pre.hasUnique {
-		if err := t.checkNativeUpdateUnique(g, pre.runtimes, pre.changed, nil); err != nil {
+	if len(pre.uniqueChecks) > 0 {
+		if err := t.checkNativeBulkUniquePrechecks(g, pre.uniqueChecks, pre.dependencies); err != nil {
 			return true, err
 		}
 	}
@@ -619,6 +736,69 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 		}
 	}
 	return true, nil
+}
+
+func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, checks []nativeBulkUniqueCheck, deps []txnhistory.Dependency) error {
+	var cursor [page.PageSize + 1]byte
+	for _, u := range checks {
+		domain, hasDomain := g.probe.collection.domains.Get(u.domainName)
+		if !hasDomain || (domain.baseRoot == 0 && domain.captured == nil && (domain.pending == nil || domain.pending.Len() == 0)) {
+			continue
+		}
+		onlyPending := domain.baseRoot == 0 && domain.captured == nil && domain.pending != nil
+		var pendingMax []byte
+		var hasPendingMax bool
+		if onlyPending {
+			var maxStr string
+			maxStr, hasPendingMax = domain.pending.MaxKey()
+			if hasPendingMax {
+				pendingMax = nativeBorrowedStringBytes(maxStr)
+				// deps[u.startDep] holds the minimum sorted unique key prefix in this batch.
+				if bytes.Compare(deps[u.startDep].Key, pendingMax) > 0 {
+					continue
+				}
+			}
+		}
+		read, err := newNativeDomainRead(domain, t.core.Snapshot())
+		if err != nil {
+			return err
+		}
+		for i := 0; i < u.depCount; i++ {
+			dep := deps[u.startDep+i]
+			if onlyPending && hasPendingMax && bytes.Compare(dep.Key, pendingMax) > 0 {
+				break
+			}
+			docID, err := indexKeyDocumentID(u.valueType, u.entries[i].key)
+			if err != nil {
+				return err
+			}
+			start := dep.Key
+			end := dep.End
+			for {
+				entry, found, err := nativeJSONSeekLive(&read, &g.probe, start, end, cursor[:])
+				if err != nil {
+					return err
+				}
+				if !found {
+					break
+				}
+				owner, err := indexKeyDocumentID(u.valueType, entry.Key)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(owner, docID) {
+					return fmt.Errorf("%w %q", ErrUniqueIndexConflict, u.indexName)
+				}
+				if len(entry.Key) >= len(cursor) {
+					return memtable.ErrCOWCapacity
+				}
+				n := copy(cursor[:], entry.Key)
+				cursor[n] = 0
+				start = cursor[:n+1]
+			}
+		}
+	}
+	return nil
 }
 
 func (m *NativeJSONManager) insertBulkBatch(name string, ids, documents [][]byte) error {

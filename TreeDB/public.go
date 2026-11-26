@@ -57,6 +57,7 @@ func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtable
 func StandaloneCOWMemtableLimits() COWMemtableLimits {
 	limits := DefaultCOWMemtableLimits()
 	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxGenerationBytes = 256 << 20
 	limits.MaxTotalBytes = 1 << 30
 	limits.MaxRetiredBytes = 1 << 30
 	return limits
