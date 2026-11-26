@@ -608,8 +608,12 @@ func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 func (p *Pager) installCountWithinCapacity(target uint64) (bool, error) {
 	p.growMu.Lock()
 	defer p.growMu.Unlock()
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// RLock suffices: caller holds allocMu + growMu (serializing numPages
+	// advances and structural growth), while all structural mutations to chunks,
+	// closing, and dirtyChunks.words require p.mu.Lock(). Using RLock avoids
+	// stalling page allocation behind concurrent msync/WithStableResourceFile.
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.readOnly {
 		return false, ErrReadOnly
 	}

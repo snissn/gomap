@@ -11,6 +11,10 @@ import (
 )
 
 func syncPageRangesData(file *os.File, chunks [][]byte, ranges []syncPageRange, chunkSize int64) (bool, error) {
+	return syncPageRangesCopiedData(file, chunks, nil, ranges, chunkSize)
+}
+
+func syncPageRangesCopiedData(file *os.File, chunks [][]byte, copies [][]byte, ranges []syncPageRange, chunkSize int64) (bool, error) {
 	if file == nil {
 		return true, nil
 	}
@@ -18,8 +22,13 @@ func syncPageRangesData(file *os.File, chunks [][]byte, ranges []syncPageRange, 
 		return false, nil
 	}
 	fd := int(file.Fd())
-	for _, r := range ranges {
-		buf := chunks[r.chunk][r.start:r.end]
+	for i, r := range ranges {
+		var buf []byte
+		if i < len(copies) && len(copies[i]) > 0 {
+			buf = copies[i]
+		} else {
+			buf = chunks[r.chunk][r.start:r.end]
+		}
 		offset := int64(r.chunk)*chunkSize + int64(r.start)
 		for len(buf) > 0 {
 			n, err := unix.Pwritev2(fd, [][]byte{buf}, offset, unix.RWF_DSYNC)

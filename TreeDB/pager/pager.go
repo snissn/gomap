@@ -72,6 +72,7 @@ type Pager struct {
 	// durableFileSize is the file length covered by a completed file-wide
 	// durability fence. Sparse range durability is restricted to this prefix.
 	durableFileSize atomic.Int64
+	dirtyMu         sync.Mutex // serializes GetForWrite dirtyChunks.set under p.mu.RLock (lock order: p.mu -> p.dirtyMu)
 	dirtyChunks     dirtyChunkBits
 	closing         bool
 	mu              sync.RWMutex
@@ -796,6 +797,32 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 	return start, nil
 }
 
+// markUnverifiedFastRLocked clears the verified bit for localID when the
+// verified bitset already covers localID. Callers hold p.mu.RLock and fall back
+// to markUnverifiedLocked under p.mu.Lock when capacity must grow.
+func (p *Pager) markUnverifiedFastRLocked(localID uint64) bool {
+	vb := p.verified.Load()
+	if vb == nil {
+		return false
+	}
+	chunkIdx := int(localID / verifiedChunkPages)
+	if chunkIdx < 0 || chunkIdx >= len(vb.chunks) {
+		return false
+	}
+	wordIdx := (localID % verifiedChunkPages) / 64
+	bit := uint64(1) << (localID % 64)
+	addr := &vb.chunks[chunkIdx][wordIdx]
+	for {
+		old := atomic.LoadUint64(addr)
+		if old&bit == 0 {
+			return true
+		}
+		if atomic.CompareAndSwapUint64(addr, old, old&^bit) {
+			return true
+		}
+	}
+}
+
 // GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
 func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	if isPrimaryBankID(pageID) {
@@ -806,22 +833,53 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	if p.readOnly {
 		return nil, ErrReadOnly
 	}
+	// Fast path: when the verified bitset and dirty chunk bitmap already cover
+	// the target page (the steady-state case), serve the write view under RLock
+	// + dirtyMu without taking the exclusive pager lock. This prevents writers
+	// from stalling behind concurrent msync/WithStableResourceFile RLock holders.
+	p.mu.RLock()
+	if p.closing {
+		p.mu.RUnlock()
+		return nil, os.ErrClosed
+	}
+	localID, local := p.localPageID(pageID)
+	if !local || pageID >= p.numPages.Load() {
+		p.mu.RUnlock()
+		return nil, ErrPageOutOfBounds
+	}
+	byteOffset := int64(localID) * int64(page.PageSize)
+	chunkIdx := int(byteOffset / p.chunkSize)
+	offsetInChunk := byteOffset % p.chunkSize
+	if chunkIdx >= len(p.chunks) {
+		p.mu.RUnlock()
+		return nil, ErrPageOutOfBounds
+	}
+	if chunkIdx/64 < len(p.dirtyChunks.words) && p.markUnverifiedFastRLocked(localID) {
+		p.dirtyMu.Lock()
+		p.dirtyChunks.set(chunkIdx)
+		p.dirtyMu.Unlock()
+		chunk := p.chunks[chunkIdx]
+		p.mu.RUnlock()
+		return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
+	}
+	p.mu.RUnlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closing {
 		return nil, os.ErrClosed
 	}
 
-	localID, local := p.localPageID(pageID)
+	localID, local = p.localPageID(pageID)
 	if !local || pageID >= p.numPages.Load() {
 		return nil, ErrPageOutOfBounds
 	}
 
 	p.markUnverifiedLocked(localID) // Invalidate cache
 
-	byteOffset := int64(localID) * int64(page.PageSize)
-	chunkIdx := int(byteOffset / p.chunkSize)
-	offsetInChunk := byteOffset % p.chunkSize
+	byteOffset = int64(localID) * int64(page.PageSize)
+	chunkIdx = int(byteOffset / p.chunkSize)
+	offsetInChunk = byteOffset % p.chunkSize
 
 	if chunkIdx >= len(p.chunks) {
 		return nil, ErrPageOutOfBounds
@@ -1276,11 +1334,13 @@ func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncT
 		}
 	}
 
-	if syncErr == nil && syncFile {
-		syncErr = syncPageFile(owned)
-	}
+	// Release mapping protection before the blocking file sync barrier: owned is
+	// an independently duplicated file descriptor and never dereferences p.chunks.
 	if mappedSync {
 		p.mu.RUnlock()
+	}
+	if syncErr == nil && syncFile {
+		syncErr = syncPageFile(owned)
 	}
 	if syncErr == nil && indexCut {
 		syncErr = durabilitycut.EmitStablePath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(path), path, owned)
@@ -1389,7 +1449,7 @@ func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 func (p *Pager) SyncPagesWithStableFileWithWork(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork) (bool, error) {
 	return p.SyncPagesWithStableFileWithCallerControl(file, pageIDs, w, 0, 0)
 }
-func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
+func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (done bool, err error) {
 	if p.readOnly {
 		return false, ErrReadOnly
 	}
@@ -1457,9 +1517,91 @@ func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs 
 		p.mu.RUnlock()
 		return false, err
 	}
+	coveredExtent := int64(len(p.chunks)) * p.chunkSize
+	withinDurable := syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load())
+	// When file is the pager-owned handle (SyncPages), duplicate it under RLock
+	// so concurrent Close cannot close the fd after we drop p.mu.RLock before
+	// blocking disk sync syscalls. Retained stable handles (file != p.file) are
+	// already independently owned by the caller.
+	syncHandle := file
+	var dupHandle *os.File
+	releaseBeforeFileSync := file != p.file || w == nil
+	if releaseBeforeFileSync && file == p.file {
+		dupHandle, err = stableio.DuplicateFile(file, file.Name())
+		if err != nil {
+			p.mu.RUnlock()
+			return false, err
+		}
+		syncHandle = dupHandle
+		defer func() {
+			if closeErr := dupHandle.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("pager: close sync-pages duplicate: %w", closeErr))
+				done = false
+			}
+		}()
+	}
+
+	if !mappedRangeSyncRequired() && releaseBeforeFileSync && syncPageRangesFn == nil {
+		// On Linux, range durability writes (Pwritev2 with RWF_DSYNC) and
+		// fdatasync do not require holding p.mu.RLock across disk I/O once we
+		// snapshot the small range bytes under RLock.
+		var stackBuf [2 * page.PageSize]byte
+		var copySliceStorage [4][]byte
+		var copiedBufs [][]byte
+		if withinDurable && useDurableRangeWrites(ranges) {
+			totalBytes := 0
+			for _, r := range ranges {
+				totalBytes += r.end - r.start
+			}
+			var backing []byte
+			if totalBytes <= len(stackBuf) {
+				backing = stackBuf[:totalBytes]
+			} else {
+				backing = make([]byte, totalBytes)
+			}
+			if len(ranges) <= len(copySliceStorage) {
+				copiedBufs = copySliceStorage[:len(ranges)]
+			} else {
+				copiedBufs = make([][]byte, len(ranges))
+			}
+			off := 0
+			for i, r := range ranges {
+				n := r.end - r.start
+				dst := backing[off : off+n]
+				copy(dst, p.chunks[r.chunk][r.start:r.end])
+				copiedBufs[i] = dst
+				off += n
+			}
+		}
+		p.mu.RUnlock()
+
+		handled := false
+		if withinDurable {
+			handled, err = syncPageRangesCopiedData(syncHandle, nil, copiedBufs, ranges, p.chunkSize)
+			if err != nil {
+				return false, err
+			}
+		}
+		if !handled {
+			err = syncPageFile(syncHandle)
+			if err == nil {
+				for old := p.durableFileSize.Load(); old < coveredExtent; old = p.durableFileSize.Load() {
+					if p.durableFileSize.CompareAndSwap(old, coveredExtent) {
+						break
+					}
+				}
+			}
+		}
+		return err == nil, err
+	}
+
 	handled := false
-	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
-		handled, err = syncPageRangesFn(file, p.chunks, ranges, p.chunkSize)
+	if withinDurable {
+		if syncPageRangesFn != nil {
+			handled, err = syncPageRangesFn(syncHandle, p.chunks, ranges, p.chunkSize)
+		} else {
+			handled, err = syncPageRangesData(syncHandle, p.chunks, ranges, p.chunkSize)
+		}
 		if err != nil {
 			p.mu.RUnlock()
 			return false, err
@@ -1474,10 +1616,28 @@ func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs 
 			}
 		}
 	}
+	if releaseBeforeFileSync {
+		p.mu.RUnlock()
+		if !handled {
+			err = syncPageFile(syncHandle)
+			if err == nil {
+				for old := p.durableFileSize.Load(); old < coveredExtent; old = p.durableFileSize.Load() {
+					if p.durableFileSize.CompareAndSwap(old, coveredExtent) {
+						break
+					}
+				}
+			}
+		}
+		return err == nil, err
+	}
 	if !handled {
-		err = syncPageFile(file)
+		err = syncPageFile(syncHandle)
 		if err == nil {
-			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
+			for old := p.durableFileSize.Load(); old < coveredExtent; old = p.durableFileSize.Load() {
+				if p.durableFileSize.CompareAndSwap(old, coveredExtent) {
+					break
+				}
+			}
 		}
 	}
 	p.mu.RUnlock()

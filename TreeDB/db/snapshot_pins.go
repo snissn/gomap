@@ -65,6 +65,34 @@ func (db *DB) minPinnedCommitSeq(readersOnly bool) uint64 {
 	return 0
 }
 
+// minPinnedSnapshotCommitSeqForDurablePublish computes a conservative lower
+// bound on all registered and in-flight snapshot pins without acquiring
+// rootReuseMu. Callers must hold durablePublishMu. Because every snapshotViewRO
+// publication installs its state while holding rootReuseMu.Lock() (draining all
+// prior in-flight captures), every in-flight capture after that unlock can only
+// register a retention commit >= visibleRetentionFloor. Therefore clamping the
+// scanned registered minimum to visibleRetentionFloor is exact for all pins
+// below visibleRetentionFloor while never blocking concurrent readers.
+func (db *DB) minPinnedSnapshotCommitSeqForDurablePublish(visibleRetentionFloor uint64) uint64 {
+	if db == nil {
+		return math.MaxUint64
+	}
+	if visibleRetentionFloor == 0 {
+		db.rootReuseMu.Lock()
+		min := db.MinPinnedSnapshotCommitSeq()
+		db.rootReuseMu.Unlock()
+		return min
+	}
+	db.idxMu.Lock()
+	min := visibleRetentionFloor
+	for _, gen := range db.idxAll {
+		min = minPinnedCommitSeqForIndexGen(min, gen, false)
+	}
+	min = minPinnedCommitSeqForIndexGen(min, db.idx.Load(), false)
+	db.idxMu.Unlock()
+	return min
+}
+
 func minPinnedCommitSeqForIndexGen(min uint64, gen *indexGen, readersOnly bool) uint64 {
 	if gen == nil || gen.registry == nil {
 		return min

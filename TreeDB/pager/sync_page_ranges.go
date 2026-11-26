@@ -1,11 +1,15 @@
 package pager
 
+import "os"
+
 const (
 	maxDurableRangeWrites = 32
 	maxDurableRangeBytes  = 256 << 10
 )
 
-var syncPageRangesFn = syncPageRangesData
+// syncPageRangesFn is a test hook that overrides the default range durability
+// implementation when non-nil.
+var syncPageRangesFn func(file *os.File, chunks [][]byte, ranges []syncPageRange, chunkSize int64) (bool, error)
 
 func syncPageRangesWithinDurableFileSize(ranges []syncPageRange, chunkSize, durableFileSize int64) bool {
 	if chunkSize <= 0 || durableFileSize <= 0 || len(ranges) == 0 {

@@ -48,10 +48,20 @@ const (
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
 
-	snapshotAcquireShardCount = 256
+	snapshotAcquireShardCount = 64
 	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
 	snapshotRootTreeRetainMax = 16
 )
+
+type snapshotAcquireShardCounter struct {
+	atomic.Int32
+	_ [124]byte // pad to 128-byte cache line (covers 64B x86_64 and 128B arm64)
+}
+
+type paddedAtomicUint64 struct {
+	atomic.Uint64
+	_ [120]byte
+}
 
 func normalizeFlushApplyConcurrency(workers int) int {
 	return normalizeFlushApplyConcurrencyForGOMAXPROCS(workers, runtimeGOMAXPROCS())
@@ -92,35 +102,39 @@ type snapshotView struct {
 }
 
 type DB struct {
-	privateCOWOwner                *transactionowner.Owner
-	nativeSemanticActive           atomic.Bool
-	legacyCommandProducers         uint64 // commandWALRawBarrierMu
-	semanticUnownedInFlight        uint64 // commandWALRawBarrierMu
-	nativeSemanticBridge           NativeSemanticBridge
-	nativeCommandWALCompletion     NativeCommandWALCompletionBridge
-	acceptedPrefix                 atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
-	mvccAdmission                  mvccadmission.Authority
-	valueLogManager                *valuelog.Manager
-	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
-	snapshotViewRO                 atomic.Pointer[snapshotView]
-	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
-	snapshotAcquireEpoch           atomic.Uint64
-	valueLogRefTracker             *valueLogRefTracker
-	valueLogAppender               atomic.Pointer[valueLogAppenderHolder]
-	leafPageLog                    LeafPageLog
-	leafPageLogVersion             uint64
-	leafPageReadCache              *leafPageReadCache
-	leafGenerationManifest         *leafGenerationManifest
-	leafGenerationManifestStore    *leafGenerationManifestStore
-	leafGenerationManifestDirty    atomic.Bool
-	leafGenerationPendingMu        sync.Mutex
-	leafGenerationPendingFileIDs   []uint32
-	leafGenerationPendingSet       map[uint32]struct{}
-	leafGenerationPendingCommitSeq map[uint32]uint64
-	leafSegmentObserverMu          sync.Mutex
-	leafSegmentObserverActive      bool
-	leafSegmentObserverIDs         []uint32
-	lock                           *lockfile.Lock
+	privateCOWOwner                   *transactionowner.Owner
+	nativeSemanticActive              atomic.Bool
+	legacyCommandProducers            uint64 // commandWALRawBarrierMu
+	semanticUnownedInFlight           uint64 // commandWALRawBarrierMu
+	nativeSemanticBridge              NativeSemanticBridge
+	nativeCommandWALCompletion        NativeCommandWALCompletionBridge
+	acceptedPrefix                    atomic.Pointer[rootpublication.Coordinator] // immutable logical owner after private binding
+	mvccAdmission                     mvccadmission.Authority
+	valueLogManager                   *valuelog.Manager
+	valueLogIdentityPins              *rootpublication.IdentityPinRegistry
+	snapshotViewRO                    atomic.Pointer[snapshotView]
+	_                                 [120]byte
+	snapshotAcquireRO                 [snapshotAcquireShardCount]snapshotAcquireShardCounter
+	snapshotAcquireEpoch              paddedAtomicUint64
+	flushReadContentionLastEpoch      atomic.Uint64
+	flushReadContentionLastSampleNano atomic.Int64
+	flushReadContentionUntilNano      atomic.Int64
+	valueLogRefTracker                *valueLogRefTracker
+	valueLogAppender                  atomic.Pointer[valueLogAppenderHolder]
+	leafPageLog                       LeafPageLog
+	leafPageLogVersion                uint64
+	leafPageReadCache                 *leafPageReadCache
+	leafGenerationManifest            *leafGenerationManifest
+	leafGenerationManifestStore       *leafGenerationManifestStore
+	leafGenerationManifestDirty       atomic.Bool
+	leafGenerationPendingMu           sync.Mutex
+	leafGenerationPendingFileIDs      []uint32
+	leafGenerationPendingSet          map[uint32]struct{}
+	leafGenerationPendingCommitSeq    map[uint32]uint64
+	leafSegmentObserverMu             sync.Mutex
+	leafSegmentObserverActive         bool
+	leafSegmentObserverIDs            []uint32
+	lock                              *lockfile.Lock
 
 	physicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
 
