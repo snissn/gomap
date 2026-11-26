@@ -592,7 +592,7 @@ var nativeUpdateCommitItemPool = sync.Pool{
 }
 
 func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte, bool, error)) (bool, bool, error) {
-	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() {
+	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() || c.nativeJSON.db.NativeCommandWALGroupCommitActive() {
 		return c.nativeUpdateDocumentSingle(id, update)
 	}
 	coord := collectionSchemaCoordinatorForDBCollection(c.nativeJSON.db, c.name)
@@ -660,6 +660,9 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 		canCoalesce := g != nil &&
 			g.typed == nil &&
 			len(g.probe.meta.VectorIndexes) == 0 &&
+			normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatTemplateV1 &&
+			len(g.templateRecords) == 0 &&
+			len(g.templateLearned) == 0 &&
 			len(g.rows.rows) == 1 &&
 			bytes.Equal(g.rows.rows[0].id, id)
 		if !canCoalesce {
@@ -818,8 +821,12 @@ func (coord *collectionSchemaCoordinator) drainNativeUpdateCommitPending() {
 				},
 			}
 		}
-		results, _, err := firstCol.finishPreparedNativeUpdateBatchWithJournal(btx, updateItems, updateBatchModeAny, nil, nil, nil)
-		if err == nil && len(results) == n {
+		mode := updateBatchModeNoSecondaryUniqueIndexChanges
+		if n == 1 {
+			mode = updateBatchModeAny
+		}
+		results, batched, err := firstCol.finishPreparedNativeUpdateBatchWithJournal(btx, updateItems, mode, nil, nil, nil)
+		if err == nil && batched && len(results) == n {
 			for i, it := range batch {
 				it.matched = results[i].Matched
 				it.modified = results[i].Modified

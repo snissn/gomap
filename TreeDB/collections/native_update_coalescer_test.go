@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync"
@@ -388,4 +389,288 @@ func TestNativeUpdateCommitCoalescerConcurrencyDuplicateKeysErrorIsolationAndReo
 	owner2, _, col2 := openDB()
 	defer func() { _ = owner2.Close() }()
 	verifyCounts(col2, "after-reopen")
+}
+
+func TestNativeUpdateCoalescerTemplateV1ConcurrentUpdates(t *testing.T) {
+	dir := t.TempDir()
+	openDB := func() (*treedb.DB, *CollectionManager, *Collection) {
+		opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, dir)
+		opts.MemtableMode = "cow_btree"
+		opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+		owner, err := treedb.Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend, err := owner.NativeSemanticBackend()
+		if err != nil {
+			_ = owner.Close()
+			t.Fatal(err)
+		}
+		mgr := NewCollectionManager(backend)
+		col, err := mgr.OpenCollection("tpl_docs")
+		if err != nil {
+			if _, err = mgr.CreateCollection(&CollectionMeta{
+				Name:    "tpl_docs",
+				Options: CollectionOptions{DocumentFormat: DocumentFormatTemplateV1},
+				Indexes: []IndexDefinition{
+					{Name: "email_1", Field: "email", ValueType: IndexValueString, Unique: true},
+				},
+			}); err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+			col, err = mgr.OpenCollection("tpl_docs")
+			if err != nil {
+				_ = owner.Close()
+				t.Fatal(err)
+			}
+		}
+		return owner, mgr, col
+	}
+
+	owner, _, col := openDB()
+	const numDocs = 32
+	ids := make([][]byte, numDocs)
+	for i := 0; i < numDocs; i++ {
+		id := []byte(fmt.Sprintf("tpl-%04d", i))
+		ids[i] = id
+		rawJSON := []byte(fmt.Sprintf(`{"_id":"tpl-%04d","email":"t%04d@example.com","version":0}`, i, i))
+		encoded, err := EncodeTemplateV1DocumentJSON(rawJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := col.Insert(id, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const workers = 16
+	const iters = 15
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			id := ids[workerID]
+			for iter := 1; iter <= iters; iter++ {
+				wantJSON := []byte(fmt.Sprintf(`{"_id":"tpl-%04d","email":"t%04d@example.com","version":%d,"extra":"v%d"}`, workerID, workerID, iter, iter))
+				encoded, err := EncodeTemplateV1DocumentJSON(wantJSON)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				matched, modified, err := col.Update(id, func(_ []byte) ([]byte, bool, error) {
+					return encoded, true, nil
+				})
+				if err != nil || !matched || !modified {
+					select {
+					case errCh <- fmt.Errorf("worker=%d iter=%d matched=%t modified=%t err=%v", workerID, iter, matched, modified, err):
+					default:
+					}
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
+
+	verifyDocs := func(c *Collection, phase string) {
+		mat, err := c.NewStoredDocumentJSONMaterializer()
+		if err != nil {
+			t.Fatalf("%s NewStoredDocumentJSONMaterializer: %v", phase, err)
+		}
+		defer func() { _ = mat.Close() }()
+		for w := 0; w < workers; w++ {
+			got, err := c.Get(ids[w])
+			if err != nil {
+				t.Fatalf("%s Get(%s): %v", phase, ids[w], err)
+			}
+			jsonDoc, err := mat.StoredDocumentJSON(got)
+			if err != nil {
+				t.Fatalf("%s StoredDocumentJSON(%s): %v", phase, ids[w], err)
+			}
+			needle := []byte(fmt.Sprintf(`"version":%d`, iters))
+			if !bytes.Contains(jsonDoc, needle) {
+				t.Fatalf("%s doc %s = %s, missing %s", phase, ids[w], jsonDoc, needle)
+			}
+		}
+	}
+	verifyDocs(col, "before-reopen")
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	owner2, _, col2 := openDB()
+	defer func() { _ = owner2.Close() }()
+	verifyDocs(col2, "after-reopen")
+}
+
+func TestNativeUpdateCoalescerRejectsConcurrentUniqueIndexSwap(t *testing.T) {
+	openCol := func(t *testing.T, name string) (*treedb.DB, *Collection) {
+		t.Helper()
+		opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, t.TempDir())
+		opts.MemtableMode = "cow_btree"
+		opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+		owner, err := treedb.Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = owner.Close() })
+		backend, err := owner.NativeSemanticBackend()
+		if err != nil {
+			t.Fatal(err)
+		}
+		mgr := NewCollectionManager(backend)
+		t.Cleanup(func() { _ = mgr.Close() })
+		if _, err := mgr.CreateCollection(&CollectionMeta{
+			Name:    name,
+			Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+			Indexes: []IndexDefinition{
+				{Name: "email_1", Field: "email", ValueType: IndexValueString, Unique: true},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		col, err := mgr.OpenCollection(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		docA, err := bson.Marshal(bson.D{{Key: "_id", Value: "A"}, {Key: "email", Value: "a@x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		docB, err := bson.Marshal(bson.D{{Key: "_id", Value: "B"}, {Key: "email", Value: "b@x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := col.InsertBatchValidatedBSONNoResultIDs([][]byte{[]byte("A"), []byte("B")}, [][]byte{docA, docB}); err != nil {
+			t.Fatal(err)
+		}
+		return owner, col
+	}
+
+	mustRawString := func(t *testing.T, s string) bson.RawValue {
+		t.Helper()
+		tp, val, err := bson.MarshalValue(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bson.RawValue{Type: tp, Value: val}
+	}
+
+	t.Run("UpdateBSONSet", func(t *testing.T) {
+		_, col := openCol(t, "swap_bson_set")
+		coord := collectionSchemaCoordinatorForDBCollection(col.nativeJSON.db, col.name)
+
+		// Queue both A->b@x and B->a@x in the same coalescer wave deterministically.
+		itemA := &nativeBSONSetCoalescerItem{
+			col:    col,
+			id:     []byte("A"),
+			fields: []BSONSetField{{Key: "email", Value: mustRawString(t, "b@x")}},
+			done:   make(chan struct{}, 1),
+		}
+		itemB := &nativeBSONSetCoalescerItem{
+			col:    col,
+			id:     []byte("B"),
+			fields: []BSONSetField{{Key: "email", Value: mustRawString(t, "a@x")}},
+			done:   make(chan struct{}, 1),
+		}
+		coord.nativeBSONSetMu.Lock()
+		coord.nativeBSONSetActive = true
+		coord.nativeBSONSetPending = append(coord.nativeBSONSetPending, itemA, itemB)
+		coord.nativeBSONSetMu.Unlock()
+
+		coord.drainNativeBSONSetPending()
+		<-itemA.done
+		<-itemB.done
+
+		if itemA.err == nil && itemB.err == nil {
+			t.Fatalf("illegal cross-document unique email swap succeeded in UpdateBSONSet coalescer (A.err=%v, B.err=%v)", itemA.err, itemB.err)
+		}
+		if itemA.err == nil || itemB.err == nil {
+			// Either individual ordering must fail BOTH (first fails because target exists,
+			// so original email remains occupied, and second ALSO fails!).
+			t.Fatalf("expected both individual swap attempts to encounter unique conflict, got A.err=%v B.err=%v", itemA.err, itemB.err)
+		}
+	})
+
+	t.Run("UpdateCommitCoalescer", func(t *testing.T) {
+		_, col := openCol(t, "swap_update_commit")
+		coord := collectionSchemaCoordinatorForDBCollection(col.nativeJSON.db, col.name)
+
+		oldA, err := col.Get([]byte("A"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldB, err := col.Get([]byte("B"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		newA, err := bson.Marshal(bson.D{{Key: "_id", Value: "A"}, {Key: "email", Value: "b@x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		newB, err := bson.Marshal(bson.D{{Key: "_id", Value: "B"}, {Key: "email", Value: "a@x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		unlockVector, _, err := col.prepareNativeProducerMutation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unlockVector()
+
+		probeTx, err := col.nativeJSON.beginPrepared(col.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inc := probeTx.binding(col.name).incarnation
+		if err := probeTx.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		itemA := &nativeUpdateCommitItem{
+			col:         col,
+			id:          []byte("A"),
+			expectedOld: oldA,
+			stagedNew:   newA,
+			incarnation: inc,
+			done:        make(chan struct{}, 1),
+		}
+		itemB := &nativeUpdateCommitItem{
+			col:         col,
+			id:          []byte("B"),
+			expectedOld: oldB,
+			stagedNew:   newB,
+			incarnation: inc,
+			done:        make(chan struct{}, 1),
+		}
+		coord.nativeUpdateCommitMu.Lock()
+		coord.nativeUpdateCommitActive = true
+		coord.nativeUpdateCommitPending = append(coord.nativeUpdateCommitPending, itemA, itemB)
+		coord.nativeUpdateCommitMu.Unlock()
+
+		coord.drainNativeUpdateCommitPending()
+		<-itemA.done
+		<-itemB.done
+
+		if itemA.err == nil && itemB.err == nil {
+			t.Fatalf("illegal cross-document unique email swap succeeded in Update commit coalescer (A.err=%v, B.err=%v)", itemA.err, itemB.err)
+		}
+		if itemA.err == nil || itemB.err == nil {
+			t.Fatalf("expected both individual swap attempts to encounter unique conflict, got A.err=%v B.err=%v", itemA.err, itemB.err)
+		}
+	})
 }

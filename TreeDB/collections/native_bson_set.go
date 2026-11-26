@@ -40,7 +40,7 @@ type nativeBSONSetRetry struct {
 }
 
 func (c *Collection) nativeUpdateBSONSet(id []byte, fields []BSONSetField) (bool, bool, error) {
-	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() {
+	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() || c.nativeJSON.db.NativeCommandWALGroupCommitActive() {
 		matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
 		return matched, modified, err
 	}
@@ -128,8 +128,8 @@ func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
 		for i, it := range batch {
 			bsonItems[i] = BSONSetUpdateBatchItem{DocumentID: it.id, Fields: it.fields}
 		}
-		results, _, err := firstCol.nativeUpdateBatchModeWithJournal(nil, updateBatchModeAny, bsonItems, nil, nil)
-		if err == nil && len(results) == n {
+		results, batched, err := firstCol.nativeUpdateBatchModeWithJournal(nil, updateBatchModeNoSecondaryUniqueIndexChanges, bsonItems, nil, nil)
+		if err == nil && batched && len(results) == n {
 			for i, it := range batch {
 				it.matched = results[i].Matched
 				it.modified = results[i].Modified
