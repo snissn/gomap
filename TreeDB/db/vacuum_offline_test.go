@@ -2,10 +2,12 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -611,5 +613,169 @@ func TestOpen_IndexOuterLeavesInValueLog_RecoversPendingOfflineVacuumReset(t *te
 	}
 	if _, err := os.Stat(leafGenerationResetPendingAfterOfflineVacuumPath(dir)); !os.IsNotExist(err) {
 		t.Fatalf("reset marker still exists or stat failed: %v", err)
+	}
+}
+
+func TestVacuumIndexOffline_SmallFastProfileChunkSizeShrinksIndex(t *testing.T) {
+	dir := t.TempDir()
+	const fastChunkSize = int64(4 << 20)
+
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  fastChunkSize,
+		KeepRecent:                 1,
+		CommandWAL:                 true,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	val := bytes.Repeat([]byte("a"), 180)
+	for round := 0; round < 3; round++ {
+		b := d.NewBatch()
+		for i := 0; i < 256; i++ {
+			k := []byte(fmt.Sprintf("key-%05d", i))
+			if err := b.Set(k, val); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("close batch: %v", err)
+		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	indexPath := filepath.Join(dir, indexFileName)
+	beforeInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	if beforeInfo.Size() < fastChunkSize {
+		t.Fatalf("index.db before=%d want >= %d", beforeInfo.Size(), fastChunkSize)
+	}
+
+	// Pass fastChunkSize explicitly, matching collection_load_fixture -index-vacuum offline.
+	if err := VacuumIndexOffline(Options{
+		Dir:                        dir,
+		ChunkSize:                  fastChunkSize,
+		KeepRecent:                 1,
+		IndexOuterLeavesInValueLog: true,
+	}); err != nil {
+		t.Fatalf("VacuumIndexOffline: %v", err)
+	}
+
+	afterInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if afterInfo.Size() >= 1<<20 {
+		t.Fatalf("offline vacuum did not shrink small fast-profile index.db: before=%d after=%d want < 1 MiB", beforeInfo.Size(), afterInfo.Size())
+	}
+
+	verify, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("reopen read-only: %v", err)
+	}
+	defer func() { _ = verify.Close() }()
+	for i := 0; i < 256; i++ {
+		got, err := verify.Get([]byte(fmt.Sprintf("key-%05d", i)))
+		if err != nil {
+			t.Fatalf("get key-%05d: %v", i, err)
+		}
+		if !bytes.Equal(got, val) {
+			t.Fatalf("value mismatch for key-%05d", i)
+		}
+	}
+}
+
+func TestVacuumIndexOnline_SmallFastProfileChunkSizeShrinksIndex(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online index vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	const fastChunkSize = int64(4 << 20)
+
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  fastChunkSize,
+		KeepRecent:                 1,
+		CommandWAL:                 true,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	val := bytes.Repeat([]byte("b"), 180)
+	for round := 0; round < 3; round++ {
+		b := d.NewBatch()
+		for i := 0; i < 256; i++ {
+			k := []byte(fmt.Sprintf("key-%05d", i))
+			if err := b.Set(k, val); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("close batch: %v", err)
+		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	indexPath := filepath.Join(dir, indexFileName)
+	beforeInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	if beforeInfo.Size() < fastChunkSize {
+		t.Fatalf("index.db before=%d want >= %d", beforeInfo.Size(), fastChunkSize)
+	}
+
+	if err := d.VacuumIndexOnline(context.Background()); err != nil {
+		_ = d.Close()
+		t.Fatalf("VacuumIndexOnline: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	afterInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if afterInfo.Size() >= 1<<20 {
+		t.Fatalf("online vacuum did not shrink small fast-profile index.db: before=%d after=%d want < 1 MiB", beforeInfo.Size(), afterInfo.Size())
+	}
+
+	verify, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("reopen read-only: %v", err)
+	}
+	defer func() { _ = verify.Close() }()
+	for i := 0; i < 256; i++ {
+		got, err := verify.Get([]byte(fmt.Sprintf("key-%05d", i)))
+		if err != nil {
+			t.Fatalf("get key-%05d: %v", i, err)
+		}
+		if !bytes.Equal(got, val) {
+			t.Fatalf("value mismatch for key-%05d", i)
+		}
 	}
 }

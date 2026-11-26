@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 type kv struct {
@@ -505,5 +507,195 @@ func truncateJSONL(t *testing.T, src, dst string) {
 	out = append(out, '\n')
 	if err := os.WriteFile(dst, out, 0o600); err != nil {
 		t.Fatalf("write truncated jsonl: %v", err)
+	}
+}
+
+func TestCompactExhaustiveShrinksSmallFastProfileIndexAndPrunesCoveredWAL(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online index vacuum unsupported on windows")
+	}
+	packSupported := rootpublication.StableRelativeNamespaceSupported() && rootpublication.StableCrossParentMoveNoReplaceSupported()
+
+	cases := []struct {
+		name        string
+		outerLeaves bool
+		mode        string
+		needsPack   bool
+	}{
+		{name: "inline_leaves_exhaustive", outerLeaves: false, mode: "exhaustive", needsPack: false},
+		{name: "inline_leaves_full", outerLeaves: false, mode: "full", needsPack: false},
+		{name: "outer_leaves_in_vlog_exhaustive", outerLeaves: true, mode: "exhaustive", needsPack: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.needsPack && !packSupported {
+				t.Skip("leaf generation pack promotion requires exact retained-parent namespace support")
+			}
+			dir := t.TempDir()
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+			opts.IndexOuterLeavesInValueLog = tc.outerLeaves
+			opts.IndexInternalBaseDelta = false
+			opts.KeepRecent = 1
+			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundCheckpointIdleDuration = -1
+			opts.BackgroundIndexVacuumInterval = -1
+			opts.DisableBackgroundPrune = true
+			if tc.mode == "full" {
+				// Generate real freelist debt so full-mode policy triggers online index vacuum.
+				opts.PreferAppendAlloc = true
+			}
+
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			val := bytes.Repeat([]byte("x"), 180)
+			keyCount := 256
+			rounds := 3
+			if tc.mode == "full" {
+				keyCount = 512
+				rounds = 40
+			}
+			for round := 0; round < rounds; round++ {
+				b := db.NewBatch()
+				limit := keyCount
+				if tc.mode == "full" && round >= 2 {
+					limit = 64
+				}
+				for i := 0; i < limit; i++ {
+					k := []byte(fmt.Sprintf("doc-%05d", i))
+					if err := b.Set(k, val); err != nil {
+						_ = b.Close()
+						_ = db.Close()
+						t.Fatalf("set: %v", err)
+					}
+				}
+				if err := b.Write(); err != nil {
+					_ = b.Close()
+					_ = db.Close()
+					t.Fatalf("write: %v", err)
+				}
+				if err := b.Close(); err != nil {
+					_ = db.Close()
+					t.Fatalf("close batch: %v", err)
+				}
+				if tc.mode == "full" {
+					if err := db.Checkpoint(); err != nil {
+						_ = db.Close()
+						t.Fatalf("checkpoint round %d: %v", round, err)
+					}
+				}
+			}
+			if err := db.Checkpoint(); err != nil {
+				_ = db.Close()
+				t.Fatalf("checkpoint: %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close db: %v", err)
+			}
+
+			mainDir := resolveMainDBDir(dir)
+			beforeIndex, err := os.Stat(filepath.Join(mainDir, "index.db"))
+			if err != nil {
+				t.Fatalf("stat index.db before compact: %v", err)
+			}
+			if beforeIndex.Size() < 4<<20 {
+				t.Fatalf("index.db before compact=%d want >= 4 MiB", beforeIndex.Size())
+			}
+
+			out := captureStdout(t, func() {
+				runCompact(dir, []string{"-rw", "-mode", tc.mode, "-json"})
+			})
+			var stats treedb.CompactStorageStats
+			if err := json.Unmarshal([]byte(out), &stats); err != nil {
+				t.Fatalf("decode compact json: %v\n%s", err, out)
+			}
+
+			afterIndex, err := os.Stat(filepath.Join(mainDir, "index.db"))
+			if err != nil {
+				t.Fatalf("stat index.db after compact: %v", err)
+			}
+			if afterIndex.Size() >= 1<<20 {
+				t.Fatalf("compact -mode %s left index.db at %d bytes (before=%d want < 1 MiB)", tc.mode, afterIndex.Size(), beforeIndex.Size())
+			}
+			if reported := compactStorageUsageBytes(stats.After, "index"); reported != afterIndex.Size() {
+				t.Fatalf("reported after index bytes=%d want %d", reported, afterIndex.Size())
+			}
+
+			if tc.mode == "exhaustive" {
+				walDir := filepath.Join(mainDir, "wal")
+				entries, err := os.ReadDir(walDir)
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatalf("readdir wal: %v", err)
+				}
+				var walSegmentBytes int64
+				for _, entry := range entries {
+					if entry.IsDir() || !strings.HasPrefix(entry.Name(), "commit-") || !strings.HasSuffix(entry.Name(), ".log") {
+						continue
+					}
+					info, err := entry.Info()
+					if err != nil {
+						t.Fatalf("stat wal entry %s: %v", entry.Name(), err)
+					}
+					walSegmentBytes += info.Size()
+				}
+				if walSegmentBytes != 0 {
+					t.Fatalf("compact -mode exhaustive left %d bytes of covered WAL segments under %s", walSegmentBytes, walDir)
+				}
+				if reportedWAL := compactStorageUsageBytes(stats.After, "wal"); reportedWAL >= 4096 {
+					t.Fatalf("reported after wal bytes=%d want < 4096", reportedWAL)
+				}
+				if !stats.ByteMinimized || !stats.FullyCompacted {
+					t.Fatalf("expected ByteMinimized && FullyCompacted, got stats=%+v", stats)
+				}
+			}
+
+			roOpts := treedb.Options{Dir: dir, ReadOnly: true}
+			applyPersistedFormatConfig(dir, &roOpts)
+			verify, err := treedb.Open(roOpts)
+			if err != nil {
+				t.Fatalf("reopen read-only after compact: %v", err)
+			}
+			for i := 0; i < keyCount; i++ {
+				got, err := verify.Get([]byte(fmt.Sprintf("doc-%05d", i)))
+				if err != nil {
+					_ = verify.Close()
+					t.Fatalf("get doc-%05d: %v", i, err)
+				}
+				if !bytes.Equal(got, val) {
+					_ = verify.Close()
+					t.Fatalf("value mismatch for doc-%05d", i)
+				}
+			}
+			if err := verify.Close(); err != nil {
+				t.Fatalf("close read-only verify: %v", err)
+			}
+
+			// Verify read-write reopen and fresh writes work cleanly after compact.
+			rwOpts := treedb.Options{Dir: dir}
+			applyPersistedFormatConfig(dir, &rwOpts)
+			rw, err := treedb.Open(rwOpts)
+			if err != nil {
+				t.Fatalf("reopen read-write after compact: %v", err)
+			}
+			if err := rw.SetSync([]byte("post-compact"), []byte("ok")); err != nil {
+				_ = rw.Close()
+				t.Fatalf("post-compact SetSync: %v", err)
+			}
+			if err := rw.Close(); err != nil {
+				t.Fatalf("close read-write after compact: %v", err)
+			}
+			verify2, err := treedb.Open(roOpts)
+			if err != nil {
+				t.Fatalf("reopen read-only after post-compact write: %v", err)
+			}
+			defer func() { _ = verify2.Close() }()
+			gotPost, err := verify2.Get([]byte("post-compact"))
+			if err != nil || !bytes.Equal(gotPost, []byte("ok")) {
+				t.Fatalf("post-compact key mismatch: got=%q err=%v", gotPost, err)
+			}
+		})
 	}
 }
