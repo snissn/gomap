@@ -6,13 +6,18 @@ func (m *Manager) RetainSnapshotWrapper() bool {
 	if m == nil {
 		return false
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closing {
+	if m.closingAtomic.Load() {
 		return false
 	}
 	m.wrapperBorrows.Add(1)
-	return true
+	if !m.closingAtomic.Load() {
+		return true
+	}
+	// Close raced with the speculative increment. Roll back through the terminal
+	// release path so Close cannot miss a final refund after seeing the transient
+	// non-zero borrow count.
+	m.ReleaseSnapshotWrapper()
+	return false
 }
 
 // ReleaseSnapshotWrapper consumes the same original borrow after the disposing
@@ -21,11 +26,14 @@ func (m *Manager) ReleaseSnapshotWrapper() {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
-	if m.wrapperBorrows.Add(-1) < 0 {
-		m.mu.Unlock()
+	rem := m.wrapperBorrows.Add(-1)
+	if rem < 0 {
 		panic("value-log Manager Snapshot borrow underflow")
 	}
+	if rem > 0 || !m.closingAtomic.Load() {
+		return
+	}
+	m.mu.Lock()
 	owner, charge := m.detachTerminalMetadataLocked()
 	m.mu.Unlock()
 	if owner != nil {

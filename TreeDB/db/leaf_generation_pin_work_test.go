@@ -1,8 +1,11 @@
 package db
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestLeafPinWorkRetainRepairsOriginalPartialUnpin(t *testing.T) {
@@ -87,6 +90,76 @@ func TestLeafPinWorkPriorReceiptCannotConsumeLaterCycle(t *testing.T) {
 	for _, ref := range pins.refs {
 		if ref.count.Load() != 0 {
 			t.Fatal("counter replay", ref.count.Load())
+		}
+	}
+}
+
+func TestLeafPinSetConcurrentRetainReleaseRacingMarkStale(t *testing.T) {
+	ids := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	for trial := 0; trial < 50; trial++ {
+		var tracker leafGenerationPinTracker
+		pins := newLeafGenerationPinSet(tracker.refsForGenerationIDs(ids))
+
+		start := make(chan struct{})
+		var staleDone atomic.Bool
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				<-start
+				for i := 0; i < 200; i++ {
+					pins.retain(&tracker)
+					if staleDone.Load() {
+						for _, genID := range ids {
+							if got := tracker.count(genID); got != 1 {
+								t.Errorf("trial %d: live holder observed unpinned gen=%d count=%d after markStale", trial, genID, got)
+								pins.release(&tracker)
+								return
+							}
+						}
+					}
+					if id == 0 && i%17 == 0 && staleDone.Load() {
+						var work leafGenerationPinReleaseWork
+						for {
+							w := iterator.OrdinalScanWork{RecordLimit: 4, ByteLimit: 1 << 20}
+							ready, err := pins.releasePinWork(&tracker, &work, &w)
+							if err != nil {
+								t.Errorf("trial %d: releasePinWork err=%v", trial, err)
+								return
+							}
+							if ready {
+								break
+							}
+						}
+					} else {
+						pins.release(&tracker)
+					}
+				}
+			}(g)
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			pins.markStale(&tracker)
+			staleDone.Store(true)
+		}()
+
+		close(start)
+		wg.Wait()
+
+		if got := atomic.LoadInt64(&pins.holders); got != 0 {
+			t.Fatalf("trial %d: holders=%d want 0", trial, got)
+		}
+		if pins.pinned || pins.unpinning {
+			t.Fatalf("trial %d: pinned=%v unpinning=%v want false/false", trial, pins.pinned, pins.unpinning)
+		}
+		for _, genID := range ids {
+			if got := tracker.count(genID); got != 0 {
+				t.Fatalf("trial %d: gen=%d count=%d want 0 after all releases", trial, genID, got)
+			}
 		}
 	}
 }

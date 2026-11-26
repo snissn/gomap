@@ -8987,6 +8987,13 @@ func (s *foregroundReaderState) Store(count int64) {
 }
 
 func (s *foregroundReaderState) Add(delta int64) int64 {
+	if delta == 1 {
+		next := s.value.Add(1)
+		if uint32(next) == 0 {
+			panic("caching: invalid foreground reader count")
+		}
+		return int64(uint32(next))
+	}
 	for {
 		current := s.value.Load()
 		count := int64(uint32(current)) + delta

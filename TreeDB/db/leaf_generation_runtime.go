@@ -101,6 +101,7 @@ type leafGenerationPinSet struct {
 	stale         bool
 	pinned        bool
 	unpinning     bool
+	slowPath      atomic.Bool // monotonic false -> true in markStale under mu
 	unpinPosition int
 	unpinCycle    uint64
 }
@@ -116,10 +117,27 @@ func (s *leafGenerationPinSet) retain(tracker *leafGenerationPinTracker) bool {
 	if s == nil || tracker == nil {
 		return false
 	}
+	if !s.slowPath.Load() {
+		atomic.AddInt64(&s.holders, 1)
+		if !s.slowPath.Load() {
+			return false
+		}
+		// markStale raced with the fast-path increment. Our holder is already
+		// counted; serialize under s.mu to repair partial unpins or install pins.
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		repaired := s.repairUnpinPrefixLocked()
+		if s.stale && !s.pinned {
+			tracker.pinRefs(s.refs)
+			s.pinned = true
+			return true
+		}
+		return repaired
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	repaired := s.repairUnpinPrefixLocked()
-	s.holders++
+	atomic.AddInt64(&s.holders, 1)
 	if s.stale && !s.pinned {
 		tracker.pinRefs(s.refs)
 		s.pinned = true
@@ -129,7 +147,45 @@ func (s *leafGenerationPinSet) retain(tracker *leafGenerationPinTracker) bool {
 }
 
 func (s *leafGenerationPinSet) release(tracker *leafGenerationPinTracker) {
+	if s == nil || tracker == nil {
+		return
+	}
+	if !s.slowPath.Load() {
+		rem := atomic.AddInt64(&s.holders, -1)
+		if rem < 0 {
+			atomic.AddInt64(&s.holders, 1)
+			return
+		}
+		if !s.slowPath.Load() {
+			return
+		}
+		// markStale raced with the fast-path decrement. Finish physical unpin
+		// under s.mu if no holders remain and pins were installed.
+		s.finishRacedRelease(tracker)
+		return
+	}
 	var state leafGenerationPinReleaseWork
+	for {
+		ready, err := s.releasePinWork(tracker, &state, nil)
+		if ready || err != nil {
+			return
+		}
+	}
+}
+
+func (s *leafGenerationPinSet) finishRacedRelease(tracker *leafGenerationPinTracker) {
+	var state leafGenerationPinReleaseWork
+	s.mu.Lock()
+	if atomic.LoadInt64(&s.holders) != 0 || !s.pinned || s.unpinning {
+		s.mu.Unlock()
+		return
+	}
+	s.unpinCycle++
+	s.unpinPosition = 0
+	s.unpinning = true
+	state.consumed = true
+	state.cycle = s.unpinCycle
+	s.mu.Unlock()
 	for {
 		ready, err := s.releasePinWork(tracker, &state, nil)
 		if ready || err != nil {
@@ -148,7 +204,8 @@ func (s *leafGenerationPinSet) markStale(tracker *leafGenerationPinTracker) {
 		return
 	}
 	s.stale = true
-	if s.holders > 0 && !s.pinned {
+	s.slowPath.Store(true)
+	if atomic.LoadInt64(&s.holders) > 0 && !s.pinned {
 		tracker.pinRefs(s.refs)
 		s.pinned = true
 	}

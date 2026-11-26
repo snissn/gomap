@@ -1,8 +1,10 @@
 package db
 
 import (
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"sync/atomic"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 // This receipt belongs in the existing disposing Snapshot. It consumes only
@@ -52,12 +54,11 @@ func (s *leafGenerationPinSet) releasePinWork(tracker *leafGenerationPinTracker,
 			return false, nil
 		}
 		state.consumed = true
-		if s.holders == 0 {
+		if atomic.LoadInt64(&s.holders) == 0 {
 			state.done = true
 			return true, nil
 		}
-		s.holders--
-		if s.holders != 0 || !s.pinned {
+		if atomic.AddInt64(&s.holders, -1) != 0 || !s.pinned {
 			state.done = true
 			return true, nil
 		}
