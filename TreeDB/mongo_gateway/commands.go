@@ -2469,10 +2469,10 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if coalescer.maxDelay == 0 {
 		if active > 2 {
 			coalescer.noteBatchConcurrency()
-		} else if !coalescer.batchModeActive() &&
-			len(coalescer.requests) == 0 &&
+		} else if len(coalescer.requests) == 0 &&
 			!coalescer.workerBusy.Load() &&
 			!coalescer.stoppedFlag.Load() &&
+			!coalescer.batchModeActive() &&
 			coalescer.execMu.TryLock() {
 			if !coalescer.stoppedFlag.Load() && len(coalescer.requests) == 0 {
 				return coalescer.runInline(col, update)
@@ -2515,7 +2515,16 @@ func (c *mongoUpdateCoalescer) nowUnixNano() int64 {
 
 func (c *mongoUpdateCoalescer) noteBatchConcurrency() {
 	if h := c.effectiveBatchHysteresis(); h > 0 {
-		c.batchModeUntil.Store(c.nowUnixNano() + int64(h))
+		target := c.nowUnixNano() + int64(h)
+		for {
+			cur := c.batchModeUntil.Load()
+			if cur >= target {
+				return
+			}
+			if c.batchModeUntil.CompareAndSwap(cur, target) {
+				return
+			}
+		}
 	}
 }
 
@@ -2924,10 +2933,10 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 		}
 	}
 drained:
-	if c.maxDelay == 0 && len(batch) >= 3 {
+	c.runBatch(batch)
+	if c.maxDelay == 0 && (len(batch) >= 3 || c.inFlight.Load() > 2) {
 		c.noteBatchConcurrency()
 	}
-	c.runBatch(batch)
 	clear(batch)
 	c.batchBuf = batch[:0]
 }

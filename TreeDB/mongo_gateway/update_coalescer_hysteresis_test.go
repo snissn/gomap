@@ -186,7 +186,7 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 
 		// Step 3: Worker batch with len(batch) >= 3 refreshes batchModeUntil even
 		// if the clock advanced after callers entered runMongoUpdateCoalesced.
-		tWorker := t0 + int64(20*time.Millisecond)
+		tWorker := wantUntil + int64(5*time.Millisecond)
 		coalescer.execMu.Lock()
 		const batchSize = 3
 		errCh := make(chan error, batchSize)
@@ -314,6 +314,147 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 	})
 
+	t.Run("MonotonicLatchAndPostBatchRefreshWhileWorkerBusy", func(t *testing.T) {
+		const t0 int64 = 1_000_000_000
+		const hyst = defaultUpdateCoalescingBatchHysteresis
+
+		// Case A: Stale timestamp in noteBatchConcurrency() must not regress a
+		// fresher batchModeUntil deadline backwards.
+		cMonotonic := &mongoUpdateCoalescer{
+			batchHysteresis: hyst,
+		}
+		newerUntil := t0 + int64(4*hyst)
+		cMonotonic.batchModeUntil.Store(newerUntil)
+		var nowMonotonic atomic.Int64
+		nowMonotonic.Store(t0)
+		cMonotonic.nowNano = nowMonotonic.Load
+		cMonotonic.noteBatchConcurrency()
+		if got := cMonotonic.batchModeUntil.Load(); got != newerUntil {
+			t.Fatalf("stale noteBatchConcurrency regressed batchModeUntil=%d want %d", got, newerUntil)
+		}
+		nowMonotonic.Store(t0 + int64(5*hyst))
+		cMonotonic.noteBatchConcurrency()
+		if got, want := cMonotonic.batchModeUntil.Load(), t0+int64(6*hyst); got != want {
+			t.Fatalf("fresh noteBatchConcurrency batchModeUntil=%d want %d", got, want)
+		}
+
+		// Case B: While workerBusy is true, an active<=2 caller must skip
+		// batchModeActive() (avoiding clock reads and premature expiry clear
+		// before the worker's post-batch refresh runs).
+		sBusy, collBusy := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = sBusy.Close() }()
+		cBusy := sBusy.Server.mongoUpdateCoalescer("app." + collBusy)
+		if cBusy == nil {
+			t.Fatal("expected cached coalescer")
+		}
+		var busyClockCalls atomic.Int64
+		expiredUntil := t0 + int64(hyst)
+		cBusy.batchModeUntil.Store(expiredUntil)
+		cBusy.nowNano = func() int64 {
+			busyClockCalls.Add(1)
+			return expiredUntil + int64(hyst)
+		}
+		cBusy.execMu.Lock()
+		cBusy.workerBusy.Store(true)
+		busyErrCh := make(chan error, 1)
+		go func() {
+			r, err := sBusy.Server.commandResponse(context.Background(), "update", buildUpdateOneCommand(t, collBusy, 0, 77), nil, 0)
+			if err == nil && !mongoCommandResponseOK(r) {
+				err = fmt.Errorf("busy update not ok: %s", r)
+			}
+			busyErrCh <- err
+		}()
+		busyDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(busyDeadline) && len(cBusy.requests) < 1 {
+			time.Sleep(time.Millisecond)
+		}
+		queuedBusy := len(cBusy.requests)
+		gotClockCalls := busyClockCalls.Load()
+		gotUntilWhileBusy := cBusy.batchModeUntil.Load()
+		cBusy.workerBusy.Store(false)
+		cBusy.execMu.Unlock()
+		cBusy.signalWake()
+		if err := <-busyErrCh; err != nil {
+			t.Fatalf("workerBusy update err: %v", err)
+		}
+		if queuedBusy != 1 {
+			t.Fatalf("workerBusy queued=%d want 1", queuedBusy)
+		}
+		if gotClockCalls != 0 {
+			t.Fatalf("workerBusy nowNano calls=%d want 0", gotClockCalls)
+		}
+		if gotUntilWhileBusy != expiredUntil {
+			t.Fatalf("workerBusy cleared batchModeUntil=%d want %d", gotUntilWhileBusy, expiredUntil)
+		}
+
+		// Case C: A slow worker batch (clock advances > batchHysteresis during
+		// runBatch) refreshes batchModeUntil at batch completion so the full
+		// hysteresis window protects post-batch turnaround.
+		sSlow, collSlow := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = sSlow.Close() }()
+		colSlow, err := sSlow.Collections.OpenCollection("app." + collSlow)
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		makeUnbufferedReq := func(id, val int64) mongoUpdateCoalescerRequest {
+			item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: val}}}}},
+			}))
+			if err != nil {
+				t.Fatalf("parseMongoUpdateItem: %v", err)
+			}
+			return mongoUpdateCoalescerRequest{
+				col:  colSlow,
+				item: item,
+				done: make(chan mongoUpdateCoalescerResult),
+			}
+		}
+		var slowNow atomic.Int64
+		slowNow.Store(t0)
+		cSlow := &mongoUpdateCoalescer{
+			maxBatch:        8,
+			batchHysteresis: hyst,
+			requests:        make(chan mongoUpdateCoalescerRequest, 8),
+			stoppedCh:       make(chan struct{}),
+			nowNano:         slowNow.Load,
+		}
+		req0 := makeUnbufferedReq(0, 10)
+		req1 := makeUnbufferedReq(1, 20)
+		req2 := makeUnbufferedReq(2, 30)
+		cSlow.requests <- req1
+		cSlow.requests <- req2
+
+		doneBatch := make(chan struct{})
+		go func() {
+			defer close(doneBatch)
+			cSlow.runBatchStartingWith(req0)
+		}()
+
+		if res := <-req0.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("slow req0=%+v want matched,modified,nil", res)
+		}
+		// Advance clock > batchHysteresis while runBatch is still completing
+		// results (blocked sending req1.done).
+		tAfterBatch := t0 + int64(2*hyst)
+		slowNow.Store(tAfterBatch)
+		if res := <-req1.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("slow req1=%+v want matched,modified,nil", res)
+		}
+		if res := <-req2.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("slow req2=%+v want matched,modified,nil", res)
+		}
+		<-doneBatch
+
+		wantAfterSlow := tAfterBatch + int64(hyst)
+		if got := cSlow.batchModeUntil.Load(); got != wantAfterSlow {
+			t.Fatalf("post-slow-batch batchModeUntil=%d want %d (refreshed after runBatch)", got, wantAfterSlow)
+		}
+		if !cSlow.batchModeActive() {
+			t.Fatal("batchModeActive()=false immediately after slow batch completion; want true")
+		}
+	})
+
 	t.Run("ConcurrentW8StandaloneCOW", func(t *testing.T) {
 		const (
 			writers      = 8
@@ -330,17 +471,31 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		start := make(chan struct{})
 		errCh := make(chan error, writers)
+		finalSteps := make([]int64, writers)
+		var stop atomic.Bool
+		var minOpsWG sync.WaitGroup
+		minOpsWG.Add(writers)
 		var wg sync.WaitGroup
 		wg.Add(writers)
+
+		// Hold execMu during wave 1 so all 8 writers genuinely enter the coalescer
+		// concurrently and engage batch-mode hysteresis through the public command
+		// path, rather than letting a single early-scheduled goroutine loop inline
+		// before other writers reach runMongoUpdateCoalesced under -race / low CPU.
+		coalescer.execMu.Lock()
 		for w := 0; w < writers; w++ {
 			w := w
 			go func() {
 				defer wg.Done()
-				<-start
-				for step := 1; step <= opsPerWriter; step++ {
-					resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), int64(step)), nil, 0)
+				reachedMin := false
+				defer func() {
+					if !reachedMin {
+						minOpsWG.Done()
+					}
+				}()
+				for step := int64(1); ; step++ {
+					resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), step), nil, 0)
 					if err != nil {
 						errCh <- fmt.Errorf("writer %d step %d: %w", w, step, err)
 						return
@@ -349,19 +504,43 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 						errCh <- fmt.Errorf("writer %d step %d not ok: %s", w, step, resp)
 						return
 					}
+					finalSteps[w] = step
+					if !reachedMin && step >= opsPerWriter {
+						reachedMin = true
+						minOpsWG.Done()
+					}
+					if reachedMin && stop.Load() {
+						return
+					}
 				}
 			}()
 		}
-		close(start)
+
+		queueDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(queueDeadline) && len(coalescer.requests) < writers && len(errCh) == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		queued := len(coalescer.requests)
+		coalescer.execMu.Unlock()
+		coalescer.signalWake()
+
+		// Snapshot hysteresis counters while all 8 writers are still concurrently
+		// active (before stopping writers and entering <=2 straggler tail drain).
+		minOpsWG.Wait()
+		inlineCount := coalescer.inlineExecs.Load()
+		batchCount := coalescer.workerBatches.Load()
+		stop.Store(true)
 		wg.Wait()
 		close(errCh)
 		for err := range errCh {
 			_ = s.Close()
 			t.Fatal(err)
 		}
+		if queued != writers {
+			_ = s.Close()
+			t.Fatalf("wave1 queued=%d want %d while execMu held", queued, writers)
+		}
 
-		inlineCount := coalescer.inlineExecs.Load()
-		batchCount := coalescer.workerBatches.Load()
 		if runtime.GOMAXPROCS(0) > 1 {
 			if batchCount == 0 {
 				_ = s.Close()
@@ -374,9 +553,13 @@ func TestMongoUpdateCoalescerBatchHysteresis(t *testing.T) {
 		}
 
 		for w := 0; w < writers; w++ {
-			if got := findDocN(t, s.Server, collName, int64(w)); got != opsPerWriter {
+			if finalSteps[w] < opsPerWriter {
 				_ = s.Close()
-				t.Fatalf("doc[%d] n=%d want %d", w, got, opsPerWriter)
+				t.Fatalf("doc[%d] finalSteps=%d want >= %d", w, finalSteps[w], opsPerWriter)
+			}
+			if got := findDocN(t, s.Server, collName, int64(w)); got != finalSteps[w] {
+				_ = s.Close()
+				t.Fatalf("doc[%d] n=%d want %d", w, got, finalSteps[w])
 			}
 		}
 
