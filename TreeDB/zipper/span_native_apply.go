@@ -41,6 +41,20 @@ type spanNativeLeafLogOutputLane struct {
 
 const spanNativeLeafLogPayloadArenaMaxCap = 16 << 20
 
+var spanNativeLeafLogPayloadArenaBucketCaps = [...]int{
+	16 << 10,
+	32 << 10,
+	64 << 10,
+	128 << 10,
+	256 << 10,
+	512 << 10,
+	1 << 20,
+	2 << 20,
+	4 << 20,
+	8 << 20,
+	spanNativeLeafLogPayloadArenaMaxCap,
+}
+
 type spanNativeLeafLogPayloadScratch struct {
 	buf []byte
 }
@@ -55,9 +69,27 @@ type spanNativeLeafLogPayloadSlice struct {
 
 var (
 	spanNativeLeafLogPayloadScratchPool sync.Pool
-	spanNativeLeafLogPayloadArenaPool   sync.Pool
+	spanNativeLeafLogPayloadArenaPools  [len(spanNativeLeafLogPayloadArenaBucketCaps)]sync.Pool
 	spanNativeLeafLogPayloadSlicePool   sync.Pool
 )
+
+func spanNativeLeafLogPayloadArenaAcquireBucket(need int) int {
+	for i, capLimit := range spanNativeLeafLogPayloadArenaBucketCaps {
+		if need <= capLimit {
+			return i
+		}
+	}
+	return -1
+}
+
+func spanNativeLeafLogPayloadArenaReleaseBucket(capacity int) int {
+	for i := len(spanNativeLeafLogPayloadArenaBucketCaps) - 1; i >= 0; i-- {
+		if capacity >= spanNativeLeafLogPayloadArenaBucketCaps[i] {
+			return i
+		}
+	}
+	return -1
+}
 
 func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
 	if limit <= 0 {
@@ -85,30 +117,31 @@ func releaseSpanNativeLeafLogPayloadScratch(scratch *spanNativeLeafLogPayloadScr
 }
 
 func acquireSpanNativeLeafLogPayloadArena(need int) *spanNativeLeafLogPayloadArena {
-	if need < 0 {
-		need = 0
+	if need <= 0 {
+		return &spanNativeLeafLogPayloadArena{}
 	}
-	if need <= spanNativeLeafLogPayloadArenaMaxCap {
-		if v := spanNativeLeafLogPayloadArenaPool.Get(); v != nil {
+	if bucket := spanNativeLeafLogPayloadArenaAcquireBucket(need); bucket >= 0 {
+		if v := spanNativeLeafLogPayloadArenaPools[bucket].Get(); v != nil {
 			if arena, ok := v.(*spanNativeLeafLogPayloadArena); ok && arena != nil && cap(arena.buf) >= need && cap(arena.buf) <= spanNativeLeafLogPayloadArenaMaxCap {
 				arena.buf = arena.buf[:0]
 				return arena
 			}
 		}
+		return &spanNativeLeafLogPayloadArena{buf: make([]byte, 0, spanNativeLeafLogPayloadArenaBucketCaps[bucket])}
 	}
-	arena := &spanNativeLeafLogPayloadArena{}
-	if need > 0 {
-		arena.buf = make([]byte, 0, need)
-	}
-	return arena
+	return &spanNativeLeafLogPayloadArena{buf: make([]byte, 0, need)}
 }
 
 func releaseSpanNativeLeafLogPayloadArena(arena *spanNativeLeafLogPayloadArena) {
 	if arena == nil || cap(arena.buf) > spanNativeLeafLogPayloadArenaMaxCap {
 		return
 	}
+	bucket := spanNativeLeafLogPayloadArenaReleaseBucket(cap(arena.buf))
+	if bucket < 0 {
+		return
+	}
 	arena.buf = arena.buf[:0]
-	spanNativeLeafLogPayloadArenaPool.Put(arena)
+	spanNativeLeafLogPayloadArenaPools[bucket].Put(arena)
 }
 
 func acquireSpanNativeLeafLogPayloadSlice(n int) *spanNativeLeafLogPayloadSlice {

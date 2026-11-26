@@ -13044,6 +13044,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		cachedIndexRuntimes:    indexRuntimes,
 		cachedIndexRuntimesErr: indexRuntimesErr,
 		options:                plannerOptions,
+		enablePlanScratch:      !bufferIndexedInserts && !columnStoreWriteEnabled(meta),
 	}
 	if bufferIndexedInserts {
 		planner.buildPrimaryVal = clonePrimaryDocument
@@ -13072,6 +13073,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 		return nil, err
 	}
+	defer plan.releaseScratch()
 	if bufferIndexedInserts {
 		plan.stats.BufferedIndexedBatches = 1
 	} else if indexedMemtablesEnabled {
@@ -13275,28 +13277,46 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 	}
 	if commandWALIntent == nil && commandWALActive {
+		poolWALBuffers := !columnStoreWriteEnabled(meta) && execOpts.trustedFloat32Projection == nil
+		var docsLease *commandWALDocsLease
+		var docsBuf []commitlog.CollectionDocument
+		if poolWALBuffers {
+			docsLease = acquireCommandWALDocs(len(ids))
+			defer releaseCommandWALDocs(docsLease)
+			docsBuf = docsLease.docs
+		}
 		docs := fullRetainedPayloadDocuments
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
-			docs, err = collectionDocumentsFromBatchInput(ids, documents)
+			docs, err = collectionDocumentsFromBatchInputInto(docsBuf, ids, documents)
 			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
 				return nil, err
 			}
+			if docsLease != nil {
+				docsLease.docs = docs
+			}
 		} else if docs == nil {
-			docs, err = collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			docs, err = collectionDocumentsFromInsertPlanInto(docsBuf, plan, collectionPrimaryRootName(meta.Name))
 			if err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
 				return nil, err
+			}
+			if docsLease != nil {
+				docsLease.docs = docs
 			}
 		}
 		commandWALDocuments = docs
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntentForMeta(meta, docs, nil, execOpts.trustedFloat32Projection)
+		var releaseCommandWALPayload func()
+		commandWALIntent, releaseCommandWALPayload, err = c.newCollectionInsertCommandWALIntentForMetaWithPool(meta, docs, nil, execOpts.trustedFloat32Projection, poolWALBuffers)
 		if err != nil {
 			closePlanningSnapshot()
 			resetCollectionRunTables(plan.runs)
 			return nil, err
+		}
+		if releaseCommandWALPayload != nil {
+			defer releaseCommandWALPayload()
 		}
 	}
 
@@ -13348,6 +13368,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	obsoletePointerizedTables, err := pointerizeInsertBatchPlanRuns(c.db, meta, plan)
 	if err != nil {
+		resetCollectionRunTables(plan.runs)
 		return nil, err
 	}
 	defer resetCollectionTables(obsoletePointerizedTables)

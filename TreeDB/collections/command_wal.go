@@ -65,34 +65,119 @@ func (c *Collection) newCollectionInsertCommandWALIntent(docs []commitlog.Collec
 	return c.newCollectionInsertCommandWALIntentForMeta(c.meta, docs, replay, projection)
 }
 
+const (
+	commandWALPayloadPoolMaxCap = 8 << 20
+	commandWALDocsPoolMaxCap    = 1 << 16
+)
+
+type commandWALPayloadBufLease struct {
+	buf []byte
+}
+
+type commandWALDocsLease struct {
+	docs []commitlog.CollectionDocument
+}
+
+var (
+	commandWALPayloadBufPool sync.Pool
+	commandWALDocsPool       sync.Pool
+)
+
+func acquireCommandWALPayloadBuf() *commandWALPayloadBufLease {
+	if v := commandWALPayloadBufPool.Get(); v != nil {
+		if lease, ok := v.(*commandWALPayloadBufLease); ok && lease != nil {
+			lease.buf = lease.buf[:0]
+			return lease
+		}
+	}
+	return &commandWALPayloadBufLease{}
+}
+
+func releaseCommandWALPayloadBuf(lease *commandWALPayloadBufLease) {
+	if lease == nil || cap(lease.buf) == 0 || cap(lease.buf) > commandWALPayloadPoolMaxCap {
+		return
+	}
+	lease.buf = lease.buf[:0]
+	commandWALPayloadBufPool.Put(lease)
+}
+
+func acquireCommandWALDocs(n int) *commandWALDocsLease {
+	if v := commandWALDocsPool.Get(); v != nil {
+		if lease, ok := v.(*commandWALDocsLease); ok && lease != nil {
+			lease.docs = lease.docs[:0]
+			if cap(lease.docs) < n {
+				lease.docs = make([]commitlog.CollectionDocument, 0, n)
+			}
+			return lease
+		}
+	}
+	return &commandWALDocsLease{docs: make([]commitlog.CollectionDocument, 0, n)}
+}
+
+func releaseCommandWALDocs(lease *commandWALDocsLease) {
+	if lease == nil || cap(lease.docs) == 0 || cap(lease.docs) > commandWALDocsPoolMaxCap {
+		return
+	}
+	clear(lease.docs[:cap(lease.docs)])
+	lease.docs = lease.docs[:0]
+	commandWALDocsPool.Put(lease)
+}
+
 func (c *Collection) newCollectionInsertCommandWALIntentForMeta(meta CollectionMeta, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection) (*backenddb.CommandWALIntent, error) {
+	intent, _, err := c.newCollectionInsertCommandWALIntentForMetaWithPool(meta, docs, replay, projection, false)
+	return intent, err
+}
+
+func (c *Collection) newCollectionInsertCommandWALIntentForMetaWithPool(meta CollectionMeta, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent, projection *trustedFloat32Projection, poolPayload bool) (*backenddb.CommandWALIntent, func(), error) {
 	if replay != nil {
-		return replay, nil
+		return replay, nil, nil
 	}
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if projection != nil {
 		p, err := typedCommandPayload(meta, docs, projection)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		payload, err := commitlog.EncodeCollectionTypedBatchPayload(p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return c.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionTypedBatchByIDV1, payload)
+		intent, err := c.db.NewTrustedCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionTypedBatchByIDV1, payload)
+		return intent, nil, err
 	}
-	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(meta.Name, docs)
+	if !poolPayload {
+		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload(meta.Name, docs)
+		if err != nil {
+			return nil, nil, err
+		}
+		intent, err := c.db.NewTrustedCommandWALIntent(
+			commitlog.CommandKindCollectionInsertBatchByID,
+			commitlog.CommandScopeCollection,
+			commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+			payload,
+		)
+		return intent, nil, err
+	}
+	lease := acquireCommandWALPayloadBuf()
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayloadTo(lease.buf[:0], meta.Name, docs)
 	if err != nil {
-		return nil, err
+		releaseCommandWALPayloadBuf(lease)
+		return nil, nil, err
 	}
-	return c.db.NewTrustedCommandWALIntent(
+	lease.buf = payload
+	intent, err := c.db.NewTrustedCommandWALIntent(
 		commitlog.CommandKindCollectionInsertBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionInsertBatchByIDV1,
 		payload,
 	)
+	if err != nil {
+		releaseCommandWALPayloadBuf(lease)
+		return nil, nil, err
+	}
+	return intent, func() { releaseCommandWALPayloadBuf(lease) }, nil
 }
 
 func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
@@ -404,10 +489,19 @@ func columnWriteDocumentsFromIDs(ids [][]byte) []columnWriteDocument {
 }
 
 func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
+	return collectionDocumentsFromBatchInputInto(nil, ids, documents)
+}
+
+func collectionDocumentsFromBatchInputInto(dst []commitlog.CollectionDocument, ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
 	if len(ids) != len(documents) {
 		return nil, fmt.Errorf("collections: command wal batch ids length mismatch: ids=%d documents=%d", len(ids), len(documents))
 	}
-	docs := make([]commitlog.CollectionDocument, len(ids))
+	var docs []commitlog.CollectionDocument
+	if cap(dst) >= len(ids) {
+		docs = dst[:len(ids)]
+	} else {
+		docs = make([]commitlog.CollectionDocument, len(ids))
+	}
 	for i := range ids {
 		docs[i] = commitlog.CollectionDocument{
 			ID:       ids[i],
@@ -418,6 +512,10 @@ func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.Col
 }
 
 func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName string) ([]commitlog.CollectionDocument, error) {
+	return collectionDocumentsFromInsertPlanInto(nil, plan, primaryRootName)
+}
+
+func collectionDocumentsFromInsertPlanInto(dst []commitlog.CollectionDocument, plan *insertBatchPlan, primaryRootName string) ([]commitlog.CollectionDocument, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("collections: missing insert plan for command wal")
 	}
@@ -425,7 +523,12 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 		if len(direct.primaryEntries) != len(plan.resultIDs) {
 			return nil, fmt.Errorf("collections: insert plan primary document count mismatch for command wal")
 		}
-		docs := make([]commitlog.CollectionDocument, 0, len(direct.primaryEntries))
+		var docs []commitlog.CollectionDocument
+		if cap(dst) >= len(direct.primaryEntries) {
+			docs = dst[:0]
+		} else {
+			docs = make([]commitlog.CollectionDocument, 0, len(direct.primaryEntries))
+		}
 		for _, entry := range direct.primaryEntries {
 			if entry.flags&node.FlagTombstone != 0 {
 				return nil, fmt.Errorf("collections: insert plan tombstoned primary document for command wal")
@@ -441,7 +544,12 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 		if run.name != primaryRootName {
 			continue
 		}
-		docs := make([]commitlog.CollectionDocument, 0, len(plan.resultIDs))
+		var docs []commitlog.CollectionDocument
+		if cap(dst) >= len(plan.resultIDs) {
+			docs = dst[:0]
+		} else {
+			docs = make([]commitlog.CollectionDocument, 0, len(plan.resultIDs))
+		}
 		it := run.table.NewIterator(nil, nil)
 		linear := true
 		for _, id := range plan.resultIDs {

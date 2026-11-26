@@ -1178,6 +1178,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.writer.bw.Reset(&j.writer.fileSink)
 	j.writer.size = activeInfo.Size()
 	oldFixed := j.writer.fixed
+	transferFixedWALPendingBuf(state, oldFixed)
 	j.writer.fixed = state
 	j.writer.containerSelection = selection
 	if state != nil {

@@ -3069,6 +3069,10 @@ func rawKVRangeBoundEncodedLen(bound []byte) (encoded uint32, bytesLen int, err 
 }
 
 func EncodeCollectionInsertBatchByIDPayload(collection string, docs []CollectionDocument) ([]byte, error) {
+	return EncodeCollectionInsertBatchByIDPayloadTo(nil, collection, docs)
+}
+
+func EncodeCollectionInsertBatchByIDPayloadTo(dst []byte, collection string, docs []CollectionDocument) ([]byte, error) {
 	if collection == "" {
 		return nil, fmt.Errorf("%w: empty collection", ErrCorrupt)
 	}
@@ -3090,7 +3094,12 @@ func EncodeCollectionInsertBatchByIDPayload(collection string, docs []Collection
 			return nil, err
 		}
 	}
-	payload := make([]byte, total)
+	var payload []byte
+	if cap(dst) >= total {
+		payload = dst[:total]
+	} else {
+		payload = make([]byte, total)
+	}
 	off := encodeCollectionBatchHeader(payload, collection, len(ordered))
 	for i := range ordered {
 		doc := ordered[i]

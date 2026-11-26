@@ -2816,6 +2816,8 @@ func (it *appendOnlyIterator) Len() int {
 
 func (*appendOnlyIterator) StableUnsafeIteratorSlices() bool { return true }
 
+func (it *appendOnlyIterator) OrderedUniqueUnsafeIterator() bool { return it != nil && !it.reverse }
+
 func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
 	if idx < 0 {
 		return nil

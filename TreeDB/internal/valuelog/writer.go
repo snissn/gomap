@@ -1264,7 +1264,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 			off += 8
 			copy(buf[off:], value)
 
-			sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+			sum := crc.Checksum(buf[4:])
 			binary.LittleEndian.PutUint32(buf[0:4], sum)
 			w.size += int64(recordLen)
 
@@ -1312,7 +1312,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		off += 8
 		copy(buf[off:], value)
 
-		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+		sum := crc.Checksum(buf[4:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
 		if err := w.writeBytes(buf); err != nil {
@@ -1447,7 +1447,7 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 	binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
 	copy(buf[HeaderSize:], body)
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
+	sum := crc.Checksum(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
 	if err := w.writeBytes(buf); err != nil {
@@ -1518,7 +1518,7 @@ func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr)
 	binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
 	copy(buf[HeaderSize:], body)
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
+	sum := crc.Checksum(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
 	if err := w.writeBytes(buf); err != nil {
@@ -1602,7 +1602,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		off += 8
 		copy(buf[off:], rec.Value)
 
-		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+		sum := crc.Checksum(buf[4:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
 		if err := w.writeBytes(buf); err != nil {
@@ -1729,7 +1729,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				off += len(records[i].Value)
 			}
 
-			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			sum := crc.Checksum(frame[4:])
 			binary.LittleEndian.PutUint32(frame[0:4], sum)
 			w.size += int64(HeaderSize + bodyLen)
 
@@ -1789,7 +1789,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				copy(frame[off:], records[i].Value)
 				off += len(records[i].Value)
 			}
-			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			sum := crc.Checksum(frame[4:])
 			binary.LittleEndian.PutUint32(frame[0:4], sum)
 			if err := w.writeFrameBatch(frame); err != nil {
 				return nil, FrameStats{}, err
@@ -2022,6 +2022,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 
 			// Build header in-place (now that we know bodyLen).
+			header = w.appendBuf[recordStart:headerEnd]
 			header[4] = Version
 			header[5] = recordFlagGrouped
 			header[6] = 0
@@ -2029,8 +2030,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			binary.LittleEndian.PutUint64(header[8:16], 0)
 			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
 
-			encoded := w.appendBuf[encodedStart:]
-			sum := crc.ChecksumParts(header[4:HeaderSize], prefix, encoded)
+			sum := crc.Checksum(w.appendBuf[recordStart+4:])
 			binary.LittleEndian.PutUint32(header[0:4], sum)
 
 			w.size += int64(HeaderSize + bodyLen)
@@ -2247,7 +2247,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
 	copy(buf[HeaderSize:], body)
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
+	sum := crc.Checksum(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
 	if err := w.writeBytes(buf); err != nil {
@@ -2479,7 +2479,7 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		copy(buf[frameOff:], encoded)
 	}
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+	sum := crc.Checksum(buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 	if err := w.writeBytes(buf); err != nil {
 		return nil, FrameStats{}, err
@@ -2591,7 +2591,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 			off += len(records[i].Value)
 		}
 
-		sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+		sum := crc.Checksum(frame[4:])
 		binary.LittleEndian.PutUint32(frame[0:4], sum)
 		w.size += int64(HeaderSize + bodyLen)
 
@@ -2651,7 +2651,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 			copy(frame[off:], records[i].Value)
 			off += len(records[i].Value)
 		}
-		sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+		sum := crc.Checksum(frame[4:])
 		binary.LittleEndian.PutUint32(frame[0:4], sum)
 		if err := w.writeFrameBatch(frame); err != nil {
 			return nil, FrameStats{}, err

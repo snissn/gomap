@@ -963,19 +963,62 @@ func orderedRootDeltaBatchFromIteratorWithBudget(iter iterator.UnsafeIterator, m
 	if trusted, ok := iter.(orderedRootTrustedSortedUniqueIterator); ok {
 		trustedSortedUnique = trusted.OrderedUniqueUnsafeIterator()
 	}
+	revIter, hasRev := iter.(iterator.RevisionUnsafeIterator)
+	if !bounded && borrowEntryViews && trustedSortedUnique {
+		for iter.Valid() {
+			var (
+				val      []byte
+				ptr      page.ValuePtr
+				flags    byte
+				revision page.EntryRevision
+			)
+			if hasRev {
+				val, ptr, flags, revision = revIter.UnsafeEntryWithRevision()
+			} else {
+				val, ptr, flags = iter.UnsafeEntry()
+			}
+			var err error
+			if flags&node.FlagTombstone != 0 || iter.IsDeleted() {
+				err = delta.AppendDeleteViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), revision)
+			} else if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+				err = delta.AppendPointerViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), ptr, revision)
+			} else {
+				err = delta.AppendViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), val, revision)
+			}
+			if err != nil {
+				_ = delta.Close()
+				return nil, err
+			}
+			iter.Next()
+		}
+		if err := iter.Error(); err != nil {
+			_ = delta.Close()
+			return nil, err
+		}
+		return delta, nil
+	}
 	for iter.Valid() {
+		var (
+			val      []byte
+			ptr      page.ValuePtr
+			flags    byte
+			revision page.EntryRevision
+		)
+		if hasRev {
+			val, ptr, flags, revision = revIter.UnsafeEntryWithRevision()
+		} else {
+			val, ptr, flags = iter.UnsafeEntry()
+		}
 		if bounded {
-			value, _, _ := iter.UnsafeEntry()
-			payload := int64(len(iter.UnsafeKey())) + int64(len(value))
+			payload := int64(len(iter.UnsafeKey())) + int64(len(val))
 			if delta.Len() >= maxEntries || payload > budget.RemainingBytes-charged {
 				_ = delta.Close()
 				return nil, ErrOrderedRootDeltaMaterializationLimit
 			}
 			charged += payload
 		}
-		if iter.IsDeleted() {
-			_, _, _, revision := iterator.UnsafeEntryWithRevision(iter)
-			var err error
+		var err error
+		if flags&node.FlagTombstone != 0 || iter.IsDeleted() {
 			if borrowEntryViews && trustedSortedUnique {
 				err = delta.AppendDeleteViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), revision)
 			} else if borrowEntryViews {
@@ -983,11 +1026,22 @@ func orderedRootDeltaBatchFromIteratorWithBudget(iter iterator.UnsafeIterator, m
 			} else {
 				err = delta.DeleteWithRevision(iter.UnsafeKey(), revision)
 			}
-			if err != nil {
-				_ = delta.Close()
-				return nil, err
+		} else if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+			if borrowEntryViews && trustedSortedUnique {
+				err = delta.AppendPointerViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), ptr, revision)
+			} else if borrowEntryViews {
+				err = delta.SetPointerViewWithRevision(iter.UnsafeKey(), ptr, revision)
+			} else {
+				err = delta.SetPointerWithRevision(iter.UnsafeKey(), ptr, revision)
 			}
-		} else if err := orderedRootBatchPut(delta, iter, borrowEntryViews, trustedSortedUnique); err != nil {
+		} else if borrowEntryViews && trustedSortedUnique {
+			err = delta.AppendViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), val, revision)
+		} else if borrowEntryViews {
+			err = delta.SetViewWithRevision(iter.UnsafeKey(), val, revision)
+		} else {
+			err = delta.SetWithRevision(iter.UnsafeKey(), val, revision)
+		}
+		if err != nil {
 			_ = delta.Close()
 			return nil, err
 		}

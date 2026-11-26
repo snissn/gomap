@@ -209,6 +209,47 @@ func TestCalculateChecksumWithZeroGap(t *testing.T) {
 	}
 }
 
+func TestCalculateChecksumWithZeroGapPooledSizes(t *testing.T) {
+	cases := []struct {
+		name      string
+		prefixLen int
+		gapLen    int
+		suffixLen int
+	}{
+		{name: "full_page_no_gap", prefixLen: PageSize, gapLen: 0, suffixLen: 0},
+		{name: "full_page_large_gap", prefixLen: 64, gapLen: PageSize - 128, suffixLen: 64},
+		{name: "full_page_empty_suffix", prefixLen: 128, gapLen: PageSize - 128, suffixLen: 0},
+		{name: "sub_page", prefixLen: 96, gapLen: 512, suffixLen: 120},
+		{name: "oversize_page", prefixLen: 256, gapLen: PageSize, suffixLen: 256},
+	}
+
+	// Run twice in sequence so pooled scratch buffers contain non-zero bytes
+	// from the full_page_no_gap case before zero-gap cases run.
+	for round := 0; round < 2; round++ {
+		for _, tc := range cases {
+			total := tc.prefixLen + tc.gapLen + tc.suffixLen
+			canonical := make([]byte, total)
+			for i := 0; i < tc.prefixLen; i++ {
+				canonical[i] = byte((i*37 + round*13 + 1) & 0xff)
+			}
+			for i := tc.prefixLen + tc.gapLen; i < total; i++ {
+				canonical[i] = byte((i*53 + round*7 + 3) & 0xff)
+			}
+			binary.LittleEndian.PutUint32(canonical[8:12], 0xdeadbeef)
+
+			want := CalculateChecksum(canonical)
+			got := CalculateChecksumWithZeroGap(
+				canonical[:tc.prefixLen],
+				tc.gapLen,
+				canonical[tc.prefixLen+tc.gapLen:],
+			)
+			if got != want {
+				t.Fatalf("round=%d %s: got=0x%x want=0x%x", round, tc.name, got, want)
+			}
+		}
+	}
+}
+
 func TestCalculateChecksumWithZeroGapPanicsOnInvalidInput(t *testing.T) {
 	assertPanic := func(name string, fn func()) {
 		t.Helper()

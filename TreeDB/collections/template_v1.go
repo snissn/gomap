@@ -135,6 +135,10 @@ func canonicalCollectionOptionDocumentFormat(format DocumentFormat) DocumentForm
 }
 
 func prepareInsertDocuments(documents [][]byte, opts collectionOptions) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
+	return prepareInsertDocumentsWithScratch(documents, opts, nil)
+}
+
+func prepareInsertDocumentsWithScratch(documents [][]byte, opts collectionOptions, scratch *insertBatchPlanScratch) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
 	switch normalizedDocumentFormat(opts.documentFormat) {
 	case DocumentFormatJSON:
 		return documents, nil, nil, nil, nil
@@ -144,7 +148,7 @@ func prepareInsertDocuments(documents [][]byte, opts collectionOptions) ([][]byt
 		}
 		return prepareBSONInsertDocuments(documents)
 	case DocumentFormatTemplateV1:
-		return prepareTemplateV1InsertDocuments(documents, opts.templateResolver, opts.learnTemplateIDs, opts.allowTemplateV1Stored)
+		return prepareTemplateV1InsertDocumentsWithScratch(documents, opts.templateResolver, opts.learnTemplateIDs, opts.allowTemplateV1Stored, scratch)
 	default:
 		return nil, nil, nil, nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
@@ -184,7 +188,19 @@ type templateV1ParsedInsertDocument struct {
 const templateV1StoredDocumentOffset = -1
 
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver, collectLearned bool, allowStored bool) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
-	hashDocumentOffsets := make([]int, len(documents))
+	return prepareTemplateV1InsertDocumentsWithScratch(documents, fallback, collectLearned, allowStored, nil)
+}
+
+func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback templateV1Resolver, collectLearned bool, allowStored bool, scratch *insertBatchPlanScratch) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
+	var hashDocumentOffsets []int
+	if scratch != nil && cap(scratch.templateHashOffsets) >= len(documents) {
+		hashDocumentOffsets = scratch.templateHashOffsets[:len(documents)]
+	} else {
+		hashDocumentOffsets = make([]int, len(documents))
+		if scratch != nil {
+			scratch.templateHashOffsets = hashDocumentOffsets
+		}
+	}
 	var pendingRecords []templateV1Record
 	for i, document := range documents {
 		next, err := parseTemplateV1InsertDocument(document, allowStored)
@@ -200,9 +216,23 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 		return nil, nil, nil, nil, err
 	}
 	resolver := templateV1PreparedResolver(memory, fallback)
-	prepared := make([][]byte, len(documents))
+	var prepared [][]byte
+	if scratch != nil && cap(scratch.templatePrepared) >= len(documents) {
+		prepared = scratch.templatePrepared[:len(documents)]
+	} else {
+		prepared = make([][]byte, len(documents))
+		if scratch != nil {
+			scratch.templatePrepared = prepared
+		}
+	}
 	validatePrepared := make([][]byte, 0)
-	conversionArena := make([]byte, 0, estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets))
+	arenaNeed := estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets)
+	var conversionArena []byte
+	if scratch != nil && cap(scratch.templateConversionArena) >= arenaNeed {
+		conversionArena = scratch.templateConversionArena[:0]
+	} else {
+		conversionArena = make([]byte, 0, arenaNeed)
+	}
 	var learnedSet map[templateV1LearnedTemplate]struct{}
 	if collectLearned {
 		learnedSet = make(map[templateV1LearnedTemplate]struct{}, len(learnedTemplates))
@@ -226,6 +256,9 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 		conversionArena = nextArena
 		learnedTemplates = nextLearned
 		prepared[i] = stored
+	}
+	if scratch != nil {
+		scratch.templateConversionArena = conversionArena
 	}
 	if len(validatePrepared) > 0 {
 		if err := validateTemplateV1PreparedDocuments(validatePrepared, resolver); err != nil {
