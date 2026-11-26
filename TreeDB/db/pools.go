@@ -52,9 +52,52 @@ type oneShotRead struct {
 	altTree tree.Tree
 }
 
+const dbOneShotReadCacheSlots = 8
+
 var oneShotReadPool = sync.Pool{New: func() any {
 	return &oneShotRead{snapshot: Snapshot{registryShardHint: snapshotShardHintUnset}}
 }}
+
+func (db *DB) getOneShotRead() *oneShotRead {
+	if db != nil {
+		for i := range db.oneShotReadCache {
+			if db.oneShotReadCache[i].Load() != nil {
+				if r := db.oneShotReadCache[i].Swap(nil); r != nil {
+					return r
+				}
+			}
+		}
+	}
+	return oneShotReadPool.Get().(*oneShotRead)
+}
+
+func (db *DB) putOneShotRead(r *oneShotRead) {
+	if r == nil {
+		return
+	}
+	if db != nil && !db.closing.Load() {
+		for i := range db.oneShotReadCache {
+			if db.oneShotReadCache[i].Load() == nil && db.oneShotReadCache[i].CompareAndSwap(nil, r) {
+				if db.closing.Load() {
+					db.drainOneShotReadCache()
+				}
+				return
+			}
+		}
+	}
+	oneShotReadPool.Put(r)
+}
+
+func (db *DB) drainOneShotReadCache() {
+	if db == nil {
+		return
+	}
+	for i := range db.oneShotReadCache {
+		if r := db.oneShotReadCache[i].Swap(nil); r != nil {
+			oneShotReadPool.Put(r)
+		}
+	}
+}
 
 func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 	if db == nil {
@@ -63,18 +106,21 @@ func (db *DB) acquireOneShotReadOrErr() (*oneShotRead, error) {
 	if err := db.publicationPoisonedError(); err != nil {
 		return nil, err
 	}
-	r := oneShotReadPool.Get().(*oneShotRead)
+	r := db.getOneShotRead()
 	db.valueLogPublicationMu.RLock()
 	ok := db.captureSnapshotForReadWithValueLogPublicationLockHeld(&r.snapshot, true)
 	db.valueLogPublicationMu.RUnlock()
 	if !ok {
-		oneShotReadPool.Put(r)
+		db.putOneShotRead(r)
 		return nil, ErrClosed
 	}
 	return r, nil
 }
 
 func (r *oneShotRead) close() error {
+	// Capture the owning DB before closeRead/putRead scrubs snapshot.db so
+	// successfully scrubbed one-shot guards return to the DB's non-lossy cache.
+	owner := r.snapshot.db
 	// Close shares all registry, value-log, and leaf-generation release logic.
 	// The read has returned, so there are no outstanding readers or iterators.
 	err := r.snapshot.closeRead(true)
@@ -87,7 +133,7 @@ func (r *oneShotRead) close() error {
 	// owned-value read has returned. Close therefore completed the finalizer,
 	// including SnapshotPool.Put's scrub before stablePagerCompletion. Repeat
 	// neither that scrub nor failed-cleanup reuse here.
-	oneShotReadPool.Put(r)
+	owner.putOneShotRead(r)
 	return err
 }
 

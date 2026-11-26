@@ -191,8 +191,9 @@ type DB struct {
 	idxAll  map[uint64]*indexGen
 	idxNext uint64
 
-	snapPool     *SnapshotPool
-	ghostManager *indexGhostManager
+	snapPool         *SnapshotPool
+	oneShotReadCache [dbOneShotReadCacheSlots]atomic.Pointer[oneShotRead]
+	ghostManager     *indexGhostManager
 
 	dir                  string
 	commandWALDir        string
@@ -3673,6 +3674,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// admission gate: stable root publication must never run while it is held.
 	db.maintenanceMu.Lock()
 	db.closing.Store(true)
+	db.drainOneShotReadCache()
 	db.mvccAdmission.Close()
 	db.maintenanceMu.Unlock()
 	// Wait for every already-admitted writer to finish constructing and handing

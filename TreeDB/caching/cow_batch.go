@@ -905,15 +905,9 @@ func (b *Batch) admitCOWAccepted() error {
 
 //go:noinline
 func (b *Batch) admitCOWAcceptedAfterOrdinaryError(c *cowCache, cause error) error {
-	if !errors.Is(cause, rootpublication.ErrAcceptedCapacity) {
-		return acceptedAdmissionError(cause)
-	}
-	if err := b.db.Checkpoint(); err != nil {
-		return err
-	}
-	ticket, err := c.prefix.ReserveAccepted(false)
+	ticket, err := b.db.reserveCOWAcceptedOrdinaryAfterPressure(c, cause)
 	if err != nil {
-		return acceptedAdmissionError(err)
+		return err
 	}
 	b.cowState.accepted = ticket
 	return nil

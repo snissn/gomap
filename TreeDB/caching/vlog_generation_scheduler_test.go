@@ -6158,8 +6158,13 @@ func TestVlogGenerationRewriteQueue_DebtDrainSelectsMultipleSegmentsAndBoundsExe
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
+	// Scope the exact call-count assertion to this explicit pass. A useful
+	// bounded rewrite leaves eligible debt (segment 22) and otherwise launches
+	// an asynchronous follow-up drain that can accrue tokens and run under load.
+	holdVlogGenerationRewriteQueueRunnerForTest(t, db)
 	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
@@ -6215,6 +6220,7 @@ func TestVlogGenerationRewriteQueue_ChunkDebtCarriesPartialFileRemainder(t *test
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(172)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(0)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)

@@ -13,12 +13,24 @@ import (
 )
 
 func TestNativeCommandWALDurablePairAdmissionHighConcurrency(t *testing.T) {
-	opts := OptionsFor(ProfileCommandWALDurable, t.TempDir())
+	runNativeCommandWALAdmissionHighConcurrency(t, ProfileCommandWALDurable, 4, 8, 8, 32)
+}
+
+func TestNativeCommandWALRelaxedAdmissionHighConcurrency(t *testing.T) {
+	// Keep MaxSources > workers so concurrent workers cannot pin more distinct
+	// cuts than MaxSources while stressing repeated full accepted-prefix ring
+	// refills (8*64 = 512 inserts across a 100-slot ring).
+	runNativeCommandWALAdmissionHighConcurrency(t, ProfileCommandWALRelaxed, 10, 10, 8, 64)
+}
+
+func runNativeCommandWALAdmissionHighConcurrency(t *testing.T, profile Profile, maxSources, maxGenerations, workers, perWorker int) {
+	t.Helper()
+	opts := OptionsFor(profile, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 1
 	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
-	opts.COWMemtableLimits.MaxSources = 4
-	opts.COWMemtableLimits.MaxGenerations = 8 // 32-slot ring (31 ordinary >= 8 workers * 2 tickets)
+	opts.COWMemtableLimits.MaxSources = maxSources
+	opts.COWMemtableLimits.MaxGenerations = maxGenerations // maxSources*maxGenerations-slot ring
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
@@ -48,7 +60,6 @@ func TestNativeCommandWALDurablePairAdmissionHighConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const workers, perWorker = 8, 32
 	errCh := make(chan error, workers)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {

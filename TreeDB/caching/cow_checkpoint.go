@@ -44,13 +44,61 @@ func (db *DB) observeCOWCheckpointRun(start time.Time) {
 // reserveRawTxnPairAfterPressure is only for ordinary durable paired denial.
 // It never duplicates flush ownership, holds half a pair, or waits with a
 // foreground publication lock. The original retry remains outside flushMu.
+// Under high concurrency, other writers can refill the accepted-prefix ring
+// between retirement inside the checkpoint and the caller's retry; keep
+// retrying while retirement strictly advances S and reclaimable pending
+// entries exist in the ring.
 func (db *DB) reserveRawTxnPairAfterPressure(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
-	ticket, spare, err := db.joinRawTxnPressureCheckpoint(denied)
-	if err != nil || ticket.Valid() {
-		return ticket, spare, err
+	for {
+		before := db.cow.prefix.LogicalFrontiers()
+		ticket, spare, err := db.joinRawTxnPressureCheckpoint(denied)
+		if err != nil || ticket.Valid() {
+			return ticket, spare, err
+		}
+		var nextDenied rootpublication.AcceptedOrdinaryPairRefusal
+		ticket, spare, nextDenied, err = db.cow.prefix.ReserveAcceptedOrdinaryPairWithRefusal()
+		if err == nil {
+			return ticket, spare, nil
+		}
+		if !nextDenied.Valid() {
+			return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
+		}
+		after := db.cow.prefix.LogicalFrontiers()
+		progressed := after.S.LogicalSequence > before.S.LogicalSequence || after.S.CanonicalLSN > before.S.CanonicalLSN
+		if !progressed || db.cow.prefix.AcceptedPendingCount() == 0 {
+			return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
+		}
+		denied = nextDenied
 	}
-	ticket, spare, err = db.cow.prefix.ReserveAcceptedOrdinaryPair()
-	return ticket, spare, acceptedAdmissionError(err)
+}
+
+// reserveCOWAcceptedOrdinaryAfterPressure seals a full accepted-prefix ring
+// using the reserved maintenance lane and retries ordinary single-slot
+// admission. If concurrent writers refill the ring after forward retirement
+// progress, keep retrying while S advances and reclaimable pending entries
+// exist.
+func (db *DB) reserveCOWAcceptedOrdinaryAfterPressure(c *cowCache, cause error) (rootpublication.AcceptedTicket, error) {
+	if !errors.Is(cause, rootpublication.ErrAcceptedCapacity) {
+		return rootpublication.AcceptedTicket{}, acceptedAdmissionError(cause)
+	}
+	for {
+		before := c.prefix.LogicalFrontiers()
+		if err := db.Checkpoint(); err != nil {
+			return rootpublication.AcceptedTicket{}, err
+		}
+		ticket, err := c.prefix.ReserveAccepted(false)
+		if err == nil {
+			return ticket, nil
+		}
+		if !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+			return rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
+		}
+		after := c.prefix.LogicalFrontiers()
+		progressed := after.S.LogicalSequence > before.S.LogicalSequence || after.S.CanonicalLSN > before.S.CanonicalLSN
+		if !progressed || c.prefix.AcceptedPendingCount() == 0 {
+			return rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
+		}
+	}
 }
 
 func (db *DB) joinRawTxnPressureCheckpoint(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
