@@ -33,6 +33,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionRewriteTextIndex, replayCollectionRewriteTextIndexCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionPersistPartitionLive, replayCollectionPersistPartitionLiveCommandWAL)
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogIndexMutation, replayNativeIndexMutation, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONTxnPlanMarker})
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL, backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: true, NativePrepare: prepareNativeJSONCreateCommand})
@@ -193,6 +194,31 @@ func (c *Collection) newCollectionRebuildVectorIndexCommandWALIntent(indexName s
 		commitlog.CommandKindCollectionRebuildVectorIndex,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionRebuildVectorIndexV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionRewriteTextIndexCommandWALIntent(indexName string, opts TextIndexRewriteOptions, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionRewriteTextIndexPayload(commitlog.CollectionRewriteTextIndexPayload{
+		Collection:             c.meta.Name,
+		IndexName:              indexName,
+		TargetPostingsPerBlock: opts.TargetPostingsPerBlock,
+		Force:                  opts.Force,
+		DisableTombstonePurge:  opts.DisableTombstonePurge,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionRewriteTextIndex,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionRewriteTextIndexV1,
 		payload,
 	)
 }
@@ -757,6 +783,40 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 		return replayNativeVectorGraph(db, env, intent, collection.meta, payload.IndexName)
 	}
 	_, err = collection.rebuildVectorIndexWithCommandWALIntent(payload.IndexName, intent)
+	return err
+}
+
+func replayCollectionRewriteTextIndexCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) (replayErr error) {
+	if env.PayloadFormat != commitlog.PayloadFormatCollectionRewriteTextIndexV1 {
+		return fmt.Errorf("%w: unsupported collection text index rewrite payload format %d", commitlog.ErrCorrupt, env.PayloadFormat)
+	}
+	manager := newCommandWALReplayCollectionManager(db)
+	defer func() { replayErr = errors.Join(replayErr, manager.Close()) }()
+
+	payload, err := commitlog.DecodeCollectionRewriteTextIndexPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
+	if err != nil {
+		return err
+	}
+	_, _, _, err = collection.rewriteTextIndexWithCommandWALIntent(
+		context.Background(),
+		payload.IndexName,
+		textV2RewriteRunOptions{
+			Rewrite: TextIndexRewriteOptions{
+				TargetPostingsPerBlock: payload.TargetPostingsPerBlock,
+				Force:                  payload.Force,
+				DisableTombstonePurge:  payload.DisableTombstonePurge,
+			},
+		},
+		intent,
+	)
 	return err
 }
 

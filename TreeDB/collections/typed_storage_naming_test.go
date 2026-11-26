@@ -888,6 +888,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/power_loss_certification_resources_helpers_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 11},
 	{path: "TreeDB/production_authority_matrix_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	{path: "TreeDB/collections/text_catalog.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/text_v2_command_wal_rewrite_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_manifest.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_manifest_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/vector_partition_router_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},

@@ -124,7 +124,7 @@ func TestCompositeMutationCodecRejectsRecursionAndStandaloneControls(t *testing.
 	}
 	for _, kind := range []CommandKind{CommandKindCompositeMutation, CommandKindCatalogCreateCollection,
 		CommandKindDurablePrefixBarrier, CommandKindCollectionRebuildVectorIndex,
-		CommandKindCollectionPersistPartitionLive, CommandKindCollectionSplitVectorInsertV1, CommandKindCollectionVectorPrepareV1} {
+		CommandKindCollectionPersistPartitionLive, CommandKindCollectionSplitVectorInsertV1, CommandKindCollectionVectorPrepareV1, CommandKindCollectionRewriteTextIndex} {
 		member := valid[1]
 		member.Kind = kind
 		if _, err := PlanCompositeMutationPayload([]CompositeMutationMember{member}); !errors.Is(err, ErrCommandWALUnsupportedKind) {

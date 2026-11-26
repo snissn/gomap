@@ -291,6 +291,10 @@ func textV2BudgetExhaustedRewriteStats(indexName string, before TextIndexStorage
 }
 
 func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName string, run textV2RewriteRunOptions) (TextIndexRewriteStats, TextIndexStorageStats, string, error) {
+	return c.rewriteTextIndexWithCommandWALIntent(ctx, indexName, run, nil)
+}
+
+func (c *Collection) rewriteTextIndexWithCommandWALIntent(ctx context.Context, indexName string, run textV2RewriteRunOptions, replayIntent *backenddb.CommandWALIntent) (TextIndexRewriteStats, TextIndexStorageStats, string, error) {
 	var empty TextIndexRewriteStats
 	var emptyStorage TextIndexStorageStats
 	if ctx == nil {
@@ -306,20 +310,19 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	if c == nil {
 		return empty, emptyStorage, "", errCollectionNil
 	}
-	if c.nativeJSON != nil {
+	if c.nativeJSON != nil && replayIntent == nil {
 		return c.nativeRewriteTextIndex(ctx, indexName, run)
 	}
 	if c.db == nil {
 		return empty, emptyStorage, "", errCollectionDBNil
 	}
-	if c.db.CommandWALEnabled() {
-		return empty, emptyStorage, "", fmt.Errorf("%w: text-v2 rewrite is rejected under command_wal_v2 until collection text maintenance commands are supported", backenddb.ErrCommandWALRejected)
-	}
 	if err := ctx.Err(); err != nil {
 		return empty, emptyStorage, "", err
 	}
-	if err := c.ensureWriteDomainOpen(); err != nil {
-		return empty, emptyStorage, "", err
+	if replayIntent == nil {
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return empty, emptyStorage, "", err
+		}
 	}
 	runCollectionSchemaMutationBeforeLockHookForTest()
 	unlockSchema := c.lockCollectionSchemaWrite()
@@ -327,10 +330,14 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	if err := ctx.Err(); err != nil {
 		return empty, emptyStorage, "", err
 	}
-	if !run.DryRun {
+	if !run.DryRun && replayIntent == nil {
 		if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 			return empty, emptyStorage, "", err
 		}
+	}
+	if c.db.CommandWALEnabled() && !run.DryRun && replayIntent == nil {
+		admission := c.lockCollectionCommandWALAdmission()
+		defer admission.unlock()
 	}
 
 	snap := c.db.AcquireSnapshot()
@@ -364,6 +371,11 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	}
 	defer resetTextV2RewritePlanTables(plan)
 	if plan.stats.Noop {
+		if replayIntent != nil {
+			if err := c.db.PublishCommandWALNoop(replayIntent, false); err != nil {
+				return empty, emptyStorage, "", err
+			}
+		}
 		return plan.stats, beforeStats, reason, nil
 	}
 
@@ -406,6 +418,11 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 		return empty, emptyStorage, "", err
 	}
 	if len(rootNames) == 0 {
+		if replayIntent != nil {
+			if err := c.db.PublishCommandWALNoop(replayIntent, false); err != nil {
+				return empty, emptyStorage, "", err
+			}
+		}
 		stats := plan.stats
 		stats.Noop = true
 		return stats, beforeStats, "no_delta_roots", nil
@@ -425,9 +442,20 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	}
 	baseCommitSeq := snapshotCommitSeq(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-	})
+	}
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	if c.commandWALActive(replayIntent) {
+		intent, intentErr := c.newCollectionRewriteTextIndexCommandWALIntent(def.Name, opts, replayIntent)
+		if intentErr != nil {
+			return empty, emptyStorage, "", intentErr
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, buildSystemDelta)
+	} else {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, buildSystemDelta)
+	}
 	if err != nil {
 		return empty, emptyStorage, "", err
 	}

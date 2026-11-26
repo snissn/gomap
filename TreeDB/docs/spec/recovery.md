@@ -573,6 +573,18 @@ the ordinary deterministic executor and its canonical accepted final documents
 or explicit IDs. It never reruns an update callback. Checkpoint/reopen coverage
 and replay of an actual unapplied WAL suffix are distinct verification cases.
 
+`CollectionRewriteTextIndex` (kind 108, payload format 18) registers with
+`NeedsReplayLogSupport` and the native transaction-plan marker so both ordinary
+and native COW (`cow_btree`) startup recovery route unapplied text-v2 rewrite
+frames through the deterministic ordinary text-v2 rewrite executor. Replay
+rejects mismatched payload formats, unknown flag bits, invalid versions, and
+malformed lengths before mutating state, executes with the recorded
+`TargetPostingsPerBlock`, `Force`, and `DisableTombstonePurge` flags under
+unbounded budgets, and publishes either the rewritten ordered roots or a
+`PublishCommandWALNoop` boundary when no rewrite work remains (for example,
+replaying against an already-sealed zero-debt index) so `AppliedCommandLSN`
+advances without stalling recovery.
+
 `RawKVBatchV2` adds `SetMaterializedRID(RID, value)`. Recovery reuses an
 existing RID only when its decoded value bytes match exactly. If the RID is
 absent, recovery appends `value` under that exact RID and advances the allocator

@@ -348,6 +348,7 @@ replayable without adding query-wide mutation semantics.
 | Collection/index metadata | create/drop index | future catalog command | `WAL-rejected` in PR6; public index DDL fails before frame append or `AppliedCommandLSN` advancement until index catalog commands land. |
 | Collection vector index rebuild | explicit index name through `Collection.RebuildVectorIndex` | `CollectionRebuildVectorIndex` | `WAL-supported` for `column_graph` rebuild/publish maintenance. Payload carries only collection and index names. Replay rebuilds physical assets or publishes a defined no-op status boundary; retired or ambiguous vector metadata fails closed. |
 | Standalone vector-partition live binding | `Collection.EnsureVectorPartitionLiveBindingV1` | `CollectionPersistPartitionLive` | `WAL-supported`; payload carries only collection and index names. Replay restores the exact active manifest/router binding into the live-overlay carrier and never scans rows or rebuilds the immutable graph. Later collection mutation commands reconstruct live deltas. |
+| Collection text-v2 index rewrite / maintenance | `Collection.RewriteTextIndex`, `Collection.MaintainTextIndex`, `Collection.MaintainTextIndexes`, `CollectionManager.MaintainTextIndexes` | `CollectionRewriteTextIndex` | `WAL-supported` for text-v2 logical rewrite/merge maintenance on both ordinary and native COW (`cow_btree`) databases. Payload format 18 carries collection name, index name, `TargetPostingsPerBlock`, `Force`, and `DisableTombstonePurge`. Dry-run, zero-debt, below-threshold, budget-exhausted, and no-op runs append zero WAL frames; replay executes deterministically with unbounded budgets and publishes a no-op boundary if no work remains. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
@@ -1365,3 +1366,27 @@ original incarnation/prior schema and uses the existing callback-scoped replay
 identity and one build group for the same rebuild-or-remove transition, without
 appending a child command. Typed DDL and unsupported index interpretations refuse
 before assignment.
+
+### Collection text-v2 index rewrite maintenance (kind 108)
+
+`CollectionRewriteTextIndex` has collection scope and payload format 18
+(`CollectionRewriteTextIndexV1`). Its little-endian v1 payload is `u16
+version=1`, `u16 flags` (bit 0 `Force`, bit 1 `DisableTombstonePurge`, bits
+2..15 reserved/zero), `u32 TargetPostingsPerBlock`, `u32 CollectionLen`, `u32
+IndexNameLen`, followed by exact-length non-empty collection and index names.
+
+Transient rewrite budgets (`MaxTerms`, `MaxPostingBlocks`, `MaxPostings`,
+`MaxDuration`), `DryRun`, and maintenance policy thresholds are evaluated prior
+to WAL append. No command-WAL frame is appended for dry-run, zero-debt
+fast-skip, below-threshold, budget-exhausted, or no-op runs. Concrete ordinary
+rewrites hold the collection schema write lock, flush pending write domains,
+acquire CommandWAL admission, and publish ordered-root deltas under one
+`CollectionRewriteTextIndex` frame; native COW (`cow_btree`) rewrites admit the
+encoded payload and `CommandWALIntent` under the native COW budget and submit
+them through `WriteNativePublication`. Because ordinary and native COW text-v2
+roots share identical persisted ordered-root formats on disk, startup WAL
+replay uses the single deterministic ordinary text-v2 rewrite executor with
+unbounded budgets for both owners, advancing `AppliedCommandLSN` via
+`PublishCommandWALNoop` on replay no-op exits. Optional `RunStorageCompaction`
+delegates to `CompactStorage` on ordinary CommandWAL databases and remains
+`ErrNativeSemanticUnsupported` on native COW.

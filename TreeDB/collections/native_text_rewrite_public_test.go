@@ -286,11 +286,14 @@ func TestNativeTextRewriteCommandWALGuard(t *testing.T) {
 			}
 			defer r.Close()
 			seq, lsn := r.capture.LogicalSequence(), b.CommandWALNextLSN()
-			if _, err = c.RewriteTextIndex("lexical", TextIndexRewriteOptions{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
-				t.Fatalf("rewrite=%v", err)
+			if _, err = c.RewriteTextIndex("lexical", TextIndexRewriteOptions{}); !errors.Is(err, ErrIndexNotFound) {
+				t.Fatalf("rewrite missing index=%v want ErrIndexNotFound", err)
 			}
-			if _, err = c.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
-				t.Fatalf("Maintain=%v", err)
+			if _, err = c.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{}); !errors.Is(err, ErrIndexNotFound) {
+				t.Fatalf("Maintain missing index=%v want ErrIndexNotFound", err)
+			}
+			if _, err = c.MaintainTextIndex(context.Background(), "lexical", TextIndexMaintenanceOptions{RunStorageCompaction: true}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				t.Fatalf("Maintain RunStorageCompaction=%v want ErrNativeSemanticUnsupported", err)
 			}
 			after, err := c.nativeJSON.Capture("docs")
 			if err != nil {

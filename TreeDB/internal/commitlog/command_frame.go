@@ -42,6 +42,22 @@ const (
 	collectionRebuildVectorIndexPayloadHeaderSize   = collectionRebuildVectorIndexIndexLenEnd
 	collectionRebuildVectorIndexCollectionNameStart = collectionRebuildVectorIndexPayloadHeaderSize
 
+	collectionRewriteTextIndexPayloadVersion       = uint16(1)
+	collectionRewriteTextIndexFlagForce            = uint16(1 << 0)
+	collectionRewriteTextIndexFlagDisableTombPurge = uint16(1 << 1)
+	collectionRewriteTextIndexKnownFlagsMask       = collectionRewriteTextIndexFlagForce | collectionRewriteTextIndexFlagDisableTombPurge
+	collectionRewriteTextIndexVersionEnd           = 2
+	collectionRewriteTextIndexFlagsStart           = collectionRewriteTextIndexVersionEnd
+	collectionRewriteTextIndexFlagsEnd             = collectionRewriteTextIndexFlagsStart + 2
+	collectionRewriteTextIndexTargetBlockStart     = collectionRewriteTextIndexFlagsEnd
+	collectionRewriteTextIndexTargetBlockEnd       = collectionRewriteTextIndexTargetBlockStart + 4
+	collectionRewriteTextIndexCollectionLenStart   = collectionRewriteTextIndexTargetBlockEnd
+	collectionRewriteTextIndexCollectionLenEnd     = collectionRewriteTextIndexCollectionLenStart + 4
+	collectionRewriteTextIndexIndexLenStart        = collectionRewriteTextIndexCollectionLenEnd
+	collectionRewriteTextIndexIndexLenEnd          = collectionRewriteTextIndexIndexLenStart + 4
+	collectionRewriteTextIndexPayloadHeaderSize    = collectionRewriteTextIndexIndexLenEnd
+	collectionRewriteTextIndexCollectionNameStart  = collectionRewriteTextIndexPayloadHeaderSize
+
 	externalRefEncodedFixedSize      = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	commandExtensionEncodedFixedSize = 2 + 2 + 4
 )
@@ -80,6 +96,7 @@ const (
 	CommandKindCollectionPersistPartitionLive CommandKind = 105
 	CommandKindCollectionSplitVectorInsertV1  CommandKind = 106
 	CommandKindCollectionVectorPrepareV1      CommandKind = 107
+	CommandKindCollectionRewriteTextIndex     CommandKind = 108
 	CommandKindCatalogCreateCollection        CommandKind = 200
 	CommandKindCatalogIndexMutation           CommandKind = 201
 	CommandKindCatalogMutationPlaceholder     CommandKind = CommandKindCatalogCreateCollection
@@ -117,6 +134,7 @@ const (
 	PayloadFormatCollectionSplitVectorInsertV1  PayloadFormat = 15
 	PayloadFormatCollectionVectorPrepareV1      PayloadFormat = 16
 	PayloadFormatCatalogIndexMutationV1         PayloadFormat = 17
+	PayloadFormatCollectionRewriteTextIndexV1   PayloadFormat = 18
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -1728,6 +1746,14 @@ type CollectionRebuildVectorIndexPayload struct {
 	IndexName  string
 }
 
+type CollectionRewriteTextIndexPayload struct {
+	Collection             string
+	IndexName              string
+	TargetPostingsPerBlock uint32
+	Force                  bool
+	DisableTombstonePurge  bool
+}
+
 type CatalogCreateCollectionPayload struct {
 	Collection string
 	Metadata   []byte
@@ -2211,6 +2237,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionSplitVectorInsertV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionRewriteTextIndex:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRewriteTextIndexV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogIndexMutation:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogIndexMutationV1 {
 			return ErrCorrupt
@@ -2271,6 +2301,8 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	case CommandKindCollectionSplitVectorInsertV1:
 		_, err := DecodeSplitVectorInsertPayloadV1(env.Payload)
 		return err
+	case CommandKindCollectionRewriteTextIndex:
+		return validateCollectionRewriteTextIndexPayload(env.Payload)
 	case CommandKindCatalogIndexMutation:
 		return validateCatalogIndexMutationPayload(env.Payload)
 	case CommandKindCatalogCreateCollection:
@@ -3410,6 +3442,92 @@ func validateCollectionRebuildVectorIndexPayload(payload []byte) error {
 	indexLen := binary.LittleEndian.Uint32(payload[collectionRebuildVectorIndexIndexLenStart:collectionRebuildVectorIndexIndexLenEnd])
 	off := collectionRebuildVectorIndexCollectionNameStart
 	if uint64(nameLen)+uint64(indexLen) != uint64(len(payload)-off) || nameLen == 0 || indexLen == 0 {
+		return ErrCorrupt
+	}
+	return nil
+}
+
+func EncodeCollectionRewriteTextIndexPayload(in CollectionRewriteTextIndexPayload) ([]byte, error) {
+	if in.Collection == "" {
+		return nil, fmt.Errorf("%w: invalid collection text index rewrite payload: collection name is empty", ErrCorrupt)
+	}
+	if in.IndexName == "" {
+		return nil, fmt.Errorf("%w: invalid collection text index rewrite payload: index name is empty", ErrCorrupt)
+	}
+	if commandFrameIntExceedsUint32(len(in.Collection)) || commandFrameIntExceedsUint32(len(in.IndexName)) {
+		return nil, ErrRecordTooLarge
+	}
+	total, err := addCommandFrameEncodedSectionLen(collectionRewriteTextIndexPayloadHeaderSize, len(in.Collection))
+	if err != nil {
+		return nil, err
+	}
+	total, err = addCommandFrameEncodedSectionLen(total, len(in.IndexName))
+	if err != nil {
+		return nil, err
+	}
+	var flags uint16
+	if in.Force {
+		flags |= collectionRewriteTextIndexFlagForce
+	}
+	if in.DisableTombstonePurge {
+		flags |= collectionRewriteTextIndexFlagDisableTombPurge
+	}
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint16(payload[:collectionRewriteTextIndexVersionEnd], collectionRewriteTextIndexPayloadVersion)
+	binary.LittleEndian.PutUint16(payload[collectionRewriteTextIndexFlagsStart:collectionRewriteTextIndexFlagsEnd], flags)
+	binary.LittleEndian.PutUint32(payload[collectionRewriteTextIndexTargetBlockStart:collectionRewriteTextIndexTargetBlockEnd], in.TargetPostingsPerBlock)
+	binary.LittleEndian.PutUint32(payload[collectionRewriteTextIndexCollectionLenStart:collectionRewriteTextIndexCollectionLenEnd], uint32(len(in.Collection)))
+	binary.LittleEndian.PutUint32(payload[collectionRewriteTextIndexIndexLenStart:collectionRewriteTextIndexIndexLenEnd], uint32(len(in.IndexName)))
+	copy(payload[collectionRewriteTextIndexCollectionNameStart:], in.Collection)
+	copy(payload[collectionRewriteTextIndexCollectionNameStart+len(in.Collection):], in.IndexName)
+	return payload, nil
+}
+
+func DecodeCollectionRewriteTextIndexPayload(payload []byte) (CollectionRewriteTextIndexPayload, error) {
+	if len(payload) < collectionRewriteTextIndexPayloadHeaderSize {
+		return CollectionRewriteTextIndexPayload{}, ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[:collectionRewriteTextIndexVersionEnd]) != collectionRewriteTextIndexPayloadVersion {
+		return CollectionRewriteTextIndexPayload{}, ErrCommandWALUnsupportedVersion
+	}
+	flags := binary.LittleEndian.Uint16(payload[collectionRewriteTextIndexFlagsStart:collectionRewriteTextIndexFlagsEnd])
+	if flags&^collectionRewriteTextIndexKnownFlagsMask != 0 {
+		return CollectionRewriteTextIndexPayload{}, ErrCorrupt
+	}
+	targetPostingsPerBlock := binary.LittleEndian.Uint32(payload[collectionRewriteTextIndexTargetBlockStart:collectionRewriteTextIndexTargetBlockEnd])
+	nameLen := binary.LittleEndian.Uint32(payload[collectionRewriteTextIndexCollectionLenStart:collectionRewriteTextIndexCollectionLenEnd])
+	indexLen := binary.LittleEndian.Uint32(payload[collectionRewriteTextIndexIndexLenStart:collectionRewriteTextIndexIndexLenEnd])
+	off := collectionRewriteTextIndexCollectionNameStart
+	if nameLen == 0 || indexLen == 0 || uint64(nameLen)+uint64(indexLen) != uint64(len(payload)-off) {
+		return CollectionRewriteTextIndexPayload{}, ErrCorrupt
+	}
+	collection := payload[off : off+int(nameLen)]
+	off += int(nameLen)
+	indexName := payload[off : off+int(indexLen)]
+	return CollectionRewriteTextIndexPayload{
+		Collection:             string(collection),
+		IndexName:              string(indexName),
+		TargetPostingsPerBlock: targetPostingsPerBlock,
+		Force:                  flags&collectionRewriteTextIndexFlagForce != 0,
+		DisableTombstonePurge:  flags&collectionRewriteTextIndexFlagDisableTombPurge != 0,
+	}, nil
+}
+
+func validateCollectionRewriteTextIndexPayload(payload []byte) error {
+	if len(payload) < collectionRewriteTextIndexPayloadHeaderSize {
+		return ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[:collectionRewriteTextIndexVersionEnd]) != collectionRewriteTextIndexPayloadVersion {
+		return ErrCommandWALUnsupportedVersion
+	}
+	flags := binary.LittleEndian.Uint16(payload[collectionRewriteTextIndexFlagsStart:collectionRewriteTextIndexFlagsEnd])
+	if flags&^collectionRewriteTextIndexKnownFlagsMask != 0 {
+		return ErrCorrupt
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[collectionRewriteTextIndexCollectionLenStart:collectionRewriteTextIndexCollectionLenEnd])
+	indexLen := binary.LittleEndian.Uint32(payload[collectionRewriteTextIndexIndexLenStart:collectionRewriteTextIndexIndexLenEnd])
+	off := collectionRewriteTextIndexCollectionNameStart
+	if nameLen == 0 || indexLen == 0 || uint64(nameLen)+uint64(indexLen) != uint64(len(payload)-off) {
 		return ErrCorrupt
 	}
 	return nil
