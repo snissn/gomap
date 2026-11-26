@@ -126,7 +126,10 @@ func TestLeafGenerationPackPrimaryNormalizationKeepsAcceptedTransition(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			candidate := findLeafGenerationByFileID(t, loadLeafGenerationManifestOrFatal(t, dir), page.ValueLogSegmentID(sourceID))
+			d.mu.RLock()
+			manifest := d.leafGenerationManifest.clone()
+			d.mu.RUnlock()
+			candidate := findLeafGenerationByFileID(t, manifest, page.ValueLogSegmentID(sourceID))
 			eligible := false
 			for _, gen := range plan.Candidates {
 				eligible = eligible || gen.GenerationID == candidate.GenerationID && gen.Eligible && gen.BytesLive > 0 && gen.BytesDead > 0 && gen.AgeCommits >= 1

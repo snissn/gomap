@@ -1027,7 +1027,9 @@ func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T
 	}
 	rootIDs[0] = updatedRootIDs[0]
 
-	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	db.mu.RLock()
+	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
 	gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
 	planBefore, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true})
 	if err != nil {

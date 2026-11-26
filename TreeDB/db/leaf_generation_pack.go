@@ -266,6 +266,16 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	if err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {
 		return stats, err
 	}
+	db.mu.RLock()
+	manifestErr := opts.MaintenanceLimits.admitManifest(db.leafGenerationManifest)
+	db.mu.RUnlock()
+	if manifestErr != nil {
+		return stats, manifestErr
+	}
+	if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+		return stats, err
+	}
+	db.flushDeferredLeafGenerationRecordLengthIndexes()
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err

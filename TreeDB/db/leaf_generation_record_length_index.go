@@ -203,6 +203,54 @@ func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	db.noteLeafGenerationRecordLengthRaw(rawFileID, ptr.Offset, recordLen)
 }
 
+func (db *DB) queueDeferredLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
+	if db == nil || db.readOnly || len(rawFileIDs) == 0 {
+		return
+	}
+	db.leafGenerationRecordLengthMu.Lock()
+	if db.leafGenerationDeferredRecordLengthFileIDs == nil {
+		db.leafGenerationDeferredRecordLengthFileIDs = make(map[uint32]struct{}, len(rawFileIDs))
+	}
+	for _, rawFileID := range rawFileIDs {
+		if rawFileID != 0 {
+			db.leafGenerationDeferredRecordLengthFileIDs[rawFileID] = struct{}{}
+		}
+	}
+	db.leafGenerationRecordLengthMu.Unlock()
+}
+
+func (db *DB) flushDeferredLeafGenerationRecordLengthIndexes() {
+	if db == nil || db.readOnly {
+		return
+	}
+	db.leafGenerationRecordLengthMu.Lock()
+	if len(db.leafGenerationDeferredRecordLengthFileIDs) == 0 {
+		db.leafGenerationRecordLengthMu.Unlock()
+		return
+	}
+	pending := make([]uint32, 0, len(db.leafGenerationDeferredRecordLengthFileIDs))
+	for rawFileID := range db.leafGenerationDeferredRecordLengthFileIDs {
+		pending = append(pending, rawFileID)
+	}
+	clear(db.leafGenerationDeferredRecordLengthFileIDs)
+	db.leafGenerationRecordLengthMu.Unlock()
+
+	sort.Slice(pending, func(i, j int) bool { return pending[i] < pending[j] })
+	live := pending[:0]
+	for _, rawFileID := range pending {
+		if rawFileID == 0 {
+			continue
+		}
+		if _, err := os.Stat(leafGenerationFallbackPath(db.dir, rawFileID)); err != nil {
+			continue
+		}
+		live = append(live, rawFileID)
+	}
+	if len(live) > 0 {
+		db.persistLeafGenerationRecordLengthIndexes(live)
+	}
+}
+
 func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) (sourceErr, indexErr error) {
 	if db == nil || db.readOnly || rawFileID == 0 {
 		return nil, nil

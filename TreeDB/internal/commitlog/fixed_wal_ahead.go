@@ -155,16 +155,27 @@ func (j *CommandJournal) fixedWALAheadErrorLocked() error {
 	return j.fixedAheadErr
 }
 
-// This is reached before an append that still fits, using flushed occupancy.
+// This is reached before an append that still fits. Start preparing the
+// successor once flushed occupancy has reached half capacity, or when another
+// frame of the incoming size would overflow after this append.
 // The worker sees only immutable scalars and a duplicated retained parent.
-func (j *CommandJournal) maybeStartFixedWALAheadLocked() error {
+func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	w := j.writer
 	if j.fixedAhead != nil || j.closing || w == nil || w.fixed == nil || w.containerSelection.ext4Stream || j.stableParent == nil || !FixedWALCreationSupported() ||
 		j.pendingStableSuccessor != nil || len(j.pendingStableRotations) != 0 || j.segmentSeq == ^uint64(0) || j.fixedAheadGeneration == ^uint64(0) {
 		return nil
 	}
 	current := w.fixed
-	if current.physical-fixedWALHeaderSize < (current.capacity-fixedWALHeaderSize+1)/2 {
+	halfReached := current.physical-fixedWALHeaderSize >= (current.capacity-fixedWALHeaderSize+1)/2
+	nextFrameOverflows := false
+	if !halfReached && incoming > 0 {
+		if projected, err := fixedWALExtentEnd(current.physical, incoming); err == nil {
+			if nextEnd, err := fixedWALExtentEnd(projected, incoming); err != nil || nextEnd > current.capacity {
+				nextFrameOverflows = true
+			}
+		}
+	}
+	if !halfReached && !nextFrameOverflows {
 		return nil
 	}
 	plan, err := fixedSuccessorSizePlan(current, w.fixedBudget, fixedWALPressureRotation, 0)

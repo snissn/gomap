@@ -112,6 +112,7 @@ type DB struct {
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
 	leafGenerationManifestStore    *leafGenerationManifestStore
+	leafGenerationManifestDirty    atomic.Bool
 	leafGenerationPendingMu        sync.Mutex
 	leafGenerationPendingFileIDs   []uint32
 	leafGenerationPendingSet       map[uint32]struct{}
@@ -326,13 +327,14 @@ type DB struct {
 	captureTeardownFailure     captureTeardownFailure
 	captureTeardownErrorCharge uint64
 
-	leafGenerationLiveStatsMu        sync.RWMutex
-	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
-	leafGenerationSubtreeStatsMu     sync.RWMutex
-	leafGenerationSubtreeStatsByPage map[uint64]leafGenerationSubtreeStats
-	leafGenerationRecordLengthMu     sync.RWMutex
-	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
-	leafGenerationStateVersion       uint64
+	leafGenerationLiveStatsMu                 sync.RWMutex
+	leafGenerationLiveStatsCache              leafGenerationLiveStatsCache
+	leafGenerationSubtreeStatsMu              sync.RWMutex
+	leafGenerationSubtreeStatsByPage          map[uint64]leafGenerationSubtreeStats
+	leafGenerationRecordLengthMu              sync.RWMutex
+	leafGenerationRecordLengthByFile          map[uint32]*leafGenerationRecordLengthIndex
+	leafGenerationDeferredRecordLengthFileIDs map[uint32]struct{}
+	leafGenerationStateVersion                uint64
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
@@ -3697,6 +3699,12 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	if err := db.finishFailedInlineLeafManifest(); err != nil {
 		cleanupFailed(err)
 	}
+	if !db.readOnly && !db.publicationPoisoned.Load() {
+		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+			cleanupFailed(err)
+		}
+		db.flushDeferredLeafGenerationRecordLengthIndexes()
+	}
 	if leafGenerationManifestStore != nil {
 		leafGenerationManifestStore.Close()
 	}
@@ -4595,13 +4603,14 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		}
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
+	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 || (post.sync && db.indexOuterLeavesInValueLog && db.leafGenerationManifestDirty.Load()) {
 		var (
-			persistErr        error
-			pendingErr        error
-			clearPending      bool
-			assignPersisted   bool
-			manifestPersisted bool
+			persistErr                 error
+			pendingErr                 error
+			clearPending               bool
+			assignPersisted            bool
+			manifestPersisted          bool
+			persistRecordLengthFileIDs []uint32
 		)
 		db.commitMu.Lock()
 		if post.persistLeafGenerationManifest {
@@ -4616,8 +4625,24 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 				assignPersisted = true
 			}
 			if manifestPersisted {
-				persistErr = db.replaceLeafGenerationManifest(post.persistLeafGenerationManifestView)
-				if persistErr == nil {
+				if post.sync {
+					persistErr = db.replaceLeafGenerationManifest(post.persistLeafGenerationManifestView)
+					if persistErr == nil {
+						db.leafGenerationManifestDirty.Store(false)
+						clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
+						if assignPersisted {
+							db.mu.Lock()
+							if state := db.state.Load(); state != nil && state.LeafGenerations == post.persistLeafGenerationStateView {
+								db.leafGenerationManifest = post.persistLeafGenerationManifestView
+							}
+							db.mu.Unlock()
+						}
+					}
+				} else {
+					// Operational manifest updates on relaxed commits are deferred
+					// until a sync commit, Checkpoint, Close, or leaf-generation
+					// maintenance call. Crash reopen reconciles any unrecorded
+					// leaf-log segments directly from disk.
 					clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
 					if assignPersisted {
 						db.mu.Lock()
@@ -4626,14 +4651,23 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 						}
 						db.mu.Unlock()
 					}
+					db.leafGenerationManifestDirty.Store(true)
 				}
 			}
 			db.durablePublishMu.Unlock()
 			if manifestPersisted && persistErr == nil {
-				db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+				if post.sync {
+					persistRecordLengthFileIDs = post.persistLeafGenerationRawFileIDs
+				} else {
+					db.queueDeferredLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+				}
 			}
 		} else if post.persistLeafGenerationIndexesOnly {
-			db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+			if post.sync {
+				persistRecordLengthFileIDs = post.persistLeafGenerationRawFileIDs
+			} else {
+				db.queueDeferredLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+			}
 			clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
 		} else if len(post.clearLeafGenerationPendingFileIDs) > 0 {
 			clearPending = true
@@ -4648,6 +4682,14 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			}
 		}
 		db.commitMu.Unlock()
+		if post.sync && persistErr == nil && db.leafGenerationManifestDirty.Load() {
+			if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+				persistErr = err
+			}
+		}
+		if len(persistRecordLengthFileIDs) > 0 {
+			db.persistLeafGenerationRecordLengthIndexes(persistRecordLengthFileIDs)
+		}
 		if persistErr != nil {
 			// The commit is already durable and published at this point. Returning
 			// this error to the caller would make retry behavior unsafe.
@@ -5101,6 +5143,10 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 				return err
 			}
 		}
+		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+			return err
+		}
+		db.flushDeferredLeafGenerationRecordLengthIndexes()
 		return nil
 	}
 	writeLocked := true
@@ -5162,6 +5208,10 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 			return err
 		}
 	}
+	if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+		return err
+	}
+	db.flushDeferredLeafGenerationRecordLengthIndexes()
 	return nil
 }
 

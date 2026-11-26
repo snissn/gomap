@@ -834,6 +834,47 @@ func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) er
 	return err
 }
 
+func (db *DB) flushDeferredLeafGenerationManifest() error {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog || !db.leafGenerationManifestDirty.Load() {
+		return nil
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	return db.flushDeferredLeafGenerationManifestLocked()
+}
+
+// The caller holds durablePublishMu.
+func (db *DB) flushDeferredLeafGenerationManifestLocked() error {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog || !db.leafGenerationManifestDirty.Load() {
+		return nil
+	}
+	for db.leafGenerationManifestDirty.Load() {
+		db.mu.RLock()
+		current := db.leafGenerationManifest
+		var snapshot *leafGenerationManifest
+		if current != nil {
+			snapshot = current.clone()
+		}
+		db.mu.RUnlock()
+		if snapshot == nil {
+			db.leafGenerationManifestDirty.Store(false)
+			return nil
+		}
+		if err := db.replaceLeafGenerationManifest(snapshot); err != nil {
+			return err
+		}
+		db.mu.Lock()
+		if db.leafGenerationManifest == current {
+			db.leafGenerationManifest = snapshot
+			db.leafGenerationManifestDirty.Store(false)
+			db.mu.Unlock()
+			return nil
+		}
+		db.mu.Unlock()
+	}
+	return nil
+}
+
 type leafGenerationBootstrapFile struct {
 	rawFileID uint32
 	lane      uint32
@@ -1232,6 +1273,7 @@ func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bo
 	}
 	db.mu.Lock()
 	db.leafGenerationManifest = reconciled
+	db.leafGenerationManifestDirty.Store(false)
 	db.mu.Unlock()
 	if err := db.publishLeafGenerationState(false); err != nil {
 		return false, err

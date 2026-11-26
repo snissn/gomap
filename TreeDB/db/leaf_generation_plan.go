@@ -291,6 +291,9 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	if err := opts.MaintenanceLimits.admitSnapshot(ctx, snap); err != nil {
 		return plan, err
 	}
+	if !db.readOnly {
+		db.flushDeferredLeafGenerationRecordLengthIndexes()
+	}
 
 	if manifest == nil || snap.state == nil {
 		plan.Admission = leafGenerationPlanAdmissionNoCandidates
