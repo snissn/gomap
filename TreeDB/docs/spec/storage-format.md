@@ -2237,11 +2237,13 @@ raw leaf segment while rebuilding that index remains a storage error.
 On relaxed (`!sync`) commits whose durable root does not require a bound
 manifest revision replacement, TreeDB updates the in-memory leaf-generation
 manifest immediately and defers synchronous persistence of the operational
-manifest replacement and advisory `.lenidx` files until the next synchronous
-commit, `Checkpoint`, `Close`, or admitted leaf-generation maintenance
-(`LeafGenerationPlan`, `LeafGenerationPack`, or non-dry-run `LeafGenerationGC`).
-Durable-root publication that binds `ResourceOuterLeafManifest` keeps its
-synchronous immutable revision replacement path unchanged.
+manifest replacement until the next synchronous commit, `Checkpoint`, `Close`,
+or admitted mutating leaf-generation maintenance (`LeafGenerationPack` or
+non-dry-run `LeafGenerationGC`). Advisory `.lenidx` persistence is likewise
+deferred until `Checkpoint`, `Close`, or admitted `LeafGenerationPlan` /
+`LeafGenerationPack`. Durable-root publication that binds
+`ResourceOuterLeafManifest` keeps its synchronous immutable revision
+replacement path unchanged.
 
 A prepared immutable revision may be abandoned only while no recoverable meta
 slot can name it. Vacuum retains prepared revisions on failure because a

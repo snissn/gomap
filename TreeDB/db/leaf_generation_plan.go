@@ -292,9 +292,6 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		return plan, err
 	}
 	if !db.readOnly {
-		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
-			return plan, err
-		}
 		db.flushDeferredLeafGenerationRecordLengthIndexes()
 	}
 
