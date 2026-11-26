@@ -59,7 +59,7 @@ func typedGraphTextInsertEncodedBound(def TextIndexDefinition, ids []columnWrite
 			return 0, err
 		}
 	}
-	if err := entry(2, 1+9*width); err != nil { // status
+	if err := entry(2, 1+13*width); err != nil { // status
 		return 0, err
 	}
 	if err := entry(2, 1+2*width); err != nil { // corpus stats

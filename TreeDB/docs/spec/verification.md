@@ -2254,6 +2254,18 @@ Coverage:
   `text_v2_position_validation_4558_test.go`:
   - block-max fallback and final-attribution posting budgets remain monotonic
     and fail closed without exceeding the explicit cap
+- `TreeDB/collections/text_v2_status_counters_test.go`:
+  - `TestTextV2StatusCountersLifecycle5828`,
+    `TestTextV2StatusValueCodecCountersAndOverflow5828`,
+    `TestTextV2StatusCrossFieldDedupAndUpdateToEmptyMaintenance5828`,
+    `TestTextV2MaintainBufferedUnflushedWriteNotMissed5828`,
+    `TestTextV2MaintainZeroDebtFastSkipAndOverrides5828`,
+    `TestTextV2RewriteDisableTombstonePurgeCounters5828`,
+    `TestTextV2StatusCounterCorruptionFailClosed5828`,
+    `TestTextV2StatusNonPrimaryRolloutAndV1Unaffected5828`,
+    `TestTextV2StatusCountersNativeCOWAndReopen5828`
+  - `BenchmarkTextIndexStatusO1`, `BenchmarkTextIndexStorageStatsFullScan`,
+    `BenchmarkMaintainTextIndexZeroDebtSkip`
 - `TreeDB/documentservice/rag_parity_test.go`:
   - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
   - `TestHTTPBooleanOperatorConflictParity4766`

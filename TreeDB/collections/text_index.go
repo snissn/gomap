@@ -423,6 +423,14 @@ type TextIndexStatus struct {
 	RequiredCounterNames    []string             `json:"required_counter_names,omitempty"`
 	RewriteMergeState       string               `json:"rewrite_merge_state,omitempty"`
 	PhysicalReclamationPath string               `json:"physical_reclamation_path,omitempty"`
+	LiveDocuments           uint64               `json:"live_documents,omitempty"`
+	DeletedDocuments        uint64               `json:"deleted_documents,omitempty"`
+	PostingBlocks           uint64               `json:"posting_blocks,omitempty"`
+	SealedPostingBlocks     uint64               `json:"sealed_posting_blocks,omitempty"`
+	MicroPostingBlocks      uint64               `json:"micro_posting_blocks,omitempty"`
+	DeltaPostingBlocks      uint64               `json:"delta_posting_blocks,omitempty"`
+	StalePostings           uint64               `json:"stale_postings,omitempty"`
+	RootGeneration          uint64               `json:"root_generation,omitempty"`
 }
 
 const (
@@ -435,19 +443,7 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 		return TextIndexStatus{}, errCollectionNil
 	}
 	if c.nativeJSON != nil {
-		if err := ValidateIndexName(indexName); err != nil {
-			return TextIndexStatus{}, err
-		}
-		read, err := c.nativeJSON.Capture(c.name)
-		if err != nil {
-			return TextIndexStatus{}, err
-		}
-		defer read.Close()
-		def, ok := findTextIndex(read.meta.TextIndexes, indexName)
-		if !ok {
-			return TextIndexStatus{}, ErrIndexNotFound
-		}
-		return textIndexStatusForDefinition(read.meta.Name, def), nil
+		return c.nativeTextIndexStatus(indexName)
 	}
 	if c.db == nil {
 		return TextIndexStatus{}, errCollectionDBNil
@@ -471,7 +467,36 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 	if !ok {
 		return TextIndexStatus{}, ErrIndexNotFound
 	}
-	return textIndexStatusForDefinition(catalog.meta.Name, idx), nil
+	status := textIndexStatusForDefinition(catalog.meta.Name, idx)
+	if status.Ready && status.Version == TextIndexVersionV2 {
+		v2Status, found, err := readTextV2StatusAtRoot(snap, catalog, collectionTextV2GenerationsRootName(catalog.meta.Name, idx.Name))
+		if err != nil {
+			return TextIndexStatus{}, err
+		}
+		if !found {
+			return TextIndexStatus{}, errMalformedTextStorage("missing text-v2 status record for collection %q index %q", catalog.meta.Name, idx.Name)
+		}
+		if err := populateTextIndexV2StatusCounters(&status, v2Status); err != nil {
+			return TextIndexStatus{}, err
+		}
+	}
+	return status, nil
+}
+
+func populateTextIndexV2StatusCounters(status *TextIndexStatus, v2Status textV2IndexStatusValue) error {
+	totalBlocks, ok := v2Status.totalPostingBlocks()
+	if !ok {
+		return errMalformedTextStorage("text-v2 status posting block count overflow")
+	}
+	status.LiveDocuments = v2Status.LiveDocuments
+	status.DeletedDocuments = v2Status.DeletedDocuments
+	status.PostingBlocks = totalBlocks
+	status.SealedPostingBlocks = v2Status.SealedPostingBlocks
+	status.MicroPostingBlocks = v2Status.MicroPostingBlocks
+	status.DeltaPostingBlocks = v2Status.DeltaPostingBlocks
+	status.StalePostings = v2Status.StalePostings
+	status.RootGeneration = v2Status.RootGeneration
+	return nil
 }
 
 func textIndexStatusForDefinition(collection string, def TextIndexDefinition) TextIndexStatus {

@@ -199,8 +199,16 @@ status, benchmark, and downgrade/fail-closed tests.
 - active root names (v2 by default, v1 for explicit compatibility indexes) and reserved v2 roots;
 - required counter names;
 - lightweight rewrite/merge readiness (`ready` for v2) and TreeDB
-  physical reclamation path. Full storage validation and detailed
-  `rewrite_merge_pending`/`compacted` state are reported by
+  physical reclamation path;
+- for `Ready` v2 indexes (ordinary and native COW), O(1) point-read counters
+  from `<collection>/text-v2-generations/<indexName>`: `LiveDocuments`,
+  `DeletedDocuments`, `PostingBlocks` (`Sealed + Micro + Delta`),
+  `SealedPostingBlocks`, `MicroPostingBlocks`, `DeltaPostingBlocks`,
+  `StalePostings`, and `RootGeneration` (failing closed with
+  `ErrTextIndexStorageCorrupt` if the status record is missing or corrupt). V1
+  indexes and non-primary v2 rollouts (`shadow`, `dual_write`, `disabled`) do
+  not read v2 status storage and report zero for these counters. Full storage
+  validation and detailed `rewrite_merge_pending`/`compacted` state remain in
   `TextIndexStorageStats` so health/status calls do not scan large roots.
 
 ## Reserved v2 root families
@@ -257,7 +265,7 @@ M1 root contents:
 | `text-v2-posting-blocks` | M2 posting-block keys are `(term, blockStartOrdinal, blockID)` under the normal collection root; values contain compressed scoring postings and block summaries. |
 | `text-v2-norm-blocks` | ordinal block key -> packed per-field token lengths with generation/tombstone flags, sufficient for BM25F field-length/norm inputs without per-candidate text-state lookup. |
 | `text-v2-positions` | optional M6 lazy payload entries keyed by `(ordinal, term)` for `StorePositions` indexes; format-only when positions are disabled. |
-| `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals. |
+| `text-v2-generations` | index status record: root/stats/docmap/norm/term generations, next ordinal, live documents, deleted/tombstoned ordinals, exact sealed/micro/delta posting-block counts, and pending stale-posting count. |
 
 All v2 decoders check the key/value version, root family, block bounds, strict
 ordinal ordering, supported flags, field counts, status-generation bounds, and
@@ -558,8 +566,17 @@ roots:
   sealed blocks and removed tombstones.
 
 `TextIndexStorageStats` performs full v2 storage inspection, reports
-sealed/delta/micro posting-block counts, and fail-closes on malformed v2 storage
-instead of declaring the inspected state ready.
+sealed/delta/micro posting-block counts, cross-checks scanned posting-block
+counts against the persisted status record, and fail-closes on malformed v2
+storage instead of declaring the inspected state ready.
+
+When `MaintainTextIndex` runs without `Force`, `DryRun`, or an explicit
+`TargetPostingsPerBlock`, it checks the persisted v2 status record in O(1) after
+draining buffered write domains and fast-skips with `Noop=true` and
+`SkippedReason="no_debt"` whenever `DeletedDocuments`, `MicroPostingBlocks`,
+`DeltaPostingBlocks`, and `StalePostings` are all zero. `DryRun=true` retains
+full storage inspection for diagnostic telemetry, and `Force=true` or explicit
+`TargetPostingsPerBlock > 0` runs full rewrite planning.
 
 ## Default-rollout write and maintenance budget guidance (#2689)
 

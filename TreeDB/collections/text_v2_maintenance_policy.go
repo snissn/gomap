@@ -376,10 +376,11 @@ func (c *Collection) maintainTextIndex(ctx context.Context, indexName string, op
 		return textV2RewriteDecision{Apply: true}
 	}
 	rewrite, before, skippedReason, err := c.rewriteTextIndexInternal(ctx, indexName, textV2RewriteRunOptions{
-		Rewrite:          rewriteOpts,
-		DryRun:           opts.DryRun,
-		NeedStorageStats: true,
-		Decide:           decide,
+		Rewrite:               rewriteOpts,
+		DryRun:                opts.DryRun,
+		NeedStorageStats:      true,
+		AllowZeroDebtFastSkip: !opts.Force && opts.TargetPostingsPerBlock == 0 && !opts.DryRun,
+		Decide:                decide,
 	})
 	if err != nil {
 		return TextIndexMaintenanceIndexStats{}, err
