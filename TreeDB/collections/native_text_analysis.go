@@ -56,9 +56,13 @@ func nativeTextStopWords(analyzer TextAnalyzer, options *TextAnalyzerOptions, ad
 	if len(options.Synonyms) != 0 {
 		return nil, fmt.Errorf("%w: text analyzer synonyms are not implemented", ErrTextIndexUnavailable)
 	}
+	if err := validateSimpleTextMaxTokenBytes(options.MaxTokenBytes); err != nil {
+		return nil, err
+	}
 	if len(options.StopWords) == 0 {
 		return nil, nil
 	}
+	maxTokenBytes := effectiveSimpleTextMaxTokenBytes(options)
 	if err := admitLocalIDArray(admit, len(options.StopWords), uint64(unsafe.Sizeof(string("")))); err != nil {
 		return nil, err
 	}
@@ -72,9 +76,12 @@ func nativeTextStopWords(analyzer TextAnalyzer, options *TextAnalyzerOptions, ad
 		if raw == "" {
 			continue
 		}
+		if simpleTextHasOversizedToken(raw, maxTokenBytes) {
+			return nil, fmt.Errorf("text analyzer stop_words[%d] exceeds max_token_bytes %d", i, maxTokenBytes)
+		}
 		sink.word = ""
 		sink.count = 0
-		if err := analyzeSimpleTextToSinkAdmitted(raw, sink, admit); err != nil {
+		if err := analyzeSimpleTextToSinkAdmitted(raw, maxTokenBytes, sink, admit); err != nil {
 			return nil, fmt.Errorf("text analyzer stop_words[%d]: %w", i, err)
 		}
 		if sink.count != 1 {

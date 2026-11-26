@@ -516,9 +516,19 @@ statistics. Score-only phrase/proximity candidate generation still keeps
 is only the existing explicit final top-K fetch.
 
 Analyzer options are persisted in `TextIndexDefinition.AnalyzerOptions`. The
-simple analyzer supports normalized stopword filtering. Stopword filtering
-preserves original token positions, so phrase/proximity slop can account for
-removed-token gaps. Stemming and synonym configuration fields are reserved as
+simple analyzer supports normalized stopword filtering and a normalized token
+UTF-8 byte ceiling via `MaxTokenBytes` (default `256` via
+`DefaultSimpleTextMaxTokenBytes`, maximum `1024` via
+`MaxSimpleTextMaxTokenBytes`, staying safely below TreeDB's 4 KiB internal
+B-tree key limit even with text-v2 prefixes, block IDs, and ordinal suffixes).
+Both stopword filtering and oversized-token skipping preserve original token
+positions (incrementing position on each skipped token run), so
+phrase/proximity slop accounts for removed-token gaps; oversized-token skipping
+runs in O(1) memory on both index and query/snippet paths, and queries made
+entirely of oversized tokens return empty results cleanly without error.
+Negative `MaxTokenBytes`, values above `1024`, and stopwords exceeding the
+effective `MaxTokenBytes` fail closed on both ordinary and native COW paths.
+Stemming and synonym configuration fields are reserved as
 extension seams and currently fail closed during index-definition normalization;
 they are not silently accepted because they would change indexed terms and
 positions. Changing analyzer options changes the physical term/position contract

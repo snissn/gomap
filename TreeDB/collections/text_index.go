@@ -23,16 +23,29 @@ type TextAnalyzer string
 
 const (
 	TextAnalyzerSimple TextAnalyzer = "simple"
+
+	// DefaultSimpleTextMaxTokenBytes is the default maximum UTF-8 byte length of
+	// a normalized token emitted by TextAnalyzerSimple when
+	// TextAnalyzerOptions.MaxTokenBytes is unset (0).
+	DefaultSimpleTextMaxTokenBytes = 256
+
+	// MaxSimpleTextMaxTokenBytes is the maximum allowed value for
+	// TextAnalyzerOptions.MaxTokenBytes, staying safely below TreeDB's 4 KiB
+	// internal B-tree page key capacity even with text-v2 prefixes, block IDs,
+	// and ordinal suffixes.
+	MaxSimpleTextMaxTokenBytes = 1024
 )
 
 // TextAnalyzerOptions configures the built-in text analyzer in ways that are
-// safe to persist in collection metadata. StopWords are supported for the
-// simple analyzer. Stemmer and Synonyms reserve bounded extension seams and are
-// rejected until their indexing/query expansion semantics are implemented.
+// safe to persist in collection metadata. StopWords and MaxTokenBytes are
+// supported for the simple analyzer. Stemmer and Synonyms reserve bounded
+// extension seams and are rejected until their indexing/query expansion
+// semantics are implemented.
 type TextAnalyzerOptions struct {
-	StopWords []string            `json:"stop_words,omitempty"`
-	Stemmer   string              `json:"stemmer,omitempty"`
-	Synonyms  map[string][]string `json:"synonyms,omitempty"`
+	StopWords     []string            `json:"stop_words,omitempty"`
+	MaxTokenBytes int                 `json:"max_token_bytes,omitempty"`
+	Stemmer       string              `json:"stemmer,omitempty"`
+	Synonyms      map[string][]string `json:"synonyms,omitempty"`
 }
 
 // TextIndexVersion selects the physical text-index contract. For new text
@@ -95,6 +108,23 @@ func normalizeTextAnalyzer(analyzer TextAnalyzer) (TextAnalyzer, error) {
 	}
 }
 
+func effectiveSimpleTextMaxTokenBytes(options *TextAnalyzerOptions) int {
+	if options == nil || options.MaxTokenBytes == 0 {
+		return DefaultSimpleTextMaxTokenBytes
+	}
+	return options.MaxTokenBytes
+}
+
+func validateSimpleTextMaxTokenBytes(maxTokenBytes int) error {
+	if maxTokenBytes < 0 {
+		return errors.New("collections: text analyzer max_token_bytes must be non-negative")
+	}
+	if maxTokenBytes > MaxSimpleTextMaxTokenBytes {
+		return fmt.Errorf("collections: text analyzer max_token_bytes exceeds limit %d", MaxSimpleTextMaxTokenBytes)
+	}
+	return nil
+}
+
 func normalizeTextAnalyzerOptions(analyzer TextAnalyzer, options *TextAnalyzerOptions) (*TextAnalyzerOptions, error) {
 	if options == nil {
 		return nil, nil
@@ -108,17 +138,24 @@ func normalizeTextAnalyzerOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 	if len(options.Synonyms) != 0 {
 		return nil, fmt.Errorf("%w: text analyzer synonyms are not implemented", ErrTextIndexUnavailable)
 	}
-	stopWords, err := normalizeTextAnalyzerStopWords(options.StopWords)
+	if err := validateSimpleTextMaxTokenBytes(options.MaxTokenBytes); err != nil {
+		return nil, err
+	}
+	maxTokenBytes := effectiveSimpleTextMaxTokenBytes(options)
+	stopWords, err := normalizeTextAnalyzerStopWords(options.StopWords, maxTokenBytes)
 	if err != nil {
 		return nil, err
 	}
-	if len(stopWords) == 0 {
+	if len(stopWords) == 0 && options.MaxTokenBytes == 0 {
 		return nil, nil
 	}
-	return &TextAnalyzerOptions{StopWords: stopWords}, nil
+	return &TextAnalyzerOptions{
+		StopWords:     stopWords,
+		MaxTokenBytes: options.MaxTokenBytes,
+	}, nil
 }
 
-func normalizeTextAnalyzerStopWords(values []string) ([]string, error) {
+func normalizeTextAnalyzerStopWords(values []string, maxTokenBytes int) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -128,11 +165,14 @@ func normalizeTextAnalyzerStopWords(values []string) ([]string, error) {
 		if raw == "" {
 			continue
 		}
+		if simpleTextHasOversizedToken(raw, maxTokenBytes) {
+			return nil, fmt.Errorf("text analyzer stop_words[%d] exceeds max_token_bytes %d", i, maxTokenBytes)
+		}
 		var terms []string
-		if err := analyzeSimpleTextToSink(raw, TextTokenSinkFunc(func(token TextToken) error {
+		if err := analyzeSimpleTextToSinkAdmitted(raw, maxTokenBytes, TextTokenSinkFunc(func(token TextToken) error {
 			terms = append(terms, token.Term)
 			return nil
-		})); err != nil {
+		}), nil); err != nil {
 			return nil, fmt.Errorf("text analyzer stop_words[%d]: %w", i, err)
 		}
 		if len(terms) != 1 {
@@ -167,8 +207,9 @@ func cloneTextAnalyzerOptions(options *TextAnalyzerOptions) *TextAnalyzerOptions
 		return nil
 	}
 	out := &TextAnalyzerOptions{
-		StopWords: append([]string(nil), options.StopWords...),
-		Stemmer:   options.Stemmer,
+		StopWords:     append([]string(nil), options.StopWords...),
+		MaxTokenBytes: options.MaxTokenBytes,
+		Stemmer:       options.Stemmer,
 	}
 	if len(options.Synonyms) != 0 {
 		out.Synonyms = make(map[string][]string, len(options.Synonyms))
@@ -183,7 +224,7 @@ func textAnalyzerOptionsEqual(a, b *TextAnalyzerOptions) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	if a.Stemmer != b.Stemmer || len(a.StopWords) != len(b.StopWords) || len(a.Synonyms) != len(b.Synonyms) {
+	if a.MaxTokenBytes != b.MaxTokenBytes || a.Stemmer != b.Stemmer || len(a.StopWords) != len(b.StopWords) || len(a.Synonyms) != len(b.Synonyms) {
 		return false
 	}
 	for i := range a.StopWords {

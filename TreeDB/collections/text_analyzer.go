@@ -98,7 +98,7 @@ func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 			}
 			sink = nativeTextStopFilter{sink: sink, words: words}
 		}
-		return analyzeSimpleTextToSinkAdmitted(text, sink, admit)
+		return analyzeSimpleTextToSinkAdmitted(text, effectiveSimpleTextMaxTokenBytes(options), sink, admit)
 	}
 	normalizedOptions, err := normalizeTextAnalyzerOptions(normalized, options)
 	if err != nil {
@@ -109,7 +109,7 @@ func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 	}
 	switch normalized {
 	case TextAnalyzerSimple:
-		return analyzeSimpleTextToSinkAdmitted(text, sink, admit)
+		return analyzeSimpleTextToSinkAdmitted(text, effectiveSimpleTextMaxTokenBytes(normalizedOptions), sink, admit)
 	default:
 		return fmt.Errorf("unsupported analyzer %q", normalized)
 	}
@@ -133,7 +133,25 @@ func (s textStopWordFilterSink) AddTextToken(token TextToken) error {
 }
 
 func analyzeSimpleTextToSink(text string, sink TextTokenSink) error {
-	return analyzeSimpleTextToSinkAdmitted(text, sink, nil)
+	return analyzeSimpleTextToSinkAdmitted(text, DefaultSimpleTextMaxTokenBytes, sink, nil)
+}
+
+func simpleTextHasOversizedToken(text string, maxTokenBytes int) bool {
+	if maxTokenBytes <= 0 {
+		maxTokenBytes = DefaultSimpleTextMaxTokenBytes
+	}
+	tokenBytes := 0
+	for _, r := range text {
+		if simpleTextTokenRune(r) {
+			tokenBytes += utf8.RuneLen(unicode.ToLower(r))
+			if tokenBytes > maxTokenBytes {
+				return true
+			}
+			continue
+		}
+		tokenBytes = 0
+	}
+	return false
 }
 
 // textNormalizerGrowthCharge checks the Go 1.26 Builder.Grow allocation target
@@ -173,12 +191,23 @@ func growTextNormalizer(builder *strings.Builder, r rune, admit func(uint64) err
 	return nil
 }
 
-func analyzeSimpleTextToSinkAdmitted(text string, sink TextTokenSink, admit func(uint64) error) error {
+func analyzeSimpleTextToSinkAdmitted(text string, maxTokenBytes int, sink TextTokenSink, admit func(uint64) error) error {
+	if maxTokenBytes <= 0 {
+		maxTokenBytes = DefaultSimpleTextMaxTokenBytes
+	}
 	var builder strings.Builder
 	start := -1
 	position := 0
+	oversized := false
 	flush := func(end int) error {
 		if start < 0 {
+			return nil
+		}
+		if oversized {
+			position++
+			oversized = false
+			builder.Reset()
+			start = -1
 			return nil
 		}
 		term := builder.String()
@@ -199,14 +228,23 @@ func analyzeSimpleTextToSinkAdmitted(text string, sink TextTokenSink, admit func
 	}
 	for offset, r := range text {
 		if simpleTextTokenRune(r) {
+			if start < 0 {
+				start = offset
+			}
+			if oversized {
+				continue
+			}
 			r = unicode.ToLower(r)
+			width := utf8.RuneLen(r)
+			if builder.Len()+width > maxTokenBytes {
+				oversized = true
+				builder.Reset()
+				continue
+			}
 			if admit != nil {
 				if err := growTextNormalizer(&builder, r, admit); err != nil {
 					return err
 				}
-			}
-			if start < 0 {
-				start = offset
 			}
 			builder.WriteRune(r)
 			continue

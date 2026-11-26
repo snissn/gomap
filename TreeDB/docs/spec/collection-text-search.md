@@ -18,7 +18,13 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   - `<collection>/text-stats/<indexName>` for corpus and term/field statistics;
     uses `CollectionOptions.IndexStateStoragePolicy`.
 - `simple` analyzer: Unicode lowercase tokenization over letters, digits, and
-  `_` so code-ish identifiers such as `HTTP_500` remain searchable.
+  `_` so code-ish identifiers such as `HTTP_500` remain searchable. Normalized
+  tokens are bounded by `TextAnalyzerOptions.MaxTokenBytes` (default
+  `DefaultSimpleTextMaxTokenBytes = 256`, ceiling
+  `MaxSimpleTextMaxTokenBytes = 1024`). Contiguous token runs whose lowercased
+  UTF-8 byte length exceeds the limit are skipped in O(1) memory while still
+  incrementing token position (matching stopword gap semantics) so oversized
+  literals cannot exceed internal 4 KiB B-tree key capacity.
 - `CreateTextIndex` backfills persistent v2 doc ordinal/docmap/term-stat/norm/status roots by default, or v1 postings/text-state/text-stats roots when callers explicitly set `TextIndexVersionV1`; roots plus metadata are published atomically.
 - `CreateCollection` with text indexes now bootstraps empty default-v2 root descriptors, format records, and status records in the same catalog publish. Explicit v1 collection text indexes remain metadata-compatible and create/maintain v1 roots on writes.
 - `DropTextIndex` removes metadata and clears all v1 and v2 text root
@@ -131,10 +137,18 @@ query syntax or full storage-compaction support.
 ## Metadata
 
 ```go
+type TextAnalyzerOptions struct {
+    StopWords     []string
+    MaxTokenBytes int
+    Stemmer       string
+    Synonyms      map[string][]string
+}
+
 type TextIndexDefinition struct {
     Name             string
     Fields           []TextIndexField
     Analyzer          TextAnalyzer
+    AnalyzerOptions   *TextAnalyzerOptions
     Version           TextIndexVersion
     Rollout           TextIndexRolloutMode
     StorePositions    bool
@@ -159,6 +173,13 @@ Validation rules:
   non-negative.
 - Analyzer `""` normalizes to `"simple"`; other analyzers fail closed until
   implemented.
+- `AnalyzerOptions.MaxTokenBytes == 0` uses the default cap of `256` UTF-8 bytes
+  (`DefaultSimpleTextMaxTokenBytes`). Negative values and values above `1024`
+  (`MaxSimpleTextMaxTokenBytes`) fail closed on both ordinary and native COW
+  validation paths. A non-zero `MaxTokenBytes` is persisted in collection
+  metadata even when `StopWords` is empty. Any stopword whose normalized token
+  exceeds the effective `MaxTokenBytes` fails validation rather than being
+  silently dropped.
 - Version `""` normalizes to `"v2"` for new declarations. `"v2"` is the default B-tree-native root format and is readable/writable for BM25F serving, scalar-pruned hybrid candidates, lazy match details, rewrite/merge, and normal TreeDB physical maintenance. `"v1"` remains an explicit compatibility/opt-out path for callers that need the legacy per-`(term, documentID)` roots or existing v1 on-disk indexes.
 - Rollout `""` normalizes to `"primary"`; `"shadow"`, `"dual_write"`, and
   `"disabled"` are reserved and currently fail closed until the matching v2

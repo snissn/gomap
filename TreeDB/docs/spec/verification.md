@@ -5206,3 +5206,23 @@ contended `flushMu` no-double-drain re-check, error propagation to checked
 `FlushCommandWAL` path. `collections/TestNativeOrdinaryGenerationAdmittedCohort`
 and `collections/TestNativeOrdinaryGenerationProgress` retain ordinary
 generation relief and automatic physical basis progress under durable mode.
+
+### Simple text analyzer token-length bound controls (#5826)
+
+`collections/TestSimpleTextAnalyzerMaxTokenBytesBoundaries`,
+`collections/TestSimpleTextAnalyzerUTF8Boundaries`,
+`collections/TestSimpleTextAnalyzerOversizedBlobsOrdinaryAndNativeCOW`,
+`collections/TestSimpleTextAnalyzerPhraseGapAndOversizedQuery`,
+`collections/TestSimpleTextAnalyzerOptionsValidationAndPersistence`,
+`collections/TestExtractTextSnippetsOversizedTokens`, and
+`collections/BenchmarkSimpleTextAnalyzerOversizedBlob` cover the
+`TextAnalyzerSimple` token-length bound (`DefaultSimpleTextMaxTokenBytes = 256`,
+`MaxSimpleTextMaxTokenBytes = 1024`), first-rune and mid-token UTF-8 boundary
+handling without latching oversized state onto subsequent tokens, O(1) skip
+allocation behavior on 64 KiB blobs, 4 KiB/64 KiB/473 KiB contiguous-blob
+ingestion and `CreateTextIndex` backfill on ordinary and native COW
+(`cow_btree`) V1/V2 collections, phrase position-gap preservation (`Slop: 0`
+vs `Slop: 1` and embedded oversized query tokens), oversized-only query and
+snippet handling, `MaxTokenBytes` persistence across reopen with empty
+`StopWords`, and identical fail-closed rejection of invalid `MaxTokenBytes`
+and oversized stopwords across both ordinary and admitted native COW paths.

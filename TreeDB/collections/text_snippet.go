@@ -47,7 +47,7 @@ type snippetWindow struct {
 
 // ExtractTextSnippets extracts up to opts.MaxSnippets high-density excerpts
 // from text matching query using the exact collection analyzer and options
-// (including StopWords). Returned byte offsets refer to the original text.
+// (including StopWords and MaxTokenBytes). Returned byte offsets refer to the original text.
 func ExtractTextSnippets(analyzer TextAnalyzer, analyzerOpts *TextAnalyzerOptions, text string, query string, opts TextSnippetOptions) ([]TextSnippet, error) {
 	if opts.MaxSnippets <= 0 {
 		opts.MaxSnippets = defaultSnippetMaxSnippets
