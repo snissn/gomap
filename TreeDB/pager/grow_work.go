@@ -85,10 +85,18 @@ func NewGrowthForPager(p *Pager, target uint64, w *iterator.OrdinalScanWork) (*G
 }
 
 func (g *Growth) valid(p *Pager) bool {
-	return !p.closing && g.owner.Value() == p && g.source.Value() == p.atomicChunks.Load() &&
-		g.file.Value() == p.file && g.count == p.numPages.Load() && len(p.chunks) == g.oldChunks &&
-		g.verified.Value() == p.verified.Load() && g.prefetch.Value() == p.prefetched.Load() &&
-		(g.dirtyOutput == nil || g.dirtyRevision == p.dirtyChunks.revision)
+	if p.closing || g.owner.Value() != p || g.source.Value() != p.atomicChunks.Load() ||
+		g.file.Value() != p.file || g.count != p.numPages.Load() || len(p.chunks) != g.oldChunks ||
+		g.verified.Value() != p.verified.Load() || g.prefetch.Value() != p.prefetched.Load() {
+		return false
+	}
+	if g.dirtyOutput == nil {
+		return true
+	}
+	p.dirtyMu.Lock()
+	rev := p.dirtyChunks.revision
+	p.dirtyMu.Unlock()
+	return g.dirtyRevision == rev
 }
 
 func (g *Growth) Step(p *Pager, w *iterator.OrdinalScanWork) (bool, error) {
@@ -608,8 +616,12 @@ func (g *Growth) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 func (p *Pager) installCountWithinCapacity(target uint64) (bool, error) {
 	p.growMu.Lock()
 	defer p.growMu.Unlock()
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// RLock suffices: caller holds allocMu + growMu (serializing numPages
+	// advances and structural growth), while all structural mutations to chunks,
+	// closing, and dirtyChunks.words require p.mu.Lock(). Using RLock avoids
+	// stalling page allocation behind concurrent msync/WithStableResourceFile.
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.readOnly {
 		return false, ErrReadOnly
 	}

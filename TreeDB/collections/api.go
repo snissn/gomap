@@ -10704,6 +10704,16 @@ func buildBufferedRootDeltaBatchPublishInput(spec bufferedRootDeltaBatchSpec, ro
 	return nil
 }
 
+const (
+	// Below this total entry threshold across direct-insert root runs, building
+	// delta batches and applying roots serially on the writer goroutine avoids
+	// spawning worker goroutines and parking on WaitGroup barriers behind
+	// CPU-saturating concurrent readers while preserving full multi-root
+	// parallelism for bulk inserts.
+	directInsertParallelBuildMinEntries = 2048
+	directInsertParallelApplyMinEntries = 2048
+)
+
 func buildDirectInsertRootDeltaBatchPublishInputs(runs []collectionRootRun, baseRootIDs []uint64, parallelApply bool, commandWAL bool) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
 	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, len(runs))
 	iterators := make([]iterator.UnsafeIterator, len(runs))
@@ -10713,6 +10723,14 @@ func buildDirectInsertRootDeltaBatchPublishInputs(runs []collectionRootRun, base
 		route = backenddb.OrderedRootSpanNativeRouteCommandWALPublish
 		routeCtx = "command-WAL collection direct insert root delta publish"
 	}
+	totalEntries := 0
+	for i := range runs {
+		if runs[i].table != nil {
+			totalEntries += runs[i].table.Len()
+		}
+	}
+	gomax := runtime.GOMAXPROCS(0)
+	useParallelApply := parallelApply && gomax > 1 && totalEntries >= directInsertParallelApplyMinEntries
 	cleanup := func() {
 		for i := range ordered {
 			if ordered[i].Delta != nil {
@@ -10738,14 +10756,14 @@ func buildDirectInsertRootDeltaBatchPublishInputs(runs []collectionRootRun, base
 			BaseRoot:          baseRootIDs[i],
 			Delta:             delta,
 			StoragePolicy:     runs[i].storagePolicy,
-			ParallelApply:     parallelApply,
+			ParallelApply:     useParallelApply,
 			SpanNativeRoute:   route,
 			SpanNativeContext: routeCtx,
 		}
 		return nil
 	}
-	parallelism := min(len(runs), runtime.GOMAXPROCS(0))
-	if parallelism <= 1 {
+	parallelism := min(len(runs), gomax)
+	if parallelism <= 1 || totalEntries < directInsertParallelBuildMinEntries {
 		for i := range runs {
 			if err := buildOne(i); err != nil {
 				cleanup()
@@ -10757,7 +10775,11 @@ func buildDirectInsertRootDeltaBatchPublishInputs(runs []collectionRootRun, base
 	errs := make([]error, len(runs))
 	var wg sync.WaitGroup
 	jobs := make(chan int, len(runs))
-	for w := 0; w < parallelism; w++ {
+	for i := range runs {
+		jobs <- i
+	}
+	close(jobs)
+	for w := 1; w < parallelism; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -10766,10 +10788,9 @@ func buildDirectInsertRootDeltaBatchPublishInputs(runs []collectionRootRun, base
 			}
 		}()
 	}
-	for i := range runs {
-		jobs <- i
+	for i := range jobs {
+		errs[i] = buildOne(i)
 	}
-	close(jobs)
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {

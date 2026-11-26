@@ -374,6 +374,28 @@ func (db *DB) durableRootReuseCapabilityV1(current durableRootRuntimeV1) (freeli
 	return freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
 }
 
+// durableRootReuseCapabilityForPublishV1 derives the reuse capability while
+// durablePublishMu is held without taking rootReuseMu.Lock(), avoiding reader
+// stop-the-world stalls on hot mixed read/write paths.
+func (db *DB) durableRootReuseCapabilityForPublishV1(current durableRootRuntimeV1) (freelist.ReuseCapability, error) {
+	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
+	if err != nil {
+		return freelist.ReuseCapability{}, err
+	}
+	if current.primary != nil {
+		for _, seq := range current.primary.dataFloor {
+			if seq != 0 && seq < oldest {
+				oldest = seq
+			}
+		}
+	}
+	var visibleFloor uint64
+	if state := db.state.Load(); state != nil {
+		visibleFloor = state.primaryRetentionCommitV5()
+	}
+	return freelist.NewReuseCapability(oldest, db.minPinnedSnapshotCommitSeqForDurablePublish(visibleFloor), 0)
+}
+
 func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, error) {
 	manifest, _, err := durableManifestFromResourcesV1WithWork(resources)
 	return manifest, err

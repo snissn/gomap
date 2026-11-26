@@ -93,6 +93,7 @@ type rootPublicationVisibleInstallV1 struct {
 	next             page.MetaPageBody
 
 	post                        finalizeCommitPost
+	previousVisibleResources    *rootpublication.StableResourceSet
 	vlogRefCounts               *candidateValueLogRefCountsV1
 	valueLogSet                 *valuelog.Set
 	leafManifest                *leafGenerationManifest
@@ -630,19 +631,30 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	return nil
 }
 
-// completeOrderedPostActivation performs bookkeeping that must observe the
-// newly visible root before another DB builder can pass durablePublishMu. It is
-// deliberately outside the coordinator mutex: value-log deltas and vacuum
-// batches are not bounded activation work, and reportError may invoke user
-// code. The returned error is reported only after the caller releases every
-// root-build lock.
-func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() error {
+// recordConditionalPostActivation records visible-root conflict history while
+// rootReuseMu is still held so conditional transactions cannot observe the new
+// visible root before its conflict history is recorded.
+func (install *rootPublicationVisibleInstallV1) recordConditionalPostActivation() error {
+	if install == nil || install.db == nil || !install.activated {
+		return errors.New("invalid root-publication conditional post-activation")
+	}
+	db := install.db
+	install.conditionalMutation.record(db, install.next.CommitSeq)
+	if !install.skipConditionalRootConflict {
+		db.conditionalRecordRootCommit(install.oldUserRootID, install.newUserRootID, install.post.commitSeq)
+	}
+	return nil
+}
+
+// completeOrderedPostActivationAfterReuse performs ordered bookkeeping that
+// only requires durablePublishMu (not rootReuseMu), such as advancing the
+// value-log reference tracker and recording vacuum mutations.
+func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivationAfterReuse() error {
 	if install == nil || install.db == nil || !install.activated || install.postActivationCompleted {
 		return errors.New("invalid root-publication post-activation completion")
 	}
 	install.postActivationCompleted = true
 	db := install.db
-	install.conditionalMutation.record(db, install.next.CommitSeq)
 	var reportErr error
 	if db.valueLogRefTracker != nil {
 		if scanned := install.vlogRefCounts; scanned != nil {
@@ -680,13 +692,23 @@ func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() 
 	install.releaseReferenceCountEvidence()
 	install.post.kickPrune = db.pruner.Enabled()
 	install.post.doPrune = !install.post.kickPrune
-	if !install.skipConditionalRootConflict {
-		db.conditionalRecordRootCommit(install.oldUserRootID, install.newUserRootID, install.post.commitSeq)
-	}
 	if install.recordVacuumMutation != nil {
 		install.recordVacuumMutation()
 	}
 	return reportErr
+}
+
+// completeOrderedPostActivation performs bookkeeping that must observe the
+// newly visible root before another DB builder can pass durablePublishMu. It is
+// deliberately outside the coordinator mutex: value-log deltas and vacuum
+// batches are not bounded activation work, and reportError may invoke user
+// code. The returned error is reported only after the caller releases every
+// root-build lock.
+func (install *rootPublicationVisibleInstallV1) completeOrderedPostActivation() error {
+	if err := install.recordConditionalPostActivation(); err != nil {
+		return err
+	}
+	return install.completeOrderedPostActivationAfterReuse()
 }
 
 func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
@@ -732,7 +754,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	dataChanged := runtime.idx.primary == nil || len(retired) != 0 || !profile.Valid ||
 		profile.RequiresGeneration || profile.AllocatedPages != 0 || profile.AbandonedAppendExtents != 0
 	if dataChanged {
-		capability, err := runtime.db.durableRootReuseCapabilityV1(runtime.db.durableRoot)
+		// Derive the reuse capability under durablePublishMu without taking
+		// rootReuseMu.Lock(), avoiding reader stalls during candidate prep.
+		capability, err := runtime.db.durableRootReuseCapabilityForPublishV1(runtime.db.durableRoot)
 		if err != nil {
 			return nil, false, err
 		}
@@ -922,7 +946,9 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				runtime.debt = append(runtime.debt, member.prepared)
 			}
 			runtime.mu.Unlock()
-			previousResources.Release()
+			// Defer closing previous visible resource handles until after
+			// coordinator.mu and db.rootReuseMu are released.
+			member.install.previousVisibleResources = previousResources
 			return nil
 		},
 		Consume: func(input rootpublication.DurableRootCallbackInput) error {
@@ -1202,8 +1228,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
-	db.rootReuseMu.Lock()
-	rootReuseLocked := true
+	rootReuseLocked := false
 	releaseReuse := func() {
 		if rootReuseLocked {
 			db.rootReuseMu.Unlock()
@@ -1246,7 +1271,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(err)
 	}
 	if baseDirectory != nil {
-		bound, directoryRetired, err := db.prepareDependencyDirectoryV2(idx, next.CommitSeq, visibleBase, resources)
+		bound, directoryRetired, err := db.prepareDependencyDirectoryV2WithReuseLock(idx, next.CommitSeq, visibleBase, resources, false)
 		if err != nil {
 			return post, prePublishErr(fmt.Errorf("prepare queued dependency directory: %w", err))
 		}
@@ -1291,6 +1316,12 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			}
 		}
 	}()
+
+	// Acquire rootReuseMu only for the bounded visible-root handoff: snapshot
+	// view preparation, optional snapshot receipt, activation, and recording
+	// conditional conflict history.
+	db.rootReuseMu.Lock()
+	rootReuseLocked = true
 
 	// Prepare the exact visible tuple before acceptance and the installation
 	// latch, including the filter and predicted system-root publication epoch.
@@ -1338,6 +1369,10 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		opts.publishTiming.FinalizeEnqueueActivation += time.Since(enqueueStart)
 	}
 	if enqueueErr != nil {
+		if prev := install.previousVisibleResources; prev != nil {
+			install.previousVisibleResources = nil
+			prev.Release()
+		}
 		enqueueErr = publicRootPublicationErrorV1(enqueueErr)
 		if opts.abortSnapshotReceipt != nil {
 			enqueueErr = errors.Join(enqueueErr, opts.abortSnapshotReceipt())
@@ -1376,14 +1411,18 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if hook := db.testAfterDurableRootVisibleInstallHook; hook != nil {
 		hook()
 	}
-	reportErr := install.completeOrderedPostActivation()
+	conditionalErr := install.recordConditionalPostActivation()
+	// Release rootReuseMu as soon as visible activation and conflict-history
+	// recording finish so readers do not wait on handle closes or ref-tracker updates.
+	releaseReuse()
+	if prev := install.previousVisibleResources; prev != nil {
+		install.previousVisibleResources = nil
+		prev.Release()
+	}
+	reportErr := errors.Join(conditionalErr, install.completeOrderedPostActivationAfterReuse())
 	post = install.post
 	post.accepted = true
 	opts.privateCOWRewrite.captureAcceptedState(install.preparedState)
-	// The candidate is coordinator-owned and all ordered bookkeeping is now
-	// complete. Release DB build locks before any user error callback or
-	// admission/durability wait can re-enter the coordinator.
-	releaseReuse()
 	if pack := opts.packedRootPublication; pack != nil {
 		pack.afterActivation()
 	}
@@ -1469,28 +1508,40 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	db := runtime.db
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
-	db.rootReuseMu.Lock()
-	defer db.rootReuseMu.Unlock()
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.poison != nil {
-		return runtime.poison
-	}
-	if seal := runtime.activeSeal; seal != nil && seal.latestSequence == latest.Sequence() && seal.groupLength == group.Len() {
-		return nil
-	}
 	if runtime.idx.primary != nil {
+		db.rootReuseMu.Lock()
+		defer db.rootReuseMu.Unlock()
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+		if runtime.poison != nil {
+			return runtime.poison
+		}
+		if seal := runtime.activeSeal; seal != nil && seal.latestSequence == latest.Sequence() && seal.groupLength == group.Len() {
+			return nil
+		}
 		member := runtime.visibleMember(latest.Sequence())
 		if member == nil || member.primary != latest.PreparedPrimary() {
 			return rootpublication.ErrDurableRootOwnership
 		}
 		return runtime.preparePrimarySealV5(ctx, candidate, member)
 	}
+	runtime.mu.Lock()
+	if runtime.poison != nil {
+		err = runtime.poison
+		runtime.mu.Unlock()
+		return err
+	}
+	if seal := runtime.activeSeal; seal != nil && seal.latestSequence == latest.Sequence() && seal.groupLength == group.Len() {
+		runtime.mu.Unlock()
+		return nil
+	}
 	member := runtime.visibleMember(latest.Sequence())
 	if member == nil || member.prepared != latest.PreparedCOW() || member.next.CommitSeq != latest.Sequence() {
+		runtime.mu.Unlock()
 		return fmt.Errorf("%w: visible member %d is not activated", rootpublication.ErrDurableRootLineage, latest.Sequence())
 	}
 	if len(runtime.debt) == 0 || runtime.debt[len(runtime.debt)-1] != member.prepared {
+		runtime.mu.Unlock()
 		return fmt.Errorf("%w: visible allocator debt is not the captured prefix", rootpublication.ErrDurableRootLineage)
 	}
 	limits := member.preparedLimits
@@ -1498,6 +1549,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		if member.resources.Len() > limits.MaxVisibleResources ||
 			len(runtime.debt) >= limits.MaxAllocatorDebt || len(runtime.seals) >= limits.MaxSeals ||
 			len(runtime.debt)+1 > limits.MaxSealPrefixEntries {
+			runtime.mu.Unlock()
 			return errors.New("prepared root-publication seal exceeds admission limits")
 		}
 	}
@@ -1508,10 +1560,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	debtCursor := 0
 	for _, transaction := range group.Members() {
 		if transaction == nil || transaction.Lineage() != runtime.lineage {
+			runtime.mu.Unlock()
 			return fmt.Errorf("%w: malformed root-publication group", rootpublication.ErrDurableRootLineage)
 		}
 		groupMember := runtime.visibleMember(transaction.Sequence())
 		if groupMember == nil || groupMember.prepared != transaction.PreparedCOW() {
+			runtime.mu.Unlock()
 			return fmt.Errorf("%w: visible member %d is absent from runtime debt", rootpublication.ErrDurableRootLineage, transaction.Sequence())
 		}
 		found := -1
@@ -1522,21 +1576,29 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			}
 		}
 		if found < 0 {
+			runtime.mu.Unlock()
 			return fmt.Errorf("%w: allocator debt omits visible member %d", rootpublication.ErrDurableRootLineage, transaction.Sequence())
 		}
 		debtCursor = found + 1
 	}
+	memberResources := member.resources
+	memberNext := member.next
+	var previousAuxiliary []uint64
+	if previous := runtime.activeSeal; previous != nil {
+		previousAuxiliary = previous.prepared.AuxiliaryPageIDs()
+	}
+	runtime.mu.Unlock()
 
 	base := db.durableRoot
-	if base.pending != nil || len(base.ambiguous) != 0 || base.record.CommitSeq >= member.next.CommitSeq {
-		return fmt.Errorf("%w: durable=%d visible=%d", errDurableRootCandidateStale, base.record.CommitSeq, member.next.CommitSeq)
+	if base.pending != nil || len(base.ambiguous) != 0 || base.record.CommitSeq >= memberNext.CommitSeq {
+		return fmt.Errorf("%w: durable=%d visible=%d", errDurableRootCandidateStale, base.record.CommitSeq, memberNext.CommitSeq)
 	}
 	// The durable slot names only the latest visible root. A coalesced candidate's
 	// aggregate resource set also contains dependencies reachable exclusively
 	// from superseded intermediate roots; retaining that union in the slot would
 	// pin unreachable value-log and leaf-log files for an extra slot lifetime.
 	// The latest activated member owns the exact closure for the root we seal.
-	resources, err := rootpublication.CloneStableResourceSetExcludingKinds(member.resources)
+	resources, err := rootpublication.CloneStableResourceSetExcludingKinds(memberResources)
 	if err != nil {
 		return fmt.Errorf("clone latest root resources: %w", err)
 	}
@@ -1595,14 +1657,14 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
-	if previous := runtime.activeSeal; previous != nil {
-		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {
-			retirements = append(retirements, freelist.COWRetirementV1{
-				PageIDs: auxiliary, LastReachableCommitSeq: base.record.CommitSeq,
-			})
-		}
+	if len(previousAuxiliary) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{
+			PageIDs: previousAuxiliary, LastReachableCommitSeq: base.record.CommitSeq,
+		})
 	}
-	capability, err := db.durableRootReuseCapabilityV1(base)
+	// Derive the reuse capability under durablePublishMu without stalling
+	// concurrent snapshot captures on rootReuseMu.Lock().
+	capability, err := db.durableRootReuseCapabilityForPublishV1(base)
 	if err != nil {
 		return err
 	}
@@ -1621,8 +1683,8 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
 		generationID,
-		member.next.CommitSeq,
-		rootPublicationSealCandidateIDV1(base, member.next, generationID),
+		memberNext.CommitSeq,
+		rootPublicationSealCandidateIDV1(base, memberNext, generationID),
 		capability,
 		retirements,
 		auxiliaryCount,
@@ -1640,7 +1702,9 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		if abortErr := runtime.idx.allocator.AbortCOWCandidateV1(prepared); abortErr != nil {
 			cause := errors.Join(err, fmt.Errorf("abort root-publication seal: %w", abortErr), ErrRecoveryRequired)
 			db.publicationPoisoned.Store(true)
+			runtime.mu.Lock()
 			runtime.poison = cause
+			runtime.mu.Unlock()
 			_ = runtime.idx.allocator.FailCOWCandidateV1(prepared, cause)
 			err = cause
 		}
@@ -1651,7 +1715,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if generation == nil || len(auxiliary) != auxiliaryCount {
 		return errors.New("incomplete root-publication seal generation")
 	}
-	next := member.next
+	next := memberNext
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
 	var manifestRef rootpublication.DependencyManifestRefV1
@@ -1690,6 +1754,11 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.poison != nil {
+		return runtime.poison
+	}
 	sealCharge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) +
 		retainedalloc.AllocationCharge(uint64(len(runtime.debt)+1)*uint64(unsafe.Sizeof(uintptr(0))))
 	if err := runtime.metadata.AddPending(sealCharge); err != nil {
@@ -1715,7 +1784,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	preparedOwned = false
 	seal := &rootPublicationSealV1{
 		metadata: runtime.metadata, metadataCharge: sealCharge,
-		latestSequence: member.next.CommitSeq, groupLength: group.Len(),
+		latestSequence: memberNext.CommitSeq, groupLength: group.Len(),
 		idx: runtime.idx, base: rootPublicationSealBaseV1{
 			slotCommit: base.slotCommit, slotResources: base.slotResources,
 			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
@@ -1958,24 +2027,20 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	}
 	db := runtime.db
 	db.durablePublishMu.Lock()
-	db.rootReuseMu.Lock()
 	runtime.mu.Lock()
 	if runtime.activeSeal != seal || runtime.poison != nil {
 		runtime.mu.Unlock()
-		db.rootReuseMu.Unlock()
 		db.durablePublishMu.Unlock()
 		return 0, errors.New("root-publication seal lost exact attempt ownership")
 	}
 	if len(seal.prefix) == 0 || len(runtime.debt) < len(seal.prefix) || seal.prefix[len(seal.prefix)-1] != seal.prepared {
 		runtime.mu.Unlock()
-		db.rootReuseMu.Unlock()
 		db.durablePublishMu.Unlock()
 		return 0, errors.New("published root seal has no exact allocator prefix")
 	}
 	for i, prepared := range seal.prefix {
 		if runtime.debt[i] != prepared {
 			runtime.mu.Unlock()
-			db.rootReuseMu.Unlock()
 			db.durablePublishMu.Unlock()
 			return 0, fmt.Errorf("published root seal allocator prefix diverged at member %d", i)
 		}
@@ -1990,29 +2055,30 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	current.slotRecord[seal.target] = seal.record
 	previousResources := current.slotResources[seal.target]
 	current.slotResources[seal.target] = seal.resources
-	nextCapability, err := db.durableRootReuseCapabilityV1(current)
-	if err != nil {
-		runtime.mu.Unlock()
-		db.rootReuseMu.Unlock()
-		db.durablePublishMu.Unlock()
-		return 0, fmt.Errorf("derive post-publication reuse capability: %w", err)
-	}
 	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
 	if err != nil {
 		runtime.mu.Unlock()
-		db.rootReuseMu.Unlock()
 		db.durablePublishMu.Unlock()
 		return 0, err
+	}
+	runtime.mu.Unlock()
+
+	// Sample the post-publication reuse capability under durablePublishMu
+	// without taking rootReuseMu.Lock(), keeping readers unblocked across seal
+	// commit and allocator prefix publication.
+	nextCapability, err := db.durableRootReuseCapabilityForPublishV1(current)
+	if err != nil {
+		db.durablePublishMu.Unlock()
+		return 0, fmt.Errorf("derive post-publication reuse capability: %w", err)
 	}
 	// This is the final fallible transition. Validate every runtime invariant
 	// above before consuming the allocator prefix so no error can leave the
 	// allocator published while db.durableRoot still names the older slot.
 	if err := seal.idx.allocator.PublishActivatedCOWPrefixV1(seal.prefix, nextCapability); err != nil {
-		runtime.mu.Unlock()
-		db.rootReuseMu.Unlock()
 		db.durablePublishMu.Unlock()
 		return 0, fmt.Errorf("publish activated root COW prefix: %w", err)
 	}
+	runtime.mu.Lock()
 	db.durableRoot = current
 	db.metaPageID = seal.target
 	seal.resources = nil
@@ -2033,7 +2099,6 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	runtime.seals = keptSeals
 	runtime.activeSeal = nil
 	runtime.mu.Unlock()
-	db.rootReuseMu.Unlock()
 	db.durablePublishMu.Unlock()
 
 	var cleanupErr error

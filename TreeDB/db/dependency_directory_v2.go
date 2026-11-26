@@ -20,6 +20,10 @@ import (
 // before PrepareCOWCandidateRetiringV1 freezes the allocator. The ordinary
 // ordered-root zipper supplies changed-path retirement for this third tree.
 func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseResources, resources *rootpublication.StableResourceSet) (result *rootpublication.StableResourceSet, retiredOut []uint64, err error) {
+	return db.prepareDependencyDirectoryV2WithReuseLock(idx, sequence, baseResources, resources, true)
+}
+
+func (db *DB) prepareDependencyDirectoryV2WithReuseLock(idx *indexGen, sequence uint64, baseResources, resources *rootpublication.StableResourceSet, rootReuseHeld bool) (result *rootpublication.StableResourceSet, retiredOut []uint64, err error) {
 	if db == nil || idx == nil || idx != db.idx.Load() || sequence == 0 {
 		return nil, nil, errors.New("invalid dependency directory index generation")
 	}
@@ -163,9 +167,15 @@ func (db *DB) prepareDependencyDirectoryV2(idx *indexGen, sequence uint64, baseR
 		}
 		retired = nil
 	}
+	if !rootReuseHeld {
+		db.rootReuseMu.Lock()
+	}
 	directory, err := db.pinDependencyDirectoryV2(idx, sequence, rootpublication.DependencyDirectoryRefV2{
 		RootPageID: root, PhysicalCount: physical, LogicalCount: logical,
 	}, idx.pager.PageCount())
+	if !rootReuseHeld {
+		db.rootReuseMu.Unlock()
+	}
 	if err != nil {
 		return nil, nil, err
 	}

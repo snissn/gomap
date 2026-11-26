@@ -2,9 +2,36 @@ package db
 
 import (
 	"errors"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
+
+const (
+	// flushReadContentionEpochDelta is the minimum snapshotAcquireEpoch delta
+	// between consecutive flushApplyOptions calls (2 ticks per snapshot acquire)
+	// that indicates concurrent foreground readers are actively contending for
+	// CPUs. While contended, keeping span-native apply inline on the writer
+	// goroutine avoids WaitGroup/ApplyWorkerPool preemption stalls behind
+	// CPU-saturating reader loops.
+	flushReadContentionEpochDelta = 64
+	flushReadContentionHoldWindow = 50 * time.Millisecond
+)
+
+func (db *DB) hasConcurrentReadContentionForFlushApply() bool {
+	if db == nil || db.flushAdmission.Policy != FlushAdmissionPolicyAuto {
+		return false
+	}
+	curEpoch := db.snapshotAcquireEpoch.Load()
+	now := time.Now().UnixNano()
+	prevEpoch := db.flushReadContentionLastEpoch.Swap(curEpoch)
+	prevSample := db.flushReadContentionLastSampleNano.Swap(now)
+	if prevSample != 0 && curEpoch >= prevEpoch && curEpoch-prevEpoch >= flushReadContentionEpochDelta {
+		db.flushReadContentionUntilNano.Store(now + int64(flushReadContentionHoldWindow))
+		return true
+	}
+	return now < db.flushReadContentionUntilNano.Load()
+}
 
 func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 	if db == nil {
@@ -22,6 +49,11 @@ func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 		ParallelApplyMinSpanOps:   db.flushApplyMinEntries,
 		ParallelApplyMinSpanBytes: db.flushApplyMinBytes,
 		SpanNativeApply:           db.flushApplySpanNative,
+	}
+	if db.hasConcurrentReadContentionForFlushApply() {
+		opts.ParallelApplyConcurrency = 1
+		opts.ReadOnlyPrepareWorkers = 1
+		opts.ParallelApplyWorkerPool = nil
 	}
 	if opts.SpanNativeApply && db.flushApplySpanNativeReducerValidationGuard.Load() {
 		opts.SpanNativeForceFallbackReason = FlushSpanRunFallbackReducerValidationGuard.String()
