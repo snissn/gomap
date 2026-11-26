@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,9 +31,49 @@ const (
 	batchChecksumChunkBytes          = 64 << 10
 	pendingAppendBatchInitialPayload = 64 << 10
 	pendingAppendBatchMaxPayload     = defaultBufferSize - segmentHeaderSize
+	fixedWALBufioSize                = 4096
 )
 
 var syncDirFn = syncDir
+
+var (
+	writerBufio4MPool  sync.Pool
+	writerBufio16MPool sync.Pool
+)
+
+func writerBufioPoolForSize(size int) *sync.Pool {
+	switch size {
+	case defaultBufferSize:
+		return &writerBufio4MPool
+	case 16 << 20:
+		return &writerBufio16MPool
+	default:
+		return nil
+	}
+}
+
+func acquireWriterBufio(sink io.Writer, size int) (*bufio.Writer, int) {
+	if pool := writerBufioPoolForSize(size); pool != nil {
+		if v := pool.Get(); v != nil {
+			if bw, ok := v.(*bufio.Writer); ok && bw != nil && bw.Size() == size {
+				bw.Reset(sink)
+				return bw, size
+			}
+		}
+		return bufio.NewWriterSize(sink, size), size
+	}
+	return bufio.NewWriterSize(sink, size), 0
+}
+
+func releaseWriterBufio(bw *bufio.Writer, pooledSize int) {
+	if bw == nil || pooledSize <= 0 || bw.Size() != pooledSize || bw.Buffered() != 0 {
+		return
+	}
+	if pool := writerBufioPoolForSize(pooledSize); pool != nil {
+		bw.Reset(io.Discard)
+		pool.Put(bw)
+	}
+}
 
 func openLogFile(path string, flags int) (*os.File, error) {
 	file, _, err := openLogFileWithCreation(path, flags)
@@ -134,6 +175,8 @@ type Writer struct {
 	preferExt4Stream       bool
 	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
+	bwPooledSize           int
+	bwConfiguredSize       int
 	fileSink               writerFileSink
 	scratch                []byte
 	encScratch             []byte
@@ -329,7 +372,16 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		commandBufLimit = opts.DeferredCommandBufferSize
 	}
 	commandBufRetain := normalizeCommandBufferRetainSize(opts.DeferredCommandBufferRetainSize, commandBufLimit)
-	w.bw = bufio.NewWriterSize(&w.fileSink, normalizeBufferSize(opts.BufferSize))
+	configuredBufSize := normalizeBufferSize(opts.BufferSize)
+	w.bwConfiguredSize = configuredBufSize
+	if w.fixed != nil {
+		// Fixed containers accumulate frames in w.fixed.pending in RAM (never
+		// issuing file syscalls through w.bw), so avoid eagerly allocating a
+		// multi-MiB bufio.Writer unless rotating to a stream segment.
+		w.bw = bufio.NewWriterSize(&w.fileSink, fixedWALBufioSize)
+	} else {
+		w.bw, w.bwPooledSize = acquireWriterBufio(&w.fileSink, configuredBufSize)
+	}
 	w.commandBuf = commandBuf
 	w.commandBufLimit = commandBufLimit
 	w.commandBufRetain = commandBufRetain
@@ -502,6 +554,9 @@ func (w *Writer) BufferStats() WriterBufferStats {
 	}
 	if w.bw != nil {
 		stats.BufferedWriterSize = w.bw.Size()
+		if w.fixed != nil && w.bwConfiguredSize > stats.BufferedWriterSize {
+			stats.BufferedWriterSize = w.bwConfiguredSize
+		}
 		stats.BufferedWriterBufferedBytes = w.bw.Buffered()
 	}
 	return stats
@@ -766,7 +821,7 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	w.fixed = state
 	w.containerSelection = selection
 	w.fileSink.file = file
-	w.bw.Reset(&w.fileSink)
+	w.resetBufioForContainer()
 	w.size = size
 	if state != nil && oldFixed == nil {
 		w.syncFn = syncWALData
@@ -775,6 +830,14 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	}
 	w.scratch = w.scratch[:0]
 	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
+}
+
+func (w *Writer) resetBufioForContainer() {
+	if w.fixed == nil && w.bwConfiguredSize > 0 && (w.bw == nil || w.bw.Size() < w.bwConfiguredSize) {
+		w.bw, w.bwPooledSize = acquireWriterBufio(&w.fileSink, w.bwConfiguredSize)
+		return
+	}
+	w.bw.Reset(&w.fileSink)
 }
 
 func (w *Writer) closeRotatedResource(file *os.File) error {
@@ -1244,7 +1307,13 @@ func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error
 	// Grow/extend only a local slice. A panic before the final publication
 	// leaves pending's length and every prior byte unchanged; only an unused
 	// tail may have been touched. No borrowed encoder storage is retained.
-	pending := slices.Grow(w.fixed.pending, size)[:before+size]
+	var pending []byte
+	if before == 0 && cap(w.fixed.pending) < size {
+		pending = acquireFixedWALPendingBuf(size)
+	}
+	if pending == nil {
+		pending = slices.Grow(w.fixed.pending, size)[:before+size]
+	}
 	frame := plan.encodeTo(pending[before+segmentHeaderSize : before+segmentHeaderSize])
 	header := pending[before : before+segmentHeaderSize]
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
@@ -1300,7 +1369,13 @@ func (w *Writer) appendFixedRawKVPointCommandV2Direct(class CommandDurabilityCla
 	if before > int(^uint(0)>>1)-total {
 		return ErrRecordTooLarge
 	}
-	pending := slices.Grow(w.fixed.pending, total)[:before+total]
+	var pending []byte
+	if before == 0 && cap(w.fixed.pending) < total {
+		pending = acquireFixedWALPendingBuf(total)
+	}
+	if pending == nil {
+		pending = slices.Grow(w.fixed.pending, total)[:before+total]
+	}
 	frame := encodeTrustedRawKVPointCommandFrameV2SizedTo(pending[before+segmentHeaderSize:before+segmentHeaderSize], class, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
 	header := pending[before : before+segmentHeaderSize]
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
@@ -2072,13 +2147,25 @@ func (w *Writer) Close() error {
 		_ = w.f.Close()
 		return err
 	}
-	if err := w.bw.Flush(); err != nil {
-		_ = w.f.Close()
-		return err
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			_ = w.f.Close()
+			return err
+		}
 	}
 	if err := w.flushFixed(); err != nil {
 		_ = w.f.Close()
 		return err
 	}
-	return w.f.Close()
+	err := w.f.Close()
+	if w.bw != nil && w.bwPooledSize > 0 {
+		releaseWriterBufio(w.bw, w.bwPooledSize)
+		w.bw = nil
+		w.bwPooledSize = 0
+	}
+	if w.fixed != nil && len(w.fixed.pending) == 0 && cap(w.fixed.pending) > 0 {
+		releaseFixedWALPendingBuf(w.fixed.pending)
+		w.fixed.pending = nil
+	}
+	return err
 }

@@ -73,6 +73,18 @@ var (
 	spanNativeLeafLogPayloadSlicePool   sync.Pool
 )
 
+const (
+	spanNativeLeafLogPayloadArenaStrongMaxSlots = 4
+	spanNativeLeafLogPayloadArenaStrongMaxBytes = 8 << 20
+)
+
+var (
+	spanNativeLeafLogPayloadArenaStrongMu    sync.Mutex
+	spanNativeLeafLogPayloadArenaStrongSlots [spanNativeLeafLogPayloadArenaStrongMaxSlots]*spanNativeLeafLogPayloadArena
+	spanNativeLeafLogPayloadArenaStrongCount int
+	spanNativeLeafLogPayloadArenaStrongBytes int
+)
+
 func spanNativeLeafLogPayloadArenaAcquireBucket(need int) int {
 	for i, capLimit := range spanNativeLeafLogPayloadArenaBucketCaps {
 		if need <= capLimit {
@@ -121,13 +133,46 @@ func acquireSpanNativeLeafLogPayloadArena(need int) *spanNativeLeafLogPayloadAre
 		return &spanNativeLeafLogPayloadArena{}
 	}
 	if bucket := spanNativeLeafLogPayloadArenaAcquireBucket(need); bucket >= 0 {
-		if v := spanNativeLeafLogPayloadArenaPools[bucket].Get(); v != nil {
-			if arena, ok := v.(*spanNativeLeafLogPayloadArena); ok && arena != nil && cap(arena.buf) >= need && cap(arena.buf) <= spanNativeLeafLogPayloadArenaMaxCap {
-				arena.buf = arena.buf[:0]
-				return arena
+		capLimit := spanNativeLeafLogPayloadArenaBucketCaps[bucket]
+		maxAccept := capLimit
+		if bucket+1 < len(spanNativeLeafLogPayloadArenaBucketCaps) {
+			maxAccept = spanNativeLeafLogPayloadArenaBucketCaps[bucket+1]
+		}
+		spanNativeLeafLogPayloadArenaStrongMu.Lock()
+		best := -1
+		for idx := spanNativeLeafLogPayloadArenaStrongCount - 1; idx >= 0; idx-- {
+			c := cap(spanNativeLeafLogPayloadArenaStrongSlots[idx].buf)
+			if c >= need && c <= maxAccept {
+				if best < 0 || c < cap(spanNativeLeafLogPayloadArenaStrongSlots[best].buf) {
+					best = idx
+					if c == capLimit {
+						break
+					}
+				}
 			}
 		}
-		return &spanNativeLeafLogPayloadArena{buf: make([]byte, 0, spanNativeLeafLogPayloadArenaBucketCaps[bucket])}
+		if best >= 0 {
+			arena := spanNativeLeafLogPayloadArenaStrongSlots[best]
+			last := spanNativeLeafLogPayloadArenaStrongCount - 1
+			spanNativeLeafLogPayloadArenaStrongSlots[best] = spanNativeLeafLogPayloadArenaStrongSlots[last]
+			spanNativeLeafLogPayloadArenaStrongSlots[last] = nil
+			spanNativeLeafLogPayloadArenaStrongCount = last
+			spanNativeLeafLogPayloadArenaStrongBytes -= cap(arena.buf)
+			spanNativeLeafLogPayloadArenaStrongMu.Unlock()
+			arena.buf = arena.buf[:0]
+			return arena
+		}
+		spanNativeLeafLogPayloadArenaStrongMu.Unlock()
+
+		for try := bucket; try <= bucket+1 && try < len(spanNativeLeafLogPayloadArenaPools); try++ {
+			if v := spanNativeLeafLogPayloadArenaPools[try].Get(); v != nil {
+				if arena, ok := v.(*spanNativeLeafLogPayloadArena); ok && arena != nil && cap(arena.buf) >= need && cap(arena.buf) <= spanNativeLeafLogPayloadArenaMaxCap {
+					arena.buf = arena.buf[:0]
+					return arena
+				}
+			}
+		}
+		return &spanNativeLeafLogPayloadArena{buf: make([]byte, 0, capLimit)}
 	}
 	return &spanNativeLeafLogPayloadArena{buf: make([]byte, 0, need)}
 }
@@ -136,11 +181,23 @@ func releaseSpanNativeLeafLogPayloadArena(arena *spanNativeLeafLogPayloadArena) 
 	if arena == nil || cap(arena.buf) > spanNativeLeafLogPayloadArenaMaxCap {
 		return
 	}
-	bucket := spanNativeLeafLogPayloadArenaReleaseBucket(cap(arena.buf))
+	c := cap(arena.buf)
+	bucket := spanNativeLeafLogPayloadArenaReleaseBucket(c)
 	if bucket < 0 {
 		return
 	}
 	arena.buf = arena.buf[:0]
+	if c >= 256<<10 {
+		spanNativeLeafLogPayloadArenaStrongMu.Lock()
+		if spanNativeLeafLogPayloadArenaStrongCount < spanNativeLeafLogPayloadArenaStrongMaxSlots && spanNativeLeafLogPayloadArenaStrongBytes+c <= spanNativeLeafLogPayloadArenaStrongMaxBytes {
+			spanNativeLeafLogPayloadArenaStrongSlots[spanNativeLeafLogPayloadArenaStrongCount] = arena
+			spanNativeLeafLogPayloadArenaStrongCount++
+			spanNativeLeafLogPayloadArenaStrongBytes += c
+			spanNativeLeafLogPayloadArenaStrongMu.Unlock()
+			return
+		}
+		spanNativeLeafLogPayloadArenaStrongMu.Unlock()
+	}
 	spanNativeLeafLogPayloadArenaPools[bucket].Put(arena)
 }
 
@@ -199,6 +256,7 @@ func estimateSpanNativeLeafLogPayloadArenaCap(leafPages [][]byte) int {
 		return totalCompactLen
 	}
 	avgCompactLen := (totalCompactLen + compactSamples - 1) / compactSamples
+	avgCompactLen += avgCompactLen >> 3
 	maxCap := page.PageSize * len(leafPages)
 	if avgCompactLen > maxCap/len(leafPages) {
 		return maxCap

@@ -3501,7 +3501,10 @@ func (db *DB) leafLogAppendLaneForWorkerIndex(workerIndex int) *lane {
 			vlogCompressionSelector: db.leafLogAppendCompressionSelector(),
 			vlogSeq:                 int(db.leafLogAppendSeq.Load()),
 		}
-		db.startVlogWriter(l)
+		// Leaf-log worker lanes are already invoked concurrently from span-native
+		// apply workers and always append directly (never via vlogCh/vlogPrepCh).
+		// Skipping startVlogWriter avoids ~1 MiB of unused channel buffers and
+		// idle goroutines per worker lane.
 		db.leafLogAppendLanes[workerIndex] = l
 		db.publishLeafLogAppendLanesLocked()
 	}
@@ -13034,7 +13037,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			continue
 		}
 		if mode == memtable.ModeAppendOnly {
-			mutableShards[i] = memShard{mem: memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(warmupCap, appendOnlyEstimate)}
+			mutableShards[i] = memShard{mem: memtable.NewAppendOnlyWithCapacityHint(warmupCap, appendOnlyEstimate)}
 			continue
 		}
 		mt, err := memtable.NewWithCapacityModeAndIndexer(warmupCap, mode, indexer)
@@ -13542,7 +13545,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			db.startVlogWriter(l)
 		}
 		if opts.IndexOuterLeavesInValueLog {
-			db.startVlogWriter(&db.leafLog)
+			// Primary leaf-log lane appends directly without vlogCh queueing;
+			// only start its frame preparer for large single-lane leaf batches.
+			db.startVlogDictPreparer(&db.leafLog)
 		}
 	}
 

@@ -111,6 +111,53 @@ var batchPool = sync.Pool{New: func() any { return newPooledBatch() }}
 
 var largeEntryBatchPool = sync.Pool{New: func() any { return newPooledBatch() }}
 
+const (
+	strongLargeEntryBatchMinCap   = 4096
+	strongLargeEntryBatchMaxCount = 4
+	strongLargeEntryBatchMaxTotal = 1 << 17 // 131,072 entries (~18 MiB ceiling)
+)
+
+var (
+	strongLargeEntryBatchMu      sync.Mutex
+	strongLargeEntryBatches      [strongLargeEntryBatchMaxCount]*Batch
+	strongLargeEntryBatchCount   int
+	strongLargeEntryBatchEntries int
+)
+
+func popStrongLargeEntryBatch() *Batch {
+	strongLargeEntryBatchMu.Lock()
+	if strongLargeEntryBatchCount == 0 {
+		strongLargeEntryBatchMu.Unlock()
+		return nil
+	}
+	strongLargeEntryBatchCount--
+	b := strongLargeEntryBatches[strongLargeEntryBatchCount]
+	strongLargeEntryBatches[strongLargeEntryBatchCount] = nil
+	strongLargeEntryBatchEntries -= cap(b.entries)
+	strongLargeEntryBatchMu.Unlock()
+	return b
+}
+
+func pushStrongLargeEntryBatch(b *Batch) bool {
+	if b == nil {
+		return false
+	}
+	c := cap(b.entries)
+	if c < strongLargeEntryBatchMinCap || c > maxLargeEntryBatchPoolCap {
+		return false
+	}
+	strongLargeEntryBatchMu.Lock()
+	if strongLargeEntryBatchCount >= strongLargeEntryBatchMaxCount || strongLargeEntryBatchEntries+c > strongLargeEntryBatchMaxTotal {
+		strongLargeEntryBatchMu.Unlock()
+		return false
+	}
+	strongLargeEntryBatches[strongLargeEntryBatchCount] = b
+	strongLargeEntryBatchCount++
+	strongLargeEntryBatchEntries += c
+	strongLargeEntryBatchMu.Unlock()
+	return true
+}
+
 func newPooledBatch() any {
 	return &Batch{
 		entries:   make([]Entry, 0, 16),
@@ -161,6 +208,18 @@ func Acquire(reader ValueReader, threshold int) *Batch {
 // AcquireRetainingLargeEntries returns a reusable Batch from the large-entry
 // pool. See NewRetainingLargeEntries.
 func AcquireRetainingLargeEntries(reader ValueReader, threshold int) *Batch {
+	if b := popStrongLargeEntryBatch(); b != nil {
+		if threshold < 0 {
+			threshold = page.DefaultInlineThreshold
+		}
+		b.reader = reader
+		b.inlineThreshold = threshold
+		b.poolKind = batchPoolKindLargeEntries
+		b.maxPoolEntries = maxLargeEntryBatchPoolCap
+		b.closed = false
+		b.resetLocked()
+		return b
+	}
 	return acquireFromPool(&largeEntryBatchPool, batchPoolKindLargeEntries, maxLargeEntryBatchPoolCap, reader, threshold)
 }
 
@@ -331,7 +390,9 @@ func Release(b *Batch) {
 	b.closed = true
 	switch b.poolKind {
 	case batchPoolKindLargeEntries:
-		largeEntryBatchPool.Put(b)
+		if !pushStrongLargeEntryBatch(b) {
+			largeEntryBatchPool.Put(b)
+		}
 	default:
 		b.poolKind = batchPoolKindDefault
 		b.maxPoolEntries = maxBatchPoolCap
