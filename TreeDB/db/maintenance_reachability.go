@@ -367,7 +367,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		return nil
 	}
 
-	scanOuterLeafData := func(ptr page.LeafLogPtr, data []byte, state tree.LeafLogPageReadState, entry *memoEntry) error {
+	scanOuterLeafData := func(ptr page.LeafLogPtr, data []byte, state tree.LeafLogPageReadState, lease tree.LeafLogPageViewLease, entry *memoEntry) error {
 		if len(data) != page.PageSize {
 			return fmt.Errorf("maintenance reachability: invalid outer leaf size %d for file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 		}
@@ -378,7 +378,11 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 				return fmt.Errorf("maintenance reachability: checksum mismatch on outer leaf file=%d offset=%d", ptr.FileID, ptr.Offset)
 			}
 			if state.RecordChecksumVerified && state.CacheEntryPresent {
-				snap.reader.MarkLeafLogPageChecksumVerified(ptr)
+				if marker, ok := lease.(tree.LeafLogPageViewChecksumMarker); ok {
+					marker.MarkLeafLogPageViewChecksumVerified()
+				} else {
+					snap.reader.MarkLeafLogPageChecksumVerified(ptr)
+				}
 			}
 		}
 		if n.Type() != page.PageTypeLeaf {
@@ -390,11 +394,20 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		return nil
 	}
 	scanOuterLeaf := func(ptr page.LeafLogPtr, entry *memoEntry) error {
+		if data, lease, ok, state, err := snap.reader.ReadLeafLogPageUnsafeViewWithState(ptr); err != nil {
+			return err
+		} else if ok {
+			err = scanOuterLeafData(ptr, data, state, lease, entry)
+			if lease != nil {
+				lease.ReleaseLeafLogPageView()
+			}
+			return err
+		}
 		data, _, state, err := snap.reader.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch[:0])
 		if err != nil {
 			return err
 		}
-		err = scanOuterLeafData(ptr, data, state, entry)
+		err = scanOuterLeafData(ptr, data, state, nil, entry)
 		leafScratch = leafScratch[:0]
 		return err
 	}
@@ -543,7 +556,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 					return nil, err
 				}
 				for i, ptr := range leafBatchPtrs {
-					if err := scanOuterLeafData(ptr, leafBatchBuffers[i], tree.LeafLogPageReadState{}, &entry); err != nil {
+					if err := scanOuterLeafData(ptr, leafBatchBuffers[i], tree.LeafLogPageReadState{}, nil, &entry); err != nil {
 						return nil, err
 					}
 				}

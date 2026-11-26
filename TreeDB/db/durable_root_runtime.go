@@ -631,7 +631,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 	applyDurableRootCandidateStateV1(&candidateState, next)
 	snapshot.state = &candidateState
 	snapshot.vlogPinned = freshSet != nil
-	snapshot.reader = newValueReader(freshSet)
+	snapshot.reader.reconfigure(freshSet, db.leafPageReadCache)
 	if oldSetPinned && oldSet != nil {
 		if err := db.valueLogManager.Release(oldSet); err != nil {
 			return nil, errors.Join(fmt.Errorf("release stale candidate dependency set: %w", err), snapshot.Close())
@@ -724,20 +724,29 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	if err := registerOuterLeaves(rootIDs); err != nil {
 		return nil, err
 	}
-	if err := registerValuePointers(rootIDs); err != nil {
-		return nil, err
-	}
 	owner := db.valueLogIdentityPins.MetadataOwner()
 	result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
 		Collectors:    maintenanceReachabilityValueLogRefCounts,
 		CountMetadata: owner,
 	})
+	if errors.Is(err, valuelog.ErrFileNotFound) {
+		if regErr := registerValuePointers(rootIDs); regErr != nil {
+			return nil, regErr
+		}
+		result, err = db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+			Collectors:    maintenanceReachabilityValueLogRefCounts,
+			CountMetadata: owner,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer result.countRecords.close()
 	for fileID := range result.valueLogReferencedSegments {
 		references[fileID] = struct{}{}
+	}
+	if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
+		return nil, err
 	}
 	if scanned != nil {
 		incarnation, err := captureValueLogRefIncarnation(snapshot.idx)
@@ -779,7 +788,7 @@ func (db *DB) rebindCandidateValueLogSetWithLimitsV1(snapshot *Snapshot, limits 
 	state.ValueLogSet = fresh
 	snapshot.state = &state
 	snapshot.vlogPinned = fresh != nil
-	snapshot.reader = newValueReader(fresh)
+	snapshot.reader.reconfigure(fresh, db.leafPageReadCache)
 	if oldPinned && old != nil {
 		if err := db.valueLogManager.Release(old); err != nil {
 			return fmt.Errorf("release stale candidate dependency set: %w", err)

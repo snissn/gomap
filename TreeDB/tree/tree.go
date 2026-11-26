@@ -648,7 +648,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
-	return t.getEntry(key, nil, nil, nil, nil, false, nil)
+	return t.getEntry(key, nil, nil, nil, nil, false, nil, nil)
 }
 
 const fixedScratchLeafCacheMaxSepLen = 128
@@ -684,7 +684,7 @@ func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, rea
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
-	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, nil)
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, nil, nil)
 }
 
 // GetEntryWithFixedScratchLeafCache behaves like GetEntryWithFixedScratch and
@@ -694,12 +694,14 @@ func (t *Tree) GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch []
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
-	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, cache)
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true, cache, nil)
 }
 
 type fixedLeafLogPointCopy struct {
-	read func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error)
-	mark func(page.LeafLogPtr, []byte)
+	read     func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error)
+	mark     func(page.LeafLogPtr, []byte)
+	readView func(page.LeafLogPtr) ([]byte, LeafLogPageViewLease, LeafLogPageReadState, bool)
+	markView func(LeafLogPageViewLease)
 }
 
 // GetEntryWithFixedScratchLeafProof accepts checksum state returned with an
@@ -720,10 +722,45 @@ func (t *Tree) GetEntryWithFixedScratchLeafProofCached(key, keyScratch, leafScra
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
 	copyLeaf := fixedLeafLogPointCopy{read: readLeaf, mark: mark}
-	return t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true, cache)
+	return t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true, cache, nil)
 }
 
-func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), copyLeaf *fixedLeafLogPointCopy, bounded bool, cache *FixedScratchLeafCache) (node.LeafEntry, error) {
+// GetEntryWithFixedScratchLeafView performs a bounded point lookup that can
+// borrow a read-locked leaf page view directly (avoiding a 4 KiB page copy)
+// and invokes consume with the found LeafEntry before releasing the view lease.
+// On a view miss, it falls back to readLeaf into leafScratch.
+func (t *Tree) GetEntryWithFixedScratchLeafView(
+	key, keyScratch, leafScratch []byte,
+	readView func(page.LeafLogPtr) ([]byte, LeafLogPageViewLease, LeafLogPageReadState, bool),
+	markView func(LeafLogPageViewLease),
+	readLeaf func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error),
+	mark func(page.LeafLogPtr, []byte),
+	consume func(node.LeafEntry) error,
+) error {
+	if readLeaf == nil {
+		entry, err := t.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, nil, nil)
+		if err != nil {
+			return err
+		}
+		if consume != nil {
+			return consume(entry)
+		}
+		return nil
+	}
+	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
+		return node.ErrCorruptedNode
+	}
+	copyLeaf := fixedLeafLogPointCopy{
+		read:     readLeaf,
+		mark:     mark,
+		readView: readView,
+		markView: markView,
+	}
+	_, err := t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true, nil, consume)
+	return err
+}
+
+func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), copyLeaf *fixedLeafLogPointCopy, bounded bool, cache *FixedScratchLeafCache, consume func(node.LeafEntry) error) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
@@ -783,8 +820,15 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
+		var borrowedLease LeafLogPageViewLease
 		if copyLeaf != nil && currRef.Kind == page.ChildRefLeafLog {
-			if err := t.loadFixedPointLeafWithProof(&n, currRef.Log, leafScratch, copyLeaf, verifyAlways); err != nil {
+			if copyLeaf.readView != nil && consume != nil {
+				var err error
+				borrowedLease, err = t.loadFixedPointLeafWithView(&n, currRef.Log, leafScratch, copyLeaf, verifyAlways)
+				if err != nil {
+					return node.LeafEntry{}, err
+				}
+			} else if err := t.loadFixedPointLeafWithProof(&n, currRef.Log, leafScratch, copyLeaf, verifyAlways); err != nil {
 				return node.LeafEntry{}, err
 			}
 		} else if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
@@ -797,6 +841,9 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 
 		switch n.Type() {
 		case page.PageTypePrimaryDirectory:
+			if borrowedLease != nil {
+				borrowedLease.ReleaseLeafLogPageView()
+			}
 			if depth != 0 {
 				return node.LeafEntry{}, node.ErrPrimaryDirectory
 			}
@@ -806,13 +853,23 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			var inline node.PrimaryDirectoryEntry
 			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, readLeaf, leafScratch, bounded)
 			if inline.InlineAbsence() {
-				return node.LeafEntry{Key: inline.Key, Flags: node.FlagTombstone, Revision: inline.Revision}, nil
+				entry := node.LeafEntry{Key: inline.Key, Flags: node.FlagTombstone, Revision: inline.Revision}
+				if consume != nil {
+					if err := consume(entry); err != nil {
+						return node.LeafEntry{}, err
+					}
+					return node.LeafEntry{}, nil
+				}
+				return entry, nil
 			}
 			if err != nil {
 				return node.LeafEntry{}, err
 			}
 			continue
 		case page.PageTypeInternal:
+			if borrowedLease != nil {
+				borrowedLease.ReleaseLeafLogPageView()
+			}
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 					return node.LeafEntry{}, err
@@ -895,7 +952,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			}
 
 		case page.PageTypeLeaf:
-			if canCache {
+			if canCache && borrowedLease == nil {
 				cache.valid = true
 				cache.hasLow = hasLow
 				cache.hasHigh = hasHigh
@@ -912,37 +969,80 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			}
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
+				if borrowedLease != nil {
+					borrowedLease.ReleaseLeafLogPageView()
+				}
 				if cache != nil {
 					cache.Reset()
 				}
 				return node.LeafEntry{}, err
 			}
 			if !found {
+				if borrowedLease != nil {
+					borrowedLease.ReleaseLeafLogPageView()
+				}
 				return node.LeafEntry{}, ErrKeyNotFound
 			}
 
 			// Zero-copy view
 			k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
 			if err != nil {
+				if borrowedLease != nil {
+					borrowedLease.ReleaseLeafLogPageView()
+				}
 				if cache != nil {
 					cache.Reset()
 				}
 				return node.LeafEntry{}, err
 			}
 
-			return node.LeafEntry{
+			entry := node.LeafEntry{
 				Key:      k,
 				Value:    v,
 				ValuePtr: ptr,
 				Flags:    flags,
 				Revision: revision,
-			}, nil
+			}
+			if consume != nil {
+				err = consume(entry)
+				if borrowedLease != nil {
+					borrowedLease.ReleaseLeafLogPageView()
+				}
+				return node.LeafEntry{}, err
+			}
+			if borrowedLease != nil {
+				borrowedLease.ReleaseLeafLogPageView()
+			}
+			return entry, nil
 
 		default:
+			if borrowedLease != nil {
+				borrowedLease.ReleaseLeafLogPageView()
+			}
 			return node.LeafEntry{}, fmt.Errorf("invalid page type %d", n.Type())
 		}
 	}
 	return node.LeafEntry{}, errors.New("tree too deep")
+}
+
+func (t *Tree) loadFixedPointLeafWithView(n *node.Node, ptr page.LeafLogPtr, scratch []byte, copyLeaf *fixedLeafLogPointCopy, verifyAlways bool) (LeafLogPageViewLease, error) {
+	if data, lease, state, ok := copyLeaf.readView(ptr); ok {
+		if verifyAlways {
+			state = LeafLogPageReadState{}
+		}
+		verified, err := validateLeafLogNodeIntoWithState(n, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+		if err != nil {
+			if lease != nil {
+				lease.ReleaseLeafLogPageView()
+			}
+			return nil, err
+		}
+		if verified && state.RecordChecksumVerified && state.CacheEntryPresent && copyLeaf.markView != nil && lease != nil {
+			copyLeaf.markView(lease)
+		}
+		return lease, nil
+	}
+	return nil, t.loadFixedPointLeafWithProof(n, ptr, scratch, copyLeaf, verifyAlways)
 }
 
 func (t *Tree) loadFixedPointLeafWithProof(n *node.Node, ptr page.LeafLogPtr, scratch []byte, copyLeaf *fixedLeafLogPointCopy, verifyAlways bool) error {

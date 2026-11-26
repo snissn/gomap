@@ -106,6 +106,71 @@ func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafCached(
 	}, r.owner.reader.leafPageCache.markCopiedPageChecksumVerified)
 }
 
+func markPinnedCOWLeafViewChecksumVerified(lease tree.LeafLogPageViewLease) {
+	if slot, ok := lease.(*leafPageReadCacheSlot); ok {
+		slot.markCopiedPageChecksumVerifiedLocked()
+	}
+}
+
+// GetEntryExactWithPinnedCOWLeafView performs a bounded fixed-scratch point read
+// on this captured root that borrows verified leaf pages directly from the
+// owner's leaf page cache under a read lock (avoiding metadata reinspection and
+// 4 KiB page copies) and passes the found entry to consume before releasing the
+// borrowed page view. Any policy/limit/identity mismatch falls back to full
+// inspection and readLeaf for canonical error reporting.
+func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafView(
+	key, keyScratch, leafScratch []byte,
+	limits valuelog.COWReadLimits,
+	checkShape func(valuelog.COWRecordShape) bool,
+	readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error),
+	consume func(node.LeafEntry) error,
+) error {
+	if err := r.beginRead(); err != nil {
+		return err
+	}
+	defer r.owner.endRead()
+	if readLeaf == nil {
+		entry, err := r.tree.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, nil, nil)
+		if err != nil {
+			return err
+		}
+		if consume != nil {
+			return consume(entry)
+		}
+		return nil
+	}
+	cache := r.owner.reader.leafPageCache
+	var readView func(page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool)
+	var markView func(tree.LeafLogPageViewLease)
+	if cache != nil {
+		readView = func(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool) {
+			f, identity, err := r.owner.pinnedValueLogSegment(ptr.ValueLogFileID())
+			if err != nil {
+				return nil, nil, tree.LeafLogPageReadState{}, false
+			}
+			data, slot, state, ok := cache.getVerifiedCOWViewLocked(ptr, identity, f, limits, checkShape)
+			if !ok {
+				return nil, nil, tree.LeafLogPageReadState{}, false
+			}
+			return data, slot, tree.LeafLogPageReadState(state), true
+		}
+		markView = markPinnedCOWLeafViewChecksumVerified
+	}
+	return r.tree.GetEntryWithFixedScratchLeafView(
+		key, keyScratch, leafScratch,
+		readView, markView,
+		func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageReadState, error) {
+			record, err := r.owner.inspectPinnedCOWLeafRecord(ptr, limits)
+			if err != nil {
+				return nil, tree.LeafLogPageReadState{}, err
+			}
+			return readLeaf(ptr, dst, record)
+		},
+		cache.markCopiedPageChecksumVerified,
+		consume,
+	)
+}
+
 // WithPinnedCOWPointRead holds one snapshot read pin across a batch of
 // fixed-scratch point reads on this captured root, carrying verified leaf-page
 // checksum proofs back to the owner's leaf page cache.
@@ -134,6 +199,71 @@ func (r *SnapshotRootReader) WithPinnedCOWPointRead(
 			}
 			return readLeaf(ptr, dst, record)
 		}, r.owner.reader.leafPageCache.markCopiedPageChecksumVerified)
+	})
+}
+
+// WithPinnedCOWPointReadView holds one snapshot read pin across a batch of
+// fixed-scratch point reads on this captured root, borrowing verified cached
+// leaf pages directly under a read lock (avoiding metadata reinspection and
+// 4 KiB page copies) and falling back to full inspection and readLeaf on misses
+// or policy mismatches.
+func (r *SnapshotRootReader) WithPinnedCOWPointReadView(
+	limits valuelog.COWReadLimits,
+	checkShape func(valuelog.COWRecordShape) bool,
+	readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error),
+	fn func(read func(key, keyScratch, leafScratch []byte, consume func(node.LeafEntry) error) error) error,
+) error {
+	if err := r.beginRead(); err != nil {
+		return err
+	}
+	defer r.owner.endRead()
+	if fn == nil {
+		return nil
+	}
+	if readLeaf == nil {
+		return fn(func(key, keyScratch, leafScratch []byte, consume func(node.LeafEntry) error) error {
+			entry, err := r.tree.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, nil, nil)
+			if err != nil {
+				return err
+			}
+			if consume != nil {
+				return consume(entry)
+			}
+			return nil
+		})
+	}
+	cache := r.owner.reader.leafPageCache
+	var readView func(page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool)
+	var markView func(tree.LeafLogPageViewLease)
+	if cache != nil {
+		readView = func(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool) {
+			f, identity, err := r.owner.pinnedValueLogSegment(ptr.ValueLogFileID())
+			if err != nil {
+				return nil, nil, tree.LeafLogPageReadState{}, false
+			}
+			data, slot, state, ok := cache.getVerifiedCOWViewLocked(ptr, identity, f, limits, checkShape)
+			if !ok {
+				return nil, nil, tree.LeafLogPageReadState{}, false
+			}
+			return data, slot, tree.LeafLogPageReadState(state), true
+		}
+		markView = markPinnedCOWLeafViewChecksumVerified
+	}
+	fallbackRead := func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageReadState, error) {
+		record, err := r.owner.inspectPinnedCOWLeafRecord(ptr, limits)
+		if err != nil {
+			return nil, tree.LeafLogPageReadState{}, err
+		}
+		return readLeaf(ptr, dst, record)
+	}
+	markCopy := cache.markCopiedPageChecksumVerified
+	return fn(func(key, keyScratch, leafScratch []byte, consume func(node.LeafEntry) error) error {
+		return r.tree.GetEntryWithFixedScratchLeafView(
+			key, keyScratch, leafScratch,
+			readView, markView,
+			fallbackRead, markCopy,
+			consume,
+		)
 	})
 }
 

@@ -62,6 +62,13 @@ type NativeJournalCompletionOwner interface {
 	EndNativeJournalCompletion()
 }
 
+// NativeCommandWALGroupCommitActive reports whether durable command-WAL group
+// commit is active on this backend so collection-level update coalescers do not
+// serialize concurrent commits ahead of the group-commit barrier.
+func (db *DB) NativeCommandWALGroupCommitActive() bool {
+	return db != nil && db.commandWAL && db.resolvedProfile == ProfileCommandWALDurable && db.nativeCommandWALCompletion != nil
+}
+
 // CanShareNativeCommandWALPrefix is a scheduling snapshot. Real mutation and
 // fallback fence admission authenticate again under the public lifecycle.
 func (db *DB) CanShareNativeCommandWALPrefix() bool {

@@ -1,14 +1,37 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+const nativeBSONSetCoalescerMaxBatch = 64
+
+type nativeBSONSetCoalescerItem struct {
+	col      *Collection
+	id       []byte
+	fields   []BSONSetField
+	matched  bool
+	modified bool
+	err      error
+	done     chan struct{}
+}
+
+var nativeBSONSetCoalescerItemPool = sync.Pool{
+	New: func() any {
+		return &nativeBSONSetCoalescerItem{
+			done: make(chan struct{}, 1),
+		}
+	},
+}
 
 type nativeBSONSetRetry struct {
 	id                 []byte
@@ -17,8 +40,116 @@ type nativeBSONSetRetry struct {
 }
 
 func (c *Collection) nativeUpdateBSONSet(id []byte, fields []BSONSetField) (bool, bool, error) {
-	matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
+	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil || durabilitycut.Enabled() || c.nativeJSON.db.NativeCommandWALGroupCommitActive() {
+		matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
+		return matched, modified, err
+	}
+	coord := collectionSchemaCoordinatorForDBCollection(c.nativeJSON.db, c.name)
+	if coord == nil {
+		matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
+		return matched, modified, err
+	}
+	coord.nativeBSONSetMu.Lock()
+	if !coord.nativeBSONSetActive {
+		coord.nativeBSONSetActive = true
+		coord.nativeBSONSetMu.Unlock()
+		matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
+		coord.drainNativeBSONSetPending()
+		return matched, modified, err
+	}
+	item := nativeBSONSetCoalescerItemPool.Get().(*nativeBSONSetCoalescerItem)
+	item.col = c
+	item.id = id
+	item.fields = fields
+	item.matched = false
+	item.modified = false
+	item.err = nil
+	coord.nativeBSONSetPending = append(coord.nativeBSONSetPending, item)
+	coord.nativeBSONSetMu.Unlock()
+
+	<-item.done
+	matched, modified, err := item.matched, item.modified, item.err
+	item.col = nil
+	item.id = nil
+	item.fields = nil
+	item.err = nil
+	nativeBSONSetCoalescerItemPool.Put(item)
 	return matched, modified, err
+}
+
+func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
+	var batchBuf [nativeBSONSetCoalescerMaxBatch]*nativeBSONSetCoalescerItem
+	var itemsBuf [nativeBSONSetCoalescerMaxBatch]BSONSetUpdateBatchItem
+	for {
+		coord.nativeBSONSetMu.Lock()
+		if len(coord.nativeBSONSetPending) == 0 {
+			coord.nativeBSONSetActive = false
+			coord.nativeBSONSetMu.Unlock()
+			return
+		}
+		// Take up to nativeBSONSetCoalescerMaxBatch compatible distinct-key
+		// items for the first pending collection; keep remaining items queued
+		// for the next wave so duplicate keys execute in FIFO order.
+		firstCol := coord.nativeBSONSetPending[0].col
+		n := 0
+		keep := 0
+		pending := coord.nativeBSONSetPending
+		for _, item := range pending {
+			canBatch := n < nativeBSONSetCoalescerMaxBatch && item.col == firstCol
+			if canBatch && n > 0 {
+				for j := 0; j < n; j++ {
+					if bytes.Equal(batchBuf[j].id, item.id) {
+						canBatch = false
+						break
+					}
+				}
+			}
+			if canBatch {
+				batchBuf[n] = item
+				n++
+			} else {
+				pending[keep] = item
+				keep++
+			}
+		}
+		clear(pending[keep:])
+		coord.nativeBSONSetPending = pending[:keep]
+		coord.nativeBSONSetMu.Unlock()
+
+		batch := batchBuf[:n]
+		if n == 1 {
+			it := batch[0]
+			it.matched, it.modified, _, it.err = it.col.nativeUpdateBSONSetWithJournal(it.id, it.fields, false)
+			it.done <- struct{}{}
+			batch[0] = nil
+			continue
+		}
+		bsonItems := itemsBuf[:n]
+		for i, it := range batch {
+			bsonItems[i] = BSONSetUpdateBatchItem{DocumentID: it.id, Fields: it.fields}
+		}
+		results, batched, err := firstCol.nativeUpdateBatchModeWithJournal(nil, updateBatchModeNoSecondaryUniqueIndexChanges, bsonItems, nil, nil)
+		if err == nil && batched && len(results) == n {
+			for i, it := range batch {
+				it.matched = results[i].Matched
+				it.modified = results[i].Modified
+				it.done <- struct{}{}
+			}
+		} else if errors.Is(err, ErrCommitAmbiguous) {
+			for _, it := range batch {
+				it.err = err
+				it.done <- struct{}{}
+			}
+		} else {
+			// Atomic batch did not commit; isolate errors and retries per caller.
+			for _, it := range batch {
+				it.matched, it.modified, _, it.err = it.col.nativeUpdateBSONSetWithJournal(it.id, it.fields, false)
+				it.done <- struct{}{}
+			}
+		}
+		clear(bsonItems)
+		clear(batch)
+	}
 }
 
 func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetField, requestJournal bool) (bool, bool, backenddb.NativeJournalCompletion, error) {

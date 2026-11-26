@@ -90,7 +90,7 @@ func (b *cowBackendBasis) readNativeEntriesWithWorkspaceAdmitted(cache *cowCache
 		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
 	}
 	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
-		return readInspectedPhysicalLeaf(cache, w, ptr, leafDst, true, false, independent, &record)
+		return readInspectedPhysicalLeaf(cache, w, ptr, leafDst, true, true, independent, &record)
 	}
 
 	type valueSpan struct {
@@ -108,69 +108,78 @@ func (b *cowBackendBasis) readNativeEntriesWithWorkspaceAdmitted(cache *cowCache
 	}
 	var slab []byte
 
-	err = reader.WithPinnedCOWPointRead(w.limits, readLeaf, func(read func(key, keyScratch, leafScratch []byte, cache *tree.FixedScratchLeafCache) (node.LeafEntry, error)) error {
+	checkShape := func(shape valuelog.COWRecordShape) bool {
+		if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
+			return false
+		}
+		if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
+			return false
+		}
+		return true
+	}
+
+	err = reader.WithPinnedCOWPointReadView(w.limits, checkShape, readLeaf, func(read func(key, keyScratch, leafScratch []byte, consume func(node.LeafEntry) error) error) error {
 		for i, key := range keys {
 			dst[i] = node.LeafEntry{}
 			found[i] = false
 			point.leafGen++
-			// Pass cache=nil and localBlock=false (above) so dictionary
-			// capability, COWReadLimits inspection, and leafPageCache hit
-			// accounting are never bypassed.
-			entry, readErr := read(key, point.key[:], point.leaf[:], nil)
+			readErr := read(key, point.key[:], point.leaf[:], func(entry node.LeafEntry) error {
+				// End every page/scratch alias before releasing the borrowed view.
+				entry.Key = nil
+				found[i] = true
+				if copyValues && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+					if len(entry.Value) == 0 {
+						// Preserve non-nil empty slice parity with NativeEntryAtRoot.
+						entry.Value = []byte{}
+					} else if admitOutput != nil {
+						n := len(entry.Value)
+						if cap(slab)-len(slab) < n {
+							rem := len(keys) - i
+							est := n
+							if rem > 1 && n <= 4096 {
+								est = n * min(rem, 32)
+							}
+							if admitErr := admitOutput(memtable.COWAllocationCharge(uint64(est))); admitErr != nil {
+								if est == n || !errors.Is(admitErr, memtable.ErrCOWCapacity) {
+									return admitErr
+								}
+								est = n
+								if admitErr = admitOutput(memtable.COWAllocationCharge(uint64(est))); admitErr != nil {
+									return admitErr
+								}
+							}
+							slab = make([]byte, 0, est)
+						}
+						off := len(slab)
+						slab = append(slab, entry.Value...)
+						entry.Value = slab[off : off+n : off+n]
+					} else {
+						if slab == nil {
+							rem := len(keys) - i
+							est := len(entry.Value)
+							if rem > 1 && len(entry.Value) <= 4096 {
+								est = len(entry.Value) * min(rem, 32)
+							}
+							slab = make([]byte, 0, est)
+						}
+						off := len(slab)
+						n := len(entry.Value)
+						slab = append(slab, entry.Value...)
+						entry.Value = nil
+						spans[i] = valueSpan{off: off, n: n}
+					}
+				} else {
+					entry.Value = nil
+				}
+				dst[i] = entry
+				return nil
+			})
 			if errors.Is(readErr, tree.ErrKeyNotFound) {
 				continue
 			}
 			if readErr != nil {
 				return readErr
 			}
-			// End every page/scratch alias before storing into dst.
-			entry.Key = nil
-			found[i] = true
-			if copyValues && entry.Flags&(node.FlagPointer|node.FlagTombstone) == 0 {
-				if len(entry.Value) == 0 {
-					// Preserve non-nil empty slice parity with NativeEntryAtRoot.
-					entry.Value = []byte{}
-				} else if admitOutput != nil {
-					n := len(entry.Value)
-					if cap(slab)-len(slab) < n {
-						rem := len(keys) - i
-						est := n
-						if rem > 1 && n <= 4096 {
-							est = n * min(rem, 32)
-						}
-						if admitErr := admitOutput(memtable.COWAllocationCharge(uint64(est))); admitErr != nil {
-							if est == n || !errors.Is(admitErr, memtable.ErrCOWCapacity) {
-								return admitErr
-							}
-							est = n
-							if admitErr = admitOutput(memtable.COWAllocationCharge(uint64(est))); admitErr != nil {
-								return admitErr
-							}
-						}
-						slab = make([]byte, 0, est)
-					}
-					off := len(slab)
-					slab = append(slab, entry.Value...)
-					entry.Value = slab[off : off+n : off+n]
-				} else {
-					if slab == nil {
-						rem := len(keys) - i
-						est := len(entry.Value)
-						if rem > 1 && len(entry.Value) <= 4096 {
-							est = len(entry.Value) * min(rem, 32)
-						}
-						slab = make([]byte, 0, est)
-					}
-					off := len(slab)
-					n := len(entry.Value)
-					slab = append(slab, entry.Value...)
-					entry.Value = nil
-					spans[i] = valueSpan{off: off, n: n}
-				}
-			} else {
-				entry.Value = nil
-			}
-			dst[i] = entry
 		}
 		return nil
 	})

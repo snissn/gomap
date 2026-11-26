@@ -39,6 +39,12 @@ type collectionSchemaCoordinator struct {
 	nativeBulkInsertMu                     sync.Mutex
 	nativeBulkPreimageOnce                 sync.Once
 	nativeBulkPreimageTokens               chan struct{}
+	nativeBSONSetMu                        sync.Mutex
+	nativeBSONSetActive                    bool
+	nativeBSONSetPending                   []*nativeBSONSetCoalescerItem
+	nativeUpdateCommitMu                   sync.Mutex
+	nativeUpdateCommitActive               bool
+	nativeUpdateCommitPending              []*nativeUpdateCommitItem
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex
