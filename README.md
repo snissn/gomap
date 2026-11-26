@@ -149,23 +149,27 @@ benchmark suite.
 
 ### TreeDB versus Qdrant: same-machine 500K vectors
 
-September 17 comparison on a Ryzen 7 9700X with a shared six-CPU budget:
-500K 768-dimensional cosine vectors, `topK=10`, and document payloads **without
+November 26 post-Sprint 16 comparison on `mikers-B560-DS3H-AC-Y1` (`i5-11400F`,
+Linux `x86_64`, commit `e78d8b40a`) with a shared six-CPU budget: 500K
+768-dimensional cosine vectors, `topK=10`, and document payloads **without
 vectors**. End-to-end Python clients use TreeDB native-v4 and Qdrant 1.19.0
-gRPC. Numbers are medians of six warm 10-second windows per configuration.
+gRPC (`qdrant-client 1.20.0`). Numbers are medians of six counterbalanced warm
+10-second windows per configuration (`0` query errors across all 36 windows).
 
 | System/query configuration | Recall@10 | One-client QPS | Six-client QPS |
 | --- | ---: | ---: | ---: |
-| TreeDB SQ8 + packed FP32 rerank | 96.60% | 1,399 | 4,295 |
-| Qdrant SQ8 + FP32 rescore | 95.85% | 1,232 | 2,586 |
-| Qdrant FP32 search reference | 95.90% | 948 | 2,192 |
+| TreeDB SQ8 + packed FP32 rerank (`ef=128`) | 97.50% | 1,040.8 | 2,521.5 |
+| Qdrant SQ8 + FP32 rescore (`ef=128`) | 95.55% | 873.9 | 2,196.5 |
+| Qdrant FP32 search reference (`ef=128`) | 95.70% | 707.3 | 1,619.4 |
 
 At independently selected settings exceeding 95% recall, TreeDB delivered
-**13.5% more one-client QPS and 66.1% more six-client QPS than Qdrant SQ8**.
-Achieved recalls are not identical. This is scoped application throughput on a
-shared workstation, not maximum server throughput or an official 1M benchmark;
-the FP32 reference uses the same SQ8-equipped Qdrant collection.
-See the [September 17 TreeDB/Qdrant report](docs/benchmarks/treedb_vs_qdrant_cohere500k_2026-09-17.md)
+**19.1% more one-client QPS and 14.8% more six-client QPS than Qdrant SQ8**
+(at `97.50%` vs `95.55%` recall@10). Achieved recalls are not identical. This is
+scoped application throughput on a shared workstation, not maximum server
+throughput or an official 1M benchmark; the FP32 reference uses the same
+SQ8-equipped Qdrant collection. See the
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#11-treedb-versus-qdrant-same-machine-500k-vectors)
+(prior Ryzen 7 9700X [September 17 TreeDB/Qdrant report](docs/benchmarks/treedb_vs_qdrant_cohere500k_2026-09-17.md))
 for latency, repeat ranges, configurations, dataset provenance, and limitations.
 
 ### VectorDBBench Cohere 1M
@@ -192,23 +196,28 @@ measurements, raw data, and evidence archive:
 
 ### YCSB Server Workload
 
-The October 30/31 comparison uses the public Mongo BSON API, the same external
-`go-ycsb` client, 100,000 records, 10,000 operations, 16 workers and 95% reads /
-5% updates. Three fresh fixtures per arm have zero operation errors. Run medians
-and the median of paired GoMap/MongoDB ratios are:
+The November 26 post-Sprint 16 comparison on `mikers-B560-DS3H-AC-Y1`
+(`i5-11400F`, Linux `x86_64`, commit `e78d8b40a`) uses the public Mongo BSON
+API, the external `go-ycsb` client, 100,000 records, 10,000 operations, 16
+workers, uniform keys, 95% reads / 5% updates, and `--network host` loopback
+parity for Docker MongoDB 8.2.7. Three alternating fresh fixtures per arm
+(AB/BA/AB) have zero operation errors. Run medians and the median of paired
+GoMap/MongoDB ratios are:
 
 | ACK class | MongoDB 8.2.7 ops/s | GoMap Mongo gateway ops/s | Paired ratio |
 | --- | ---: | ---: | ---: |
-| Relaxed: both `w:1`, `j` absent | 42,753.6 | 59,245.2 | 1.372250 (+37.23%) |
-| Durable-B: requests differ | 19,879.2 | 11,766.6 | 0.591905 (−40.81%) |
+| Relaxed: both `w:1`, `j` absent | 27,333.4 | 74,649.3 | 2.744788 (+174.48%) |
+| Durable-B: requests differ | 21,381.7 | 35,471.1 | 1.784305 (+78.43%) |
 
 Durable-B uses MongoDB `w:1,j:true` versus GoMap's ordinary
-`command_wal_durable` ACK with `w:1`, `j` absent, supported by separate scoped
-sync/crash controls. Common load, census and a public journal sentinel are
-outside timing. These short, cache-warmed runs with asymmetric resource caps
-are not a sustained or isolated-COW speedup claim. Exact sources, all rates,
-latencies, failed attempts, lifecycle limitations and raw evidence:
-[October final-source YCSB report](docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md).
+`command_wal_durable` ACK with `w:1`, `j` absent. Load uses `w:1`, `j` absent
+on both engines (median load: `48,013.7` vs `33,825.2 ops/s` in Relaxed;
+`48,849.7` vs `2,324.8 ops/s` in Durable-B, where GoMap's durable load waits on
+stable command-WAL dependencies). These short, cache-warmed runs are scoped
+workstation evidence, not a sustained or durability-equivalence claim. Full
+per-pair numbers, latencies, and methodology:
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#1-ycsb-server-workload)
+(prior [October final-source YCSB report](docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md)).
 
 Historical June results used different whole versions and fixture/runtime
 conditions. The MongoDB URI requested `w:1` with `j` absent; it is not a
@@ -226,69 +235,80 @@ retains its original commands, repeats and limitations.
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, June 17 UTC full benchmark refresh, `100000` documents,
-batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
-is the timed insert measurement for the value-log outer-leaf layout. Compacted
-B/doc uses the byte-minimized `exhaustive_compact` row for TreeDB template-v1 and
-SQLite after `VACUUM`; TreeDB JSON is omitted from the README compacted-size
-headline until the canonical exhaustive fixture covers that format.
+Two secondary indexes, November 26 post-Sprint 16 benchmark refresh
+(`i5-11400F`, commit `e78d8b40a`, `-count 3` medians), `100000` documents,
+batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec` is the
+timed insert measurement for the value-log outer-leaf layout. Compacted B/doc
+uses `exhaustive_compact` for TreeDB template-v1 (`25.2` B/doc
+`full_leafgen_pack_gc`; `68.8` B/doc offline compact), `full_leafgen_pack_gc`
+for TreeDB BSON and JSON, and SQLite after `VACUUM`.
 
 | engine / format | layout | docs/sec | compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 746,269 | 22.8 |
-| TreeDB JSON | data and index outer leaves in value log | 527,148 | — |
-| SQLite native columns | WAL normal | 385,654 | 156.7 |
-| SQLite JSON | WAL normal | 333,444 | 231.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 657,030 | 26.5 |
+| TreeDB BSON | data and index outer leaves in value log | 612,370 | 28.0 |
+| TreeDB JSON | data and index outer leaves in value log | 506,329 | 36.3 |
+| SQLite native columns | WAL normal | 372,949 | 156.7 |
+| SQLite JSON | WAL normal | 312,858 | 231.7 |
 
 Source:
-[June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#2-indexed-collection-insert-workload)
+(prior [June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md)).
 
 ### Collection Read And Lookup Workload
 
-Two secondary indexes, April 27 collection/SQLite matrix.
+Two secondary indexes, November 26 post-Sprint 16 collection/SQLite matrix
+(`i5-11400F`, commit `e78d8b40a`, `command_wal_relaxed`, batch size `16000`,
+data and index outer leaves in value log).
 
 | operation | TreeDB template-v1 ops/sec | TreeDB JSON ops/sec | SQLite native columns ops/sec | SQLite JSON ops/sec |
 | --- | ---: | ---: | ---: | ---: |
-| Primary read | 771,803 | 524,843 | 357,398 | 473,634 |
-| Unique secondary lookup | 815,661 | 845,785 | 484,574 | 442,478 |
-| Nonunique secondary lookup | 243,625 | 257,356 | 68,815 | 39,399 |
+| Primary read | 1,098,780 | 1,034,768 | 242,014 | 310,655 |
+| Unique secondary lookup | 604,230 | 586,166 | 313,873 | 287,109 |
+| Nonunique secondary lookup | 211,506 | 214,961 | 45,455 | 26,922 |
 
 Source:
-[April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#3-collection-read-and-lookup-workload)
+(prior [April 27 collection/SQLite matrix](docs/benchmarks/collections_rewrite_vacuum_matrix_pr1075_2026-04-27.md)).
 
 ### Collection Concurrency Workload
 
 The collection insert/read/lookup rows above are single benchmark-driver rows.
 For concurrent collection-layer reads and mixed read/write evidence, use the
-separate concurrency report. In the June 4 run, TreeDB template-v1 primary reads
-into a caller buffer measured 332.3 ns/op at `GOMAXPROCS=12`; mixed primary
-reads with one writer measured 2.96M reader ops/sec and 44.3k writer docs/sec.
+separate concurrency runner. In the November 26 post-Sprint 16 run
+(`i5-11400F`, commit `e78d8b40a`, `GOMAXPROCS=12`, `command_wal_relaxed`, two
+secondary indexes), TreeDB template-v1 primary reads into a caller buffer
+measured `202.6 ns/op` (`4.94M ops/sec`, `0 B/op`, `0 allocs/op`), parallel
+unique secondary lookups measured `296.1 ns/op` (`3.38M ops/sec`, `3 allocs/op`),
+and saturated mixed primary reads with one writer measured `4.95M reader ops/sec`
+(`202.1 ns/op`) and `18.2k writer docs/sec`. Under fixed-read-load pacing
+(`128`-doc writer batches, medians of 5), writer throughput reached `275.9k`
+docs/sec at `500k` reads/sec and `223.3k` docs/sec at `1.50M` reads/sec (`2.5 us`
+p50 read).
 
 Source:
-[June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#4-collection-concurrency-workload)
+(prior [June 4 collection concurrency report](docs/benchmarks/collections_concurrency_main_2026-06-04.md)).
 
 ### Typed Metadata Mutation Workload
 
-September 19 same-host paired run on a Ryzen 7 9700X, pinned to two CPUs with
-`GOMAXPROCS=2`: 128 existing typed documents, 8-dimensional vectors, and a
-declared metadata string update. Each sample performs 10 complete public
-mutations, including validation, planning, command-WAL encoding, and
-publication; setup and teardown are untimed. The Collection API fixture uses
-`command_wal_durable` with fsync-on-publish. The document-service fixture uses
-its test backend with command WAL enabled but without fsync-on-publish. Vector
-assets are not rebuilt.
-Medians are from five samples at baseline `578aeb9bd` and merged candidate
-`ce827a07c`.
+November 26 run on `mikers-B560-DS3H-AC-Y1` (`i5-11400F`, commit `e78d8b40a`),
+pinned to two CPUs with `GOMAXPROCS=2`: 128 existing typed documents,
+8-dimensional vectors, and a declared metadata string update. Each sample
+performs 10 complete public mutations, including validation, planning,
+command-WAL encoding, and publication; setup and teardown are untimed. The
+Collection API fixture uses `command_wal_durable` with fsync-on-publish. The
+document-service fixture uses its test backend with command WAL enabled but
+without fsync-on-publish. Vector assets are not rebuilt. Medians are from five
+samples:
 
-| public boundary | publication profile | median ns/op | batches/sec | rows/sec | B/op | allocs/op | candidate delta |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Collection API | durable, fsync-on-publish | 9,968,746 | 100.31 | 12,840 | 1,634,576 | 10,839 | ns/op -0.3%; B/op -15.7%; allocs/op -3.4% |
-| Document service | test backend, no fsync-on-publish | 5,934,939 | 168.49 | 21,567 | 1,395,546 | 9,068 | ns/op -0.6%; B/op -14.1%; allocs/op -4.0% |
+| public boundary | publication profile | median ns/op | batches/sec | rows/sec | B/op | allocs/op |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Collection API | durable, fsync-on-publish | 18,208,476 | 54.92 | 7,030 | 1,505,976 | 10,959 |
+| Document service | test backend, no fsync-on-publish | 14,122,493 | 70.81 | 9,064 | 1,339,100 | 9,601 |
 
-The rows use different fixtures and publication profiles, so compare each only
-with its own baseline, not with the other row. The sub-1% timing changes are
-within local run noise; the demonstrated optimization is lower allocation
-cost. Reproduce with:
+The rows use different fixtures and publication profiles, so do not compare
+them directly against each other. Reproduce with:
 
 ```sh
 GOMAXPROCS=2 taskset -c 4,5 go test \
@@ -300,69 +320,84 @@ GOMAXPROCS=2 taskset -c 4,5 go test \
 
 ### Vector Search Serving Workload
 
-Dated Tier S exact-FP32 no-document snapshot: Apple M3 (`darwin/arm64`),
-2026-06-05, commit `2feb1f0e35459d1b3d044008203d0c8afcf5630f`, `10000`
+Tier S exact-FP32 no-document snapshot: `mikers-B560-DS3H-AC-Y1` (Intel Core
+i5-11400F, `linux/amd64`), 2026-11-26, commit `e78d8b40a` (with the
+`-tags usearch_bench` compile fix in `vector_usearch_bench_test.go`), `10000`
 documents, `64` dimensions, `M=16`, `efConstruction=128`, `efSearch=128`,
 `topK=10`, query stream length `16`, `BENCHTIME=1000x`, and `COUNT=3`. TreeDB
 rows use warmed persisted `column_graph` / `hnsw_search_pack_v1` no-document
-routes. USearch rows are pure in-memory external ANN baselines, not
+routes. USearch (`v2.25.2`) rows are pure in-memory external ANN baselines, not
 persistence-equivalent storage rows.
 
 | row | cpu | median ns/op | derived ops/sec | B/op | allocs/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| TreeDB `Collection.SearchVectorIndexWithBuffer` | 1 | 43,049 | 23,229 | 0 | 0 |
-| TreeDB `OpenVectorIndexSearcher` + `SearchWithBuffer` parallel row | 8 | 8,610 | 116,144 | 0 | 0 |
-| USearch `Search` | 1 | 30,065 | 33,261 | 136 | 3 |
-| USearch `SearchParallel` | 8 | 6,906 | 144,802 | 139 | 3 |
+| TreeDB `Collection.SearchVectorIndexWithBuffer` | 1 | 65,908 | 15,173 | 0 | 0 |
+| TreeDB `OpenVectorIndexSearcher` + `SearchWithBuffer` | 1 | 65,378 | 15,296 | 0 | 0 |
+| TreeDB `OpenVectorIndexSearcher` + `SearchWithBuffer` parallel row | 8 | 10,167 | 98,357 | 0 | 0 |
+| USearch `Search` | 1 | 79,980 | 12,503 | 136 | 3 |
+| USearch `SearchParallel` | 8 | 11,819 | 84,610 | 136 | 3 |
 
 Source and reproduction workflow:
-[TreeDB vs USearch vector benchmark workflow](TreeDB/docs/guides/vector-search-benchmark-workflow.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#6-vector-search-serving-workload)
+and [TreeDB vs USearch vector benchmark workflow](TreeDB/docs/guides/vector-search-benchmark-workflow.md).
 API chooser, route guardrails, and runnable exact-only demo:
 [high-QPS collection vector-search guide](TreeDB/docs/guides/vector-search-high-qps-collection-api.md)
 and [`cmd/treedb_vector_highqps_demo`](cmd/treedb_vector_highqps_demo/README.md).
 
 ### TreeDB Mongo Gateway Client-Shape Workload
 
-Gateway-shaped BSON documents, `200000` documents, batch size `1000`,
-16 insert producers, two secondary indexes (`email`, `city`), TreeDB
-`command_wal_relaxed`, settled read state, and 16 concurrent readers for the
-read phases. This benchmark keeps TreeDB storage constant while changing the
+November 26 post-Sprint 16 run (`i5-11400F`, commit `e78d8b40a`):
+gateway-shaped BSON documents, `200000` documents, batch size `1000`, 16 insert
+producers, two secondary indexes (`email`, `city`), TreeDB `command_wal_relaxed`
+(standalone COW), settled read state, and 16 concurrent readers for the read
+phases. This benchmark keeps TreeDB storage constant while changing the
 client/protocol boundary.
 
 | TreeDB access path | load docs/sec | concurrent `_id` reads/sec | concurrent indexed `email` reads/sec | `_id` p95 us | `email` p95 us |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Direct collection API | 299,777 | 2,026,834 | 230,846 | 6 | 813 |
-| Mongo raw wire over TCP | 283,472 | 276,187 | 65,365 | 81 | 627 |
-| TreeDB native wire over TCP | 271,948 | 115,712 | 66,917 | 213 | 618 |
-| Mongo driver raw command | 276,503 | 124,961 | 70,215 | 197 | 580 |
-| Mongo driver command | 253,315 | 130,387 | 69,213 | 191 | 596 |
-| Mongo driver CRUD | 228,906 | 115,262 | 62,586 | 221 | 643 |
-| Mongo driver unacknowledged writes | 233,169 | 114,026 | 68,454 | 219 | 601 |
+| Direct collection API | 371,930 | 1,447,011 | 550,218 | 18 | 110 |
+| Mongo raw wire over TCP | 402,560 | 234,285 | 192,711 | 103 | 125 |
+| TreeDB native wire over TCP | 350,096 | 93,901 | 105,634 | 280 | 231 |
+| Mongo driver raw command | 364,605 | 115,848 | 107,077 | 217 | 229 |
+| Mongo driver command | 377,490 | 120,807 | 113,793 | 209 | 213 |
+| Mongo driver CRUD | 336,105 | 106,443 | 113,382 | 237 | 215 |
 
 `Direct collection API` is the TreeDB collection/storage ceiling, not a
-Mongo-compatible protocol row. `Mongo driver unacknowledged writes` is not a
-durability-equivalent default. Use this table to compare TreeDB access-path
-overhead; compare against MongoDB only when client mode and acknowledgement
-semantics match.
+Mongo-compatible protocol row. TreeDB rejects unacknowledged `w:0` writes
+before mutation, so `driver-unack` is excluded. On the same run, TreeDB
+post-load physical `du` measured `15.47–15.51 MiB` (`81.1–81.3 B/doc`) versus
+Docker MongoDB 8.2.7 `driver` physical `du` `218.90 MiB` (`1,147.7 B/doc`,
+`0.07x`). Use this table to compare TreeDB access-path overhead; compare
+against MongoDB only when client mode and acknowledgement semantics match.
 
 Source:
-[June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#7-treedb-mongo-gateway-client-shape-workload)
+(prior [June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md)).
 
 ### Mongo API Full-Sweep Workload
 
-June 17 UTC full benchmark refresh, Docker MongoDB 8 baseline, `100000` BSON
-documents, TreeDB Mongo gateway `driver-command-raw`, and `command_wal_relaxed`.
-The full-sweep load rows include the additional `age_1` range index even when
-the displayed secondary-index count is `0`.
+November 26 post-Sprint 16 benchmark refresh (`i5-11400F`, commit `e78d8b40a`),
+Docker MongoDB 8.2.7 baseline, `100000` BSON documents, TreeDB Mongo gateway
+`driver-command-raw`, `command_wal_relaxed`, standalone COW open mode. The
+full-sweep load rows include the additional `age_1` range index even when the
+displayed secondary-index count is `0`. TreeDB physical MiB is the post-sweep
+`checkpoint` physical `du` (after `480,000+` concurrent updates, prior to
+offline `exhaustive` compaction; `0.09x–0.47x` MongoDB physical `du`).
 
 | secondary indexes | TreeDB load docs/sec | MongoDB load docs/sec | TreeDB `_id` r16 ops/sec | MongoDB `_id` r16 ops/sec | TreeDB physical MiB | MongoDB physical MiB |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 549,311 | 454,224 | 137,313 | 34,396 | 68.66 | 213.38 |
-| 1 | 422,113 | 255,638 | 121,289 | 34,727 | 69.38 | 216.94 |
-| 2 | 448,003 | 206,858 | 129,211 | 34,566 | 69.66 | 217.52 |
+| 0 | 292,742 | 411,559 | 118,446 | 35,711 | 18.97 | 213.38 |
+| 1 | 276,414 | 243,760 | 124,489 | 33,685 | 101.80 | 216.99 |
+| 2 | 239,582 | 183,053 | 125,480 | 37,014 | 102.19 | 217.56 |
+
+In the same run, TreeDB indexed `age` range reads (`r16`) measured `98,356` /
+`88,947` / `105,341 ops/sec` (`3.43x–4.19x` MongoDB 8.2.7) and concurrent `_id`
+`updateOne` scaling reached `52,272–53,846 ops/sec` at 16 writers (`1.54x–1.60x`
+MongoDB) and `70,526–72,159 ops/sec` at 32 writers (`2.00x–2.12x` MongoDB).
 
 Source:
-[June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#8-mongo-api-full-sweep-workload--writer-scaling)
+(prior [June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md)).
 
 ### Vector Search Server Matched-Recall Matrix
 
@@ -388,6 +423,30 @@ and caveats are in the
 [August 12 matched-recall report](docs/benchmarks/treedb_vector_server_matched_recall_2026-08-12.md)
 and its [machine-readable result](docs/benchmarks/treedb_vector_server_matched_recall_2026-08-12.json).
 
+On November 26 (`e78d8b40a`, same `i5-11400F` host, same pinned
+`pgvector/pgvector:pg16` and `milvusdb/milvus:v2.6.20` containers), running the
+checked-in `scripts/bench_vector_db_compare.sh` harness (`M=16`,
+`efConstruction=128`, 1,000 queries) refreshed **in-process** TreeDB
+`column_graph` HNSW (`treedb_vector_search_demo`) against containerized
+PostgreSQL+pgvector and Milvus Standalone on the deterministic clustered
+`100k`/`250k` 128d cosine corpora:
+
+| system (Nov 26 `bench_vector_db_compare.sh`) | corpus | EF | recall@10 | c=1 QPS / p95 | c=32 QPS / p95 | storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| TreeDB `column_graph` HNSW (in-process) | 100k | 64 | .9978 | 9,313.7 / 0.131 ms | 42,183.3 / 0.371 ms | 163.48 MB |
+| PostgreSQL+pgvector (`pg16`) | 100k | 64 | .9985 | 1,501.6 / 0.856 ms | 5,481.6 / 10.34 ms | 137.32 MB |
+| Milvus Standalone (`v2.6.20`) | 100k | 64 | .9989 | 795.6 / 1.45 ms | 2,537.2 / 22.50 ms | 206.61 MB |
+| TreeDB `column_graph` HNSW (in-process) | 250k | 128 | 1.0000 | 5,095.9 / 0.242 ms | 23,051.1 / 0.711 ms | 407.42 MB |
+| PostgreSQL+pgvector (`pg16`) | 250k | 128 | 1.0000 | 453.9 / 2.64 ms | 1,790.8 / 33.74 ms | 343.27 MB |
+| Milvus Standalone (`v2.6.20`) | 250k | 128 | .9977 | 617.2 / 1.71 ms | 2,170.2 / 25.93 ms | 516.41 MB |
+
+Note the measurement boundary: the November 26 table exercises in-process TreeDB
+`column_graph` (`0` docs fetched, `0` fallbacks) against networked pgvector and
+Milvus containers, whereas the August 12 table above measures the networked
+TreeDB single-daemon / four-group server topology. See the
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#10-vector-search-matched-recall-comparison-bench_vector_db_comparesh)
+for insert/build/reopen timings and guardrails.
+
 TreeDB is also wired into `snissn/vectordbbench` through the document service.
 Those rows measure Python/client/HTTP/service overhead and are separate from
 native Go `0 B/op` no-document evidence; see the
@@ -409,34 +468,29 @@ Source:
 
 ### Indexed Text/Vector/Hybrid Insert And Search Workload
 
-The #2589 optimized context rows use the #2564 fixture on an active Apple M3 laptop:
-`256` JSON documents, scalar indexes on `tenant`/`region`, a `lexical`
-title/body text index (new text indexes default to text-v2; v1 is explicit
-compatibility), and an exact cosine column graph (`dims=16`, `M=8`). The
-insert row times `InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows
+November 26 post-Sprint 16 run on `mikers-B560-DS3H-AC-Y1` (`i5-11400F`, Linux
+`x86_64`, commit `e78d8b40a`, `-benchtime=5x -count=3` medians): `256` JSON
+documents, scalar indexes on `tenant`/`region`, a `lexical` title/body text
+index (new text indexes default to `text-v2`; `text-v1` is explicit
+compatibility), and an exact cosine column graph (`dims=16`, `M=8`). The insert
+row times `InsertBatch` + `Flush` + `RebuildVectorIndex`; search rows
 build/index the fixture before timing and then time the search API call only.
-Original #2564 rows remain in the linked runbook for context; treat these as
-same-host/context evidence, not universal throughput claims.
 
-| row | timed boundary | ns/op median | ops/sec | B/op | allocs/op | allocation delta vs #2564 context | key counters |
-| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
-| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 68,588,625 | 14.58 ops/sec / 3,732.4 docs/sec | 7,902,142 | 31,953 | B/op -28.3%; allocs/op -71.8% | 141,939 insert ns/doc; 130,717 vector rebuild ns/doc |
-| Text candidates | `SearchHybridTextCandidates`, no docs | 140,917 | 7,096.38 | 109,298 | 878 | B/op -74.3%; allocs/op -88.4% | 64 text candidates; 0 docs fetched; 0 fail/fallback |
-| Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,584 | 48,582.60 | 36,408 | 82 | B/op 0.0%; allocs/op 0.0% | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
-| Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | B/op -61.4%; allocs/op -86.2% | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
-| Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | B/op -55.2%; allocs/op -76.6% | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
+| row | timed boundary | ns/op median | ops/sec | B/op | allocs/op | key counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Indexed insert/readiness | 256-doc batch insert + flush + vector rebuild | 189,824,102 | 5.27 ops/sec / 1,348.6 docs/sec | 12,472,600 | 39,866 | 45,964 insert ns/doc; 485,386 flush ns/doc; 210,148 vector rebuild ns/doc |
+| Text candidates (`text-v2` default) | `SearchHybridTextCandidates`, no docs | 96,472 | 10,365.70 | 115,020 | 198 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
+| Text candidates (`text-v1` legacy) | `SearchHybridTextCandidates`, no docs | 197,570 | 5,061.50 | 92,825 | 632 | 64 text candidates; 0 docs fetched; 0 fail/fallback |
+| Vector candidates | `SearchHybridVectorCandidates`, no docs | 36,960 | 27,056.28 | 40,256 | 82 | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
+| Hybrid `text-v2` + scalar filter | `SearchHybrid` lexical + scalar filter, no docs | 56,585 | 17,672.53 | 47,147 | 266 | 0 docs fetched; 0 fail/fallback |
 
-The two filtered vector Hybrid rows above are historical measurements. Ordinary
-vector+scalar Hybrid is currently unsupported and fails closed; these numbers
-provide no current latency or qualification evidence. Current benchmark probes
-verify the rejection and explicitly skip those cells without success metrics.
+Ordinary vector+scalar filtered Hybrid is unsupported and fails closed; current
+benchmark probes verify the rejection and skip those cells without success
+metrics.
 
-The strict same-host M4 paired insert/readiness delta was B/op -28.2%,
-allocs/op -71.8%, and ns/op +0.8%. Remaining allocation floors include DB
-open/commitlog setup in profiles plus value-log append buffers, typed-column
-image builders, text analysis/posting construction, and vector rebuild state.
 Source, commands, artifact paths, guardrails, and caveats:
-[TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
+[November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#9-indexed-textvectorhybrid-insert-and-search-workload)
+and [TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
 
 ### Benchmark tools and runbooks
 

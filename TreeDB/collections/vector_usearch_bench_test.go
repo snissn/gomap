@@ -781,9 +781,6 @@ func reportVectorUSearchProductionCommonMetrics(b *testing.B, docs, dims int, pa
 func reportVectorUSearchProductionTreeDBFootprintMetrics(b *testing.B, status VectorIndexStatus) {
 	b.Helper()
 	b.ReportMetric(float64(status.Stats.BytesDisk), "index_bytes_disk")
-	if status.NativeRootBytes > 0 {
-		b.ReportMetric(float64(status.NativeRootBytes), "native_root_bytes")
-	}
 	if status.Stats.BytesMemory > 0 {
 		b.ReportMetric(float64(status.Stats.BytesMemory), "index_bytes_memory")
 	}
