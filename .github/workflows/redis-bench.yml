@@ -1,9 +1,6 @@
 name: "redisserver: protocol bench"
 
 on:
-  push:
-    branches: [main]
-    tags: ['**']
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,492 @@
+name: "CI"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Execution mode (main_fast runs full Linux verification)"
+        required: false
+        type: choice
+        options:
+          - main_fast
+        default: main_fast
+
+# Cancel superseded runs on the same PR or rapid back-to-back main merges.
+# Retain explicitly marked [ci retain] PRs, merge_group, and manual dispatches.
+concurrency:
+  group: >-
+    ci-${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main' || format('run-{0}', github.run_id)) }}
+  cancel-in-progress: >-
+    ${{ (github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (gofmt + scope)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tier: ${{ steps.scope.outputs.tier }}
+      ci_full: ${{ steps.scope.outputs.ci_full }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      run_docs_check: ${{ steps.scope.outputs.run_docs_check }}
+      run_ci_script_tests: ${{ steps.scope.outputs.run_ci_script_tests }}
+      run_python_client: ${{ steps.scope.outputs.run_python_client }}
+      run_vet: ${{ steps.scope.outputs.run_vet }}
+      run_test: ${{ steps.scope.outputs.run_test }}
+      test_shards_json: ${{ steps.scope.outputs.test_shards_json }}
+      run_race: ${{ steps.scope.outputs.run_race }}
+      race_shards_json: ${{ steps.scope.outputs.race_shards_json }}
+      escalate_os: ${{ steps.scope.outputs.escalate_os }}
+      os_runners_json: ${{ steps.scope.outputs.os_runners_json }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Check gofmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Resolve 3-tier CI scope
+        id: scope
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          IS_DRAFT: ${{ github.event.pull_request.draft == true }}
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          DISPATCH_MODE: ${{ inputs.mode || '' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/ci_scope.py plan \
+            --repo . \
+            --event-name "$EVENT_NAME" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --is-draft "$IS_DRAFT" \
+            --pr-title "$PR_TITLE" \
+            --pr-labels-json "${PR_LABELS_JSON:-[]}" \
+            --dispatch-mode "$DISPATCH_MODE" \
+            --output "$RUNNER_TEMP/ci-scope-plan.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI scope plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope-plan.json
+          retention-days: 3
+          if-no-files-found: error
+
+  docs-checks:
+    name: docs & naming contracts (linux)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_docs_check == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Docs lint (fast git-grep)
+        run: make docs-check
+
+      - name: TreeDB docs & typed storage naming contracts
+        env:
+          GOWORK: "off"
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+        run: |
+          set -euo pipefail
+          go test -count=1 ./TreeDB/docs
+          go test -count=1 ./TreeDB/collections -run '^TestTypedStorage'
+
+  draft-vet-compile:
+    name: draft preflight (vet + compile)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.tier == 'draft' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: CI workflow & script contract tests
+        if: ${{ needs.preflight.outputs.run_ci_script_tests == 'true' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --user --quiet pyyaml
+          python3 .github/scripts/test_ci_3tier_contract.py
+
+      - name: Vet and compile touched packages
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind draft
+
+  vet-and-cross-compile:
+    name: vet + cross-OS compile (linux)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_vet == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: CI workflow & script contract tests
+        if: ${{ needs.preflight.outputs.run_ci_script_tests == 'true' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --user --quiet pyyaml
+          python3 .github/scripts/test_ci_3tier_contract.py
+          python3 .github/scripts/test_vlog_auto_incompressible.py
+          python3 scripts/r1_collection_source_test.py
+          python3 scripts/r1_collection_summary_test.py
+          python3 -B scripts/cow_c3_read/host_isolation_test.py
+          python3 -B scripts/cow_c3_read/load_readiness_test.py
+
+      - name: go vet (affected cone)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind vet
+
+      - name: Cross-compile darwin/arm64 (CGO_ENABLED=0)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind cross-darwin
+
+      - name: Cross-compile windows/amd64 (CGO_ENABLED=0)
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind cross-windows
+
+  test-linux:
+    name: test (linux)-${{ matrix.shard }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_test == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.test_shards_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run affected Linux tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          GOMAP_M3_DIAGNOSTICS_DIR: ${{ runner.temp }}/gomap-m3-diagnostics
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind test \
+            --shard-index "${{ matrix.shard }}" \
+            --jsonl "$RUNNER_TEMP/ci-test-linux-${{ matrix.shard }}.jsonl"
+
+      - name: Python native client tests
+        if: ${{ matrix.shard == 0 && needs.preflight.outputs.run_python_client == 'true' }}
+        working-directory: clients/python/treedb_client
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests
+          TREEDB_CLIENT_RUN_INTEGRATION=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -k test_native_public_listener_and_client_capability
+
+      - name: Summarize test timings
+        if: always()
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/ci-test-linux-${{ matrix.shard }}.jsonl" ]; then
+            python3 .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-test-linux-${{ matrix.shard }}.jsonl" | tee "$RUNNER_TEMP/ci-test-linux-${{ matrix.shard }}.summary.md"
+            {
+              echo "### Linux test timing summary (shard ${{ matrix.shard }})"
+              echo
+              cat "$RUNNER_TEMP/ci-test-linux-${{ matrix.shard }}.summary.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  race-linux:
+    name: race (linux touched)-${{ matrix.shard }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_race == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.race_shards_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run touched-package -race tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind race \
+            --shard-index "${{ matrix.shard }}" \
+            --jsonl "$RUNNER_TEMP/ci-race-linux-${{ matrix.shard }}.jsonl"
+
+      - name: Summarize race timings
+        if: always()
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/ci-race-linux-${{ matrix.shard }}.jsonl" ]; then
+            python3 .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-race-linux-${{ matrix.shard }}.jsonl" | tee "$RUNNER_TEMP/ci-race-linux-${{ matrix.shard }}.summary.md"
+            {
+              echo "### Linux race timing summary (shard ${{ matrix.shard }})"
+              echo
+              cat "$RUNNER_TEMP/ci-race-linux-${{ matrix.shard }}.summary.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  test-os-escalated:
+    name: os-escalated (${{ matrix.os }})
+    needs: preflight
+    if: ${{ needs.preflight.outputs.escalate_os == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.preflight.outputs.os_runners_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-scope-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run targeted cross-OS tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHON_BIN: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+          OS_KIND: ${{ runner.os == 'Windows' && 'os-windows' || 'os-macos' }}
+        run: |
+          "$PYTHON_BIN" .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind "$OS_KIND" \
+            --jsonl "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl"
+
+  ci-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs:
+      - preflight
+      - docs-checks
+      - draft-vet-compile
+      - vet-and-cross-compile
+      - test-linux
+      - race-linux
+      - test-os-escalated
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify fail-closed CI tier outcomes
+        shell: bash
+        env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          TIER: ${{ needs.preflight.outputs.tier }}
+          RUN_DOCS: ${{ needs.preflight.outputs.run_docs_check }}
+          RUN_VET: ${{ needs.preflight.outputs.run_vet }}
+          RUN_TEST: ${{ needs.preflight.outputs.run_test }}
+          RUN_RACE: ${{ needs.preflight.outputs.run_race }}
+          ESCALATE_OS: ${{ needs.preflight.outputs.escalate_os }}
+          DOCS_RESULT: ${{ needs.docs-checks.result }}
+          DRAFT_RESULT: ${{ needs.draft-vet-compile.result }}
+          VET_RESULT: ${{ needs.vet-and-cross-compile.result }}
+          TEST_RESULT: ${{ needs.test-linux.result }}
+          RACE_RESULT: ${{ needs.race-linux.result }}
+          OS_RESULT: ${{ needs.test-os-escalated.result }}
+        run: |
+          set -euo pipefail
+          check_result() {
+            local name="$1"
+            local required="$2"
+            local actual="$3"
+            if [[ "$required" == "true" ]]; then
+              if [[ "$actual" != "success" ]]; then
+                echo "FAIL: required job '${name}' finished with '${actual}'" >&2
+                return 1
+              fi
+            else
+              if [[ "$actual" != "skipped" ]]; then
+                echo "FAIL: non-scheduled job '${name}' had unexpected status '${actual}'" >&2
+                return 1
+              fi
+            fi
+            echo "OK: ${name} (required=${required}, result=${actual})"
+          }
+
+          if [[ "$PREFLIGHT_RESULT" != "success" ]]; then
+            echo "FAIL: preflight finished with '${PREFLIGHT_RESULT}'" >&2
+            exit 1
+          fi
+          case "$TIER" in
+            docs_only|draft|surgical|main_fast) ;;
+            *)
+              echo "FAIL: unrecognized CI tier '${TIER}'" >&2
+              exit 1
+              ;;
+          esac
+
+          need_draft="false"
+          if [[ "$TIER" == "draft" ]]; then
+            need_draft="true"
+          fi
+
+          failed=0
+          check_result "docs-checks" "$RUN_DOCS" "$DOCS_RESULT" || failed=1
+          check_result "draft-vet-compile" "$need_draft" "$DRAFT_RESULT" || failed=1
+          check_result "vet-and-cross-compile" "$RUN_VET" "$VET_RESULT" || failed=1
+          check_result "test-linux" "$RUN_TEST" "$TEST_RESULT" || failed=1
+          check_result "race-linux" "$RUN_RACE" "$RACE_RESULT" || failed=1
+          check_result "test-os-escalated" "$ESCALATE_OS" "$OS_RESULT" || failed=1
+
+          if [[ "$failed" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "CI Gate PASSED (tier=${TIER})." >> "$GITHUB_STEP_SUMMARY"

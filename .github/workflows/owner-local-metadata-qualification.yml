@@ -1,40 +1,6 @@
 name: "Owner-local metadata qualification"
 
 on:
-  pull_request:
-    paths:
-      - 'TreeDB/collections/vector_partition_owner*'
-      - 'TreeDB/collections/vector_partition_source_import_v2*'
-      - 'TreeDB/collections/vector_partition_source_reader_v2*'
-      - 'TreeDB/collections/column_source_directory*v2*'
-      - 'TreeDB/collections/column_asset_gc.go'
-      - 'TreeDB/collections/column_asset_reachability.go'
-      - 'TreeDB/collections/column_store.go'
-      - 'TreeDB/collections/column_publish_plan.go'
-      - 'TreeDB/collections/stable_resource.go'
-      - 'TreeDB/collections/column_physical_scan.go'
-      - 'TreeDB/collections/column_physical_visibility.go'
-      - 'TreeDB/collections/typed_column_publication.go'
-      - 'TreeDB/collections/source_atomic.go'
-      - 'TreeDB/collections/column_publish_write.go'
-      - 'TreeDB/collections/command_wal.go'
-      - 'TreeDB/internal/commitlog/command_source_import_v2*'
-      - 'TreeDB/internal/commitlog/command_frame.go'
-      - 'TreeDB/docs/command_wal_matrix_test.go'
-      - 'TreeDB/docs/spec/command-wal-support-matrix.json'
-      - 'TreeDB/collections/vector_partition_paged_root_v2*'
-      - 'TreeDB/collections/vector_partition_legacy_compat_v2_test.go'
-      - 'TreeDB/collections/vector_partition_manifest.go'
-      - 'TreeDB/collections/vector_partition_lifecycle*'
-      - 'TreeDB/collections/vector_partition_persistent_searcher_v1.go'
-      - 'TreeDB/collections/vector_partition_router_v1.go'
-      - 'TreeDB/internal/raftplacement/source_shard_v2*'
-      - 'TreeDB/internal/vectorpartition/source_snapshot*_v2*'
-      - 'TreeDB/internal/sourcepartition/*.go'
-      - 'TreeDB/nativewire/vector_partition_owner*'
-      - 'TreeDB/nativewire/vector_partition_generation_source_v1.go'
-      - 'TreeDB/nativewire/vector_partition_production_node_v1.go'
-      - '.github/workflows/owner-local-metadata-qualification.yml'
   workflow_dispatch:
 
 permissions:

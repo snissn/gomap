@@ -1,0 +1,954 @@
+name: "CI: Full Matrix Sweep"
+
+on:
+  schedule:
+    # Every 8 hours UTC; skips in ~10s if main HEAD has not changed since the last passing sweep.
+    - cron: "0 */8 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      run_macos:
+        description: "Run macOS TreeDB, Root, and unified_bench suites"
+        type: boolean
+        required: false
+        default: true
+      run_windows:
+        description: "Run Windows TreeDB (7 balanced shards) and HashDB suites"
+        type: boolean
+        required: false
+        default: true
+      run_race:
+        description: "Run full 8-shard Linux TreeDB -race suite"
+        type: boolean
+        required: false
+        default: true
+      run_perf_and_suites:
+        description: "Run perf-smoke, snapshot-iterator-perf, read-snapshot guardrail, and unified_bench suites"
+        type: boolean
+        required: false
+        default: true
+      run_redis_bench:
+        description: "Run Docker redisserver protocol bench"
+        type: boolean
+        required: false
+        default: false
+      force:
+        description: "Force run even if main HEAD matches last passing scheduled sweep"
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: >-
+    ci-full-sweep-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'schedule' && 'schedule' || format('manual-{0}', github.run_id)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  guard:
+    name: sweep eligibility guard
+    # Ordinary PRs without [ci full] or ci:full skip immediately with zero VM starts.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.title, '[ci full]') ||
+      contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      run_macos: ${{ steps.check.outputs.run_macos }}
+      run_windows: ${{ steps.check.outputs.run_windows }}
+      run_race: ${{ steps.check.outputs.run_race }}
+      run_perf_and_suites: ${{ steps.check.outputs.run_perf_and_suites }}
+      run_redis_bench: ${{ steps.check.outputs.run_redis_bench }}
+    steps:
+      - name: Evaluate SHA change and sweep toggles
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          IN_MACOS: ${{ inputs.run_macos }}
+          IN_WINDOWS: ${{ inputs.run_windows }}
+          IN_RACE: ${{ inputs.run_race }}
+          IN_PERF: ${{ inputs.run_perf_and_suites }}
+          IN_REDIS: ${{ inputs.run_redis_bench }}
+        run: |
+          set -euo pipefail
+          should_run=true
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            last_pass="$(gh api "repos/${REPO}/actions/workflows/ci-full-sweep.yml/runs?event=schedule&status=completed&per_page=15" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | .[0].head_sha // ""' 2>/dev/null || true)"
+            echo "Current main SHA: ${CURRENT_SHA}"
+            echo "Last passing scheduled sweep SHA: ${last_pass:-<none>}"
+            if [[ -n "$last_pass" && "$last_pass" == "$CURRENT_SHA" ]]; then
+              should_run=false
+              echo "Skipping scheduled Tier 2 sweep: main SHA (${CURRENT_SHA}) already passed." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          run_macos="${IN_MACOS:-true}"
+          run_windows="${IN_WINDOWS:-true}"
+          run_race="${IN_RACE:-true}"
+          run_perf="${IN_PERF:-true}"
+          run_redis="${IN_REDIS:-false}"
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            run_macos=true
+            run_windows=true
+            run_race=true
+            run_perf=true
+            run_redis=false
+          fi
+
+          {
+            echo "should_run=${should_run}"
+            echo "run_macos=${run_macos}"
+            echo "run_windows=${run_windows}"
+            echo "run_race=${run_race}"
+            echo "run_perf_and_suites=${run_perf}"
+            echo "run_redis_bench=${run_redis}"
+          } >> "$GITHUB_OUTPUT"
+
+  treedb-ubuntu:
+    name: TreeDB ubuntu-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps: &treedb_unix_steps
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Expire cached test results
+        shell: bash
+        run: go clean -testcache
+
+      - name: Vet and test TreeDB shard
+        working-directory: TreeDB
+        shell: bash
+        env:
+          GOWORK: "off"
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+          SHARD_NUM: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          shard_index=$((SHARD_NUM - 1))
+          shard_count=3
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          go list ./... > "$tmp_dir/all.txt"
+          awk -F '\t' -v idx="$shard_index" -v n="$shard_count" '
+            NR == FNR {
+              if ($0 !~ /^#/ && NF >= 3 && $1 == "package") {
+                pinned[$3] = $2
+                preserve_fallback[$3] = ($5 == "preserve-fallback")
+              }
+              next
+            }
+            $0 in pinned {
+              if ((pinned[$0] + 0) == idx) print
+              if (preserve_fallback[$0]) fallback++
+              next
+            }
+            (fallback % n) == idx { print }
+            { fallback++ }
+          ' ../.github/ci/treedb_unix_weighted_shards.tsv "$tmp_dir/all.txt" > "$tmp_dir/shard.txt"
+          echo "TreeDB unix shard ${shard_index}/${shard_count}:"
+          cat "$tmp_dir/shard.txt"
+          if [ -s "$tmp_dir/shard.txt" ]; then
+            xargs go vet < "$tmp_dir/shard.txt"
+            xargs go test -json -timeout 30m -p 1 < "$tmp_dir/shard.txt" | tee treedb-test.jsonl
+          fi
+
+      - name: Summarize test timings
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          if [ -s treedb-test.jsonl ]; then
+            python3 ../.github/scripts/summarize_go_test_json.py treedb-test.jsonl | tee treedb-test-summary.md
+            {
+              echo "### TreeDB test timing summary (${{ runner.os }} shard ${{ matrix.shard }})"
+              echo
+              cat treedb-test-summary.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  treedb-macos:
+    name: TreeDB macos-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_macos == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps: *treedb_unix_steps
+
+  treedb-windows:
+    name: TreeDB windows-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_windows == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run balanced Windows TreeDB shard
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python .github/scripts/ci_full_windows_shard.py \
+            --repo . \
+            --shard "${{ matrix.shard }}" \
+            --jsonl "$RUNNER_TEMP/treedb-windows-${{ matrix.shard }}.jsonl"
+
+      - name: Summarize test timings
+        if: always()
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/treedb-windows-${{ matrix.shard }}.jsonl" ]; then
+            python .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/treedb-windows-${{ matrix.shard }}.jsonl" | tee "$RUNNER_TEMP/treedb-windows-${{ matrix.shard }}.summary.md"
+            {
+              echo "### TreeDB Windows shard ${{ matrix.shard }} timing summary"
+              echo
+              cat "$RUNNER_TEMP/treedb-windows-${{ matrix.shard }}.summary.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  treedb-race:
+    name: TreeDB race (linux)-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_race == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            shard_kind: core
+            shard_index: 0
+            shard_count: 7
+          - shard: 2
+            shard_kind: core
+            shard_index: 1
+            shard_count: 7
+          - shard: 3
+            shard_kind: core
+            shard_index: 2
+            shard_count: 7
+          - shard: 4
+            shard_kind: core
+            shard_index: 3
+            shard_count: 7
+          - shard: 5
+            shard_kind: core
+            shard_index: 4
+            shard_count: 7
+          - shard: 6
+            shard_kind: core
+            shard_index: 5
+            shard_count: 7
+          - shard: 7
+            shard_kind: core
+            shard_index: 6
+            shard_count: 7
+          - shard: 8
+            shard_kind: collections
+            shard_index: 0
+            shard_count: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Expire cached test results
+        shell: bash
+        run: go clean -testcache
+
+      - name: Test TreeDB Race
+        working-directory: TreeDB
+        shell: bash
+        env:
+          GOWORK: "off"
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          weighted_shard_file() {
+            awk -F '\t' -v kind="$1" -v idx="$2" -v n="$3" '
+              NR == FNR {
+                if ($0 !~ /^#/ && NF >= 3 && $1 == kind) {
+                  pinned[$3] = $2
+                  preserve_fallback[$3] = ($5 == "preserve-fallback")
+                }
+                next
+              }
+              $0 in pinned {
+                if ((pinned[$0] + 0) == idx) print
+                if (preserve_fallback[$0]) fallback++
+                next
+              }
+              (fallback % n) == idx { print }
+              { fallback++ }
+            ' "$4" "$5" > "$6"
+          }
+          shard_kind="${{ matrix.shard_kind }}"
+          shard_index="${{ matrix.shard_index }}"
+          shard_count="${{ matrix.shard_count }}"
+          if [ "$shard_kind" = collections ]; then
+            go test -json -race -p 1 -timeout 25m ./collections | tee treedb-race.jsonl
+            go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
+            exit 0
+          fi
+          weights=../.github/ci/treedb_race_weighted_shards.tsv
+          go list ./... | grep -Ev '^github\.com/snissn/gomap/TreeDB($|/caching$|/collections$|/db$|/nativewire$)' > "$tmp_dir/pkg_all"
+          go test -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$tmp_dir/root_all"
+          go test -race -p 1 ./caching -list 'Test.*' | grep '^Test' > "$tmp_dir/caching_all"
+          go test -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$tmp_dir/db_all"
+          go test -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$tmp_dir/nw_all"
+          weighted_shard_file package "$shard_index" "$shard_count" "$weights" "$tmp_dir/pkg_all" "$tmp_dir/pkg"
+          weighted_shard_file root "$shard_index" "$shard_count" "$weights" "$tmp_dir/root_all" "$tmp_dir/root"
+          weighted_shard_file caching "$shard_index" "$shard_count" "$weights" "$tmp_dir/caching_all" "$tmp_dir/caching"
+          weighted_shard_file db "$shard_index" "$shard_count" "$weights" "$tmp_dir/db_all" "$tmp_dir/db"
+          weighted_shard_file nativewire "$shard_index" "$shard_count" "$weights" "$tmp_dir/nw_all" "$tmp_dir/nw"
+          if [ -s "$tmp_dir/pkg" ]; then
+            xargs go test -json -race -p 1 -timeout 15m < "$tmp_dir/pkg" | tee -a treedb-race.jsonl
+          fi
+          if [ -s "$tmp_dir/root" ]; then
+            go test -json -race -p 1 -timeout 15m . -run "^($(paste -sd'|' "$tmp_dir/root"))$" | tee -a treedb-race.jsonl
+          fi
+          if [ -s "$tmp_dir/caching" ]; then
+            go test -json -race -p 1 -timeout 15m ./caching -run "^($(paste -sd'|' "$tmp_dir/caching"))$" | tee -a treedb-race.jsonl
+          fi
+          if [ -s "$tmp_dir/db" ]; then
+            go test -json -race -p 1 -timeout 15m ./db -run "^($(paste -sd'|' "$tmp_dir/db"))$" | tee -a treedb-race.jsonl
+          fi
+          if [ -s "$tmp_dir/nw" ]; then
+            go test -json -race -p 1 -timeout 15m ./nativewire -run "^($(paste -sd'|' "$tmp_dir/nw"))$" | tee -a treedb-race.jsonl
+          fi
+
+      - name: Test tagged PRIMARY lifecycle race
+        if: ${{ matrix.shard == 3 }}
+        timeout-minutes: 10
+        working-directory: TreeDB
+        shell: bash
+        env:
+          GOWORK: "off"
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+        run: |
+          go test -json -mod=readonly -tags=treedb_test -race -p 1 -count=1 -timeout=540s ./mvcc -run '^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$' | tee -a treedb-race.jsonl
+
+      - name: Summarize race timing
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          if [ -s treedb-race.jsonl ]; then
+            python3 ../.github/scripts/summarize_go_test_json.py treedb-race.jsonl | tee treedb-race-summary.md
+            {
+              echo "### TreeDB race timing summary (shard ${{ matrix.shard }})"
+              echo
+              cat treedb-race-summary.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  root-ubuntu:
+    name: Root ubuntu-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps: &root_steps
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Expire cached test results
+        shell: bash
+        run: go clean -testcache
+
+      - name: Root vet, docs-check, Python client, and tests
+        shell: bash
+        env:
+          GOWORK: "off"
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+          SHARD_NUM: ${{ matrix.shard }}
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS_NAME" == "Linux" && "$SHARD_NUM" == "1" ]]; then
+            make docs-check
+          fi
+          if [[ "$RUNNER_OS_NAME" == "Linux" && "$SHARD_NUM" == "2" ]]; then
+            (
+              cd clients/python/treedb_client
+              PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests
+              TREEDB_CLIENT_RUN_INTEGRATION=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -k test_native_public_listener_and_client_capability
+            )
+          fi
+          # Exclude TreeDB/* (covered by treedb-*) and cmd/unified_bench (covered by unified-bench-*).
+          shard_index=$((SHARD_NUM - 1))
+          pkg_file="$(mktemp)"
+          trap 'rm -f "$pkg_file"' EXIT
+          go list ./... | grep -Ev '^github\.com/snissn/gomap/(TreeDB($|/)|cmd/unified_bench$)' | \
+            awk -v idx="$shard_index" -v n=2 '(NR-1)%n == idx' > "$pkg_file"
+          if [ -s "$pkg_file" ]; then
+            xargs go vet < "$pkg_file"
+            xargs go test -timeout 30m -p 1 < "$pkg_file"
+          fi
+
+  root-macos:
+    name: Root macos-${{ matrix.shard }}
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_macos == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps: *root_steps
+
+  hashdb-windows:
+    name: HashDB (windows)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_windows == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: HashDB vet & test
+        working-directory: HashDB
+        shell: bash
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          go clean -testcache
+          go vet ./...
+          go test -timeout 15m ./...
+
+  unified-bench-linux:
+    name: unified_bench & suites (linux)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Vet and test cmd/unified_bench
+        working-directory: cmd/unified_bench
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          go clean -testcache
+          go vet ./...
+          go test -timeout 15m ./...
+
+      - name: Read-snapshot append-only guardrail
+        if: ${{ needs.guard.outputs.run_perf_and_suites == 'true' }}
+        run: ./scripts/check_read_snapshot_guardrail.sh
+
+      - name: Unified bench suites & profile smokes
+        if: ${{ needs.guard.outputs.run_perf_and_suites == 'true' }}
+        run: |
+          set -euo pipefail
+          make unified-bench
+          ./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false
+          ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false
+          ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 35m -max-rss-mb 4096
+          for profile in balanced fast durable; do
+            ./bin/unified-bench -dbs treedb -profile "$profile" -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests
+          done
+
+  unified-bench-macos:
+    name: unified_bench (macos)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_macos == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Vet and test cmd/unified_bench
+        working-directory: cmd/unified_bench
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          go clean -testcache
+          go vet ./...
+          go test -timeout 15m ./...
+
+  perf-smoke:
+    name: TreeDB perf-smoke (linux)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_perf_and_suites == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Aggregate perf gate self-tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_vlog_auto_incompressible.py
+
+      - name: ValueLog dict compressibility bench
+        shell: bash
+        run: |
+          count=5
+          duration=1s
+          if [[ "${GITHUB_EVENT_NAME}" == pull_request ]]; then
+            count=1
+            duration=2048x
+          fi
+          go test ./TreeDB/internal/valuelog -run '^$' \
+            -bench 'BenchmarkValueLogDictCompressibilitySweep/valsize=1024/(highly_compressible_tail64|medium_compressible|incompressible)/dict_(off|on)/k=4$' \
+            -benchmem -count="${count}" -benchtime="${duration}" | tee vlog_dict_bench.txt
+
+      - name: Perf baseline checker (gate)
+        run: |
+          extra=()
+          if [[ "${GITHUB_EVENT_NAME}" == pull_request ]]; then
+            extra+=( -storage-only )
+          fi
+          go run .github/scripts/check_vlog_dict_bench.go "${extra[@]}" \
+            -bench-output vlog_dict_bench.txt \
+            -baseline .github/perf_baselines/vlog_dict_defaults.json \
+            -strict=true
+
+      - name: Incompressible auto-vs-off gate
+        shell: bash
+        run: |
+          sample_count=6
+          storage_only=false
+          if [[ "${GITHUB_EVENT_NAME}" == pull_request ]]; then
+            sample_count=1
+            storage_only=true
+          fi
+          if [[ "${storage_only}" == false ]] && ((sample_count % 2 != 0)); then
+            echo "sample_count must be even to balance off/auto row order"
+            exit 2
+          fi
+
+          mapfile -t cpu_models < <(
+            sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | sort -u
+          )
+          cpu_model="unknown"
+          if ((${#cpu_models[@]} == 1)); then
+            cpu_model="${cpu_models[0]}"
+          elif ((${#cpu_models[@]} > 1)); then
+            cpu_model="ambiguous: ${cpu_models[*]}"
+          fi
+          min_cpu_efficiency_frac="0.95"
+          if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
+            min_cpu_efficiency_frac="0.93"
+          elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then
+            min_cpu_efficiency_frac="0.93"
+          fi
+
+          # EPYC 7763 and EPYC 9V74 use 0.93x, and every other or unknown CPU uses 0.95x.
+          # The checker sums the total= fields from value_vlog plus leaf_vlog.
+          run_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            local profile_args=()
+            if [[ "${storage_only}" == false ]]; then
+              profile_args+=( -cpuprofile "${cpu_profile_prefix}" -cpuprofile-tests batch_write_steady )
+            fi
+            if ! go run ./cmd/unified_bench \
+              -profile fast \
+              -keys 1000000 \
+              -valsize 512 \
+              -batchsize 1024 \
+              -dbs "${db}" \
+              -test batch_write_steady \
+              "${profile_args[@]}" \
+              -val-pattern random \
+              -format markdown \
+              -progress=false \
+              -keep=false \
+              -seed 1 \
+              -treedb-force-value-pointers=true \
+              -treedb-value-log-threshold=1 \
+              -treedb-vlog-dict-train-bytes=-1 \
+              -treedb-flush-admission-policy=off \
+              > "${output}" 2>&1; then
+              echo "${db} benchmark failed"
+              tail -n 80 "${output}" || true
+              return 1
+            fi
+          }
+
+          off_logs=()
+          auto_logs=()
+          off_cpu_profiles=()
+          auto_cpu_profiles=()
+          benchmark_failures=()
+          record_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            if ! run_vlog_row "${db}" "${output}" "${cpu_profile_prefix}"; then
+              benchmark_failures+=("${db}:${output}")
+            fi
+          }
+          for sample in $(seq 1 "${sample_count}"); do
+            off_log="vlog_auto_incompressible_off_sample${sample}.txt"
+            auto_log="vlog_auto_incompressible_auto_sample${sample}.txt"
+            off_cpu_profile_prefix="vlog_auto_incompressible_off_sample${sample}"
+            auto_cpu_profile_prefix="vlog_auto_incompressible_auto_sample${sample}"
+            off_cpu_profile="${off_cpu_profile_prefix}_batch_write_steady_treedb_vlog_off.pprof"
+            auto_cpu_profile="${auto_cpu_profile_prefix}_batch_write_steady_treedb_vlog_auto.pprof"
+            off_logs+=("${off_log}")
+            auto_logs+=("${auto_log}")
+            off_cpu_profiles+=("${off_cpu_profile}")
+            auto_cpu_profiles+=("${auto_cpu_profile}")
+            echo "incompressible gate sample ${sample}/${sample_count}"
+
+            if ((sample % 2 == 1)); then
+              echo "sample ${sample} order=off-auto"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+            else
+              echo "sample ${sample} order=auto-off"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+            fi
+          done
+
+          checker_args=()
+          for sample in $(seq 0 $((sample_count - 1))); do
+            checker_args+=( -off-log "${off_logs[$sample]}" -auto-log "${auto_logs[$sample]}" )
+            if [[ "${storage_only}" == false ]]; then
+              checker_args+=( -off-cpu-profile "${off_cpu_profiles[$sample]}" -auto-cpu-profile "${auto_cpu_profiles[$sample]}" )
+            fi
+          done
+          if [[ "${storage_only}" == true ]]; then
+            checker_args+=( -storage-only )
+          fi
+          summary_log="vlog_auto_incompressible_summary.txt"
+          {
+            echo "incompressible gate cpu_model=${cpu_model}"
+            echo "incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}"
+            echo "incompressible gate benchmark_failures=${#benchmark_failures[@]}"
+            if ((${#benchmark_failures[@]} > 0)); then
+              printf 'incompressible gate benchmark_failure=%s\n' "${benchmark_failures[@]}"
+            fi
+          } > "${summary_log}"
+          set +e
+          go run .github/scripts/check_vlog_auto_incompressible.go \
+            "${checker_args[@]}" \
+            -min-samples "${sample_count}" \
+            -min-cpu-efficiency-frac "${min_cpu_efficiency_frac}" \
+            -min-cpu-seconds 0.25 \
+            -max-size-frac 1.02 \
+            2>&1 | tee -a "${summary_log}"
+          checker_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Incompressible value-log aggregate"
+            echo '```text'
+            cat "${summary_log}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if ((${#benchmark_failures[@]} > 0)); then
+            exit 1
+          fi
+          exit "${checker_status}"
+
+      - name: Upload value-log performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlog-perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            vlog_dict_bench.txt
+            vlog_auto_incompressible_summary.txt
+            vlog_auto_incompressible_off_sample*.txt
+            vlog_auto_incompressible_auto_sample*.txt
+            vlog_auto_incompressible_*_sample*.pprof
+          if-no-files-found: warn
+
+  snapshot-iterator-perf:
+    name: snapshot-iterator-perf (linux)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_perf_and_suites == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test snapshot iterator benchmark parser
+        run: GOWORK=off go test ./.github/scripts/snapshot_iterator_bench
+
+      - name: Collect CPU-pinned snapshot iterator pairs
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/snapshot_iterator_perf
+          GOWORK=off go test -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
+          sha256sum artifacts/snapshot_iterator_perf/snapshot_iterator.test | tee artifacts/snapshot_iterator_perf/binary.sha256
+          SNAPSHOT_ITERATOR_PAIRS=8 \
+            .github/scripts/collect_snapshot_iterator_pairs.sh \
+              artifacts/snapshot_iterator_perf/snapshot_iterator.test \
+              artifacts/snapshot_iterator_perf/raw.txt
+          GOWORK=off go run ./.github/scripts/snapshot_iterator_bench \
+            -bench-output artifacts/snapshot_iterator_perf/raw.txt \
+            -json-output artifacts/snapshot_iterator_perf/report.json \
+            -markdown-output artifacts/snapshot_iterator_perf/report.md \
+            -head "$(git rev-parse HEAD)" \
+            -binary-sha256 "$(cut -d' ' -f1 artifacts/snapshot_iterator_perf/binary.sha256)" \
+            -runner-image "${ImageOS:-unknown}-${ImageVersion:-unknown}" \
+            -cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            -affinity "$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)" \
+            -go-version "$(go version)" \
+            -samples 8 \
+            -max-regression 0.05
+
+  redis-bench:
+    name: redisserver protocol bench (linux)
+    needs: guard
+    if: ${{ needs.guard.outputs.should_run == 'true' && needs.guard.outputs.run_redis_bench == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Install redis-benchmark & run protocol bench
+        env:
+          BENCH_KEYS: 20000
+          BENCH_VALSIZE: 128
+          BENCH_CONCURRENCY: 30
+          BENCH_PIPELINE: 8
+          BENCH_SERVERS: "hashdb,treedb,redis,valkey,dragonfly"
+          USE_DOCKER: "1"
+        run: |
+          set -euo pipefail
+          docker pull redis:8.4.0
+          cid="$(docker create redis:8.4.0)"
+          docker cp "$cid:/usr/local/bin/redis-benchmark" /tmp/redis-benchmark
+          docker rm "$cid"
+          sudo install -m 0755 /tmp/redis-benchmark /usr/local/bin/redis-benchmark
+          ./scripts/redis_bench.sh
+
+  full-sweep-gate:
+    name: CI Full Sweep Gate
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       contains(github.event.pull_request.title, '[ci full]') ||
+       contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    needs:
+      - guard
+      - treedb-ubuntu
+      - treedb-macos
+      - treedb-windows
+      - treedb-race
+      - root-ubuntu
+      - root-macos
+      - hashdb-windows
+      - unified-bench-linux
+      - unified-bench-macos
+      - perf-smoke
+      - snapshot-iterator-perf
+      - redis-bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify fail-closed full sweep outcomes
+        shell: bash
+        env:
+          GUARD_RESULT: ${{ needs.guard.result }}
+          SHOULD_RUN: ${{ needs.guard.outputs.should_run }}
+          RUN_MACOS: ${{ needs.guard.outputs.run_macos }}
+          RUN_WINDOWS: ${{ needs.guard.outputs.run_windows }}
+          RUN_RACE: ${{ needs.guard.outputs.run_race }}
+          RUN_PERF: ${{ needs.guard.outputs.run_perf_and_suites }}
+          RUN_REDIS: ${{ needs.guard.outputs.run_redis_bench }}
+          TREEDB_UBUNTU_RESULT: ${{ needs.treedb-ubuntu.result }}
+          TREEDB_MACOS_RESULT: ${{ needs.treedb-macos.result }}
+          TREEDB_WIN_RESULT: ${{ needs.treedb-windows.result }}
+          RACE_RESULT: ${{ needs.treedb-race.result }}
+          ROOT_UBUNTU_RESULT: ${{ needs.root-ubuntu.result }}
+          ROOT_MACOS_RESULT: ${{ needs.root-macos.result }}
+          HASHDB_WIN_RESULT: ${{ needs.hashdb-windows.result }}
+          UNIFIED_LINUX_RESULT: ${{ needs.unified-bench-linux.result }}
+          UNIFIED_MACOS_RESULT: ${{ needs.unified-bench-macos.result }}
+          PERF_RESULT: ${{ needs.perf-smoke.result }}
+          SNAPSHOT_ITER_RESULT: ${{ needs.snapshot-iterator-perf.result }}
+          REDIS_RESULT: ${{ needs.redis-bench.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$GUARD_RESULT" != "success" ]]; then
+            echo "FAIL: guard job finished with '${GUARD_RESULT}'" >&2
+            exit 1
+          fi
+          if [[ "$SHOULD_RUN" != "true" ]]; then
+            echo "Scheduled full sweep skipped (main unchanged)."
+            exit 0
+          fi
+          check() {
+            local name="$1" req="$2" res="$3"
+            if [[ "$req" == "true" && "$res" != "success" ]]; then
+              echo "FAIL: required sweep job '${name}' finished with '${res}'" >&2
+              return 1
+            fi
+            if [[ "$req" != "true" && "$res" != "skipped" ]]; then
+              echo "FAIL: disabled sweep job '${name}' had unexpected status '${res}'" >&2
+              return 1
+            fi
+            echo "OK: ${name} (required=${req}, result=${res})"
+          }
+          failed=0
+          check "treedb-ubuntu" "true" "$TREEDB_UBUNTU_RESULT" || failed=1
+          check "treedb-macos" "$RUN_MACOS" "$TREEDB_MACOS_RESULT" || failed=1
+          check "treedb-windows" "$RUN_WINDOWS" "$TREEDB_WIN_RESULT" || failed=1
+          check "treedb-race" "$RUN_RACE" "$RACE_RESULT" || failed=1
+          check "root-ubuntu" "true" "$ROOT_UBUNTU_RESULT" || failed=1
+          check "root-macos" "$RUN_MACOS" "$ROOT_MACOS_RESULT" || failed=1
+          check "hashdb-windows" "$RUN_WINDOWS" "$HASHDB_WIN_RESULT" || failed=1
+          check "unified-bench-linux" "true" "$UNIFIED_LINUX_RESULT" || failed=1
+          check "unified-bench-macos" "$RUN_MACOS" "$UNIFIED_MACOS_RESULT" || failed=1
+          check "perf-smoke" "$RUN_PERF" "$PERF_RESULT" || failed=1
+          check "snapshot-iterator-perf" "$RUN_PERF" "$SNAPSHOT_ITER_RESULT" || failed=1
+          check "redis-bench" "$RUN_REDIS" "$REDIS_RESULT" || failed=1
+          exit "$failed"

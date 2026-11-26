@@ -32,3 +32,24 @@ profiling may use a dedicated fresh-process script; document its benchmark names
 artifacts, and reproduction in both READMEs and do not label its Go test profiles
 as benchprof inputs. The focused collection insert compression recipe is in the
 [unified-bench README](cmd/unified_bench/README.md#focused-collection-insert-compression-profile).
+
+## Pre-push gate & CI tiers
+
+Before every `git push` to a PR branch, run this local pre-push gate so hosted
+runners are never burned on avoidable format, lint, or doc-contract failures:
+
+```sh
+unformatted="$(gofmt -l $(git ls-files '*.go'))" && test -z "$unformatted"
+go vet <affected-packages>
+go test <affected-packages>
+# If any docs, README, or spec files changed:
+make docs-check && go test ./TreeDB/docs && go test ./TreeDB/collections -run '^TestTypedStorage'
+```
+
+CI uses a 3-tier pre-alpha pipeline (`.github/workflows/ci.yml` + `.github/workflows/ci-full-sweep.yml`)
+reporting a single fail-closed `CI Gate` check:
+
+- **Tier 0 (Docs-only PRs)**: `docs-check`, `TreeDB/docs`, and `TestTypedStorage*` (`<1 min`).
+- **Tier 0.5 (Draft PRs)**: Preflight-only (`gofmt`, affected `go vet`, and compile check, `~1 min`) until marked Ready for Review. Keep WIP iterations in Draft PRs and batch review fixes + base rebases into one coherent push (hold non-urgent pushes while `@codex review` is still running).
+- **Tier 1 (Surgical Ready PRs)**: Fast `preflight` (`gofmt` fails fast before fan-out), `go vet` + `CGO_ENABLED=0` Linux cross-compile checks for `darwin`/`windows`, affected-cone Linux tests, and directly-touched package `-race` (`~3–8 min`). Platform/durability/mmap/`go.mod` changes automatically escalate targeted affected-package tests to `macos-latest` and `windows-latest`.
+- **Tier 2 (Full Cross-OS + Full `-race` + Suites/Perf Sweep)**: Runs on an every-8h schedule (skips when `main` is unchanged), manual `workflow_dispatch`, or on any PR carrying `[ci full]` in the title or the `ci:full` label. Add `ci:full` / `[ci full]` when touching high-risk storage/OS/durability internals or running post-sprint qualification.

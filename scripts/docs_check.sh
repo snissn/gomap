@@ -13,11 +13,18 @@ if command -v rg >/dev/null 2>&1; then
 	have_rg=1
 fi
 
+have_git=0
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	have_git=1
+fi
+
 search() {
 	local pattern="$1"
 	shift
 	if [ "$have_rg" -eq 1 ]; then
 		rg -n "$pattern" -- "$@"
+	elif [ "$have_git" -eq 1 ]; then
+		git grep -n -I -E -- "$pattern" -- "$@"
 	else
 		grep -RInE "$pattern" -- "$@"
 	fi
