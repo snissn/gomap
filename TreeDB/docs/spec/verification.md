@@ -2266,6 +2266,20 @@ Coverage:
     `TestTextV2StatusCountersNativeCOWAndReopen5828`
   - `BenchmarkTextIndexStatusO1`, `BenchmarkTextIndexStorageStatsFullScan`,
     `BenchmarkMaintainTextIndexZeroDebtSkip`
+- `TreeDB/collections/text_v2_phrase_blockmax_test.go`:
+  - `TestTextV2PhraseHighDFBlockMaxLateHits`,
+    `TestTextV2PhraseHighDFBlockMaxSpreadHitsAndPruningProof`,
+    `TestTextV2PhraseBlockMaxRepeatedTerm`,
+    `TestTextV2PhraseBlockMaxThreeTermAndStopwordGap`,
+    `TestTextV2PhraseBlockMaxTieBreakAcrossBlockBoundaries`,
+    `TestTextV2PhraseBlockMaxScalarPrefilter`,
+    `TestTextV2PhraseBlockMaxMidScanFallback`,
+    `TestTextV2PhraseBlockMaxFailClosedParity`,
+    `TestTextV2PhraseBlockMaxNativeCOWHighDF`, and
+    `BenchmarkTextV2PhraseHighDFBlockMax` (streaming Block-Max WAND phrase
+    intersection, score-before-position pruning, high-DF default
+    `CandidateLimit` serving, exact legacy-oracle parity, monotonic mid-scan
+    fallback, fail-closed limits, and native COW parity)
 - `TreeDB/documentservice/rag_parity_test.go`:
   - `TestHTTPLiteralAndBoundedFilteredLexicalSearch4766`
   - `TestHTTPBooleanOperatorConflictParity4766`
