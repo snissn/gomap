@@ -515,13 +515,30 @@ fail closed instead of scanning documents.
 Phrase semantics are ordered and position-lane based. The analyzer tokenizes the
 phrase query with the same persisted analyzer configuration used at index build
 time. Exact phrase uses `Slop=0`; positive slop permits that many total
-intervening tokens across the ordered phrase within a single indexed field. The
-serving path generates candidates from existing posting blocks, validates
-`text-v2-positions` entries for candidate ordinals under the same TreeDB
-snapshot, then scores matching candidates with the unchanged BM25F/BM25F term
-statistics. Score-only phrase/proximity candidate generation still keeps
-`docs_fetched=0`, `state_lookups=0`, and `match_details_built=0`; document fetch
-is only the existing explicit final top-K fetch.
+intervening tokens across the ordered phrase within a single indexed field.
+For multi-term and repeated-term phrases (`len(phrase.terms) > 1`), the default
+serving path streams non-overlapping sealed/micro posting blocks via Block-Max
+WAND intersection (`#5827`), holding O(`TopK`) memory rather than eagerly
+materializing the rarest term into a `CandidateLimit`-bounded map. Block-level
+pruning skips non-overlapping ordinal ranges, scalar-disallowed ranges, and
+blocks whose combined or tightened BM25F upper bound cannot beat the current
+top-K threshold (preserving exact deterministic `documentID` tie-breaking).
+Inside unskipped overlaps, exact BM25F scoring runs before reading
+`text-v2-positions` under the same TreeDB snapshot so candidates that cannot
+enter top-K skip position lookups without altering ranking semantics. Streaming
+phrase work is bounded by `MaxPostingsScanned` (`postings_scan_limit_exceeded`)
+and the per-candidate position-match work cap
+(`phrase_position_match_limit_exceeded`) rather than failing closed on
+`CandidateLimit`. Delta blocks, unverified checksums, overlapping block ranges,
+or stale posting generations fall back cleanly
+(`blockmax_phrase_unsealed_stale_or_overlapping_block`) to the legacy bounded
+candidate-map path while keeping `TextPostingsScanned` monotonic, preserving
+`CandidateLimit` on the map fallback, and resetting phrase candidate counters
+so no work is double-counted. `Explain.Serving.Path` remains
+`phrase_validation` (`BlockMaxEnabled=true` while streaming and `false` on
+fallback/legacy execution). Score-only phrase/proximity candidate generation
+still keeps `docs_fetched=0`, `state_lookups=0`, and `match_details_built=0`;
+document fetch is only the existing explicit final top-K fetch.
 
 Analyzer options are persisted in `TextIndexDefinition.AnalyzerOptions`. The
 simple analyzer supports normalized stopword filtering and a normalized token

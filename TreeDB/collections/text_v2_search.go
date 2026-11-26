@@ -135,6 +135,39 @@ type textV2SearchBlockCache struct {
 	// Immutable for this query. Nil/all retain complete blocks, including
 	// historical entries; strict filters retain only their selected ordinals.
 	allowed *textV2SearchOrdinalAllowSet
+	// Optional hard cap on retained sidecar blocks per map during monotonic
+	// streaming scans (0 = unbounded).
+	maxBlocks int
+}
+
+func (cache *textV2SearchBlockCache) evictBefore(ordinal uint64) {
+	if cache == nil || ordinal == 0 {
+		return
+	}
+	for blockStart, block := range cache.normBlocks {
+		if block.BlockSize > 0 && blockStart <= math.MaxUint64-uint64(block.BlockSize) && blockStart+uint64(block.BlockSize) <= ordinal {
+			delete(cache.normBlocks, blockStart)
+		}
+	}
+	for blockStart, block := range cache.docMapBlocks {
+		if block.BlockSize > 0 && blockStart <= math.MaxUint64-uint64(block.BlockSize) && blockStart+uint64(block.BlockSize) <= ordinal {
+			delete(cache.docMapBlocks, blockStart)
+		}
+	}
+}
+
+func evictTextV2SmallestBlockKey[V any](m map[uint64]V) {
+	var oldest uint64
+	hasOldest := false
+	for k := range m {
+		if !hasOldest || k < oldest {
+			oldest = k
+			hasOldest = true
+		}
+	}
+	if hasOldest {
+		delete(m, oldest)
+	}
 }
 
 type textV2SearchNormBlock struct {
@@ -2981,6 +3014,9 @@ func (cache *textV2SearchBlockCache) normBlockAtOptional(snap *backenddb.Snapsho
 			}
 		}
 	}
+	if cache.maxBlocks > 0 && len(cache.normBlocks) >= cache.maxBlocks {
+		evictTextV2SmallestBlockKey(cache.normBlocks)
+	}
 	cache.normBlocks[blockStart] = decoded
 	return decoded, true, nil
 }
@@ -3178,6 +3214,9 @@ func (cache *textV2SearchBlockCache) docMapBlockAtOptional(snap *backenddb.Snaps
 	}
 	if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultDocMapBlockSize {
 		return textV2SearchDocMapBlock{}, false, errMalformedTextStorage("text-v2 docmap block key/value mismatch")
+	}
+	if cache.maxBlocks > 0 && len(cache.docMapBlocks) >= cache.maxBlocks {
+		evictTextV2SmallestBlockKey(cache.docMapBlocks)
 	}
 	cache.docMapBlocks[blockStart] = decoded
 	return decoded, true, nil
