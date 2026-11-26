@@ -151,7 +151,12 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	if err != nil {
 		return result, update, err
 	}
-	if missingKind == rootpublication.ResourceOuterLeafPack && pack == nil {
+	// GC can retire or delete an older packed generation without publishing a
+	// root commit, leaving its exact token inherited conservatively from
+	// visibleBase across both ordinary and subsequent packed publications.
+	// Project out only packs that the final candidate roots prove unreachable;
+	// any still-reachable omitted pack remains uncovered and fails closed below.
+	if missingKind == rootpublication.ResourceOuterLeafPack {
 		projected, err := db.projectUncoveredPublicationPacks(resources, idx, next, covered, opts)
 		if err != nil {
 			return result, update, err
