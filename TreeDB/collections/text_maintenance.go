@@ -146,7 +146,7 @@ func appendSingleTextIndexMutationDeltas(
 				return err
 			}
 			stateTable.DeleteSteal(encodeTextStateKey(mutation.documentID))
-			if err := statsDelta.addState(oldState, -1); err != nil {
+			if _, err := statsDelta.addState(oldState, -1); err != nil {
 				return err
 			}
 		}
@@ -163,7 +163,7 @@ func appendSingleTextIndexMutationDeltas(
 				addTextPostingsForDocument(postingsTable, mutation.documentID, newAnalysis)
 			}
 			stateTable.SetSteal(encodeTextStateKey(mutation.documentID), encodeTextDocumentStateValue(newState))
-			if err := statsDelta.addState(newState, 1); err != nil {
+			if _, err := statsDelta.addState(newState, 1); err != nil {
 				return err
 			}
 		}
@@ -226,6 +226,11 @@ func appendSingleTextV2IndexMutationDeltas(
 	sort.Slice(orderedMutations, func(i, j int) bool {
 		return bytes.Compare(orderedMutations[i].documentID, orderedMutations[j].documentID) < 0
 	})
+	for i := 1; i < len(orderedMutations); i++ {
+		if bytes.Equal(orderedMutations[i-1].documentID, orderedMutations[i].documentID) {
+			return fmt.Errorf("collections: duplicate text-v2 index maintenance document id %q", string(orderedMutations[i].documentID))
+		}
+	}
 	typedOldStates, err := loadTypedTextOldStates(snap, catalog, opts, def, orderedMutations)
 	if err != nil {
 		return err
@@ -274,6 +279,7 @@ func appendSingleTextV2IndexMutationDeltas(
 	nextOrdinal := status.NextOrdinal
 	liveDocuments := status.LiveDocuments
 	deletedDocuments := status.DeletedDocuments
+	var addedStalePostings uint64
 	nextGeneration := status.RootGeneration + 1
 	if nextGeneration == 0 {
 		return errMalformedTextStorage("text-v2 root generation overflow")
@@ -326,10 +332,15 @@ func appendSingleTextV2IndexMutationDeltas(
 			if nextDoc.Generation == 0 {
 				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
 			}
-			if err := statsDelta.addState(oldState, -1); err != nil {
+			oldUniqueTerms, err := statsDelta.addState(oldState, -1)
+			if err != nil {
 				return err
 			}
-			if err := statsDelta.addState(newState, 1); err != nil {
+			if oldUniqueTerms > ^uint64(0)-addedStalePostings {
+				return errMalformedTextStorage("text-v2 stale postings overflow")
+			}
+			addedStalePostings += oldUniqueTerms
+			if _, err := statsDelta.addState(newState, 1); err != nil {
 				return err
 			}
 		case mutation.deleteOld:
@@ -337,9 +348,14 @@ func appendSingleTextV2IndexMutationDeltas(
 			if nextDoc.Generation == 0 {
 				return errMalformedTextStorage("text-v2 generation overflow for document %q", string(mutation.documentID))
 			}
-			if err := statsDelta.addState(oldState, -1); err != nil {
+			oldUniqueTerms, err := statsDelta.addState(oldState, -1)
+			if err != nil {
 				return err
 			}
+			if oldUniqueTerms > ^uint64(0)-addedStalePostings {
+				return errMalformedTextStorage("text-v2 stale postings overflow")
+			}
+			addedStalePostings += oldUniqueTerms
 			if liveDocuments == 0 {
 				return errMalformedTextStorage("text-v2 live document underflow")
 			}
@@ -357,7 +373,7 @@ func appendSingleTextV2IndexMutationDeltas(
 			if nextOrdinal == 0 {
 				return errMalformedTextStorage("text-v2 next ordinal overflow")
 			}
-			if err := statsDelta.addState(newState, 1); err != nil {
+			if _, err := statsDelta.addState(newState, 1); err != nil {
 				return err
 			}
 			liveDocuments++
@@ -422,10 +438,22 @@ func appendSingleTextV2IndexMutationDeltas(
 	if err != nil {
 		return err
 	}
-	_, _, postingBlockCounts, err := buildTextV2PostingBatchTable(postingBlocksTable, &postingBuilder, textV2PostingBlockKindMicro, textV2PostingBlockMicroPostings, mutationBlockIDStart)
+	addedMicroBlocks, _, postingBlockCounts, err := buildTextV2PostingBatchTable(postingBlocksTable, &postingBuilder, textV2PostingBlockKindMicro, textV2PostingBlockMicroPostings, mutationBlockIDStart)
 	if err != nil {
 		return err
 	}
+	if addedMicroBlocks < 0 {
+		return errMalformedTextStorage("text-v2 negative micro posting block count %d", addedMicroBlocks)
+	}
+	addedMicro := uint64(addedMicroBlocks)
+	if addedMicro > ^uint64(0)-status.MicroPostingBlocks {
+		return errMalformedTextStorage("text-v2 micro posting block count overflow")
+	}
+	microPostingBlocks := status.MicroPostingBlocks + addedMicro
+	if addedStalePostings > ^uint64(0)-status.StalePostings {
+		return errMalformedTextStorage("text-v2 stale postings overflow")
+	}
+	stalePostings := status.StalePostings + addedStalePostings
 	if err := statsDelta.addPostingBlocks(postingBlockCounts); err != nil {
 		return err
 	}
@@ -433,15 +461,22 @@ func appendSingleTextV2IndexMutationDeltas(
 		return err
 	}
 	nextStatus := textV2IndexStatusValue{
-		FormatVersion:    textV2FormatVersion,
-		RootGeneration:   nextGeneration,
-		StatsGeneration:  nextGeneration,
-		DocMapGeneration: nextGeneration,
-		NormGeneration:   nextGeneration,
-		TermGeneration:   nextGeneration,
-		NextOrdinal:      nextOrdinal,
-		LiveDocuments:    liveDocuments,
-		DeletedDocuments: deletedDocuments,
+		FormatVersion:       textV2FormatVersion,
+		RootGeneration:      nextGeneration,
+		StatsGeneration:     nextGeneration,
+		DocMapGeneration:    nextGeneration,
+		NormGeneration:      nextGeneration,
+		TermGeneration:      nextGeneration,
+		NextOrdinal:         nextOrdinal,
+		LiveDocuments:       liveDocuments,
+		DeletedDocuments:    deletedDocuments,
+		SealedPostingBlocks: status.SealedPostingBlocks,
+		MicroPostingBlocks:  microPostingBlocks,
+		DeltaPostingBlocks:  status.DeltaPostingBlocks,
+		StalePostings:       stalePostings,
+	}
+	if _, ok := nextStatus.totalPostingBlocks(); !ok {
+		return errMalformedTextStorage("text-v2 total posting block count overflow")
 	}
 	generationsTable.SetSteal(encodeTextV2StatusKey(), encodeTextV2IndexStatusValue(nextStatus))
 
@@ -895,9 +930,9 @@ func textAnalysisFromDocumentState(state textDocumentStateValue) textAnalyzedDoc
 	return analysis
 }
 
-func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) error {
+func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) (uint64, error) {
 	if sign == 0 {
-		return nil
+		return 0, nil
 	}
 	seen := textValues[uint64]{admit: d.Terms.admit}
 	for _, field := range state.Fields {
@@ -905,24 +940,28 @@ func (d *textStatsDelta) addState(state textDocumentStateValue, sign int64) erro
 		value.DocumentCount += sign
 		value.TotalTokenCount += signedTextDelta(field.Length, sign)
 		if err := d.Fields.set(field.Field, value); err != nil {
-			return err
+			return 0, err
 		}
 		for _, term := range field.Terms {
 			if err := seen.set(term.Term, seen.get(term.Term)+uint64(term.Frequency)); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
+	var uniqueTerms uint64
 	for term, frequency := range seen.all {
+		if frequency > 0 {
+			uniqueTerms++
+		}
 		value := d.Terms.get(term)
 		value.DocumentFrequency += sign
 		value.TotalTermFrequency += signedTextDeltaUint64(frequency, sign)
 		if err := d.Terms.set(term, value); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	d.Documents += sign
-	return nil
+	return uniqueTerms, nil
 }
 func (d *textStatsDelta) addPostingBlocks(counts textValues[uint64]) error {
 	for term, count := range counts.all {

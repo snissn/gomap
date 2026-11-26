@@ -130,3 +130,54 @@ func (c *Collection) nativeTextStorageStats(indexName string) (stats TextIndexSt
 	}
 	return inspectTextIndexStorage(read.capture.Snapshot(), catalog, def)
 }
+
+func (c *Collection) nativeTextIndexStatus(indexName string) (status TextIndexStatus, resultErr error) {
+	if err := ValidateIndexName(indexName); err != nil {
+		return TextIndexStatus{}, err
+	}
+	read, err := c.nativeJSON.Capture(c.name)
+	if err != nil {
+		return TextIndexStatus{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+	def, ok := findTextIndex(read.meta.TextIndexes, indexName)
+	if !ok {
+		return TextIndexStatus{}, ErrIndexNotFound
+	}
+	status = textIndexStatusForDefinition(read.meta.Name, def)
+	if !status.Ready || status.Version != TextIndexVersionV2 {
+		return status, nil
+	}
+	lease, err := read.engine.allocator.AdmitNativeBytes(0)
+	if err != nil {
+		return TextIndexStatus{}, err
+	}
+	defer lease.Close()
+	var charge uint64
+	admit := func(n uint64) error {
+		n = memtable.COWAllocationCharge(n)
+		if n > ^uint64(0)-charge {
+			return memtable.ErrCOWCapacity
+		}
+		if err := lease.Resize(charge + n); err != nil {
+			return err
+		}
+		charge += n
+		return nil
+	}
+	catalog, err := newNativeTextCatalog(read, admit)
+	if err != nil {
+		return TextIndexStatus{}, err
+	}
+	v2Status, found, err := readTextV2StatusAtRoot(read.capture.Snapshot(), catalog, collectionTextV2GenerationsRootName(read.meta.Name, def.Name))
+	if err != nil {
+		return TextIndexStatus{}, err
+	}
+	if !found {
+		return TextIndexStatus{}, errMalformedTextStorage("missing text-v2 status record for collection %q index %q", read.meta.Name, def.Name)
+	}
+	if err := populateTextIndexV2StatusCounters(&status, v2Status); err != nil {
+		return TextIndexStatus{}, err
+	}
+	return status, nil
+}

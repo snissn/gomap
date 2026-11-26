@@ -1744,6 +1744,52 @@ entries present for an index without `StorePositions` make the text-v2 positions
 lane corrupt and must fail closed when inspected or when detailed materialization
 needs the affected payload.
 
+### Text-v2 generations status record
+
+Each text-v2 index persists one canonical status record in
+`<collection>/text-v2-generations/<indexName>` at key:
+
+```text
+u8  KeyVersion = 2
+u8  KeyKind    = 0x01  // text-v2 status
+```
+
+Status value encoding (all integer varints are Go `binary.PutUvarint`):
+
+```text
+u8      ValueVersion  = 1
+uvarint FormatVersion = 1
+uvarint RootGeneration
+uvarint StatsGeneration
+uvarint DocMapGeneration
+uvarint NormGeneration
+uvarint TermGeneration
+uvarint NextOrdinal
+uvarint LiveDocuments
+uvarint DeletedDocuments
+uvarint SealedPostingBlocks
+uvarint MicroPostingBlocks
+uvarint DeltaPostingBlocks
+uvarint StalePostings
+```
+
+Validation invariants:
+
+- `ValueVersion`, `FormatVersion`, and trailing bytes are validated strictly;
+- `RootGeneration` and all component generations are non-zero, and no component
+  generation may exceed `RootGeneration`;
+- `NextOrdinal` is non-zero and `LiveDocuments + DeletedDocuments <= NextOrdinal - 1`;
+- `SealedPostingBlocks + MicroPostingBlocks + DeltaPostingBlocks` must not
+  overflow `uint64`;
+- `StalePostings` tracks the exact count of obsolete posting entries remaining
+  in `<collection>/text-v2-posting-blocks/<indexName>` (counting each unique
+  term across all fields of an updated or deleted document once);
+- full storage inspection (`TextIndexStorageStats`) fails closed with
+  `ErrTextIndexStorageCorrupt` if scanned sealed/micro/delta posting-block
+  counts disagree with status; full rewrite planning (`RewriteTextIndex`)
+  additionally fails closed if scanned stale postings disagree with
+  `StalePostings`.
+
 ### Text-v2 rewrite/merge records
 
 Text-v2 rewrite/merge maintenance does not introduce another durable file or GC
@@ -1760,7 +1806,8 @@ existing v2 roots:
   roots after stale postings are gone;
 - `<collection>/text-v2-generations/<indexName>` receives a new status record
   with an advanced root/term and, when tombstones are purged, docmap/norm
-  generation.
+  generation, exact post-rewrite sealed/micro/delta posting-block counts, and
+  `StalePostings = 0`.
 
 Consequently, old inline values or `value_vlog`/leaf-log pointer-backed payloads
 are reclaimed only by normal TreeDB reachability and maintenance after snapshots

@@ -107,15 +107,30 @@ type textV2RootFormatValue struct {
 }
 
 type textV2IndexStatusValue struct {
-	FormatVersion    uint32
-	RootGeneration   uint64
-	StatsGeneration  uint64
-	DocMapGeneration uint64
-	NormGeneration   uint64
-	TermGeneration   uint64
-	NextOrdinal      uint64
-	LiveDocuments    uint64
-	DeletedDocuments uint64
+	FormatVersion       uint32
+	RootGeneration      uint64
+	StatsGeneration     uint64
+	DocMapGeneration    uint64
+	NormGeneration      uint64
+	TermGeneration      uint64
+	NextOrdinal         uint64
+	LiveDocuments       uint64
+	DeletedDocuments    uint64
+	SealedPostingBlocks uint64
+	MicroPostingBlocks  uint64
+	DeltaPostingBlocks  uint64
+	StalePostings       uint64
+}
+
+func (v textV2IndexStatusValue) totalPostingBlocks() (uint64, bool) {
+	if v.SealedPostingBlocks > ^uint64(0)-v.MicroPostingBlocks {
+		return 0, false
+	}
+	sum := v.SealedPostingBlocks + v.MicroPostingBlocks
+	if v.DeltaPostingBlocks > ^uint64(0)-sum {
+		return 0, false
+	}
+	return sum + v.DeltaPostingBlocks, true
 }
 
 type textV2DocIDValue struct {
@@ -359,7 +374,7 @@ func decodeTextV2RootFormatValue(raw []byte) (textV2RootFormatValue, error) {
 }
 
 func encodeTextV2IndexStatusValue(value textV2IndexStatusValue) []byte {
-	out := make([]byte, 0, 80)
+	out := make([]byte, 0, 128)
 	out = append(out, textV2StatusValueVersion)
 	out = appendTextUvarint(out, uint64(value.FormatVersion))
 	out = appendTextUvarint(out, value.RootGeneration)
@@ -370,6 +385,10 @@ func encodeTextV2IndexStatusValue(value textV2IndexStatusValue) []byte {
 	out = appendTextUvarint(out, value.NextOrdinal)
 	out = appendTextUvarint(out, value.LiveDocuments)
 	out = appendTextUvarint(out, value.DeletedDocuments)
+	out = appendTextUvarint(out, value.SealedPostingBlocks)
+	out = appendTextUvarint(out, value.MicroPostingBlocks)
+	out = appendTextUvarint(out, value.DeltaPostingBlocks)
+	out = appendTextUvarint(out, value.StalePostings)
 	return out
 }
 
@@ -417,6 +436,22 @@ func decodeTextV2IndexStatusValue(raw []byte) (textV2IndexStatusValue, error) {
 	if err != nil {
 		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status deleted documents: %v", err)
 	}
+	sealedPostingBlocks, err := cur.readUvarint()
+	if err != nil {
+		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status sealed posting blocks: %v", err)
+	}
+	microPostingBlocks, err := cur.readUvarint()
+	if err != nil {
+		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status micro posting blocks: %v", err)
+	}
+	deltaPostingBlocks, err := cur.readUvarint()
+	if err != nil {
+		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status delta posting blocks: %v", err)
+	}
+	stalePostings, err := cur.readUvarint()
+	if err != nil {
+		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status stale postings: %v", err)
+	}
 	if cur.remaining() != 0 {
 		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status trailing bytes")
 	}
@@ -433,17 +468,25 @@ func decodeTextV2IndexStatusValue(raw []byte) (textV2IndexStatusValue, error) {
 	if liveDocuments > allocatedOrdinals || deletedDocuments > allocatedOrdinals-liveDocuments {
 		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status live/deleted documents exceed allocated ordinals")
 	}
-	return textV2IndexStatusValue{
-		FormatVersion:    uint32(formatVersion),
-		RootGeneration:   rootGeneration,
-		StatsGeneration:  statsGeneration,
-		DocMapGeneration: docMapGeneration,
-		NormGeneration:   normGeneration,
-		TermGeneration:   termGeneration,
-		NextOrdinal:      nextOrdinal,
-		LiveDocuments:    liveDocuments,
-		DeletedDocuments: deletedDocuments,
-	}, nil
+	value := textV2IndexStatusValue{
+		FormatVersion:       uint32(formatVersion),
+		RootGeneration:      rootGeneration,
+		StatsGeneration:     statsGeneration,
+		DocMapGeneration:    docMapGeneration,
+		NormGeneration:      normGeneration,
+		TermGeneration:      termGeneration,
+		NextOrdinal:         nextOrdinal,
+		LiveDocuments:       liveDocuments,
+		DeletedDocuments:    deletedDocuments,
+		SealedPostingBlocks: sealedPostingBlocks,
+		MicroPostingBlocks:  microPostingBlocks,
+		DeltaPostingBlocks:  deltaPostingBlocks,
+		StalePostings:       stalePostings,
+	}
+	if _, ok := value.totalPostingBlocks(); !ok {
+		return textV2IndexStatusValue{}, errMalformedTextStorage("text-v2 status posting block count overflow")
+	}
+	return value, nil
 }
 
 func encodeTextV2DocIDValue(value textV2DocIDValue) []byte {

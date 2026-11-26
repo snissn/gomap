@@ -489,17 +489,25 @@ func buildCreateTextV2IndexBackfillPlan(
 	plan.stats.EncodedBytes += statsBytes
 	plan.stats.V2TermStatsBytes += statsBytes
 
+	if postingBlocks < 0 {
+		resetAll()
+		return nil, errMalformedTextStorage("text-v2 negative sealed posting block count %d", postingBlocks)
+	}
 	statusKey := encodeTextV2StatusKey()
 	statusValue := encodeTextV2IndexStatusValue(textV2IndexStatusValue{
-		FormatVersion:    textV2FormatVersion,
-		RootGeneration:   1,
-		StatsGeneration:  1,
-		DocMapGeneration: 1,
-		NormGeneration:   1,
-		TermGeneration:   1,
-		NextOrdinal:      nextOrdinal,
-		LiveDocuments:    uint64(plan.stats.DocumentsScanned),
-		DeletedDocuments: 0,
+		FormatVersion:       textV2FormatVersion,
+		RootGeneration:      1,
+		StatsGeneration:     1,
+		DocMapGeneration:    1,
+		NormGeneration:      1,
+		TermGeneration:      1,
+		NextOrdinal:         nextOrdinal,
+		LiveDocuments:       uint64(plan.stats.DocumentsScanned),
+		DeletedDocuments:    0,
+		SealedPostingBlocks: uint64(postingBlocks),
+		MicroPostingBlocks:  0,
+		DeltaPostingBlocks:  0,
+		StalePostings:       0,
 	})
 	tables[generationsRootName].SetSteal(statusKey, statusValue)
 	statusBytes := uint64(len(statusKey) + len(statusValue))
@@ -1176,6 +1184,15 @@ func inspectTextV2IndexStorageWithBudget(snap *backenddb.Snapshot, catalog *coll
 		if err := inspectTextV2Root(snap, catalog, def, rootName, family, status, &stats, budget, positionValidation); err != nil {
 			return stats, err
 		}
+	}
+	if stats.V2SealedPostingBlocks != status.SealedPostingBlocks ||
+		stats.V2MicroPostingBlocks != status.MicroPostingBlocks ||
+		stats.V2DeltaPostingBlocks != status.DeltaPostingBlocks {
+		return stats, errMalformedTextStorage(
+			"text-v2 status posting block counts (sealed=%d micro=%d delta=%d) do not match scanned posting blocks (sealed=%d micro=%d delta=%d)",
+			status.SealedPostingBlocks, status.MicroPostingBlocks, status.DeltaPostingBlocks,
+			stats.V2SealedPostingBlocks, stats.V2MicroPostingBlocks, stats.V2DeltaPostingBlocks,
+		)
 	}
 	stats.V2RewriteMergeState = textV2RewriteMergeStateFromStats(stats)
 	return stats, nil

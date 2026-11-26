@@ -91,14 +91,17 @@ type TextIndexRewriteStats struct {
 }
 
 type textV2PostingRewriteTerm struct {
-	term      string
-	oldKeys   [][]byte
-	entries   []textV2PostingBlockEntry
-	liveByOrd map[uint64]textV2PostingBlockEntry
-	postings  uint64
-	stale     uint64
-	oldBlocks uint64
-	nonSealed bool
+	term            string
+	oldKeys         [][]byte
+	entries         []textV2PostingBlockEntry
+	liveByOrd       map[uint64]textV2PostingBlockEntry
+	postings        uint64
+	stale           uint64
+	oldBlocks       uint64
+	oldSealedBlocks uint64
+	oldMicroBlocks  uint64
+	oldDeltaBlocks  uint64
+	nonSealed       bool
 }
 
 type textV2RewritePlan struct {
@@ -115,6 +118,13 @@ type textV2RewritePlan struct {
 	termsChanged   bool
 	tombChanged    bool
 	statusChanged  bool
+
+	totalOldSealed    uint64
+	totalOldMicro     uint64
+	totalOldDelta     uint64
+	sealedBlocksAfter uint64
+	microBlocksAfter  uint64
+	deltaBlocksAfter  uint64
 
 	nextStatus textV2IndexStatusValue
 	workspace  *nativeTextRewriteWorkspace
@@ -141,10 +151,11 @@ type textV2RewriteDecision struct {
 }
 
 type textV2RewriteRunOptions struct {
-	Rewrite          TextIndexRewriteOptions
-	DryRun           bool
-	NeedStorageStats bool
-	Decide           func(before TextIndexStorageStats, plan TextIndexRewriteStats) textV2RewriteDecision
+	Rewrite               TextIndexRewriteOptions
+	DryRun                bool
+	NeedStorageStats      bool
+	AllowZeroDebtFastSkip bool
+	Decide                func(before TextIndexStorageStats, plan TextIndexRewriteStats) textV2RewriteDecision
 }
 
 func newTextV2RewriteBudget(ctx context.Context, opts TextIndexRewriteOptions) *textV2RewriteBudget {
@@ -440,6 +451,45 @@ func prepareTextV2RewriteRun(ctx context.Context, snap *backenddb.Snapshot, cata
 			plan = nil
 		}
 	}()
+	if run.AllowZeroDebtFastSkip {
+		if err := budget.check(); err != nil {
+			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+				return &textV2RewritePlan{stats: textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason)}, beforeStats, budget.reason, nil
+			}
+			return nil, beforeStats, "", err
+		}
+		generationsRootName := collectionTextV2GenerationsRootName(catalog.meta.Name, def.Name)
+		status, ok, err := readTextV2StatusAtRoot(snap, catalog, generationsRootName)
+		if err != nil {
+			return nil, beforeStats, "", err
+		}
+		if !ok {
+			return nil, beforeStats, "", errMalformedTextStorage("missing text-v2 status record for collection %q index %q", catalog.meta.Name, def.Name)
+		}
+		if status.DeletedDocuments == 0 && status.MicroPostingBlocks == 0 && status.DeltaPostingBlocks == 0 && status.StalePostings == 0 {
+			beforeStats = TextIndexStorageStats{
+				Version:               TextIndexVersionV2,
+				Documents:             status.LiveDocuments,
+				V2NextOrdinal:         status.NextOrdinal,
+				V2LiveDocuments:       status.LiveDocuments,
+				V2DeletedDocs:         0,
+				V2RootGeneration:      status.RootGeneration,
+				V2StatsGeneration:     status.StatsGeneration,
+				V2PostingBlocks:       status.SealedPostingBlocks,
+				V2SealedPostingBlocks: status.SealedPostingBlocks,
+			}
+			beforeStats.V2RewriteMergeState = textV2RewriteMergeStateFromStats(beforeStats)
+			return &textV2RewritePlan{
+				stats: TextIndexRewriteStats{
+					IndexName:            indexName,
+					Version:              TextIndexVersionV2,
+					Noop:                 true,
+					RootGenerationBefore: status.RootGeneration,
+					RootGenerationAfter:  status.RootGeneration,
+				},
+			}, beforeStats, TextIndexMaintenanceSkipReasonNoDebt, nil
+		}
+	}
 	if run.NeedStorageStats || run.Decide != nil {
 		var err error
 		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
@@ -586,6 +636,17 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 		resetTextV2RewritePlanTables(plan)
 		return nil, scanErr
 	}
+	if plan.totalOldSealed != status.SealedPostingBlocks ||
+		plan.totalOldMicro != status.MicroPostingBlocks ||
+		plan.totalOldDelta != status.DeltaPostingBlocks ||
+		plan.stats.StalePostingsPurged != status.StalePostings {
+		resetTextV2RewritePlanTables(plan)
+		return nil, errMalformedTextStorage(
+			"text-v2 status counters (sealed=%d micro=%d delta=%d stale=%d) do not match scanned posting blocks (sealed=%d micro=%d delta=%d stale=%d)",
+			status.SealedPostingBlocks, status.MicroPostingBlocks, status.DeltaPostingBlocks, status.StalePostings,
+			plan.totalOldSealed, plan.totalOldMicro, plan.totalOldDelta, plan.stats.StalePostingsPurged,
+		)
+	}
 
 	terms := make([]string, 0, len(termStats))
 	for term := range termStats {
@@ -647,6 +708,14 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 			plan.nextStatus.NormGeneration = nextGeneration
 			plan.nextStatus.DeletedDocuments = 0
 		}
+		plan.nextStatus.SealedPostingBlocks = plan.sealedBlocksAfter
+		plan.nextStatus.MicroPostingBlocks = plan.microBlocksAfter
+		plan.nextStatus.DeltaPostingBlocks = plan.deltaBlocksAfter
+		plan.nextStatus.StalePostings = 0
+		if _, ok := plan.nextStatus.totalPostingBlocks(); !ok {
+			resetTextV2RewritePlanTables(plan)
+			return nil, errMalformedTextStorage("text-v2 total posting block count overflow")
+		}
 		if err := plan.workspace.admitMutation(); err != nil {
 			resetTextV2RewritePlanTables(plan)
 			return nil, err
@@ -683,6 +752,9 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	p.stats.PostingBlocksRead += term.oldBlocks
 	p.stats.PostingBlocksBefore += term.oldBlocks
 	p.stats.PostingsRead += term.postings
+	p.totalOldSealed += term.oldSealedBlocks
+	p.totalOldMicro += term.oldMicroBlocks
+	p.totalOldDelta += term.oldDeltaBlocks
 
 	if err := term.filterCurrentEntries(snap, catalog, ctx, cache, checkBudget); err != nil {
 		return err
@@ -759,9 +831,13 @@ func (p *textV2RewritePlan) processRewriteTerm(
 	needsRewrite := force || term.stale != 0 || term.nonSealed || uint64(len(newBlocks)) != term.oldBlocks || termStats.PostingBlockCount != uint64(len(newBlocks))
 	if !needsRewrite {
 		p.stats.PostingBlocksAfter += term.oldBlocks
+		p.sealedBlocksAfter += term.oldSealedBlocks
+		p.microBlocksAfter += term.oldMicroBlocks
+		p.deltaBlocksAfter += term.oldDeltaBlocks
 		return nil
 	}
 	p.stats.PostingBlocksAfter += uint64(len(newBlocks))
+	p.sealedBlocksAfter += uint64(len(newBlocks))
 	newKeySet := make(map[string]struct{}, len(newBlocks))
 	for _, block := range newBlocks {
 		if checkBudget != nil {
@@ -923,7 +999,16 @@ func scanTextV2PostingRewriteTerms(snap *backenddb.Snapshot, catalog *collection
 		}
 		current.oldKeys = append(current.oldKeys, append([]byte(nil), keyBytes...))
 		current.oldBlocks++
-		if scanner.block.Kind != textV2PostingBlockKindSealed {
+		switch scanner.block.Kind {
+		case textV2PostingBlockKindSealed:
+			current.oldSealedBlocks++
+		case textV2PostingBlockKindMicro:
+			current.oldMicroBlocks++
+			current.nonSealed = true
+		case textV2PostingBlockKindDelta:
+			current.oldDeltaBlocks++
+			current.nonSealed = true
+		default:
 			current.nonSealed = true
 		}
 		var entry textV2PostingBlockEntry

@@ -263,8 +263,29 @@ func TestTextV2PostingBlockIteratorOrderAcrossTerms2625(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build shipping blocks: %v", err)
 	}
-	for _, kv := range append(refundBlocks, shippingBlocks...) {
+	injected := append(refundBlocks, shippingBlocks...)
+	var addedSealed uint64
+	withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+		for _, kv := range injected {
+			_, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, kv.Key, nil)
+			if err != nil {
+				t.Fatalf("lookup posting block: %v", err)
+			}
+			if !ok {
+				addedSealed++
+			}
+		}
+	})
+	for _, kv := range injected {
 		corruptTextRootValue(t, d, "docs", rootName, kv.Key, kv.Value)
+	}
+	if addedSealed > 0 {
+		var status textV2IndexStatusValue
+		withTextCatalog(t, d, "docs", func(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+			status = textV2StatusRootValue(t, snap, catalog, "docs", "lexical")
+		})
+		status.SealedPostingBlocks += addedSealed
+		corruptTextRootValue(t, d, "docs", collectionTextV2GenerationsRootName("docs", "lexical"), encodeTextV2StatusKey(), encodeTextV2IndexStatusValue(status))
 	}
 
 	var blockStarts []uint64
