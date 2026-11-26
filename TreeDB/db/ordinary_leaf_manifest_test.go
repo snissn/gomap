@@ -269,8 +269,9 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 			continueSync := make(chan struct{})
 			retrying.Store(route == "inline")
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				base := filepath.Base(event.Path)
 				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
-					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					(strings.HasPrefix(base, "manifest.durable.") || strings.HasPrefix(base, "manifest.stage.tmp.")) && blocked.CompareAndSwap(false, true) {
 					close(syncEntered)
 					<-continueSync
 				}
@@ -452,8 +453,9 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 			cut := errors.New("refuse manifest content sync after raw command append")
 			var blocked atomic.Bool
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				base := filepath.Base(event.Path)
 				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
-					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					(strings.HasPrefix(base, "manifest.durable.") || strings.HasPrefix(base, "manifest.stage.tmp.")) && blocked.CompareAndSwap(false, true) {
 					close(syncEntered)
 					<-continueSync
 					return cut
