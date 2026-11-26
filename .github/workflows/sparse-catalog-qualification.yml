@@ -1,11 +1,6 @@
 name: "Sparse catalog qualification"
 
 on:
-  pull_request:
-    paths:
-      - 'TreeDB/nativewire/fixed_peer*'
-      - 'TreeDB/nativewire/sparse_catalog*'
-      - '.github/workflows/sparse-catalog-qualification.yml'
   workflow_dispatch:
 
 permissions:
