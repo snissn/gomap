@@ -514,7 +514,16 @@ func PruneClosedEmptyCommandWALSegments(dir string) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = lock.Close() }()
+	return pruneClosedEmptyCommandWALSegmentsLocked(dir)
+}
 
+// pruneClosedEmptyCommandWALSegmentsLocked removes preallocated empty
+// (zero-logical-byte) command-WAL segment containers while the caller already
+// holds the exclusive DB LOCK for dir.
+func pruneClosedEmptyCommandWALSegmentsLocked(dir string) (int, error) {
+	if dir == "" {
+		return 0, errors.New("db dir required")
+	}
 	walDir := WALDirPath(dir)
 	info, err := os.Stat(walDir)
 	if err != nil {
@@ -524,6 +533,26 @@ func PruneClosedEmptyCommandWALSegments(dir string) (int, error) {
 		return 0, err
 	}
 	if !info.IsDir() {
+		return 0, nil
+	}
+
+	// Avoid creating command-wal-journal-owner.lock in directories that have no
+	// command-WAL segment files (e.g. non-command-WAL profiles).
+	preEntries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	hasCommandSegments := false
+	for _, entry := range preEntries {
+		if !entry.IsDir() && entry.Type().IsRegular() && commitlog.IsCommandSegmentName(entry.Name()) {
+			hasCommandSegments = true
+			break
+		}
+	}
+	if !hasCommandSegments {
 		return 0, nil
 	}
 
