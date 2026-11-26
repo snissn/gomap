@@ -1541,67 +1541,9 @@ func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs 
 		}()
 	}
 
-	if !mappedRangeSyncRequired() && releaseBeforeFileSync && syncPageRangesFn == nil {
-		// On Linux, range durability writes (Pwritev2 with RWF_DSYNC) and
-		// fdatasync do not require holding p.mu.RLock across disk I/O once we
-		// snapshot the small range bytes under RLock.
-		var stackBuf [2 * page.PageSize]byte
-		var copySliceStorage [4][]byte
-		var copiedBufs [][]byte
-		if withinDurable && useDurableRangeWrites(ranges) {
-			totalBytes := 0
-			for _, r := range ranges {
-				totalBytes += r.end - r.start
-			}
-			var backing []byte
-			if totalBytes <= len(stackBuf) {
-				backing = stackBuf[:totalBytes]
-			} else {
-				backing = make([]byte, totalBytes)
-			}
-			if len(ranges) <= len(copySliceStorage) {
-				copiedBufs = copySliceStorage[:len(ranges)]
-			} else {
-				copiedBufs = make([][]byte, len(ranges))
-			}
-			off := 0
-			for i, r := range ranges {
-				n := r.end - r.start
-				dst := backing[off : off+n]
-				copy(dst, p.chunks[r.chunk][r.start:r.end])
-				copiedBufs[i] = dst
-				off += n
-			}
-		}
-		p.mu.RUnlock()
-
-		handled := false
-		if withinDurable {
-			handled, err = syncPageRangesCopiedData(syncHandle, nil, copiedBufs, ranges, p.chunkSize)
-			if err != nil {
-				return false, err
-			}
-		}
-		if !handled {
-			err = syncPageFile(syncHandle)
-			if err == nil {
-				for old := p.durableFileSize.Load(); old < coveredExtent; old = p.durableFileSize.Load() {
-					if p.durableFileSize.CompareAndSwap(old, coveredExtent) {
-						break
-					}
-				}
-			}
-		}
-		return err == nil, err
-	}
-
 	handled := false
 	if withinDurable {
-		if syncPageRangesFn != nil {
-			handled, err = syncPageRangesFn(syncHandle, p.chunks, ranges, p.chunkSize)
-		} else {
-			handled, err = syncPageRangesData(syncHandle, p.chunks, ranges, p.chunkSize)
-		}
+		handled, err = syncPageRangesFn(syncHandle, p.chunks, ranges, p.chunkSize)
 		if err != nil {
 			p.mu.RUnlock()
 			return false, err

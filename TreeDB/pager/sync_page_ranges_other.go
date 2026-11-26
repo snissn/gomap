@@ -7,7 +7,3 @@ import "os"
 func syncPageRangesData(_ *os.File, _ [][]byte, _ []syncPageRange, _ int64) (bool, error) {
 	return false, nil
 }
-
-func syncPageRangesCopiedData(_ *os.File, _ [][]byte, _ [][]byte, _ []syncPageRange, _ int64) (bool, error) {
-	return false, nil
-}
