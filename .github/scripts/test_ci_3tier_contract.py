@@ -25,6 +25,7 @@ SAMPLE_PKG_TO_DIR = {
     "github.com/snissn/gomap/TreeDB/collections": "TreeDB/collections",
     "github.com/snissn/gomap/TreeDB/db": "TreeDB/db",
     "github.com/snissn/gomap/TreeDB/docs": "TreeDB/docs",
+    "github.com/snissn/gomap/TreeDB/internal/atomicfile": "TreeDB/internal/atomicfile",
     "github.com/snissn/gomap/TreeDB/internal/raftcluster": "TreeDB/internal/raftcluster",
     "github.com/snissn/gomap/TreeDB/internal/raftplacement": "TreeDB/internal/raftplacement",
     "github.com/snissn/gomap/TreeDB/internal/stableio": "TreeDB/internal/stableio",
@@ -38,6 +39,7 @@ SAMPLE_PKG_TO_DIR = {
 
 SAMPLE_PKG_TO_IMPORTS = {
     "github.com/snissn/gomap/HashDB": [],
+    "github.com/snissn/gomap/TreeDB/internal/atomicfile": [],
     "github.com/snissn/gomap/TreeDB/internal/stableio": [],
     "github.com/snissn/gomap/TreeDB/pager": ["github.com/snissn/gomap/TreeDB/internal/stableio"],
     "github.com/snissn/gomap/TreeDB/db": ["github.com/snissn/gomap/TreeDB/pager"],
@@ -92,10 +94,9 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
                 self.assertIn("ready_for_review", pr_types)
                 self.assertEqual(triggers["push"]["branches"], ["main"])
             elif wf.name == "ci-full-sweep.yml":
-                self.assertEqual(trigger_keys, {"schedule", "pull_request", "workflow_dispatch"})
+                self.assertEqual(trigger_keys, {"schedule", "workflow_call", "workflow_dispatch"})
                 self.assertNotIn("push", trigger_keys)
-                pr_types = triggers["pull_request"]["types"]
-                self.assertNotIn("edited", pr_types)
+                self.assertNotIn("pull_request", trigger_keys)
             else:
                 self.assertEqual(
                     trigger_keys,
@@ -114,9 +115,12 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertIn("TestTypedStorage", docs_script)
         # No setup-go cache: false anywhere in ci.yml
         self.assertNotIn("cache: false", raw)
-        # Single fail-closed aggregator
+        # Single fail-closed aggregator includes opted-in full-sweep
+        self.assertIn("full-sweep", doc["jobs"])
+        self.assertEqual(doc["jobs"]["full-sweep"]["uses"], "./.github/workflows/ci-full-sweep.yml")
         self.assertIn("ci-gate", doc["jobs"])
         self.assertEqual(doc["jobs"]["ci-gate"]["name"], "CI Gate")
+        self.assertIn("full-sweep", doc["jobs"]["ci-gate"]["needs"])
         # Cross-compile steps and retained script suites exist
         vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet-and-cross-compile"]["steps"])
         self.assertIn("--kind cross-darwin", vet_script)
@@ -131,10 +135,6 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertNotIn("go vet -p=1 -x", raw)
         self.assertNotIn("windows-caching-heavy-1", raw)
         self.assertEqual(doc["jobs"]["treedb-windows"]["strategy"]["matrix"]["shard"], [1, 2, 3, 4, 5, 6, 7])
-        # Ordinary PRs without [ci full] / ci:full skip guard with zero VM starts
-        guard_if = str(doc["jobs"]["guard"]["if"])
-        self.assertIn("[ci full]", guard_if)
-        self.assertIn("ci:full", guard_if)
         # Schedule guard checks last passing scheduled SHA
         guard_run = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["guard"]["steps"])
         self.assertIn("event=schedule", guard_run)
@@ -248,11 +248,22 @@ class TestCIScopeRouter(unittest.TestCase):
             ("TreeDB/nativewire/vector_partition_production_listener_socket_windows_v1.go", True),
             ("TreeDB/nativewire/vector_partition_production_listener_socket_unix_v1.go", True),
             ("TreeDB/nativewire/foo_linux_v2_test.go", True),
+            ("TreeDB/db/durable_root_runtime.go", True),
+            ("TreeDB/db/root_publication_v1.go", True),
+            ("TreeDB/db/native_command_wal_completion.go", True),
+            ("TreeDB/db/leaf_generation_manifest.go", True),
+            ("TreeDB/db/leaf_manifest_revision_gc.go", True),
+            ("TreeDB/db/command_wal_publish.go", True),
+            ("TreeDB/internal/atomicfile/atomicfile.go", True),
+            ("TreeDB/caching/stable_leaf_resource.go", True),
         ):
             plan = self._plan(changed_files=[path])
             self.assertTrue(plan["escalate_os"], path)
             self.assertTrue(plan["os_macos_packages"], path)
             self.assertEqual(bool(plan["os_windows_packages"]), want_win, path)
+
+        non_durability = self._plan(changed_files=["TreeDB/db/vacuum_collection_publication_guard_test.go"])
+        self.assertFalse(non_durability["escalate_os"])
 
         # Also detect OS build constraints in arbitrarily named .go files.
         with tempfile.TemporaryDirectory() as td:

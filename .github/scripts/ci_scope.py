@@ -122,14 +122,28 @@ OS_BUILD_CONSTRAINT_TOKEN_RE = re.compile(
     r"\b(linux|darwin|windows|unix|freebsd|openbsd|netbsd|dragonfly|solaris|cgo|amd64|arm64)\b"
 )
 OS_ESCALATION_PREFIXES: tuple[str, ...] = (
+    "TreeDB/internal/atomicfile/",
     "TreeDB/internal/stableio/",
     "TreeDB/internal/lockfile/",
     "TreeDB/internal/mappedresource/",
     "TreeDB/internal/rootpublication/",
+    "TreeDB/internal/durabilitycut/",
+    "TreeDB/internal/powerlosscert/",
+    "TreeDB/internal/powerlossoracle/",
+    "TreeDB/internal/powerlossreopen/",
+    "TreeDB/internal/collectionwal/",
+    "TreeDB/internal/commandwalapply/",
+    "TreeDB/internal/commandwalbarrier/",
     "TreeDB/pager/",
     "TreeDB/internal/commitlog/",
     "TreeDB/internal/valuelog/",
     "HashDB/internal/lockfile/",
+)
+OS_ESCALATION_FILE_RE = re.compile(
+    r"^(?:"
+    r"TreeDB/db/(?:command_wal|durability|durable_|wal_|leaf_generation_manifest|leaf_manifest|ordinary_leaf_manifest|native_command_wal|native_publication|ordered_root_publish|recoverable_root_set|root_publication|system_root_publish|stable_resource|stable_pager|compact_storage|index_swap|physical_snapshot_cut)"
+    r"|TreeDB/caching/(?:stable_leaf_resource|txn_journal|cow_checkpoint)"
+    r").*\.go$"
 )
 OS_ESCALATION_EXACT: frozenset[str] = frozenset({
     "go.mod",
@@ -250,6 +264,8 @@ def is_os_escalation_path(path: str, repo: Path | None = None) -> bool:
     if any(p.startswith(prefix) for prefix in OS_ESCALATION_PREFIXES):
         return True
     if OS_TAG_FILE_RE.search(p):
+        return True
+    if OS_ESCALATION_FILE_RE.search(p):
         return True
     if file_has_os_build_constraint(repo, p):
         return True
@@ -440,7 +456,10 @@ def build_plan(
     dir_to_pkg = {d: p for p, d in pkg_to_dir.items()}
     rdeps = build_reverse_prod_imports(pkg_to_imports)
 
-    ci_full = ("[ci full]" in pr_title.lower()) or ("ci:full" in pr_labels)
+    ci_full = (
+        event_name == "pull_request"
+        and (("[ci full]" in pr_title.lower()) or ("ci:full" in pr_labels))
+    )
     files = changed_files if changed_files is not None else []
     diff_known = changed_files is not None and len(changed_files) > 0
 

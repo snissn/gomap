@@ -4,8 +4,32 @@ on:
   schedule:
     # Every 8 hours UTC; skips in ~10s if main HEAD has not changed since the last passing sweep.
     - cron: "0 */8 * * *"
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
+  workflow_call:
+    inputs:
+      run_macos:
+        type: boolean
+        required: false
+        default: true
+      run_windows:
+        type: boolean
+        required: false
+        default: true
+      run_race:
+        type: boolean
+        required: false
+        default: true
+      run_perf_and_suites:
+        type: boolean
+        required: false
+        default: true
+      run_redis_bench:
+        type: boolean
+        required: false
+        default: false
+      force:
+        type: boolean
+        required: false
+        default: true
   workflow_dispatch:
     inputs:
       run_macos:
@@ -41,8 +65,8 @@ on:
 
 concurrency:
   group: >-
-    ci-full-sweep-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'schedule' && 'schedule' || format('manual-{0}', github.run_id)) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    ci-full-sweep-${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'schedule' && 'schedule' || format('manual-{0}', github.run_id)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') }}
 
 permissions:
   contents: read
@@ -51,11 +75,6 @@ permissions:
 jobs:
   guard:
     name: sweep eligibility guard
-    # Ordinary PRs without [ci full] or ci:full skip immediately with zero VM starts.
-    if: >-
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.title, '[ci full]') ||
-      contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -79,10 +98,11 @@ jobs:
           IN_RACE: ${{ inputs.run_race }}
           IN_PERF: ${{ inputs.run_perf_and_suites }}
           IN_REDIS: ${{ inputs.run_redis_bench }}
+          IN_FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           should_run=true
-          if [[ "$EVENT_NAME" == "schedule" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || ( "$EVENT_NAME" == "workflow_dispatch" && "${IN_FORCE:-true}" != "true" ) ]]; then
             last_pass="$(gh api "repos/${REPO}/actions/workflows/ci-full-sweep.yml/runs?event=schedule&status=completed&per_page=15" \
               --jq '[.workflow_runs[] | select(.conclusion == "success")] | .[0].head_sha // ""' 2>/dev/null || true)"
             echo "Current main SHA: ${CURRENT_SHA}"
@@ -892,11 +912,7 @@ jobs:
 
   full-sweep-gate:
     name: CI Full Sweep Gate
-    if: >-
-      always() &&
-      (github.event_name != 'pull_request' ||
-       contains(github.event.pull_request.title, '[ci full]') ||
-       contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    if: ${{ always() }}
     needs:
       - guard
       - treedb-ubuntu

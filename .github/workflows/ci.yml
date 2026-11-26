@@ -26,6 +26,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   preflight:
@@ -413,6 +414,12 @@ jobs:
             --kind "$OS_KIND" \
             --jsonl "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl"
 
+  full-sweep:
+    name: full-sweep ([ci full])
+    needs: preflight
+    if: ${{ needs.preflight.outputs.ci_full == 'true' }}
+    uses: ./.github/workflows/ci-full-sweep.yml
+
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
@@ -424,6 +431,7 @@ jobs:
       - test-linux
       - race-linux
       - test-os-escalated
+      - full-sweep
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -432,6 +440,7 @@ jobs:
         env:
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           TIER: ${{ needs.preflight.outputs.tier }}
+          CI_FULL: ${{ needs.preflight.outputs.ci_full }}
           RUN_DOCS: ${{ needs.preflight.outputs.run_docs_check }}
           RUN_VET: ${{ needs.preflight.outputs.run_vet }}
           RUN_TEST: ${{ needs.preflight.outputs.run_test }}
@@ -443,6 +452,7 @@ jobs:
           TEST_RESULT: ${{ needs.test-linux.result }}
           RACE_RESULT: ${{ needs.race-linux.result }}
           OS_RESULT: ${{ needs.test-os-escalated.result }}
+          FULL_SWEEP_RESULT: ${{ needs.full-sweep.result }}
         run: |
           set -euo pipefail
           check_result() {
@@ -487,8 +497,9 @@ jobs:
           check_result "test-linux" "$RUN_TEST" "$TEST_RESULT" || failed=1
           check_result "race-linux" "$RUN_RACE" "$RACE_RESULT" || failed=1
           check_result "test-os-escalated" "$ESCALATE_OS" "$OS_RESULT" || failed=1
+          check_result "full-sweep" "$CI_FULL" "$FULL_SWEEP_RESULT" || failed=1
 
           if [[ "$failed" -ne 0 ]]; then
             exit 1
           fi
-          echo "CI Gate PASSED (tier=${TIER})." >> "$GITHUB_STEP_SUMMARY"
+          echo "CI Gate PASSED (tier=${TIER}, ci_full=${CI_FULL})." >> "$GITHUB_STEP_SUMMARY"
