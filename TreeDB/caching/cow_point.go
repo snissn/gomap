@@ -1,7 +1,6 @@
 package caching
 
 import (
-	"errors"
 	"time"
 	"unsafe"
 
@@ -421,15 +420,9 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 	if c.prefix != nil {
 		ticket, admitErr := c.prefix.ReserveAccepted(false)
 		if admitErr != nil {
-			if !errors.Is(admitErr, rootpublication.ErrAcceptedCapacity) {
-				return true, acceptedAdmissionError(admitErr)
-			}
-			if cpErr := db.Checkpoint(); cpErr != nil {
-				return true, cpErr
-			}
-			ticket, admitErr = c.prefix.ReserveAccepted(false)
+			ticket, admitErr = db.reserveCOWAcceptedOrdinaryAfterPressure(c, admitErr)
 			if admitErr != nil {
-				return true, acceptedAdmissionError(admitErr)
+				return true, admitErr
 			}
 		}
 		accepted = ticket

@@ -11,8 +11,12 @@ import (
 )
 
 func TestCollectionGetIntoAllocationBudgetWithCachingObserver(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	opts := treedb.OptionsForBenchmark(treedb.ProfileFast, t.TempDir())
 	opts.IndexOuterLeavesInValueLog = true
+	opts.DisableBackgroundPrune = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundIndexVacuumInterval = -1
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open backend with cached leaf log: %v", err)
@@ -50,6 +54,11 @@ func TestCollectionGetIntoAllocationBudgetWithCachingObserver(t *testing.T) {
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
+	}
+	// Drain asynchronous durable-root publication before reading process-global
+	// malloc counters in testing.AllocsPerRun.
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after flush: %v", err)
 	}
 
 	dst := make([]byte, 0, 256)
@@ -96,6 +105,9 @@ func TestCollectionGetIntoAllocationBudgetWithCachingObserver(t *testing.T) {
 	}
 	if err := writerCol.Flush(); err != nil {
 		t.Fatalf("writer flush: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after writer flush: %v", err)
 	}
 	got2, found2, err := col.GetInto(docID2, dst)
 	if err != nil || !found2 || !bytes.Equal(got2, want2) {
