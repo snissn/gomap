@@ -137,6 +137,14 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         guard_run = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["guard"]["steps"])
         self.assertIn("event=schedule", guard_run)
         self.assertIn("should_run=false", guard_run)
+        # Snapshot iterator retains summary publication and artifact upload on always()
+        snap_steps = doc["jobs"]["snapshot-iterator-perf"]["steps"]
+        snap_names = [s.get("name", "") for s in snap_steps]
+        self.assertIn("Publish snapshot iterator summary", snap_names)
+        self.assertIn("Upload snapshot iterator performance evidence", snap_names)
+        upload_step = next(s for s in snap_steps if s.get("name") == "Upload snapshot iterator performance evidence")
+        self.assertIn("always()", str(upload_step.get("if", "")))
+        self.assertEqual(upload_step["with"]["path"], "artifacts/snapshot_iterator_perf/")
 
 
 class TestCIScopeRouter(unittest.TestCase):
@@ -249,6 +257,34 @@ class TestCIScopeRouter(unittest.TestCase):
 
         p_err = self._plan(event_name="pull_request", changed_files=None)
         self.assertEqual(p_err["tier"], "main_fast")
+
+    def test_local_replace_module_edits_fail_closed(self) -> None:
+        replace_dirs = ci_scope.discover_local_replace_dirs(REPO_ROOT)
+        self.assertIn("third_party/hashicorp_raft_v1.7.3/", replace_dirs)
+        plan = self._plan(
+            changed_files=["third_party/hashicorp_raft_v1.7.3/raft.go"],
+            local_replace_dirs=replace_dirs,
+        )
+        self.assertEqual(plan["tier"], "main_fast")
+        self.assertEqual(len(plan["vet_packages"]), len(SAMPLE_PKG_TO_DIR))
+        self.assertEqual(len(plan["test_packages"]), len(SAMPLE_PKG_TO_DIR))
+        self.assertTrue(plan["escalate_os"])
+
+        draft_plan = self._plan(
+            changed_files=["third_party/hashicorp_raft_v1.7.3/raft.go"],
+            is_draft=True,
+            local_replace_dirs=replace_dirs,
+        )
+        self.assertEqual(draft_plan["tier"], "draft")
+        self.assertEqual(len(draft_plan["vet_packages"]), len(SAMPLE_PKG_TO_DIR))
+
+    def test_fuzz_seeds_included_in_windows_and_split_race_discovery(self) -> None:
+        win_src = (REPO_ROOT / ".github" / "scripts" / "ci_full_windows_shard.py").read_text(encoding="utf-8")
+        scope_src = (REPO_ROOT / ".github" / "scripts" / "ci_scope.py").read_text(encoding="utf-8")
+        self.assertIn("^(Test|Example|Fuzz).*", win_src)
+        self.assertIn('("Test", "Example", "Fuzz")', win_src)
+        self.assertIn("^(Test|Example|Fuzz).*", scope_src)
+        self.assertIn('("Test", "Example", "Fuzz")', scope_src)
 
     def test_github_outputs_never_emit_empty_matrix_vectors(self) -> None:
         plan = self._plan(changed_files=["README.md"])

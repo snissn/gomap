@@ -833,6 +833,26 @@ jobs:
             -samples 8 \
             -max-regression 0.05
 
+      - name: Publish snapshot iterator summary
+        if: always()
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == pull_request ]]; then
+            echo "## Snapshot iterator: parser checks; comparative timing runs on scheduled or manual sweeps." >> "${GITHUB_STEP_SUMMARY}"
+          elif [[ -f artifacts/snapshot_iterator_perf/report.md ]]; then
+            cat artifacts/snapshot_iterator_perf/report.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Snapshot iterator performance gate: no report generated" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload snapshot iterator performance evidence
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-iterator-perf-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/snapshot_iterator_perf/
+          if-no-files-found: warn
+          retention-days: 14
+
   redis-bench:
     name: redisserver protocol bench (linux)
     needs: guard

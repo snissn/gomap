@@ -361,6 +361,38 @@ def pack_lpt(packages: list[str], weights: dict[str, float], shard_count: int) -
     return [sorted(b) for b in bins if b]
 
 
+def discover_local_replace_dirs(repo: Path) -> tuple[str, ...]:
+    """Parse root go.mod for local filesystem replace directives (e.g. third_party/...)."""
+    go_mod = repo / "go.mod"
+    if not go_mod.is_file():
+        return ()
+    dirs: set[str] = set()
+    in_replace = False
+    for raw_line in go_mod.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("//", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("replace ("):
+            in_replace = True
+            continue
+        if in_replace and line == ")":
+            in_replace = False
+            continue
+        if line.startswith("replace ") or in_replace:
+            body = line[len("replace "):].strip() if line.startswith("replace ") else line
+            if "=>" not in body:
+                continue
+            target = body.split("=>", 1)[1].strip().split()[0].strip('"')
+            if target.startswith(("./", "../", "/")):
+                try:
+                    rel = (repo / target).resolve().relative_to(repo.resolve()).as_posix().strip("/")
+                except ValueError:
+                    continue
+                if rel and rel != ".":
+                    dirs.add(rel + "/")
+    return tuple(sorted(dirs))
+
+
 def build_plan(
     *,
     event_name: str,
@@ -371,6 +403,7 @@ def build_plan(
     dispatch_mode: str,
     pkg_to_dir: dict[str, str],
     pkg_to_imports: dict[str, list[str]],
+    local_replace_dirs: tuple[str, ...] = (),
     base_sha: str = "",
     head_sha: str = "",
 ) -> dict[str, Any]:
@@ -388,7 +421,11 @@ def build_plan(
         and diff_known
         and all(is_docs_only_path(f) for f in files)
     )
-    touches_mod = any(f in ("go.mod", "go.sum") for f in files)
+    touches_local_replace = bool(local_replace_dirs) and any(
+        any(f.strip("/").startswith(prefix) for prefix in local_replace_dirs)
+        for f in files
+    )
+    touches_mod = touches_local_replace or any(f in ("go.mod", "go.sum") for f in files)
 
     if event_name in ("push", "merge_group") or dispatch_mode == "main_fast":
         tier = "main_fast"
@@ -397,7 +434,8 @@ def build_plan(
     elif event_name == "pull_request" and is_draft and not ci_full:
         tier = "draft"
     elif not diff_known or touches_mod:
-        # Fail closed when PR diff is unavailable or module graph changed.
+        # Fail closed when PR diff is unavailable, go.mod/go.sum changed, or a
+        # local go.mod replace module (e.g. third_party/hashicorp_raft_*) changed.
         tier = "main_fast"
     else:
         tier = "surgical"
@@ -434,7 +472,7 @@ def build_plan(
         run_ci_script_tests = any(f.startswith((".github/", "scripts/")) for f in files)
         run_python_client = False
     elif tier == "draft":
-        vet_packages = touched_packages if touched_packages else []
+        vet_packages = all_packages if touches_mod else (touched_packages if touched_packages else [])
         test_packages = []
         race_packages = []
         escalate_os = False
@@ -650,7 +688,7 @@ def _run_split_race_package(
     env: dict[str, str],
     jsonl_path: Path,
 ) -> int:
-    list_cmd = ["go", "test", "-race", "-p", "1", pkg, "-list", "^(Test|Example).*"]
+    list_cmd = ["go", "test", "-race", "-p", "1", pkg, "-list", "^(Test|Example|Fuzz).*"]
     print("+", " ".join(list_cmd), flush=True)
     listed = subprocess.run(list_cmd, cwd=repo, env=env, capture_output=True, text=True)
     if listed.returncode != 0:
@@ -660,7 +698,7 @@ def _run_split_race_package(
     tests = [
         line.strip()
         for line in listed.stdout.splitlines()
-        if line.strip().startswith(("Test", "Example"))
+        if line.strip().startswith(("Test", "Example", "Fuzz"))
     ]
     selected = [t for idx, t in enumerate(tests) if (idx % split_count) == split_index]
     if not selected:
@@ -709,6 +747,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     changed = git_changed_files(repo, args.base_sha, args.head_sha) if args.event_name == "pull_request" else []
     pkg_to_dir, pkg_to_imports = discover_go_packages(repo)
+    local_replace_dirs = discover_local_replace_dirs(repo)
     plan = build_plan(
         event_name=args.event_name,
         changed_files=changed,
@@ -718,6 +757,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         dispatch_mode=args.dispatch_mode or "",
         pkg_to_dir=pkg_to_dir,
         pkg_to_imports=pkg_to_imports,
+        local_replace_dirs=local_replace_dirs,
         base_sha=args.base_sha or "",
         head_sha=args.head_sha or "",
     )

@@ -48,7 +48,7 @@ def list_treedb_packages(repo: Path, env: dict[str, str]) -> list[str]:
 
 def list_package_tests(repo: Path, env: dict[str, str], rel_pkg: str) -> list[str]:
     proc = subprocess.run(
-        ["go", "test", rel_pkg, "-list", "^(Test|Example).*"],
+        ["go", "test", rel_pkg, "-list", "^(Test|Example|Fuzz).*"],
         cwd=repo / "TreeDB",
         env=env,
         capture_output=True,
@@ -58,7 +58,7 @@ def list_package_tests(repo: Path, env: dict[str, str], rel_pkg: str) -> list[st
     return [
         line.strip()
         for line in proc.stdout.splitlines()
-        if line.strip().startswith(("Test", "Example"))
+        if line.strip().startswith(("Test", "Example", "Fuzz"))
     ]
 
 
