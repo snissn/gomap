@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -183,5 +186,275 @@ func TestOneShotReadRejectedCaptureReleasesValueLogPin(t *testing.T) {
 	}
 	if set.RefCount.Load() != 0 || segment.RefCount.Load() != 0 || d.snapshotAcquireInFlight() != 0 {
 		t.Fatal("failed capture leaked a value-log or acquisition pin")
+	}
+}
+
+func TestOneShotReadAlternateRootLeavesPooledRootTreesClean(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("primary-key"), []byte("primary-value")); err != nil {
+		t.Fatal(err)
+	}
+	table := memtable.NewAppendOnlyWithCapacity(4)
+	table.Set([]byte("alt-key"), []byte("alt-value-payload"))
+	table.Freeze()
+	_, rootIDs, err := d.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: table.NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroup: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want 1 nonzero root", rootIDs)
+	}
+	altRootID := rootIDs[0]
+
+	var begins, ends atomic.Int64
+	unregister := d.RegisterForegroundReadObserverHooks(
+		func() {},
+		func() { begins.Add(1) },
+		func() { ends.Add(1) },
+	)
+	defer unregister()
+
+	var (
+		captured  *oneShotRead
+		staleView OneShotReadView
+		gotVal    []byte
+		found     bool
+	)
+	dst := make([]byte, 0, 64)
+	if err := d.WithOneShotRead(func(view OneShotReadView) error {
+		captured = view.r
+		staleView = view
+		state, ok := view.StateToken()
+		if !ok || state.RootPageID == 0 || state.RootPageID == altRootID {
+			t.Fatalf("unexpected state token: %+v ok=%v altRoot=%d", state, ok, altRootID)
+		}
+		if view.Pager() == nil {
+			t.Fatal("Pager() returned nil")
+		}
+		var readErr error
+		gotVal, found, readErr = view.GetAppendAtRoot(altRootID, []byte("alt-key"), dst[:0])
+		if readErr != nil {
+			return readErr
+		}
+		// Verify alternate-root read never dirtied rootTreeFirst or rootTrees.
+		if view.r.snapshot.rootTreeFirst[0].root != 0 || len(view.r.snapshot.rootTrees) != 0 || cap(view.r.snapshot.rootTrees) != 0 {
+			t.Fatalf("alternate-root read dirtied pooled rootTrees: first=%+v len=%d cap=%d",
+				view.r.snapshot.rootTreeFirst[0].root, len(view.r.snapshot.rootTrees), cap(view.r.snapshot.rootTrees))
+		}
+		// Verify missing key and zero root semantics.
+		miss, missFound, missErr := view.GetAppendAtRoot(altRootID, []byte("missing"), dst[:0])
+		if missErr != nil || missFound || len(miss) != 0 {
+			t.Fatalf("missing key=(%q, %v, %v), want (\"\", false, nil)", miss, missFound, missErr)
+		}
+		zeroOut, zeroFound, zeroErr := view.GetAppendAtRoot(0, []byte("alt-key"), dst[:0])
+		if zeroErr != nil || zeroFound || len(zeroOut) != 0 {
+			t.Fatalf("zero root=(%q, %v, %v), want (\"\", false, nil)", zeroOut, zeroFound, zeroErr)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithOneShotRead: %v", err)
+	}
+	if !found || !bytes.Equal(gotVal, []byte("alt-value-payload")) {
+		t.Fatalf("alt-key=(%q, %v), want (%q, true)", gotVal, found, "alt-value-payload")
+	}
+	if captured == nil {
+		t.Fatal("expected captured oneShotRead")
+	}
+	if captured.snapshot.rootTreeFirst[0].root != 0 || len(captured.snapshot.rootTrees) != 0 || cap(captured.snapshot.rootTrees) != 0 {
+		t.Fatalf("returned oneShotRead retained rootTrees: first=%d len=%d cap=%d",
+			captured.snapshot.rootTreeFirst[0].root, len(captured.snapshot.rootTrees), cap(captured.snapshot.rootTrees))
+	}
+	if begins.Load() != 1 || ends.Load() != 1 {
+		t.Fatalf("foreground observer begins=%d ends=%d, want 1/1", begins.Load(), ends.Load())
+	}
+
+	// Retained view must stay closed even after another WithOneShotRead reuses the pool.
+	if err := d.WithOneShotRead(func(view OneShotReadView) error {
+		if _, ok := staleView.StateToken(); ok {
+			t.Fatal("stale OneShotReadView StateToken succeeded during reused capture")
+		}
+		if staleView.Pager() != nil {
+			t.Fatal("stale OneShotReadView Pager returned non-nil during reused capture")
+		}
+		if _, _, err := staleView.GetAppendAtRoot(altRootID, []byte("alt-key"), nil); !errors.Is(err, ErrClosed) {
+			t.Fatalf("stale OneShotReadView GetAppendAtRoot err=%v, want ErrClosed", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("second WithOneShotRead: %v", err)
+	}
+
+	// Zero-allocation budget for alternate-root WithOneShotRead with hooks observer.
+	key := []byte("alt-key")
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := d.WithOneShotRead(func(view OneShotReadView) error {
+			var ok bool
+			var readErr error
+			dst, ok, readErr = view.GetAppendAtRoot(altRootID, key, dst[:0])
+			if readErr != nil || !ok {
+				t.Fatalf("GetAppendAtRoot=(%v, %v)", ok, readErr)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 0 {
+		t.Fatalf("WithOneShotRead alternate-root allocs/op=%.0f, want 0", allocs)
+	}
+}
+
+func TestForegroundReadObserverHooksConcurrentSwapAndUnregister(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+
+	type counterObserver struct {
+		begins   atomic.Int64
+		ends     atomic.Int64
+		active   atomic.Int64
+		underflo atomic.Bool
+	}
+	newHooks := func(c *counterObserver) (func(), func()) {
+		return func() {
+				c.begins.Add(1)
+				c.active.Add(1)
+			}, func() {
+				c.ends.Add(1)
+				if c.active.Add(-1) < 0 {
+					c.underflo.Store(true)
+				}
+			}
+	}
+	obsA := &counterObserver{}
+	obsB := &counterObserver{}
+	obsLegacy := &counterObserver{}
+	beginA, endA := newHooks(obsA)
+	beginB, endB := newHooks(obsB)
+	beginLegacy := func() func() {
+		obsLegacy.begins.Add(1)
+		obsLegacy.active.Add(1)
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				obsLegacy.ends.Add(1)
+				if obsLegacy.active.Add(-1) < 0 {
+					obsLegacy.underflo.Store(true)
+				}
+			})
+		}
+	}
+
+	stop := make(chan struct{})
+	var swapWG sync.WaitGroup
+	swapWG.Add(1)
+	go func() {
+		defer swapWG.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var unreg func()
+			switch i % 3 {
+			case 0:
+				unreg = d.RegisterForegroundReadObserverHooks(func() {}, beginA, endA)
+			case 1:
+				unreg = d.RegisterForegroundReadObserverHooks(func() {}, beginB, endB)
+			default:
+				unreg = d.RegisterForegroundReadObserver(func() {}, beginLegacy)
+			}
+			if i%2 == 0 {
+				unreg()
+			}
+		}
+	}()
+
+	var readerWG sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		readerWG.Add(1)
+		go func(id int) {
+			defer readerWG.Done()
+			dst := make([]byte, 0, 32)
+			for i := 0; i < 400; i++ {
+				switch (id + i) % 4 {
+				case 0:
+					snap := d.AcquireSnapshot()
+					if snap == nil {
+						t.Errorf("AcquireSnapshot=nil")
+						return
+					}
+					snap.MarkForegroundRead()
+					snap.MarkForegroundRead()
+					if err := snap.Close(); err != nil {
+						t.Errorf("Snapshot.Close: %v", err)
+						return
+					}
+				case 1:
+					snap := d.AcquireSnapshot()
+					if snap == nil {
+						t.Errorf("AcquireSnapshot=nil")
+						return
+					}
+					snap.MarkForegroundRead()
+					snap.DetachForegroundRead()
+					snap.DetachForegroundRead()
+					if err := snap.Close(); err != nil {
+						t.Errorf("Snapshot.Close: %v", err)
+						return
+					}
+				case 2:
+					end := d.BeginForegroundRead()
+					end()
+					end()
+				case 3:
+					if err := d.WithOneShotRead(func(view OneShotReadView) error {
+						state, ok := view.StateToken()
+						if !ok {
+							return errors.New("missing state token")
+						}
+						var readErr error
+						dst, _, readErr = view.GetAppendAtRoot(state.RootPageID, []byte("k"), dst[:0])
+						return readErr
+					}); err != nil {
+						t.Errorf("WithOneShotRead: %v", err)
+						return
+					}
+				}
+			}
+		}(g)
+	}
+
+	readerWG.Wait()
+	close(stop)
+	swapWG.Wait()
+
+	for name, obs := range map[string]*counterObserver{
+		"A":      obsA,
+		"B":      obsB,
+		"legacy": obsLegacy,
+	} {
+		if obs.underflo.Load() {
+			t.Fatalf("observer %s underflowed active count", name)
+		}
+		if got := obs.active.Load(); got != 0 {
+			t.Fatalf("observer %s active=%d want 0 (begins=%d ends=%d)", name, got, obs.begins.Load(), obs.ends.Load())
+		}
+		if obs.begins.Load() != obs.ends.Load() {
+			t.Fatalf("observer %s begins=%d != ends=%d", name, obs.begins.Load(), obs.ends.Load())
+		}
 	}
 }

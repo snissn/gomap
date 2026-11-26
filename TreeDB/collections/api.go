@@ -21785,6 +21785,22 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Sna
 	return c.catalogForSnapshotWithWriteDomainLockState(snap, true)
 }
 
+func (c *Collection) cachedCatalogForState(p *pager.Pager, systemRoot, commitSeq uint64) *collectionCatalog {
+	if c == nil || p == nil || systemRoot == 0 {
+		return nil
+	}
+	c.catalogMu.RLock()
+	cached := c.catalog
+	hit := cached != nil && cached.pager == p &&
+		c.catalogSystemRoot == systemRoot &&
+		c.catalogCommitSeq == commitSeq
+	c.catalogMu.RUnlock()
+	if hit {
+		return cached
+	}
+	return nil
+}
+
 // cachedCatalogForSnapshot only reads the immutable handle-local entry. In
 // particular it never waits for writeDomain.mu or retains a snapshot. Typed
 // owner capture and the general catalog path both require
@@ -21793,17 +21809,11 @@ func (c *Collection) cachedCatalogForSnapshot(snap *backenddb.Snapshot) *collect
 	if c == nil || snap == nil {
 		return nil
 	}
-	systemRoot := snapshotSystemRoot(snap)
-	commitSeq := snapshotCommitSeq(snap)
-	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
-	cached := c.catalog
-	if cached != nil && cached.pager == snap.Pager() && systemRoot != 0 &&
-		c.catalogSystemRoot == systemRoot &&
-		c.catalogCommitSeq == commitSeq {
-		return cached
+	state, ok := snap.StateToken()
+	if !ok {
+		return nil
 	}
-	return nil
+	return c.cachedCatalogForState(snap.Pager(), state.SystemRootPageID, state.CommitSeq)
 }
 
 func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.Snapshot, writeDomainLocked bool) (*collectionCatalog, error) {
@@ -23240,6 +23250,39 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	} else if buffered {
 		c.db.NotifyForegroundRead()
 		return value, found, nil
+	}
+	var (
+		out          []byte
+		found        bool
+		needFallback bool
+	)
+	if err := c.db.WithOneShotRead(func(view backenddb.OneShotReadView) error {
+		state, ok := view.StateToken()
+		if !ok {
+			needFallback = true
+			return nil
+		}
+		catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+		if catalog == nil ||
+			catalog.nativeText != nil ||
+			columnStoreCanReconstructDocument(catalog.meta) ||
+			len(catalog.overlayRootIDs(catalog.primaryRootName)) != 0 {
+			needFallback = true
+			return nil
+		}
+		rootID := catalog.rootID(catalog.primaryRootName)
+		if rootID == 0 {
+			out = dst[:0]
+			found = false
+			return nil
+		}
+		var readErr error
+		out, found, readErr = view.GetAppendAtRoot(rootID, documentID, dst[:0])
+		return readErr
+	}); err != nil {
+		return dst[:0], false, err
+	} else if !needFallback {
+		return out, found, nil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
