@@ -116,7 +116,10 @@ RACE_EXCLUDED_PACKAGES: frozenset[str] = frozenset({
 # High-risk platform / OS / mmap / durability-IO paths that trigger targeted
 # macOS + Windows escalation even on ordinary Ready PRs.
 OS_TAG_FILE_RE = re.compile(
-    r"_(linux|darwin|windows|unix|bsd|cgo|amd64|arm64|other|fallback|nop)(_test)?\.go$"
+    r"_(linux|darwin|windows|unix|bsd|cgo|amd64|arm64|other|fallback|nop)(_[A-Za-z0-9]+)*(_test)?\.go$"
+)
+OS_BUILD_CONSTRAINT_TOKEN_RE = re.compile(
+    r"\b(linux|darwin|windows|unix|freebsd|openbsd|netbsd|dragonfly|solaris|cgo|amd64|arm64)\b"
 )
 OS_ESCALATION_PREFIXES: tuple[str, ...] = (
     "TreeDB/internal/stableio/",
@@ -217,13 +220,38 @@ def is_docs_only_path(path: str) -> bool:
     return False
 
 
-def is_os_escalation_path(path: str) -> bool:
+def file_has_os_build_constraint(repo: Path | None, path: str) -> bool:
+    """Return True if a changed .go file carries an OS/arch/cgo build constraint."""
+    if repo is None or not path.endswith(".go"):
+        return False
+    full = repo / path
+    if not full.is_file():
+        return False
+    try:
+        with full.open("r", encoding="utf-8", errors="ignore") as fh:
+            for idx, line in enumerate(fh):
+                if idx >= 40:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("package "):
+                    break
+                if stripped.startswith(("//go:build", "// +build")):
+                    if OS_BUILD_CONSTRAINT_TOKEN_RE.search(stripped):
+                        return True
+    except OSError:
+        return False
+    return False
+
+
+def is_os_escalation_path(path: str, repo: Path | None = None) -> bool:
     p = path.strip("/")
     if p in OS_ESCALATION_EXACT:
         return True
     if any(p.startswith(prefix) for prefix in OS_ESCALATION_PREFIXES):
         return True
     if OS_TAG_FILE_RE.search(p):
+        return True
+    if file_has_os_build_constraint(repo, p):
         return True
     return False
 
@@ -404,6 +432,7 @@ def build_plan(
     pkg_to_dir: dict[str, str],
     pkg_to_imports: dict[str, list[str]],
     local_replace_dirs: tuple[str, ...] = (),
+    repo: Path | None = None,
     base_sha: str = "",
     head_sha: str = "",
 ) -> dict[str, Any]:
@@ -520,7 +549,7 @@ def build_plan(
             surgical_tests.append(pkg)
         test_packages = surgical_tests
         race_packages = [p for p in touched_packages if p not in RACE_EXCLUDED_PACKAGES]
-        escalate_os = any(is_os_escalation_path(f) for f in files) and bool(touched_packages)
+        escalate_os = any(is_os_escalation_path(f, repo=repo) for f in files) and bool(touched_packages)
         os_macos_packages = touched_packages if escalate_os else []
         os_windows_packages = [p for p in os_macos_packages if is_windows_supported_package(p)]
         run_docs_check = any(is_docs_check_trigger(f) for f in files)
@@ -758,6 +787,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         pkg_to_dir=pkg_to_dir,
         pkg_to_imports=pkg_to_imports,
         local_replace_dirs=local_replace_dirs,
+        repo=repo,
         base_sha=args.base_sha or "",
         head_sha=args.head_sha or "",
     )

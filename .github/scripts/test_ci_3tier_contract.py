@@ -117,10 +117,12 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         # Single fail-closed aggregator
         self.assertIn("ci-gate", doc["jobs"])
         self.assertEqual(doc["jobs"]["ci-gate"]["name"], "CI Gate")
-        # Cross-compile steps exist
+        # Cross-compile steps and retained script suites exist
         vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet-and-cross-compile"]["steps"])
         self.assertIn("--kind cross-darwin", vet_script)
         self.assertIn("--kind cross-windows", vet_script)
+        self.assertIn("treedb_peer_*test.py", vet_script)
+        self.assertIn("treedb_vacuum_m0_summarize_test.py", vet_script)
 
     def test_ci_full_sweep_guardrails_and_7_windows_shards(self) -> None:
         raw = (WORKFLOWS / "ci-full-sweep.yml").read_text(encoding="utf-8")
@@ -243,11 +245,24 @@ class TestCIScopeRouter(unittest.TestCase):
             ("TreeDB/internal/stableio/sync_file_darwin.go", True),
             ("HashDB/replacefile_windows.go", True),
             ("cmd/unified_bench/hostinfo_darwin.go", False),
+            ("TreeDB/nativewire/vector_partition_production_listener_socket_windows_v1.go", True),
+            ("TreeDB/nativewire/vector_partition_production_listener_socket_unix_v1.go", True),
+            ("TreeDB/nativewire/foo_linux_v2_test.go", True),
         ):
             plan = self._plan(changed_files=[path])
             self.assertTrue(plan["escalate_os"], path)
             self.assertTrue(plan["os_macos_packages"], path)
             self.assertEqual(bool(plan["os_windows_packages"]), want_win, path)
+
+        # Also detect OS build constraints in arbitrarily named .go files.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pkg_dir = root / "TreeDB" / "mongo_gateway"
+            pkg_dir.mkdir(parents=True)
+            (pkg_dir / "custom_socket.go").write_text("//go:build windows\n\npackage mongogateway\n", encoding="utf-8")
+            plan = self._plan(changed_files=["TreeDB/mongo_gateway/custom_socket.go"], repo=root)
+            self.assertTrue(plan["escalate_os"])
+            self.assertTrue(plan["os_windows_packages"])
 
     def test_main_push_is_main_fast_and_fail_closed_on_unknown_diff(self) -> None:
         p_main = self._plan(event_name="push", changed_files=[])

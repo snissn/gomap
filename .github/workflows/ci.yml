@@ -219,6 +219,8 @@ jobs:
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --user --quiet pyyaml
           python3 .github/scripts/test_ci_3tier_contract.py
           python3 .github/scripts/test_vlog_auto_incompressible.py
+          python3 -m unittest discover -s scripts -p 'treedb_peer_*test.py' -v
+          python3 -B scripts/treedb_vacuum_m0_summarize_test.py
           python3 scripts/r1_collection_source_test.py
           python3 scripts/r1_collection_summary_test.py
           python3 -B scripts/cow_c3_read/host_isolation_test.py
