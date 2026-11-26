@@ -79,13 +79,14 @@ func (s *Snapshot) InspectPinnedCOWLeafRecord(ptr page.ValuePtr, limits valuelog
 // during a WithPinnedCOWLeafRecord or GetEntryExactWithPinnedCOWLeaf callback.
 // The caller must not retain it.
 type PinnedCOWLeafRead struct {
-	file        *valuelog.File
-	identity    rootpublication.StableIdentity
-	cache       *leafPageReadCache
-	ptr         page.LeafLogPtr
-	limits      valuelog.COWReadLimits
-	shape       valuelog.COWRecordShape
-	mappedInput []byte
+	file           *valuelog.File
+	identity       rootpublication.StableIdentity
+	cache          *leafPageReadCache
+	ptr            page.LeafLogPtr
+	limits         valuelog.COWReadLimits
+	shape          valuelog.COWRecordShape
+	mappedInput    []byte
+	mappedFromMmap bool
 }
 
 // WithPinnedCOWLeafRecord holds one snapshot read pin from live metadata
@@ -106,15 +107,21 @@ func (s *Snapshot) WithPinnedCOWLeafRecord(ptr page.LeafLogPtr, limits valuelog.
 
 // The caller holds a snapshot read through inspection and all record use.
 func (s *Snapshot) inspectPinnedCOWLeafRecord(ptr page.LeafLogPtr, limits valuelog.COWReadLimits) (PinnedCOWLeafRead, error) {
+	return s.inspectPinnedCOWLeafRecordInto(ptr, limits, nil)
+}
+
+// The caller holds a snapshot read through inspection and all record use, and
+// owns readScratch until the returned PinnedCOWLeafRead is no longer used.
+func (s *Snapshot) inspectPinnedCOWLeafRecordInto(ptr page.LeafLogPtr, limits valuelog.COWReadLimits, readScratch []byte) (PinnedCOWLeafRead, error) {
 	f, identity, err := s.pinnedValueLogSegment(ptr.ValueLogFileID())
 	if err != nil {
 		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
-	shape, mappedInput, err := f.InspectCOWLeafRecordPinned(ptr.ValuePtr(), limits)
+	shape, mappedInput, fromMmap, err := f.InspectCOWLeafRecordPinnedInto(ptr.ValuePtr(), limits, readScratch)
 	if err != nil {
 		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.File.Name(), identity, err)
 	}
-	return PinnedCOWLeafRead{file: f, identity: identity, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape, mappedInput: mappedInput}, nil
+	return PinnedCOWLeafRead{file: f, identity: identity, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape, mappedInput: mappedInput, mappedFromMmap: fromMmap}, nil
 }
 
 func (r *PinnedCOWLeafRead) FileName() string { return r.file.File.Name() }
@@ -124,7 +131,10 @@ func (r *PinnedCOWLeafRead) Shape() valuelog.COWRecordShape { return r.shape }
 
 func (r *PinnedCOWLeafRead) ReadPage(input, raw, dst []byte, decode valuelog.COWDecodeFunc) ([]byte, error) {
 	if r.mappedInput != nil {
-		return r.file.ReadCOWLeafPageMapped(r.ptr.ValuePtr(), r.shape, r.mappedInput, input, raw, dst, decode)
+		if r.mappedFromMmap {
+			return r.file.ReadCOWLeafPageMapped(r.ptr.ValuePtr(), r.shape, r.mappedInput, input, raw, dst, decode)
+		}
+		return r.file.ReadCOWLeafPageBuffered(r.ptr.ValuePtr(), r.shape, r.mappedInput, input, raw, dst, decode)
 	}
 	return r.file.ReadCOWLeafPage(r.ptr.ValuePtr(), r.shape, input, raw, dst, decode)
 }

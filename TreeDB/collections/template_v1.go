@@ -240,6 +240,8 @@ func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback te
 			learnedSet[learned] = struct{}{}
 		}
 	}
+	var lastHash [32]byte
+	var lastTpl *templateV1Template
 	for i, document := range documents {
 		hashDocumentOffset := hashDocumentOffsets[i]
 		if hashDocumentOffset == templateV1StoredDocumentOffset {
@@ -247,9 +249,13 @@ func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback te
 			validatePrepared = append(validatePrepared, document)
 			continue
 		}
-		nextArena, stored, nextLearned, err := appendTemplateV1InsertDocumentToStored(conversionArena, document[hashDocumentOffset:], resolver, learnedTemplates, learnedSet, collectLearned)
+		nextArena, stored, nextLearned, tpl, err := appendTemplateV1InsertDocumentToStoredCached(conversionArena, document[hashDocumentOffset:], resolver, learnedTemplates, learnedSet, collectLearned, lastHash, lastTpl)
 		if err != nil {
 			return nil, nil, nil, nil, err
+		}
+		if tpl != nil {
+			lastHash = tpl.hash
+			lastTpl = tpl
 		}
 		// Keep compact stored bytes borrowed or freshly prepared like JSON
 		// documents; publish consumes the prepared batch synchronously.
@@ -460,9 +466,63 @@ func isMissingTemplateV1Lookup(err error) bool {
 }
 
 func validateTemplateV1PreparedDocuments(documents [][]byte, resolver templateV1Resolver) error {
+	if resolver == nil {
+		if len(documents) == 0 {
+			return nil
+		}
+		return errTemplateV1MissingResolver
+	}
+	var lastID uint64
+	var lastTpl *templateV1Template
 	for _, document := range documents {
-		if err := validateTemplateV1StoredDocumentTemplates(document, resolver); err != nil {
+		root, err := parseTemplateV1StoredDocument(document)
+		if err != nil {
 			return err
+		}
+		tpl := lastTpl
+		if tpl == nil || root.templateID != lastID {
+			tpl, err = resolver.lookupTemplateV1(root.templateID)
+			if err != nil {
+				return err
+			}
+			lastID = root.templateID
+			lastTpl = tpl
+		}
+		pos := 0
+		raw := root.values
+		nRaw := len(raw)
+		for range tpl.fields {
+			if pos >= nRaw {
+				return errors.New("collections: malformed template-v1 value")
+			}
+			kind := raw[pos]
+			switch kind {
+			case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+				pos++
+			case templateV1KindFloat64:
+				if nRaw-pos < 9 {
+					return errors.New("collections: malformed template-v1 number")
+				}
+				pos += 9
+			case templateV1KindString:
+				if pos+1 < nRaw && raw[pos+1] < 0x80 {
+					n := int(raw[pos+1])
+					next := pos + 2 + n
+					if next > nRaw {
+						return errors.New("collections: malformed template-v1 string")
+					}
+					pos = next
+				} else if err := skipTemplateV1Value(raw, &pos, resolver); err != nil {
+					return err
+				}
+			default:
+				if err := skipTemplateV1Value(raw, &pos, resolver); err != nil {
+					return err
+				}
+			}
+		}
+		if pos != nRaw {
+			return errors.New("collections: trailing template-v1 object values")
 		}
 	}
 	return nil
@@ -1653,16 +1713,24 @@ func convertTemplateV1InsertDocumentToStored(raw []byte, resolver templateV1Reso
 }
 
 func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver templateV1Resolver, learned []templateV1LearnedTemplate, learnedSet map[templateV1LearnedTemplate]struct{}, collectLearned bool) ([]byte, []byte, []templateV1LearnedTemplate, error) {
+	dst, stored, learned, _, err := appendTemplateV1InsertDocumentToStoredCached(dst, raw, resolver, learned, learnedSet, collectLearned, [32]byte{}, nil)
+	return dst, stored, learned, err
+}
+
+func appendTemplateV1InsertDocumentToStoredCached(dst []byte, raw []byte, resolver templateV1Resolver, learned []templateV1LearnedTemplate, learnedSet map[templateV1LearnedTemplate]struct{}, collectLearned bool, cachedHash [32]byte, cachedTpl *templateV1Template) ([]byte, []byte, []templateV1LearnedTemplate, *templateV1Template, error) {
 	if resolver == nil {
-		return dst, nil, learned, errTemplateV1MissingResolver
+		return dst, nil, learned, nil, errTemplateV1MissingResolver
 	}
 	root, err := parseTemplateV1InsertHashDocument(raw)
 	if err != nil {
-		return dst, nil, learned, err
+		return dst, nil, learned, nil, err
 	}
-	tpl, err := resolver.lookupTemplateV1ByHash(root.templateHash)
-	if err != nil {
-		return dst, nil, learned, err
+	tpl := cachedTpl
+	if tpl == nil || root.templateHash != cachedHash {
+		tpl, err = resolver.lookupTemplateV1ByHash(root.templateHash)
+		if err != nil {
+			return dst, nil, learned, nil, err
+		}
 	}
 	if collectLearned {
 		learned = appendTemplateV1LearnedTemplate(learned, learnedSet, tpl)
@@ -1672,23 +1740,23 @@ func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver tem
 	dst = appendTemplateV1Uvarint(dst, tpl.id)
 	needsConversion, err := templateV1ValuesNeedHashConversion(root.values, len(tpl.fields))
 	if err != nil {
-		return dst, nil, learned, err
+		return dst, nil, learned, nil, err
 	}
 	if !needsConversion {
 		dst = append(dst, root.values...)
-		return dst, dst[start:len(dst):len(dst)], learned, nil
+		return dst, dst[start:len(dst):len(dst)], learned, tpl, nil
 	}
 	pos := 0
 	for range tpl.fields {
 		dst, learned, err = appendTemplateV1ConvertedValue(dst, root.values, &pos, resolver, learned, learnedSet, collectLearned)
 		if err != nil {
-			return dst, nil, learned, err
+			return dst, nil, learned, nil, err
 		}
 	}
 	if pos != len(root.values) {
-		return dst, nil, learned, errors.New("collections: trailing template-v1 object values")
+		return dst, nil, learned, nil, errors.New("collections: trailing template-v1 object values")
 	}
-	return dst, dst[start:len(dst):len(dst)], learned, nil
+	return dst, dst[start:len(dst):len(dst)], learned, tpl, nil
 }
 
 func appendTemplateV1LearnedTemplate(dst []templateV1LearnedTemplate, seen map[templateV1LearnedTemplate]struct{}, tpl *templateV1Template) []templateV1LearnedTemplate {
@@ -1713,13 +1781,39 @@ func appendTemplateV1LearnedTemplate(dst []templateV1LearnedTemplate, seen map[t
 
 func templateV1ValuesNeedHashConversion(raw []byte, fieldCount int) (bool, error) {
 	pos := 0
+	nRaw := len(raw)
 	for i := 0; i < fieldCount; i++ {
+		if pos >= nRaw {
+			return false, errors.New("collections: malformed template-v1 value")
+		}
+		kind := raw[pos]
+		switch kind {
+		case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+			pos++
+			continue
+		case templateV1KindFloat64:
+			if nRaw-pos < 9 {
+				return false, errors.New("collections: malformed template-v1 number")
+			}
+			pos += 9
+			continue
+		case templateV1KindString:
+			if pos+1 < nRaw && raw[pos+1] < 0x80 {
+				n := int(raw[pos+1])
+				next := pos + 2 + n
+				if next > nRaw {
+					return false, errors.New("collections: malformed template-v1 string")
+				}
+				pos = next
+				continue
+			}
+		}
 		needsConversion, err := templateV1ValueNeedsHashConversion(raw, &pos)
 		if err != nil || needsConversion {
 			return needsConversion, err
 		}
 	}
-	if pos != len(raw) {
+	if pos != nRaw {
 		return false, errors.New("collections: trailing template-v1 object values")
 	}
 	return false, nil
@@ -1891,31 +1985,183 @@ func templateV1OrderedIndexStateForDocumentWithArena(document []byte, runtimes [
 	return state, nil
 }
 
-func templateV1RootIndexStateForDocumentWithArena(root templateV1ObjectRef, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, bool, error) {
+type templateV1RootFieldPlan struct {
+	runtimeIdx   int16
+	multiRuntime bool
+	valueType    IndexValueType
+}
+
+type templateV1RootIndexPlan struct {
+	templateID uint64
+	runtimeLen int
+	allRoot    bool
+	tpl        *templateV1Template
+	fields     []templateV1RootFieldPlan
+}
+
+func (p *templateV1RootIndexPlan) prepare(templateID uint64, runtimes []indexRuntime, resolver templateV1Resolver) (bool, error) {
+	if p.templateID == templateID && p.runtimeLen == len(runtimes) && p.tpl != nil {
+		return p.allRoot, nil
+	}
+	allRoot := true
 	for _, runtime := range runtimes {
 		if len(runtime.path) != 1 {
-			return nil, false, nil
+			allRoot = false
+			break
 		}
 	}
-	tpl, err := opts.templateResolver.lookupTemplateV1(root.templateID)
+	if !allRoot {
+		p.templateID = templateID
+		p.runtimeLen = len(runtimes)
+		p.allRoot = false
+		p.tpl = nil
+		return false, nil
+	}
+	tpl, err := resolver.lookupTemplateV1(templateID)
+	if err != nil {
+		return true, err
+	}
+	nFields := len(tpl.fields)
+	if cap(p.fields) < nFields {
+		p.fields = make([]templateV1RootFieldPlan, nFields)
+	} else {
+		p.fields = p.fields[:nFields]
+	}
+	for i, field := range tpl.fields {
+		first := templateV1RootFieldFirstRuntime(field, runtimes)
+		if first < 0 {
+			p.fields[i] = templateV1RootFieldPlan{runtimeIdx: -1}
+			continue
+		}
+		multi := false
+		for j := first + 1; j < len(runtimes); j++ {
+			if runtimes[j].path[0] == field {
+				multi = true
+				break
+			}
+		}
+		p.fields[i] = templateV1RootFieldPlan{
+			runtimeIdx:   int16(first),
+			multiRuntime: multi,
+			valueType:    runtimes[first].def.valueType,
+		}
+	}
+	p.templateID = templateID
+	p.runtimeLen = len(runtimes)
+	p.allRoot = true
+	p.tpl = tpl
+	return true, nil
+}
+
+func templateV1RootIndexStateForDocumentWithArena(root templateV1ObjectRef, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, bool, error) {
+	allRoot, err := encoder.tplRootPlan.prepare(root.templateID, runtimes, opts.templateResolver)
 	if err != nil {
 		return nil, true, err
 	}
+	if !allRoot {
+		return nil, false, nil
+	}
+	tpl := encoder.tplRootPlan.tpl
+	fieldPlans := encoder.tplRootPlan.fields
 	state := encoder.appendState(len(runtimes))
+	raw := root.values
+	nRaw := len(raw)
 	pos := 0
-	for _, field := range tpl.fields {
-		runtimeIdx := templateV1RootFieldFirstRuntime(field, runtimes)
-		if runtimeIdx < 0 {
-			if err := skipTemplateV1Value(root.values, &pos, opts.templateResolver); err != nil {
-				return nil, true, err
+	for i := range fieldPlans {
+		fp := fieldPlans[i]
+		if pos >= nRaw {
+			return nil, true, errors.New("collections: malformed template-v1 value")
+		}
+		kind := raw[pos]
+		if fp.runtimeIdx < 0 {
+			switch kind {
+			case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+				pos++
+			case templateV1KindFloat64:
+				if nRaw-pos < 9 {
+					return nil, true, errors.New("collections: malformed template-v1 number")
+				}
+				pos += 9
+			case templateV1KindString:
+				if pos+1 < nRaw && raw[pos+1] < 0x80 {
+					next := pos + 2 + int(raw[pos+1])
+					if next > nRaw {
+						return nil, true, errors.New("collections: malformed template-v1 string")
+					}
+					pos = next
+				} else if err := skipTemplateV1Value(raw, &pos, opts.templateResolver); err != nil {
+					return nil, true, err
+				}
+			default:
+				if err := skipTemplateV1Value(raw, &pos, opts.templateResolver); err != nil {
+					return nil, true, err
+				}
 			}
 			continue
 		}
-		if err := appendTemplateV1RootFieldIndexValues(state, field, runtimeIdx, root.values, &pos, runtimes, opts, encoder); err != nil {
+		if kind == templateV1KindNull {
+			pos++
+			continue
+		}
+		if !fp.multiRuntime {
+			switch fp.valueType {
+			case IndexValueString:
+				if kind == templateV1KindString && pos+1 < nRaw && raw[pos+1] < 0x80 {
+					strLen := int(raw[pos+1])
+					strStart := pos + 2
+					strEnd := strStart + strLen
+					if strEnd > nRaw {
+						return nil, true, errors.New("collections: malformed template-v1 string")
+					}
+					pos = strEnd
+					start := len(encoder.buf)
+					encoder.buf = appendIndexStringComponent(encoder.buf, raw[strStart:strEnd])
+					state[fp.runtimeIdx] = encoder.appendSingleValueRef(encoder.buf[start:len(encoder.buf):len(encoder.buf)])
+					continue
+				}
+			case IndexValueBool:
+				if kind == templateV1KindFalse || kind == templateV1KindTrue {
+					pos++
+					start := len(encoder.buf)
+					encoder.buf = appendIndexBoolComponent(encoder.buf, kind == templateV1KindTrue)
+					state[fp.runtimeIdx] = encoder.appendSingleValueRef(encoder.buf[start:len(encoder.buf):len(encoder.buf)])
+					continue
+				}
+			case IndexValueDouble:
+				if kind == templateV1KindFloat64 {
+					if nRaw-pos < 9 {
+						return nil, true, errors.New("collections: malformed template-v1 number")
+					}
+					bits := binary.BigEndian.Uint64(raw[pos+1 : pos+9])
+					pos += 9
+					start := len(encoder.buf)
+					encoder.buf = appendIndexDoubleComponent(encoder.buf, math.Float64frombits(bits))
+					state[fp.runtimeIdx] = encoder.appendSingleValueRef(encoder.buf[start:len(encoder.buf):len(encoder.buf)])
+					continue
+				}
+			case IndexValueInt64:
+				if kind == templateV1KindFloat64 {
+					if nRaw-pos < 9 {
+						return nil, true, errors.New("collections: malformed template-v1 number")
+					}
+					bits := binary.BigEndian.Uint64(raw[pos+1 : pos+9])
+					pos += 9
+					v, err := exactFloat64AsInt64(math.Float64frombits(bits))
+					if err != nil {
+						return nil, true, err
+					}
+					start := len(encoder.buf)
+					encoder.buf = appendIndexInt64Component(encoder.buf, v)
+					state[fp.runtimeIdx] = encoder.appendSingleValueRef(encoder.buf[start:len(encoder.buf):len(encoder.buf)])
+					continue
+				}
+			}
+		}
+		if err := appendTemplateV1RootFieldIndexValues(state, tpl.fields[i], int(fp.runtimeIdx), raw, &pos, runtimes, opts, encoder); err != nil {
 			return nil, true, err
 		}
 	}
-	if pos != len(root.values) {
+	if pos != nRaw {
 		return nil, true, errors.New("collections: trailing template-v1 object values")
 	}
 	return state, true, nil

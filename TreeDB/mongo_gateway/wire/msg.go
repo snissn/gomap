@@ -115,6 +115,14 @@ func AppendMsgMessage(dst []byte, requestID, responseTo int32, flags MsgFlag, do
 
 func AppendMsgMessageWithSequences(dst []byte, requestID, responseTo int32, flags MsgFlag, doc Document, sequences []DocumentSequence) ([]byte, error) {
 	base := len(dst)
+	if len(sequences) == 0 {
+		need := HeaderLen + 5 + len(doc)
+		if cap(dst)-base < need {
+			grown := make([]byte, base, base+need)
+			copy(grown, dst)
+			dst = grown
+		}
+	}
 	dst = appendInt32(dst, 0)
 	dst = appendInt32(dst, requestID)
 	dst = appendInt32(dst, responseTo)

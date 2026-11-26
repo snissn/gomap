@@ -352,6 +352,43 @@ func (db *DB) CaptureNativeCut() (backenddb.NativeSemanticCapture, error) {
 	return db.CaptureNativeSemanticState(db.cow.txnOwner)
 }
 
+// BorrowNativeSemanticCut pins the current live cut with a lock-free atomic
+// refcount and returns it directly without allocating a NativeSemanticCapture
+// wrapper or acquiring a COWBudget external lease. Returns ErrNativeSemanticUnsupported
+// when the cut has no installed semantic state yet so the caller falls back to
+// CaptureNativeCut / cold catalog projection.
+func (db *DB) BorrowNativeSemanticCut() (backenddb.NativeSemanticBorrowedCut, error) {
+	if db == nil || db.cow == nil {
+		return nil, ErrCOWUnsupported
+	}
+	cut := db.cow.retainCut()
+	if cut == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if cut.semanticRootSet == nil {
+		_ = db.cow.releaseCut(cut)
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	return cut, nil
+}
+
+func (c *cowReadCut) State() backenddb.NativeSemanticState { return c.semanticRootSet }
+
+func (c *cowReadCut) Release() error {
+	if c == nil || c.cache == nil {
+		return nil
+	}
+	return c.cache.releaseCut(c)
+}
+
+func (c *cowReadCut) dictionaryProvider() cowDictionaryReadProvider {
+	if c == nil || c.cache == nil || c.cache.ownerDB == nil {
+		return nil
+	}
+	provider, _ := c.cache.ownerDB.dictStore.(cowDictionaryReadProvider)
+	return provider
+}
+
 // WithNativeSemanticStateReadOnly synchronously borrows the current retained
 // cut's immutable native semantic state without allocating a capture handle or
 // external lease. Callers must not retain references derived from state after

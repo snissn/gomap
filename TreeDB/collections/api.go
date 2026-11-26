@@ -23497,6 +23497,20 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 // Typed-row collections reconstruct declared columns together with the retained
 // JSON payload. The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
+// GetIntoWithFormat reads one document by primary ID into dst and also returns
+// the collection's DocumentFormat from the same read view without allocating a
+// CollectionReadView or copying CollectionMeta.
+func (c *Collection) GetIntoWithFormat(documentID []byte, dst []byte) ([]byte, DocumentFormat, bool, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeGetIntoWithFormat(documentID, dst)
+	}
+	val, found, err := c.GetInto(documentID, dst)
+	if err != nil {
+		return val, "", false, err
+	}
+	return val, c.meta.Options.DocumentFormat, found, nil
+}
+
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
 	if c != nil && c.nativeJSON != nil {
 		return c.nativeGetInto(documentID, dst)

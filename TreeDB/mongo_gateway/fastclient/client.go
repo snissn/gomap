@@ -23,12 +23,23 @@ type Client struct {
 	maxMessageLen int32
 	nextRequestID atomic.Int32
 	readBuf       []byte
+	writeBuf      []byte
+	docsBuf       []bson.Raw
 	mu            sync.Mutex
+
+	closed        atomic.Bool
+	watchInFlight atomic.Bool
+	watchFired    atomic.Bool
+	watchMu       sync.Mutex
+	watchCtx      context.Context
+	watchStop     func() bool
 }
 
 const (
-	defaultReadBufferSize = 32 * 1024
-	maxRetainedReadBuffer = 1 << 20
+	defaultReadBufferSize  = 32 * 1024
+	maxRetainedReadBuffer  = 1 << 20
+	maxRetainedWriteBuffer = 1 << 20
+	maxRetainedDocsBuffer  = 1024
 )
 
 func Connect(ctx context.Context, address string) (*Client, error) {
@@ -52,7 +63,17 @@ func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
-	return c.conn.Close()
+	c.closed.Store(true)
+	err := c.conn.Close()
+	c.watchMu.Lock()
+	stop := c.watchStop
+	c.watchStop = nil
+	c.watchCtx = nil
+	c.watchMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	return err
 }
 
 func (c *Client) InsertManyRawBSON(ctx context.Context, database, collection string, docs []bson.Raw) (int, error) {
@@ -103,11 +124,7 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 	if _, ok := command.Lookup("find").StringValueOK(); !ok {
 		return nil, errors.New("FindRawBSON requires a find command document")
 	}
-	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
-	if err != nil {
-		return nil, err
-	}
-	return c.roundTripFind(ctx, msg)
+	return c.roundTripFindCommand(ctx, command)
 }
 
 // FindRawBSONBorrowed is like FindRawBSON, but the returned BSON documents are
@@ -128,11 +145,7 @@ func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn f
 	if _, ok := command.Lookup("find").StringValueOK(); !ok {
 		return errors.New("FindRawBSONBorrowed requires a find command document")
 	}
-	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
-	if err != nil {
-		return err
-	}
-	return c.roundTripFindBorrowed(ctx, msg, fn)
+	return c.roundTripFindCommandBorrowed(ctx, command, fn)
 }
 
 func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (int, error) {
@@ -145,12 +158,10 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 		return 0, err
 	}
 
-	stopCancelWatch := c.watchContextCancelLocked(ctx)
-	defer func() {
-		if stopCancelWatch() {
-			_ = c.conn.SetDeadline(time.Time{})
-		}
-	}()
+	if err := c.beginContextWatchLocked(ctx); err != nil {
+		return 0, err
+	}
+	defer c.endContextWatchLocked()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, ctxErr
@@ -167,7 +178,7 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 	return parseInsertResponse(header, body, wantN)
 }
 
-func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, error) {
+func (c *Client) roundTripFindCommand(ctx context.Context, command bson.Raw) ([]bson.Raw, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -176,13 +187,20 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	msg, err := wire.AppendMsgMessage(c.writeBuf[:0], c.nextRequestID.Add(1), 0, 0, wire.Document(command))
+	if err != nil {
+		return nil, err
+	}
+	if cap(msg) <= maxRetainedWriteBuffer {
+		c.writeBuf = msg[:0]
+	} else {
+		c.writeBuf = nil
+	}
 
-	stopCancelWatch := c.watchContextCancelLocked(ctx)
-	defer func() {
-		if stopCancelWatch() {
-			_ = c.conn.SetDeadline(time.Time{})
-		}
-	}()
+	if err := c.beginContextWatchLocked(ctx); err != nil {
+		return nil, err
+	}
+	defer c.endContextWatchLocked()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -196,10 +214,10 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 		}
 		return nil, err
 	}
-	return parseFindResponse(header, body)
+	return parseFindResponseInto(header, body, nil)
 }
 
-func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func([]bson.Raw) error) error {
+func (c *Client) roundTripFindCommandBorrowed(ctx context.Context, command bson.Raw, fn func([]bson.Raw) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -208,13 +226,20 @@ func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	msg, err := wire.AppendMsgMessage(c.writeBuf[:0], c.nextRequestID.Add(1), 0, 0, wire.Document(command))
+	if err != nil {
+		return err
+	}
+	if cap(msg) <= maxRetainedWriteBuffer {
+		c.writeBuf = msg[:0]
+	} else {
+		c.writeBuf = nil
+	}
 
-	stopCancelWatch := c.watchContextCancelLocked(ctx)
-	defer func() {
-		if stopCancelWatch() {
-			_ = c.conn.SetDeadline(time.Time{})
-		}
-	}()
+	if err := c.beginContextWatchLocked(ctx); err != nil {
+		return err
+	}
+	defer c.endContextWatchLocked()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -228,7 +253,12 @@ func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func(
 		}
 		return err
 	}
-	docs, err := parseFindResponse(header, body)
+	docs, err := parseFindResponseInto(header, body, c.docsBuf[:0])
+	if cap(docs) <= maxRetainedDocsBuffer {
+		c.docsBuf = docs[:0]
+	} else {
+		c.docsBuf = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -256,22 +286,68 @@ func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
 	return header, body, nil
 }
 
-func (c *Client) watchContextCancelLocked(ctx context.Context) func() bool {
-	done := ctx.Done()
-	if done == nil {
-		return func() bool { return false }
+func (c *Client) beginContextWatchLocked(ctx context.Context) error {
+	if ctx.Done() == nil {
+		return nil
 	}
-	fired := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		defer close(fired)
-		_ = c.conn.SetDeadline(time.Now())
-	})
-	return func() bool {
-		if stop() {
-			return false
+	if ctx != c.watchCtx {
+		c.watchMu.Lock()
+		oldStop := c.watchStop
+		c.watchStop = nil
+		c.watchCtx = nil
+		c.watchMu.Unlock()
+		if oldStop != nil {
+			oldStop()
 		}
-		<-fired
-		return true
+		c.watchFired.Store(false)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.watchMu.Lock()
+		if c.closed.Load() {
+			c.watchMu.Unlock()
+			return errors.New("mongo gateway fast client is closed")
+		}
+		c.watchCtx = ctx
+		c.watchStop = context.AfterFunc(ctx, func() {
+			c.watchMu.Lock()
+			c.watchFired.Store(true)
+			if c.watchInFlight.Load() {
+				_ = c.conn.SetDeadline(time.Now())
+			}
+			c.watchMu.Unlock()
+		})
+		c.watchMu.Unlock()
+	}
+	c.watchInFlight.Store(true)
+	if c.watchFired.Load() {
+		c.watchInFlight.Store(false)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *Client) endContextWatchLocked() {
+	if !c.watchInFlight.Swap(false) {
+		return
+	}
+	if c.watchFired.Load() {
+		// Synchronize with any in-flight AfterFunc callback and clear the
+		// deadline so the connection is not left permanently expired if a
+		// subsequent request uses a fresh non-cancelled context.
+		c.watchMu.Lock()
+		_ = c.conn.SetDeadline(time.Time{})
+		oldStop := c.watchStop
+		c.watchStop = nil
+		c.watchCtx = nil
+		c.watchMu.Unlock()
+		if oldStop != nil {
+			oldStop()
+		}
+		c.watchFired.Store(false)
 	}
 }
 
@@ -297,7 +373,7 @@ func parseInsertResponse(header wire.Header, body []byte, wantN int) (int, error
 	return n, nil
 }
 
-func parseFindResponse(header wire.Header, body []byte) ([]bson.Raw, error) {
+func parseFindResponseInto(header wire.Header, body []byte, dst []bson.Raw) ([]bson.Raw, error) {
 	if header.OpCode != wire.OpMsg {
 		return nil, fmt.Errorf("find response opcode=%d want %d", header.OpCode, wire.OpMsg)
 	}
@@ -317,10 +393,10 @@ func parseFindResponse(header wire.Header, body []byte) ([]bson.Raw, error) {
 	if !ok {
 		return nil, errors.New("find response missing cursor.firstBatch")
 	}
-	return rawDocumentsFromArray(batch)
+	return rawDocumentsFromArrayInto(batch, dst)
 }
 
-func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
+func rawDocumentsFromArrayInto(batch bson.RawArray, dst []bson.Raw) ([]bson.Raw, error) {
 	length, rem, ok := bsoncore.ReadLength(bsoncore.Array(batch))
 	if !ok || length < 5 || int(length) > len(batch) {
 		return nil, errors.New("malformed find cursor.firstBatch")
@@ -331,7 +407,10 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 	}
 	rem = rem[:len(rem)-1]
 
-	docs := make([]bson.Raw, 0, rawArrayDocumentCapacityHint(len(rem)))
+	docs := dst[:0]
+	if cap(docs) == 0 {
+		docs = make([]bson.Raw, 0, rawArrayDocumentCapacityHint(len(rem)))
+	}
 	for len(rem) > 0 {
 		elem, next, ok := bsoncore.ReadElement(rem)
 		if !ok {

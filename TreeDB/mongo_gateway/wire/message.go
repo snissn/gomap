@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -102,13 +103,32 @@ func ReadMessageInto(r io.Reader, dst []byte, maxMessageLength int32) (Header, [
 	if maxMessageLength <= 0 {
 		maxMessageLength = DefaultMaxMessageLength
 	}
-	var headerBuf [HeaderLen]byte
-	if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
-		return Header{}, nil, err
-	}
-	h, err := ParseHeader(headerBuf[:])
-	if err != nil {
-		return Header{}, nil, err
+	var h Header
+	if br, ok := r.(*bufio.Reader); ok {
+		headerBytes, err := br.Peek(HeaderLen)
+		if err != nil {
+			if err == io.EOF && len(headerBytes) > 0 {
+				return Header{}, nil, io.ErrUnexpectedEOF
+			}
+			return Header{}, nil, err
+		}
+		h, err = ParseHeader(headerBytes)
+		if err != nil {
+			return Header{}, nil, err
+		}
+		if _, err := br.Discard(HeaderLen); err != nil {
+			return Header{}, nil, err
+		}
+	} else {
+		var headerBuf [HeaderLen]byte
+		if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
+			return Header{}, nil, err
+		}
+		var err error
+		h, err = ParseHeader(headerBuf[:])
+		if err != nil {
+			return Header{}, nil, err
+		}
 	}
 	if h.MessageLength > maxMessageLength {
 		return Header{}, nil, fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, h.MessageLength, maxMessageLength)
