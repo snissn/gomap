@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -91,5 +92,122 @@ func TestRelaxedFinalizeDefersAdvisoryRecordLengthIndexSyncUntilCheckpoint(t *te
 	}
 	if !foundSealed {
 		t.Fatalf("expected at least one sealed generation in plan: %+v", plan.Generations)
+	}
+}
+
+func TestRelaxedDeferredManifestSurvivesCrashReopenWithoutFlush(t *testing.T) {
+	db, leafLog, opts := openLeafLogLaneGCTestDB(t, 32<<10)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			closeLeafLogLaneGCTestDB(t, db, leafLog)
+		}
+	})
+
+	const rounds = 4
+	const keysPerRound = 512
+	val := []byte("val-relaxed-crash-reopen-unflushed-manifest-0123456789")
+	for round := 0; round < rounds; round++ {
+		b := db.NewBatch()
+		for i := 0; i < keysPerRound; i++ {
+			if err := b.Set(leafGenerationKey("crash", round*keysPerRound+i), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatal(err)
+		}
+		_ = b.Close()
+	}
+
+	if !db.leafGenerationManifestDirty.Load() {
+		t.Fatal("expected deferred operational leaf-generation manifest to remain dirty after relaxed writes")
+	}
+
+	// Verify the in-memory manifest tracks newly created leaf-log segments while
+	// the on-disk operational manifest has not yet been flushed.
+	db.mu.RLock()
+	inMemIDs := leafGenerationManifestRawFileIDSet(db.leafGenerationManifest.clone())
+	db.mu.RUnlock()
+	onDiskBefore := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	if len(inMemIDs) <= len(onDiskBefore) {
+		t.Fatalf("expected in-memory manifest file IDs (%d) to exceed unflushed on-disk manifest (%d)", len(inMemIDs), len(onDiskBefore))
+	}
+
+	// Wait for the background root publisher to persist the durable root meta
+	// pointing at the split leaf-log segments WITHOUT calling Checkpoint,
+	// leaving the deferred operational manifest dirty and unflushed.
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		visibleSeq := db.state.Load().CommitSeq
+		if err := runtime.coordinator.WaitThrough(context.Background(), visibleSeq); err != nil {
+			t.Fatalf("WaitThrough(%d): %v", visibleSeq, err)
+		}
+	} else {
+		if err := leafLog.Sync(); err != nil {
+			t.Fatalf("leafLog.Sync: %v", err)
+		}
+		if gen := db.idx.Load(); gen != nil && gen.pager != nil {
+			if err := gen.pager.Sync(); err != nil {
+				t.Fatalf("pager.Sync: %v", err)
+			}
+		}
+	}
+	if !db.leafGenerationManifestDirty.Load() {
+		t.Fatal("expected operational manifest to still be unflushed after durable root publication")
+	}
+
+	// Simulate an abrupt exit before Close can flush the deferred operational
+	// manifest and advisory .lenidx files, preserving exact physical file inodes
+	// on disk so reopen exercises true reconciliation against the stale manifest.
+	db.leafGenerationManifestDirty.Store(false)
+	db.leafGenerationRecordLengthMu.Lock()
+	clear(db.leafGenerationDeferredRecordLengthFileIDs)
+	db.leafGenerationRecordLengthMu.Unlock()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB without manifest flush: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+	closed = true
+
+	onDiskAtReopen := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	if len(onDiskAtReopen) != len(onDiskBefore) {
+		t.Fatalf("expected on-disk manifest to remain unflushed before reopen: got %d file IDs, want %d", len(onDiskAtReopen), len(onDiskBefore))
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen with unflushed operational manifest: %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("close reopened db: %v", err)
+		}
+	}()
+
+	// Reopen must reconcile every unrecorded leaf-log segment into manifest.json
+	// and keep every reachable outer-leaf pointer readable.
+	reconciledDisk := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	for rawFileID := range inMemIDs {
+		if _, ok := reconciledDisk[rawFileID]; !ok {
+			t.Fatalf("reopened on-disk manifest missing reconciled leaf-log file ID %d (have=%v)", rawFileID, reconciledDisk)
+		}
+	}
+	for i := 0; i < rounds*keysPerRound; i++ {
+		got, err := reopened.Get(leafGenerationKey("crash", i))
+		if err != nil {
+			t.Fatalf("reopened Get(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, val) {
+			t.Fatalf("reopened value mismatch at key %d: got %q want %q", i, got, val)
+		}
+	}
+	plan, err := reopened.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{})
+	if err != nil {
+		t.Fatalf("reopened LeafGenerationPlan: %v", err)
+	}
+	if len(plan.Generations) < 2 {
+		t.Fatalf("expected reconciled generations after crash reopen, got %d", len(plan.Generations))
 	}
 }

@@ -358,6 +358,18 @@ empty, truncated, malformed, zero-revision, or unsupported-version document.
 Ambiguous cleanup is handle-owned until close; recovery does not guess a
 temporary pathname to unlink.
 
+Because relaxed commits defer operational `manifest.json` and advisory
+`.lenidx` persistence until a synchronous commit, `Checkpoint`, `Close`, or
+admitted leaf-generation maintenance, a process exit before flush can leave
+newly created `leaf_vlog/value-l255-*.log` segments absent from the last
+persisted operational manifest. On read-write reopen, TreeDB loads the last
+complete manifest, reconciles any unrecorded `leaf_vlog/value-l255-*.log`
+segments discovered on disk into the manifest, and persists the reconciled
+manifest so all reachable outer-leaf pointers remain readable and accounted
+for by subsequent maintenance. Advisory `.lenidx` files omitted before exit
+are rebuilt on demand during planning. Durable-root manifest authority bound
+into `DependencyManifestV1` is unaffected by relaxed operational deferral.
+
 Before `command_wal_v2`, accepted patterns include:
 
 - canonical commit log: `commit-l<lane>-<seq>.log`
