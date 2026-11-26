@@ -256,7 +256,7 @@ The fixed consequences are:
   stable complete frame closure without forcing a backend root; journal-free `*Sync`
   waits for a sealed root covering the call.
 - For explicit `Checkpoint` in relaxed command-WAL mode
-  (`DurabilityWALOnRelaxed` / `command_wal_relaxed`, when `durabilitycut` and
+  (`command_wal_relaxed`, when `durabilitycut` and
   checkpoint/WAL flush test hooks are inactive), frontier capture records the
   command-WAL frontier without pre-rotating or fsyncing the active WAL segment
   prior to backend materialization. After backend publication crosses

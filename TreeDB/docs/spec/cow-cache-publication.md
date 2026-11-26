@@ -635,7 +635,7 @@ brief source/WAL frontier cut, then releases writer/admission locks before
 value-log sync, backend build/publication and handoff cleanup. Post-frontier
 writers are admitted only under the existing command-WAL cutover contract;
 NoWAL retains its full checkpoint drain. For explicit relaxed command-WAL
-checkpoints (`DurabilityWALOnRelaxed` when `durabilitycut` and checkpoint test
+checkpoints (`command_wal_relaxed` when `durabilitycut` and checkpoint test
 hooks are inactive), frontier capture defers active WAL segment rotation until
 after durable-root `WaitThrough(visibleCommitSeq)` proves `durableAppliedLSN >=
 frontier`; teardown then rotates the superseded active WAL segment without

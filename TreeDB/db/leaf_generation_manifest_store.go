@@ -429,7 +429,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	// Keep the legacy path as an operational/diagnostic view. New-format recovery
 	// never trusts this path: it reads the exact immutable revision retained by
 	// the selected durable-root resource set.
-	if err := s.replaceStableCompatibilityView(parent, data, custody, 2, 1, durabilitycut.Enabled()); err != nil {
+	if err := s.replaceStableCompatibilityView(parent, data, custody, 2, 1); err != nil {
 		manifest.ManifestRevision = candidate.ManifestRevision
 		return nil, s.ambiguous(err)
 	}
@@ -510,7 +510,7 @@ func (s *leafGenerationManifestStore) abandonPreparedStableRevision(resourceID s
 			if decodeErr != nil || previous.ManifestRevision == 0 || previous.ManifestRevision >= revision {
 				return s.ambiguous(errors.Join(decodeErr, fmt.Errorf("%w: invalid previous manifest view for abandoned revision=%d", rootpublication.ErrResourceConflict, revision)))
 			}
-			if err := s.replaceStableCompatibilityView(s.parent, previousView, custody, 4, 2, true); err != nil {
+			if err := s.replaceStableCompatibilityView(s.parent, previousView, custody, 4, 2); err != nil {
 				return s.ambiguous(err)
 			}
 			s.durabilityCounters.ContentSyncs.Add(1)
@@ -584,7 +584,7 @@ func (s *leafGenerationManifestStore) syncStableRevisionDeletionLocked() error {
 	return durabilitycut.EmitStablePath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent)
 }
 
-func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.File, data []byte, custody *LeafGenerationManifestStablePreparedClosure, fileIndex, namespaceIndex int, syncView bool) (retErr error) {
+func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.File, data []byte, custody *LeafGenerationManifestStablePreparedClosure, fileIndex, namespaceIndex int) (retErr error) {
 	if s == nil || parent == nil {
 		return rootpublication.ErrResourceOwnership
 	}
@@ -625,10 +625,8 @@ func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.
 	if _, err := temp.Write(data); err != nil {
 		return err
 	}
-	if syncView {
-		if err := syncLeafGenerationManifestFile(temp, s.leafDir); err != nil {
-			return err
-		}
+	if err := syncLeafGenerationManifestFile(temp, s.leafDir); err != nil {
+		return err
 	}
 	if err := rootpublication.RenameStableChildFile(parent, tempName, leafGenerationManifestFileName); err != nil {
 		return err
@@ -639,9 +637,6 @@ func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, temp, leafGenerationManifestFileName); err != nil {
 		return err
-	}
-	if !syncView {
-		return nil
 	}
 	parentGeneration, err := rootpublication.StableNamespaceParentGeneration(parent)
 	if err != nil {
