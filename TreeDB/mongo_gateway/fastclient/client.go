@@ -256,15 +256,20 @@ func (c *Client) roundTripFindCommandBorrowed(ctx context.Context, command bson.
 		return err
 	}
 	docs, err := parseFindResponseInto(header, body, c.docsBuf[:0])
-	if cap(docs) <= maxRetainedDocsBuffer {
-		c.docsBuf = docs[:0]
-	} else {
-		c.docsBuf = nil
-	}
+	c.docsBuf = nil
 	if err != nil {
+		clear(docs)
+		if cap(docs) <= maxRetainedDocsBuffer {
+			c.docsBuf = docs[:0]
+		}
 		return err
 	}
-	return fn(docs)
+	cbErr := fn(docs)
+	clear(docs)
+	if cap(docs) <= maxRetainedDocsBuffer {
+		c.docsBuf = docs[:0]
+	}
+	return cbErr
 }
 
 func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {

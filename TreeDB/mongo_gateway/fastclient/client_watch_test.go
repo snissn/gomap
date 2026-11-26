@@ -227,3 +227,109 @@ func TestClientRetiredWatchCallbackCannotPoisonNextWatch(t *testing.T) {
 		t.Fatalf("after endContextWatchLocked, lastDeadline=(%v, %v), want zero deadline", last, ok)
 	}
 }
+
+func TestClientFindRawBSONBorrowedClearsRetainedDocsBuf(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := mongogateway.NewServer()
+	defer func() { _ = server.Close() }()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+
+	srvCtx, srvCancel := context.WithCancel(context.Background())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_ = server.ServeConn(srvCtx, c)
+			}(conn)
+		}
+	}()
+	defer func() {
+		srvCancel()
+		_ = ln.Close()
+		<-acceptDone
+	}()
+
+	client, err := Connect(srvCtx, ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	docs := []bson.Raw{
+		mustBSON(t, bson.D{{Key: "_id", Value: "a"}, {Key: "v", Value: 1}}),
+		mustBSON(t, bson.D{{Key: "_id", Value: "b"}, {Key: "v", Value: 2}}),
+		mustBSON(t, bson.D{{Key: "_id", Value: "c"}, {Key: "v", Value: 3}}),
+		mustBSON(t, bson.D{{Key: "_id", Value: "d"}, {Key: "v", Value: 4}}),
+	}
+	if _, err := client.InsertManyRawBSON(ctx, "bench", "items", docs); err != nil {
+		t.Fatalf("InsertManyRawBSON: %v", err)
+	}
+
+	// Fetch 4 docs, then 1 doc, and verify every entry in the retained docsBuf
+	// backing array is cleared to nil after each callback returns.
+	findAll := mustBSON(t, bson.D{
+		{Key: "find", Value: "items"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "batchSize", Value: 10},
+		{Key: "$db", Value: "bench"},
+	})
+	gotCount := 0
+	if err := client.FindRawBSONBorrowed(ctx, findAll, func(docs []bson.Raw) error {
+		gotCount = len(docs)
+		return nil
+	}); err != nil {
+		t.Fatalf("findAll: %v", err)
+	}
+	if gotCount != 4 {
+		t.Fatalf("findAll count=%d want 4", gotCount)
+	}
+	assertCleared := func(stage string) {
+		t.Helper()
+		client.mu.Lock()
+		full := client.docsBuf[:cap(client.docsBuf)]
+		client.mu.Unlock()
+		for i, doc := range full {
+			if doc != nil {
+				t.Fatalf("%s: retained docsBuf[%d] is non-nil (len=%d)", stage, i, len(doc))
+			}
+		}
+	}
+	assertCleared("after_4_docs")
+
+	findOne := mustBSON(t, bson.D{
+		{Key: "find", Value: "items"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}}},
+		{Key: "limit", Value: 1},
+		{Key: "$db", Value: "bench"},
+	})
+	if err := client.FindRawBSONBorrowed(ctx, findOne, func(docs []bson.Raw) error {
+		gotCount = len(docs)
+		return nil
+	}); err != nil {
+		t.Fatalf("findOne: %v", err)
+	}
+	if gotCount != 1 {
+		t.Fatalf("findOne count=%d want 1", gotCount)
+	}
+	assertCleared("after_1_doc")
+}
