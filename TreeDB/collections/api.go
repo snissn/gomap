@@ -1584,7 +1584,7 @@ type collectionWriteDomain struct {
 	meta                      CollectionMeta
 	catalog                   *collectionCatalog
 	catalogCache              atomic.Pointer[cachedCollectionCatalog]
-	bufferedCount             atomic.Int64
+	bufferedEmpty             atomic.Bool
 	baseCommitSeq             uint64
 	baseSystemRoot            uint64
 	primaryRoot               uint64
@@ -3383,6 +3383,7 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 		updateCombineShards: defaultCollectionUpdateCombineShards,
 		schemaCoordinator:   schemaCoord,
 	}
+	domain.bufferedEmpty.Store(true)
 	domain.commandWALCoordinator.Store(m.commandWALCoordinator)
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	if schemaCoord != nil {
@@ -22058,7 +22059,7 @@ func (d *collectionWriteDomain) setBufferedCountLocked(n int) {
 		return
 	}
 	d.count = n
-	d.bufferedCount.Store(int64(n))
+	d.bufferedEmpty.Store(n == 0)
 }
 
 func (c *Collection) rememberCatalogFromLoad(snap *backenddb.Snapshot, catalog *collectionCatalog) {
@@ -22147,6 +22148,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	if domain.count != 0 {
 		return
 	}
+	domain.bufferedEmpty.Store(true)
 	if err != nil {
 		domain.loaded = false
 		domain.publishCatalogCacheLocked()
@@ -23542,7 +23544,7 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 		return nil, false, false, nil
 	}
 	domain := c.writeDomain
-	if domain.bufferedCount.Load() == 0 {
+	if domain.bufferedEmpty.Load() {
 		return nil, false, false, nil
 	}
 	domain.mu.RLock()
