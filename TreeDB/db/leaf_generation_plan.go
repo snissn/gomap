@@ -263,6 +263,12 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		plan.Admission = leafGenerationPlanAdmissionDisabled
 		return plan, nil
 	}
+	if !db.readOnly {
+		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+			return plan, err
+		}
+		db.flushDeferredLeafGenerationRecordLengthIndexes()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

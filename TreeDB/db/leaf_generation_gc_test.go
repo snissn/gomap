@@ -881,7 +881,9 @@ func TestLeafPageLogLanes_CheckpointReopenPublishesEveryCurrentLane(t *testing.T
 		currentLaneRawFileIDs[page.ValueLogSegmentID(seg.FileID)] = seg.Path
 	}
 
-	manifest := loadLeafGenerationManifestOrFatal(t, opts.Dir)
+	db.mu.RLock()
+	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
 	view := newLeafGenerationView(manifest)
 	if view == nil {
 		t.Fatal("leaf generation view missing")
@@ -1048,9 +1050,15 @@ func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *test
 	}()
 
 	putBatch(t, db, 0, 4096, "old")
-	baseIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	db.mu.RLock()
+	baseManifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
+	baseIDs := leafGenerationManifestRawFileIDSet(baseManifest)
 	putBatch(t, db, 0, 4096, "mid")
-	midIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	db.mu.RLock()
+	midManifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
+	midIDs := leafGenerationManifestRawFileIDSet(midManifest)
 	midOnly := leafGenerationRawFileIDsWithout(midIDs, baseIDs)
 	putBatch(t, db, 0, 4096, "final")
 

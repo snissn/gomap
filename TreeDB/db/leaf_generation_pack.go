@@ -202,6 +202,10 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	if err := db.CheckStorageMaintenanceReady(); err != nil {
 		return stats, err
 	}
+	if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+		return stats, err
+	}
+	db.flushDeferredLeafGenerationRecordLengthIndexes()
 	selectedPlan, err := db.validateLeafGenerationPackSelection(ctx, opts)
 	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
 	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal

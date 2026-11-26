@@ -73,6 +73,9 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		if err := db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
+		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
+			return stats, err
+		}
 	}
 
 	attempts := 1
