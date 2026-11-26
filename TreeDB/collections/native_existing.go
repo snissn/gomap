@@ -5,11 +5,18 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"weak"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+type nativeOpenCacheEntry struct {
+	schema weak.Pointer[nativeSchemaState]
+	meta   CollectionMeta
+	coord  *collectionSchemaCoordinator
+}
 
 var nativeBulkCapacityDrainHook atomic.Pointer[func()]
 
@@ -41,15 +48,43 @@ func isRetryableBulkCapacityRefusal(err error, journal *nativeOperationJournal) 
 // The existing API's native role owns no legacy coordinator, write domain or
 // raw barrier. Both public frontends use the same NativeJSONTxn preparation.
 func (m *CollectionManager) openNativeCollection(name string) (collection *Collection, resultErr error) {
-	read, err := m.nativeJSON.captureCatalog(name)
+	if err := ValidateCollectionName(name); err != nil {
+		return nil, err
+	}
+	if m.nativeJSON == nil || m.nativeJSON.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	capture, err := m.nativeJSON.db.CaptureNativeSemanticState()
+	if err != nil {
+		return nil, err
+	}
+	_, state, privateEngine, err := resolveNativeCatalog(capture, name)
+	defer func() { resultErr = errors.Join(resultErr, closeNativeCatalog(capture, privateEngine)) }()
 	if errors.Is(err, tree.ErrKeyNotFound) {
+		m.nativeJSON.openCache.Delete(name)
 		return nil, errors.Join(ErrCollectionNotFound, err)
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	meta := read.collection.schema.meta.copy()
+	if domain, ok := state.domains.Get("primary"); ok {
+		if _, err = newNativeDomainRead(domain, capture.Snapshot()); err != nil {
+			return nil, err
+		}
+	}
+	if cached, ok := m.nativeJSON.openCache.Load(name); ok {
+		entry := cached.(*nativeOpenCacheEntry)
+		if entry.schema.Value() == state.schema && entry.coord != nil {
+			return &Collection{
+				manager:                 m,
+				nativeJSON:              m.nativeJSON,
+				nativeSchemaCoordinator: entry.coord,
+				name:                    name,
+				meta:                    entry.meta,
+			}, nil
+		}
+	}
+	meta := state.schema.meta.copy()
 	coord := collectionSchemaCoordinatorForDBCollection(m.nativeJSON.db, name)
 	if coord == nil {
 		return nil, backenddb.ErrClosed
@@ -57,7 +92,23 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 	if len(meta.VectorIndexes) != 0 {
 		coord.hasNativeVectorIndexes.Store(true)
 	}
+	m.nativeJSON.openCache.Store(name, &nativeOpenCacheEntry{
+		schema: weak.Make(state.schema),
+		meta:   *meta,
+		coord:  coord,
+	})
 	return &Collection{manager: m, nativeJSON: m.nativeJSON, nativeSchemaCoordinator: coord, name: name, meta: *meta}, nil
+}
+
+// InsertBatchValidatedBSONNoResultIDs inserts validated BSON documents without
+// cloning response document IDs when the caller discards the returned slice.
+func (c *Collection) InsertBatchValidatedBSONNoResultIDs(ids, documents [][]byte) error {
+	if c != nil && c.nativeJSON != nil {
+		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false, false)
+		return err
+	}
+	_, err := c.InsertBatchValidatedBSON(ids, documents)
+	return err
 }
 
 func (c *Collection) nativeInsertBatch(ids, documents [][]byte, retryProjectedGeneration bool) ([][]byte, error) {

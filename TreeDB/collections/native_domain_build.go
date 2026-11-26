@@ -11,7 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const nativeBuildBatchEntries = 256
+const (
+	nativeBuildBatchEntries    = 256
+	nativeBuildMaxBatchEntries = 131072
+)
 
 // nativeOrderedRootBuilder is the existing physical group operation, with no
 // publication or callback registration. The production owner is always the
@@ -86,19 +89,32 @@ func nativeDomainBuildCharge(maxSources int) (uint64, error) {
 
 // materialize applies older captured sources before newer sources and the
 // active root, preserving final replacements/deletions and exact revisions.
-// Each synchronous group call receives at most nativeBuildBatchEntries rows.
+// Each synchronous group call receives at most nativeBuildBatchEntries rows
+// unless the caller supplies a larger preadmitted shared delta batch.
 // The descriptor edge covers every borrowed byte until Reset/Close scrubs it.
 func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64, error) {
-	return b.materializeWithCatalog(group, nil)
+	return b.materializeWithCatalogAndDelta(group, nil, b.delta, nativeBuildBatchEntries)
+}
+
+func (b *nativeDomainBuild) materializeWithDelta(group nativeOrderedRootBuilder, delta *batch.Batch, batchEntries int) (uint64, error) {
+	if delta == nil || batchEntries <= 0 {
+		delta = b.delta
+		batchEntries = nativeBuildBatchEntries
+	}
+	return b.materializeWithCatalogAndDelta(group, nil, delta, batchEntries)
 }
 
 // names is borrowed synchronously from the same captured engine that owns this
 // build. It is never stored on the ledger or used for ordinary row domains.
 func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState]) (uint64, error) {
+	return b.materializeWithCatalogAndDelta(group, names, b.delta, nativeBuildBatchEntries)
+}
+
+func (b *nativeDomainBuild) materializeWithCatalogAndDelta(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState], delta *batch.Batch, batchEntries int) (uint64, error) {
 	if b.failure != nil {
 		return 0, b.failure
 	}
-	if b.started || group == nil {
+	if b.started || group == nil || delta == nil || batchEntries <= 0 {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	if b.catalog {
@@ -115,14 +131,14 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 		b.roots = append(b.roots, positions.source.root)
 	}
 	for i := len(b.roots) - 1; i >= 0 && b.failure == nil; i-- {
-		b.buildSource(group, b.roots[i], names)
+		b.buildSource(group, b.roots[i], names, delta, batchEntries)
 	}
 	if b.failure == nil && b.source.pending != nil {
-		b.buildSource(group, b.source.pending, names)
+		b.buildSource(group, b.source.pending, names, delta, batchEntries)
 	}
 	clear(b.roots)
 	b.roots = b.roots[:0]
-	b.delta.Reset()
+	delta.Reset()
 	if b.failure != nil {
 		return 0, b.failure
 	}
@@ -130,18 +146,23 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 	return b.root, nil
 }
 
-func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState]) {
+func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState], delta *batch.Batch, batchEntries int) {
+	placement, hasPlacement := group.(interface {
+		NativeInlineThresholdForKey([]byte) int
+		AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
+	})
+	checkInlineThreshold := !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates")
 	root.ScanOwned(func(row memtable.COWRecord) bool {
 		key := nativeBorrowedStringBytes(row.Key)
 		switch {
 		case row.Flags&node.FlagTombstone != 0:
-			b.failure = b.delta.AppendDeleteViewTrustedSortedUniqueWithRevision(key, row.Revision)
+			b.failure = delta.AppendDeleteViewTrustedSortedUniqueWithRevision(key, row.Revision)
 		case row.Flags&node.FlagPointer != 0:
 			if b.catalog || !page.IsValueLogFileID(row.Ptr.FileID) {
 				b.failure = backenddb.ErrNativeSemanticUnsupported
 				break
 			}
-			b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, row.Ptr, row.Revision)
+			delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, row.Ptr, row.Revision)
 		default:
 			value := nativeBorrowedStringBytes(row.Value)
 			if b.catalog && names != nil {
@@ -153,11 +174,7 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 				}
 			}
 			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
-			placement, hasPlacement := group.(interface {
-				NativeInlineThresholdForKey([]byte) int
-				AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
-			})
-			if !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates") {
+			if checkInlineThreshold {
 				threshold = min(threshold, placement.NativeInlineThresholdForKey(key))
 			}
 			if !b.catalog && len(value) > threshold {
@@ -172,39 +189,39 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					b.failure = err
 					return false
 				}
-				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
+				delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
 			} else {
-				b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
+				b.failure = delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
 			}
 		}
-		if b.failure == nil && b.delta.Len() == nativeBuildBatchEntries {
-			b.flush(group)
+		if b.failure == nil && delta.Len() == batchEntries {
+			b.flushDelta(group, delta)
 		}
 		return b.failure == nil
 	})
 	if b.failure == nil {
-		b.flush(group)
+		b.flushDelta(group, delta)
 	}
 }
 
-func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {
-	if b.delta.IsEmpty() {
+func (b *nativeDomainBuild) flushDelta(group nativeOrderedRootBuilder, delta *batch.Batch) {
+	if delta.IsEmpty() {
 		return
 	}
 	var err error
 	if b.catalog {
-		err = group.(nativeSystemRootBuilder).BuildNativeSystemDelta(b.delta)
+		err = group.(nativeSystemRootBuilder).BuildNativeSystemDelta(delta)
 	} else {
 		var next uint64
 		next, err = group.BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput{
-			BaseRoot: b.root, Delta: b.delta, StoragePolicy: b.source.storagePolicy,
+			BaseRoot: b.root, Delta: delta, StoragePolicy: b.source.storagePolicy,
 		})
 		if err == nil {
 			b.root = next
 		}
 	}
 	b.failure = err
-	b.delta.Reset() // no borrowed entry survives synchronous physical apply
+	delta.Reset() // no borrowed entry survives synchronous physical apply
 }
 
 // finish runs only from original Work outside publication/cut gates. Failed

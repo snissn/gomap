@@ -317,7 +317,7 @@ func TestStandaloneNativeDictionaryCachePolicy(t *testing.T) {
 	if !s.Backend.HasNativeSemanticBridge() {
 		t.Fatal("standalone did not bind native owner")
 	}
-	if s.Options.COWMemtableLimits.MaxGenerationBytes != 64<<20 || s.Options.COWMemtableLimits.MaxInFlightBytes != 512<<20 {
+	if s.Options.COWMemtableLimits.MaxGenerationBytes != 256<<20 || s.Options.COWMemtableLimits.MaxInFlightBytes != 512<<20 {
 		t.Fatal("standalone policy mismatch absent")
 	}
 	_, err = s.Collections.CreateCollection(&collections.CollectionMeta{Name: "db.policy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})

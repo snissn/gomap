@@ -19,8 +19,9 @@ import (
 // NativeJSONManager exposes the native scalar-indexed document capability. It owns
 // no legacy manager and never registers a raw publication barrier.
 type NativeJSONManager struct {
-	db *backenddb.DB
-	mu sync.Mutex
+	db        *backenddb.DB
+	mu        sync.Mutex
+	openCache sync.Map // map[string]*nativeOpenCacheEntry
 }
 
 func NewNativeJSONManager(database *backenddb.DB) (*NativeJSONManager, error) {

@@ -252,8 +252,7 @@ func runMongoInsertBatchValidatedBSON(col *collections.Collection, ids, stored [
 	if budget != nil && budget.insertBatchValidatedBSONHook != nil {
 		return budget.insertBatchValidatedBSONHook(ids, stored)
 	}
-	_, err := col.InsertBatchValidatedBSON(ids, stored)
-	return err
+	return col.InsertBatchValidatedBSONNoResultIDs(ids, stored)
 }
 
 // runMongoInsertChunkedBSON handles pre-publication COW capacity refusals for
@@ -1893,18 +1892,194 @@ func (e mongoUpdateParseError) Error() string {
 	return e.message
 }
 
-func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
-	if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+func parseFastPureSetUpdateDoc(updateDoc wire.Document) (fields []collections.BSONSetField, setFieldsOK, bsonSetFieldsOK, handled bool) {
+	first, remaining, err := mongoMutationFirstRawElement(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: updateDoc})
+	if err != nil || first == nil || len(remaining) != 0 {
+		return nil, false, false, false
 	}
-	for _, option := range []string{"collation", "hint"} {
-		if !bson.Raw(update).Lookup(option).IsZero() {
-			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support %s", index, option)}
+	if string(first.KeyBytes()) != "$set" {
+		return nil, false, false, false
+	}
+	val, valErr := first.ValueErr()
+	if valErr != nil || bson.Type(val.Type) != bson.TypeEmbeddedDocument {
+		return nil, false, false, false
+	}
+	contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: val.Data})
+	if !ok {
+		return nil, false, false, false
+	}
+	if len(contents) == 0 {
+		return nil, false, false, false
+	}
+
+	var (
+		count            int
+		allJSONSupported = true
+		seen             map[string]int
+	)
+	fields = make([]collections.BSONSetField, 0, 2)
+	for len(contents) != 0 {
+		elem, next, ok := bsoncore.ReadElement(contents)
+		if !ok {
+			return nil, false, false, false
+		}
+		if elemErr := elem.Validate(); elemErr != nil {
+			return nil, false, false, false
+		}
+		count++
+		if count > mongoMutationMaxTargets {
+			return nil, false, false, false
+		}
+		key := string(elem.KeyBytes())
+		rawVal, rawErr := elem.ValueErr()
+		if rawErr != nil {
+			return nil, false, false, false
+		}
+		rv := bson.RawValue{Type: bson.Type(rawVal.Type), Value: rawVal.Data}
+		if validateMongoMutationRawNesting(rv) != nil {
+			return nil, false, false, false
+		}
+		if validateSetFieldName(key) != nil {
+			return nil, false, false, false
+		}
+		if allJSONSupported {
+			if validateSupportedValue(key, rv) != nil {
+				allJSONSupported = false
+			}
+		}
+		if seen != nil {
+			if prevIdx, exists := seen[key]; exists {
+				fields[prevIdx].Value = rv
+			} else {
+				seen[key] = len(fields)
+				fields = append(fields, collections.BSONSetField{Key: key, Value: rv})
+			}
+		} else {
+			foundIdx := -1
+			for i := range fields {
+				if fields[i].Key == key {
+					foundIdx = i
+					break
+				}
+			}
+			if foundIdx >= 0 {
+				fields[foundIdx].Value = rv
+			} else {
+				if len(fields) == 16 {
+					seen = make(map[string]int, 32)
+					for i := range fields {
+						seen[fields[i].Key] = i
+					}
+					seen[key] = len(fields)
+				}
+				fields = append(fields, collections.BSONSetField{Key: key, Value: rv})
+			}
+		}
+		contents = next
+	}
+	if len(fields) == 0 {
+		return nil, false, false, false
+	}
+	return fields, allJSONSupported, true, true
+}
+
+func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
+	var (
+		hasArrayFilters bool
+		hasCollation    bool
+		hasHint         bool
+		qVal            bson.RawValue
+		hasQ            bool
+		uVal            bson.RawValue
+		hasU            bool
+		multiVal        bson.RawValue
+		hasMulti        bool
+		upsertVal       bson.RawValue
+		hasUpsert       bool
+		scannedOK       bool
+	)
+	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: update}); ok {
+		scannedOK = true
+		for len(contents) != 0 {
+			elem, next, ok := bsoncore.ReadElement(contents)
+			if !ok {
+				scannedOK = false
+				break
+			}
+			kb := elem.KeyBytes()
+			switch string(kb) {
+			case "arrayFilters":
+				hasArrayFilters = true
+			case "collation":
+				hasCollation = true
+			case "hint":
+				hasHint = true
+			case "q":
+				if !hasQ {
+					v := elem.Value()
+					qVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					hasQ = true
+				}
+			case "u":
+				if !hasU {
+					v := elem.Value()
+					uVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					hasU = true
+				}
+			case "multi":
+				if !hasMulti {
+					v := elem.Value()
+					multiVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					hasMulti = true
+				}
+			case "upsert":
+				if !hasUpsert {
+					v := elem.Value()
+					upsertVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					hasUpsert = true
+				}
+			}
+			contents = next
 		}
 	}
-	filter, err := requiredDocumentField(update, "q")
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	var (
+		filter    wire.Document
+		updateDoc wire.Document
+		multi     bool
+		upsert    bool
+		err       error
+	)
+	if scannedOK {
+		if hasArrayFilters {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+		}
+		if hasCollation {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support collation", index)}
+		}
+		if hasHint {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support hint", index)}
+		}
+		if !hasQ {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command missing %q", index, "q")}
+		}
+		qDoc, ok := qVal.DocumentOK()
+		if !ok {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command field %q must be a document", index, "q")}
+		}
+		filter = wire.Document(qDoc)
+	} else {
+		if !bson.Raw(update).Lookup("arrayFilters").IsZero() {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support arrayFilters", index)}
+		}
+		for _, option := range []string{"collation", "hint"} {
+			if !bson.Raw(update).Lookup(option).IsZero() {
+				return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update does not support %s", index, option)}
+			}
+		}
+		filter, err = requiredDocumentField(update, "q")
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
 	}
 	// Keep the long-standing scalar _id path allocation-light. Operator documents
 	// deliberately fall through to the find parser: {_id: {$eq: ...}} is an
@@ -1922,13 +2097,30 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 		}
 		id, directID = simplePrimaryEqualityFindValue(plan)
 	}
-	multi, err := optionalBoolField(update, "multi")
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
-	}
-	upsert, err := optionalBoolField(update, "upsert")
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	if scannedOK {
+		if hasMulti {
+			var ok bool
+			multi, ok = multiVal.BooleanOK()
+			if !ok {
+				return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command field %q must be a boolean", index, "multi")}
+			}
+		}
+		if hasUpsert {
+			var ok bool
+			upsert, ok = upsertVal.BooleanOK()
+			if !ok {
+				return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command field %q must be a boolean", index, "upsert")}
+			}
+		}
+	} else {
+		multi, err = optionalBoolField(update, "multi")
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+		upsert, err = optionalBoolField(update, "upsert")
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
 	}
 	if upsert && !directID {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update upsert requires an exact _id equality filter", index)}
@@ -1940,9 +2132,36 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
 	}
-	updateDoc, err := requiredDocumentField(update, "u")
-	if err != nil {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	if scannedOK {
+		if !hasU {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command missing %q", index, "u")}
+		}
+		uDoc, ok := uVal.DocumentOK()
+		if !ok {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: Mongo command field %q must be a document", index, "u")}
+		}
+		updateDoc = wire.Document(uDoc)
+	} else {
+		updateDoc, err = requiredDocumentField(update, "u")
+		if err != nil {
+			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+		}
+	}
+	if bsonSetFields, setFieldsOK, bsonSetFieldsOK, handled := parseFastPureSetUpdateDoc(updateDoc); handled {
+		return mongoUpdateItem{
+			index:           index,
+			key:             key,
+			updateDoc:       updateDoc,
+			bsonSetFields:   bsonSetFields,
+			setFieldsOK:     setFieldsOK,
+			bsonSetFieldsOK: bsonSetFieldsOK,
+			pureSet:         true,
+			upsert:          upsert,
+			multi:           multi,
+			id:              id,
+			plan:            plan,
+			exactID:         directID,
+		}, nil
 	}
 	if err := validateMongoMutationTargetCount(updateDoc); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
@@ -1950,7 +2169,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err := validateMongoMutationOperandsNesting(updateDoc); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
+	setFields, _, setFieldsOK := mongoSetUpdateFields(updateDoc)
 	bsonSetFields, bsonSetFieldNames, bsonSetFieldsOK := mongoBSONSetUpdateFields(updateDoc)
 	if !setFieldsOK && bsonSetFieldsOK {
 		setFields = bsonSetFieldNames
@@ -2438,6 +2657,7 @@ type mongoUpdateCoalescer struct {
 	enqueueMu       sync.Mutex
 	nowNano         func() int64
 	batchBuf        []mongoUpdateCoalescerRequest
+	updatesBuf      []mongoUpdateItem
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -2953,10 +3173,14 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
-	updates := make([]mongoUpdateItem, len(batch))
+	if cap(c.updatesBuf) < len(batch) {
+		c.updatesBuf = make([]mongoUpdateItem, len(batch))
+	}
+	updates := c.updatesBuf[:len(batch)]
 	for i, req := range batch {
 		updates[i] = req.item
 	}
+	defer clear(updates)
 	var journal *standaloneOperationJournalOutcome
 	for _, req := range batch {
 		if req.item.budget != nil && req.item.budget.journal != nil {
@@ -3202,14 +3426,28 @@ func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpd
 	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta, update)
 }
 
-func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if update.setFields == nil {
-		return true
+func mongoUpdateSetFieldsTouchTopLevel(update mongoUpdateItem, topLevel string) bool {
+	if len(update.bsonSetFields) != 0 {
+		for i := range update.bsonSetFields {
+			fieldTop, _, _ := strings.Cut(update.bsonSetFields[i].Key, ".")
+			if fieldTop == topLevel {
+				return true
+			}
+		}
+		return false
 	}
-	updatedTopLevel := make(map[string]struct{}, len(update.setFields))
 	for field := range update.setFields {
-		topLevel, _, _ := strings.Cut(field, ".")
-		updatedTopLevel[topLevel] = struct{}{}
+		fieldTop, _, _ := strings.Cut(field, ".")
+		if fieldTop == topLevel {
+			return true
+		}
+	}
+	return false
+}
+
+func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if len(update.bsonSetFields) == 0 && update.setFields == nil {
+		return true
 	}
 	for _, idx := range meta.Indexes {
 		if !idx.Unique {
@@ -3218,14 +3456,14 @@ func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.Collecti
 		if len(idx.Components) == 0 {
 			// Legacy indexes keep their compact Field-only metadata.
 			topLevel, _, _ := strings.Cut(idx.Field, ".")
-			if _, ok := updatedTopLevel[topLevel]; ok {
+			if mongoUpdateSetFieldsTouchTopLevel(update, topLevel) {
 				return true
 			}
 			continue
 		}
 		for _, component := range idx.Components {
 			topLevel, _, _ := strings.Cut(component.Field, ".")
-			if _, ok := updatedTopLevel[topLevel]; ok {
+			if mongoUpdateSetFieldsTouchTopLevel(update, topLevel) {
 				return true
 			}
 		}
