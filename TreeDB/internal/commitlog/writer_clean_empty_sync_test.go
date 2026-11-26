@@ -19,19 +19,20 @@ func TestWriterCleanEmptySyncSkipsRedundantDefaultSyncAndHonorsOverride(t *testi
 	}
 	defer func() { _ = w.Close() }()
 
-	// First Sync on a 0-byte segment performs 1 real sync and marks cleanEmptySynced.
+	// Explicit Sync calls on an unrotated 0-byte segment must always execute
+	// w.syncFile() (preserving FlushCommandWALBarrier repeat-sync semantics on
+	// both Unix and Windows).
 	if err := w.Sync(); err != nil {
 		t.Fatalf("first empty Sync: %v", err)
 	}
 	if got := w.fileSyncCalls.Load(); got != 1 {
 		t.Fatalf("first empty Sync calls=%d want 1", got)
 	}
-	// Second redundant Sync on the same 0-byte segment is skipped.
 	if err := w.Sync(); err != nil {
 		t.Fatalf("second empty Sync: %v", err)
 	}
-	if got := w.fileSyncCalls.Load(); got != 1 {
-		t.Fatalf("second empty Sync calls=%d want 1", got)
+	if got := w.fileSyncCalls.Load(); got != 2 {
+		t.Fatalf("second empty Sync calls=%d want 2", got)
 	}
 
 	// Rotating with syncCurrent=true into a fresh 0-byte segment sets cleanEmptySynced.
@@ -75,5 +76,29 @@ func TestWriterCleanEmptySyncSkipsRedundantDefaultSyncAndHonorsOverride(t *testi
 	}
 	if got := customCalls.Load(); got != 1 {
 		t.Fatalf("custom syncFn calls=%d want 1", got)
+	}
+
+	// Rotating with syncCurrent=false defers the new segment's directory sync
+	// until a subsequent Sync(), preserving directory durability for explicit
+	// durable writes on the rotated segment.
+	path4 := filepath.Join(dir, "wal-000004.log")
+	dirCallsBefore := w.directorySyncCalls.Load()
+	if err := w.RotateToWithSync(path4, false); err != nil {
+		t.Fatalf("RotateToWithSync(false): %v", err)
+	}
+	if got := w.directorySyncCalls.Load(); got != dirCallsBefore {
+		t.Fatalf("RotateToWithSync(false) synced dir=%d want %d", got, dirCallsBefore)
+	}
+	if !w.dirSyncPending {
+		t.Fatalf("expected dirSyncPending after RotateToWithSync(false)")
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatalf("Sync after RotateToWithSync(false): %v", err)
+	}
+	if got := w.directorySyncCalls.Load(); got != dirCallsBefore+1 {
+		t.Fatalf("Sync after RotateToWithSync(false) dir syncs=%d want %d", got, dirCallsBefore+1)
+	}
+	if w.dirSyncPending {
+		t.Fatalf("expected dirSyncPending cleared after Sync")
 	}
 }

@@ -195,6 +195,7 @@ type Writer struct {
 	size                   int64
 	maxSegmentSize         int64
 	cleanEmptySynced       bool
+	dirSyncPending         bool
 	writebackHintOffset    int64
 	writtenFileBytes       int64
 	compress               bool
@@ -839,6 +840,7 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	w.resetBufioForContainer()
 	w.size = size
 	w.cleanEmptySynced = syncCurrent && size == 0 && state == nil
+	w.dirSyncPending = created && !syncCurrent && state == nil
 	w.writtenFileBytes = size
 	w.writebackHintOffset = size
 	if state != nil && oldFixed == nil {
@@ -2152,14 +2154,16 @@ func (w *Writer) Sync() error {
 	if err := w.flushFixed(); err != nil {
 		return err
 	}
-	if w.cleanEmptySynced && w.size == 0 && w.fixed == nil && !durabilitycut.Enabled() && isDefaultCommitlogSyncFn(w.syncFn) {
+	if w.cleanEmptySynced && !w.dirSyncPending && w.size == 0 && w.fixed == nil && !durabilitycut.Enabled() && isDefaultCommitlogSyncFn(w.syncFn) {
 		return nil
 	}
-	err := w.syncFile()
-	if err == nil && w.size == 0 && w.fixed == nil {
-		w.cleanEmptySynced = true
+	if w.dirSyncPending {
+		if err := syncNewLogFileDirectory(w, w.f, w.f.Name()); err != nil {
+			return err
+		}
+		w.dirSyncPending = false
 	}
-	return err
+	return w.syncFile()
 }
 
 func (w *Writer) Close() error {

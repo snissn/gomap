@@ -307,7 +307,11 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		}
 		db.writeMu.Unlock()
 	} else {
-		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+		// Explicit Checkpoint on relaxed command-WAL defers active WAL segment
+		// rotation until after index.db + leaf_vlog durably cover the frontier,
+		// avoiding a synchronous fsync of a segment about to be unlinked.
+		rotateJournal := !pressureOnly && (!db.relaxedSync || automatic || durabilitycut.Enabled() || db.testBeforeCheckpointFrontierDrain != nil || db.testAfterCheckpointFrontierCapture != nil)
+		err = db.rotateCOWFrontier(ctx, true, &frontier, rotateJournal)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
