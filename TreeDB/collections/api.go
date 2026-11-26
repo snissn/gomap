@@ -18783,6 +18783,7 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.stateArena.states = scratch.stateArena.states[:0]
 	}
+	scratch.stateArena.tplRootPlan.reset(false)
 	rootCap := 2 + runtimeCount
 	if cap(scratch.rootNames) < rootCap || cap(scratch.rootNames) > updateBatchPlanScratchMaxRootNameCap {
 		scratch.rootNames = make([]string, 0, rootCap)
@@ -18860,6 +18861,7 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	} else {
 		scratch.stateArena.states = scratch.stateArena.states[:0]
 	}
+	scratch.stateArena.tplRootPlan.reset(true)
 	clear(scratch.rootNames)
 	scratch.rootNames = scratch.rootNames[:0]
 	if len(scratch.baseRootIDs) > updateBatchPlanScratchMaxRootNameCap {

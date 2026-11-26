@@ -220,6 +220,7 @@ func releaseInsertBatchPlanScratch(s *insertBatchPlanScratch) {
 		clear(s.encoder.valueRefs[:cap(s.encoder.valueRefs)])
 		s.encoder.valueRefs = s.encoder.valueRefs[:0]
 	}
+	s.encoder.tplRootPlan.reset(true)
 	if cap(s.uniqueProbes) > insertBatchPlanScratchMaxValueRefs {
 		s.uniqueProbes = nil
 	} else if s.uniqueProbes != nil {
@@ -894,8 +895,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbesWithScratch(items []ins
 			encoder.buf = encoder.buf[:0]
 		}
 		encoder.scratch = encoder.scratch[:0]
-		encoder.tplRootPlan.templateID = 0
-		encoder.tplRootPlan.tpl = nil
+		encoder.tplRootPlan.reset(false)
 		if cap(encoder.states) < valueRefsNeed {
 			encoder.states = make([][][]byte, 0, valueRefsNeed)
 		} else {

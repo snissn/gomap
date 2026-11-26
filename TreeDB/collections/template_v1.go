@@ -1991,34 +1991,61 @@ type templateV1RootFieldPlan struct {
 	valueType    IndexValueType
 }
 
+type templateV1RootRuntimeSig struct {
+	field     string
+	valueType IndexValueType
+}
+
 type templateV1RootIndexPlan struct {
 	templateID uint64
-	runtimeLen int
-	allRoot    bool
+	resolver   templateV1Resolver
 	tpl        *templateV1Template
 	fields     []templateV1RootFieldPlan
+	runtimeSig []templateV1RootRuntimeSig
+}
+
+func (p *templateV1RootIndexPlan) reset(release bool) {
+	p.templateID = 0
+	p.resolver = nil
+	p.tpl = nil
+	if release && cap(p.fields) > 256 {
+		p.fields = nil
+	} else {
+		p.fields = p.fields[:0]
+	}
+	clear(p.runtimeSig)
+	if release && cap(p.runtimeSig) > 64 {
+		p.runtimeSig = nil
+	} else {
+		p.runtimeSig = p.runtimeSig[:0]
+	}
+}
+
+func (p *templateV1RootIndexPlan) matches(templateID uint64, runtimes []indexRuntime, resolver templateV1Resolver) bool {
+	if p.tpl == nil || p.templateID != templateID || p.resolver != resolver || len(p.runtimeSig) != len(runtimes) {
+		return false
+	}
+	for i := range runtimes {
+		if len(runtimes[i].path) != 1 || runtimes[i].path[0] != p.runtimeSig[i].field || runtimes[i].def.valueType != p.runtimeSig[i].valueType {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *templateV1RootIndexPlan) prepare(templateID uint64, runtimes []indexRuntime, resolver templateV1Resolver) (bool, error) {
-	if p.templateID == templateID && p.runtimeLen == len(runtimes) && p.tpl != nil {
-		return p.allRoot, nil
+	if p.matches(templateID, runtimes, resolver) {
+		return true, nil
 	}
-	allRoot := true
 	for _, runtime := range runtimes {
 		if len(runtime.path) != 1 {
-			allRoot = false
-			break
+			p.reset(false)
+			return false, nil
 		}
-	}
-	if !allRoot {
-		p.templateID = templateID
-		p.runtimeLen = len(runtimes)
-		p.allRoot = false
-		p.tpl = nil
-		return false, nil
 	}
 	tpl, err := resolver.lookupTemplateV1(templateID)
 	if err != nil {
+		p.reset(false)
 		return true, err
 	}
 	nFields := len(tpl.fields)
@@ -2046,9 +2073,20 @@ func (p *templateV1RootIndexPlan) prepare(templateID uint64, runtimes []indexRun
 			valueType:    runtimes[first].def.valueType,
 		}
 	}
+	nRuntimes := len(runtimes)
+	if cap(p.runtimeSig) < nRuntimes {
+		p.runtimeSig = make([]templateV1RootRuntimeSig, nRuntimes)
+	} else {
+		p.runtimeSig = p.runtimeSig[:nRuntimes]
+	}
+	for i := range runtimes {
+		p.runtimeSig[i] = templateV1RootRuntimeSig{
+			field:     runtimes[i].path[0],
+			valueType: runtimes[i].def.valueType,
+		}
+	}
 	p.templateID = templateID
-	p.runtimeLen = len(runtimes)
-	p.allRoot = true
+	p.resolver = resolver
 	p.tpl = tpl
 	return true, nil
 }

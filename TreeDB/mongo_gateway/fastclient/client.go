@@ -31,8 +31,9 @@ type Client struct {
 	watchInFlight atomic.Bool
 	watchFired    atomic.Bool
 	watchMu       sync.Mutex
-	watchCtx      context.Context
-	watchStop     func() bool
+	watchGen      uint64
+	watchCtx      context.Context // guarded by mu
+	watchStop     func() bool     // guarded by watchMu
 }
 
 const (
@@ -66,9 +67,10 @@ func (c *Client) Close() error {
 	c.closed.Store(true)
 	err := c.conn.Close()
 	c.watchMu.Lock()
+	c.watchGen++
 	stop := c.watchStop
 	c.watchStop = nil
-	c.watchCtx = nil
+	c.watchFired.Store(false)
 	c.watchMu.Unlock()
 	if stop != nil {
 		stop()
@@ -286,20 +288,32 @@ func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
 	return header, body, nil
 }
 
+func (c *Client) retireContextWatchLocked() {
+	c.watchMu.Lock()
+	c.watchGen++
+	oldStop := c.watchStop
+	c.watchStop = nil
+	c.watchFired.Store(false)
+	c.watchMu.Unlock()
+	c.watchCtx = nil
+	if oldStop != nil {
+		oldStop()
+	}
+}
+
 func (c *Client) beginContextWatchLocked(ctx context.Context) error {
+	if c.closed.Load() {
+		c.retireContextWatchLocked()
+		return errors.New("mongo gateway fast client is closed")
+	}
 	if ctx.Done() == nil {
+		if c.watchCtx != nil {
+			c.retireContextWatchLocked()
+		}
 		return nil
 	}
 	if ctx != c.watchCtx {
-		c.watchMu.Lock()
-		oldStop := c.watchStop
-		c.watchStop = nil
-		c.watchCtx = nil
-		c.watchMu.Unlock()
-		if oldStop != nil {
-			oldStop()
-		}
-		c.watchFired.Store(false)
+		c.retireContextWatchLocked()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -308,20 +322,26 @@ func (c *Client) beginContextWatchLocked(ctx context.Context) error {
 			c.watchMu.Unlock()
 			return errors.New("mongo gateway fast client is closed")
 		}
-		c.watchCtx = ctx
+		c.watchGen++
+		gen := c.watchGen
+		c.watchFired.Store(false)
 		c.watchStop = context.AfterFunc(ctx, func() {
 			c.watchMu.Lock()
+			defer c.watchMu.Unlock()
+			if c.watchGen != gen || c.closed.Load() {
+				return
+			}
 			c.watchFired.Store(true)
 			if c.watchInFlight.Load() {
 				_ = c.conn.SetDeadline(time.Now())
 			}
-			c.watchMu.Unlock()
 		})
 		c.watchMu.Unlock()
+		c.watchCtx = ctx
 	}
 	c.watchInFlight.Store(true)
 	if c.watchFired.Load() {
-		c.watchInFlight.Store(false)
+		c.endContextWatchLocked()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -340,14 +360,15 @@ func (c *Client) endContextWatchLocked() {
 		// subsequent request uses a fresh non-cancelled context.
 		c.watchMu.Lock()
 		_ = c.conn.SetDeadline(time.Time{})
+		c.watchGen++
 		oldStop := c.watchStop
 		c.watchStop = nil
-		c.watchCtx = nil
+		c.watchFired.Store(false)
 		c.watchMu.Unlock()
+		c.watchCtx = nil
 		if oldStop != nil {
 			oldStop()
 		}
-		c.watchFired.Store(false)
 	}
 }
 
