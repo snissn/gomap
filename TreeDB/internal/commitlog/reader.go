@@ -199,7 +199,14 @@ func resizeReaderBuffer(buf *[]byte, size int) []byte {
 		return make([]byte, size)
 	}
 	if cap(*buf) < size {
-		*buf = make([]byte, size)
+		if cap(*buf) >= fixedWALExtentBufPoolMinSize {
+			releaseFixedWALPendingBuf(*buf)
+		}
+		if pooled := acquireFixedWALPendingBuf(size); pooled != nil {
+			*buf = pooled
+		} else {
+			*buf = make([]byte, size)
+		}
 	} else {
 		*buf = (*buf)[:size]
 	}
@@ -351,6 +358,12 @@ func (r *Reader) Close() error {
 	if r.dec != nil {
 		r.dec.Close()
 		r.dec = nil
+	}
+	if cap(r.scanRaw) >= fixedWALExtentBufPoolMinSize {
+		releaseFixedWALPendingBuf(r.scanRaw)
+	}
+	if cap(r.scanDecoded) >= fixedWALExtentBufPoolMinSize {
+		releaseFixedWALPendingBuf(r.scanDecoded)
 	}
 	r.scanRaw = nil
 	r.scanDecoded = nil

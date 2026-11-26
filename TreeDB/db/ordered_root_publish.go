@@ -938,8 +938,21 @@ func orderedRootDeltaBatchFromIteratorWithBudget(iter iterator.UnsafeIterator, m
 		}
 	}
 	var delta *batch.Batch
+	var lenHint int
+	hasLenHint := false
+	if !bounded {
+		if hint, ok := iter.(orderedRootLenHintIterator); ok {
+			lenHint = hint.Len()
+			hasLenHint = true
+		}
+	}
 	if bounded {
 		delta = batch.NewBoundedRetainingLargeEntries(nil, orderedRootDeltaBatchInlineThreshold, maxEntries)
+	} else if hasLenHint && lenHint >= 0 && lenHint <= 256 {
+		// Small system/metadata deltas should use the default pool so they
+		// neither pollute the large-entry pool with tiny backing slices nor
+		// consume warm multi-MiB large-entry batches.
+		delta = batch.Acquire(nil, orderedRootDeltaBatchInlineThreshold)
 	} else {
 		delta = batch.NewRetainingLargeEntries(nil, orderedRootDeltaBatchInlineThreshold)
 	}
@@ -951,8 +964,8 @@ func orderedRootDeltaBatchFromIteratorWithBudget(iter iterator.UnsafeIterator, m
 			_ = delta.Close()
 			return nil, ErrOrderedRootDeltaMaterializationLimit
 		}
-	} else if hint, ok := iter.(orderedRootLenHintIterator); ok {
-		delta.Reserve(hint.Len())
+	} else if hasLenHint {
+		delta.Reserve(lenHint)
 	}
 	charged := int64(delta.EntriesCap()) * int64(unsafe.Sizeof(batch.Entry{}))
 	borrowEntryViews := false

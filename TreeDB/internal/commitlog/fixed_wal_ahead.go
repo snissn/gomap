@@ -156,10 +156,15 @@ func (j *CommandJournal) fixedWALAheadErrorLocked() error {
 }
 
 // This is reached before an append that still fits. Start preparing the
-// successor once flushed occupancy has reached half capacity, or when another
-// frame of the incoming size would overflow after this append.
+// successor once flushed occupancy has reached half capacity, or when two more
+// frames of the incoming size would overflow after this append.
 // The worker sees only immutable scalars and a duplicated retained parent.
 func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
+	if j.fixedAhead != nil && j.fixedAhead.done {
+		if err := j.fixedWALAheadErrorLocked(); err != nil {
+			return err
+		}
+	}
 	w := j.writer
 	if j.fixedAhead != nil || j.closing || w == nil || w.fixed == nil || w.containerSelection.ext4Stream || j.stableParent == nil || !FixedWALCreationSupported() ||
 		j.pendingStableSuccessor != nil || len(j.pendingStableRotations) != 0 || j.segmentSeq == ^uint64(0) || j.fixedAheadGeneration == ^uint64(0) {
@@ -170,7 +175,13 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	nextFrameOverflows := false
 	if !halfReached && incoming > 0 {
 		if projected, err := fixedWALExtentEnd(current.physical, incoming); err == nil {
-			if nextEnd, err := fixedWALExtentEnd(projected, incoming); err != nil || nextEnd > current.capacity {
+			extent := projected - current.physical
+			// Start ahead-reserve when fewer than 3 additional frames of the
+			// same size will fit after this append, giving background zero-fill
+			// and fsync multiple batch intervals of lead time for 8-16 MiB
+			// geometric reserves without shifting small-frame half-capacity tests.
+			remaining := current.capacity - projected
+			if extent > 0 && remaining/extent < 3 {
 				nextFrameOverflows = true
 			}
 		}

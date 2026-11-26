@@ -19,10 +19,11 @@ import (
 const (
 	// LeafPageReadCacheEntriesEnvKey names the environment variable that
 	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
-	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	defaultLeafPageReadCacheEntries = 8192
-	maxLeafPageReadCacheEntries     = 1 << 18
-	leafPageReadCacheWays           = 4
+	LeafPageReadCacheEntriesEnvKey    = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	defaultLeafPageReadCacheEntries   = 8192
+	maxLeafPageReadCacheEntries       = 1 << 18
+	leafPageReadCacheWays             = 4
+	leafPageReadCacheBackingSlabPages = 64
 	// Bound miss-admission observer retries so high contention yields a skipped
 	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
 	// transient reset windows; 256 stable-epoch retries bound CAS churn; and a
@@ -212,6 +213,10 @@ type leafPageReadCache struct {
 	// Page backing belongs to fixed slots and survives eviction. Keep this
 	// distinct from the bytes occupied by valid entries.
 	backingBytes atomic.Uint64
+
+	slabMu  sync.Mutex
+	slab    []byte
+	slabPos int
 
 	conflictEvictions atomic.Uint64
 	capacityEvictions atomic.Uint64
@@ -615,11 +620,36 @@ func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumState(key leafPageR
 	return s.storeLockedWithRecordChecksumAndCOWPolicy(key, leafPage, recordChecksumVerified, false, valuelog.COWReadLimits{})
 }
 
+func (c *leafPageReadCache) allocBackingPage() []byte {
+	if c == nil {
+		return make([]byte, page.PageSize)
+	}
+	c.slabMu.Lock()
+	if c.slabPos+page.PageSize > len(c.slab) {
+		slabPages := leafPageReadCacheBackingSlabPages
+		if len(c.slots) > 0 && len(c.slots) < slabPages {
+			slabPages = len(c.slots)
+		}
+		if slabPages < 1 {
+			slabPages = 1
+		}
+		c.slab = make([]byte, slabPages*page.PageSize)
+		c.slabPos = 0
+	}
+	off := c.slabPos
+	c.slabPos += page.PageSize
+	buf := c.slab[off : off+page.PageSize : off+page.PageSize]
+	c.slabMu.Unlock()
+	return buf
+}
+
 func (s *leafPageReadCacheSlot) storeLockedWithRecordChecksumAndCOWPolicy(key leafPageReadCacheKey, leafPage []byte, recordChecksumVerified, dictionary bool, limits valuelog.COWReadLimits) leafPageReadCacheStoreResult {
 	if cap(s.data) < page.PageSize {
-		s.data = make([]byte, page.PageSize)
 		if s.owner != nil {
+			s.data = s.owner.allocBackingPage()
 			s.owner.backingBytes.Add(page.PageSize)
+		} else {
+			s.data = make([]byte, page.PageSize)
 		}
 	}
 	return s.storeIntoBackingWithCOWPolicyLocked(key, leafPage, recordChecksumVerified, dictionary, limits)

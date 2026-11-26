@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,11 +31,63 @@ const (
 	fixedWALReadBufferSize        = 64 << 10
 	fixedWALPendingRetainMaxCap   = 8 << 20
 	fixedWALExtentBufPoolMaxCap   = 8 << 20
+	fixedWALExtentBufPoolMinSize  = 256 << 10
 )
 
 // Read-only zero block shared by writeInitializedFixedWAL to avoid allocating
-// 256 KiB per segment initialization.
-var fixedWALZeroBlock [256 << 10]byte
+// per segment initialization and reduce pwrite syscall count for multi-MiB reserves.
+var fixedWALZeroBlock [1 << 20]byte
+
+var crc32IEEECombineMats [32][32]uint32
+
+func init() {
+	var odd, even [32]uint32
+	odd[0] = crc32.IEEE
+	row := uint32(1)
+	for n := 1; n < 32; n++ {
+		odd[n] = row
+		row <<= 1
+	}
+	gf2MatrixSquare(&even, &odd)
+	gf2MatrixSquare(&odd, &even)
+	// odd is now the operator for 4 zero bits; square once more for 1 zero byte (8 bits).
+	gf2MatrixSquare(&crc32IEEECombineMats[0], &odd)
+	for i := 1; i < len(crc32IEEECombineMats); i++ {
+		gf2MatrixSquare(&crc32IEEECombineMats[i], &crc32IEEECombineMats[i-1])
+	}
+}
+
+func gf2MatrixTimes(mat *[32]uint32, vec uint32) uint32 {
+	var sum uint32
+	for i := 0; vec != 0; i++ {
+		if vec&1 != 0 {
+			sum ^= mat[i]
+		}
+		vec >>= 1
+	}
+	return sum
+}
+
+func gf2MatrixSquare(dst, src *[32]uint32) {
+	for n := 0; n < 32; n++ {
+		dst[n] = gf2MatrixTimes(src, src[n])
+	}
+}
+
+// crc32IEEECombine combines crc1 = CRC32_IEEE(a) and crc2 = CRC32_IEEE(b) where
+// len(b) == len2, returning CRC32_IEEE(a || b).
+func crc32IEEECombine(crc1, crc2 uint32, len2 int) uint32 {
+	if len2 <= 0 {
+		return crc1
+	}
+	rem := uint64(len2)
+	for bit := 0; rem != 0 && bit < len(crc32IEEECombineMats); bit, rem = bit+1, rem>>1 {
+		if rem&1 != 0 {
+			crc1 = gf2MatrixTimes(&crc32IEEECombineMats[bit], crc1)
+		}
+	}
+	return crc1 ^ crc2
+}
 
 var fixedWALExtentBufBucketCaps = [...]int{
 	256 << 10,
@@ -51,9 +104,71 @@ type fixedWALExtentBufLease struct {
 
 var fixedWALExtentBufPools [len(fixedWALExtentBufBucketCaps)]sync.Pool
 
+const (
+	fixedWALExtentBufStrongMaxSlots = 4
+	fixedWALExtentBufStrongMaxBytes = 12 << 20
+)
+
+var (
+	fixedWALExtentBufStrongMu    sync.Mutex
+	fixedWALExtentBufStrongSlots [fixedWALExtentBufStrongMaxSlots]*fixedWALExtentBufLease
+	fixedWALExtentBufStrongCount int
+	fixedWALExtentBufStrongBytes int
+	fixedWALReadBufPool          sync.Pool
+)
+
+func acquireFixedWALReadBuf(r io.Reader) *bufio.Reader {
+	if v := fixedWALReadBufPool.Get(); v != nil {
+		if br, ok := v.(*bufio.Reader); ok && br != nil {
+			br.Reset(r)
+			return br
+		}
+	}
+	return bufio.NewReaderSize(r, fixedWALReadBufferSize)
+}
+
+func releaseFixedWALReadBuf(br *bufio.Reader) {
+	if br == nil {
+		return
+	}
+	br.Reset(nil)
+	fixedWALReadBufPool.Put(br)
+}
+
 func acquireFixedWALExtentBuf(size int) (*fixedWALExtentBufLease, []byte) {
 	for i, capLimit := range fixedWALExtentBufBucketCaps {
 		if size <= capLimit {
+			// Check bounded strong slots first so GC does not evict hot 2-4 MiB
+			// WAL extent/scan buffers mid-run. Accept exact or next-size bucket.
+			maxAccept := capLimit
+			if i+1 < len(fixedWALExtentBufBucketCaps) {
+				maxAccept = fixedWALExtentBufBucketCaps[i+1]
+			}
+			fixedWALExtentBufStrongMu.Lock()
+			best := -1
+			for idx := fixedWALExtentBufStrongCount - 1; idx >= 0; idx-- {
+				c := cap(fixedWALExtentBufStrongSlots[idx].buf)
+				if c >= size && c <= maxAccept {
+					if best < 0 || c < cap(fixedWALExtentBufStrongSlots[best].buf) {
+						best = idx
+						if c == capLimit {
+							break
+						}
+					}
+				}
+			}
+			if best >= 0 {
+				lease := fixedWALExtentBufStrongSlots[best]
+				last := fixedWALExtentBufStrongCount - 1
+				fixedWALExtentBufStrongSlots[best] = fixedWALExtentBufStrongSlots[last]
+				fixedWALExtentBufStrongSlots[last] = nil
+				fixedWALExtentBufStrongCount = last
+				fixedWALExtentBufStrongBytes -= cap(lease.buf)
+				fixedWALExtentBufStrongMu.Unlock()
+				return lease, lease.buf[:size]
+			}
+			fixedWALExtentBufStrongMu.Unlock()
+
 			if v := fixedWALExtentBufPools[i].Get(); v != nil {
 				if lease, ok := v.(*fixedWALExtentBufLease); ok && lease != nil && cap(lease.buf) >= size && cap(lease.buf) <= fixedWALExtentBufPoolMaxCap {
 					return lease, lease.buf[:size]
@@ -70,13 +185,41 @@ func releaseFixedWALExtentBuf(lease *fixedWALExtentBufLease) {
 	if lease == nil || cap(lease.buf) > fixedWALExtentBufPoolMaxCap {
 		return
 	}
+	c := cap(lease.buf)
+	if c >= fixedWALExtentBufPoolMinSize {
+		lease.buf = lease.buf[:0]
+		fixedWALExtentBufStrongMu.Lock()
+		if fixedWALExtentBufStrongCount < fixedWALExtentBufStrongMaxSlots && fixedWALExtentBufStrongBytes+c <= fixedWALExtentBufStrongMaxBytes {
+			fixedWALExtentBufStrongSlots[fixedWALExtentBufStrongCount] = lease
+			fixedWALExtentBufStrongCount++
+			fixedWALExtentBufStrongBytes += c
+			fixedWALExtentBufStrongMu.Unlock()
+			return
+		}
+		fixedWALExtentBufStrongMu.Unlock()
+	}
 	for i := len(fixedWALExtentBufBucketCaps) - 1; i >= 0; i-- {
-		if cap(lease.buf) >= fixedWALExtentBufBucketCaps[i] {
+		if c >= fixedWALExtentBufBucketCaps[i] {
 			lease.buf = lease.buf[:0]
 			fixedWALExtentBufPools[i].Put(lease)
 			return
 		}
 	}
+}
+
+func acquireFixedWALPendingBuf(size int) []byte {
+	if size < fixedWALExtentBufPoolMinSize || size > fixedWALExtentBufPoolMaxCap {
+		return nil
+	}
+	_, buf := acquireFixedWALExtentBuf(size)
+	return buf
+}
+
+func releaseFixedWALPendingBuf(buf []byte) {
+	if cap(buf) < fixedWALExtentBufPoolMinSize || cap(buf) > fixedWALExtentBufPoolMaxCap {
+		return
+	}
+	releaseFixedWALExtentBuf(&fixedWALExtentBufLease{buf: buf[:0]})
 }
 
 func transferFixedWALPendingBuf(dst, src *fixedWAL) {
@@ -416,8 +559,15 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 	// scan owns its cursor and payload scratch; no bytes escape into the extent
 	// index or incomplete-frame identities. Buffering removes per-witness reads
 	// without treating initialized reserve as an implicit end marker.
-	input := bufio.NewReaderSize(io.NewSectionReader(file, fixedWALHeaderSize, capacity-fixedWALHeaderSize), fixedWALReadBufferSize)
-	var payload []byte
+	input := acquireFixedWALReadBuf(io.NewSectionReader(file, fixedWALHeaderSize, capacity-fixedWALHeaderSize))
+	defer releaseFixedWALReadBuf(input)
+	var (
+		payload      []byte
+		payloadLease *fixedWALExtentBufLease
+	)
+	defer func() {
+		releaseFixedWALExtentBuf(payloadLease)
+	}()
 	// io.Reader and the checksum implementation may retain these addresses in
 	// compiler escape analysis. Own them once per scan, not once per extent.
 	var probe, footer, expected [fixedWALWitnessSize]byte
@@ -470,7 +620,13 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 			return nil, nil, ErrCorrupt
 		}
 		if int64(cap(payload)) < length {
-			payload = make([]byte, int(length))
+			releaseFixedWALExtentBuf(payloadLease)
+			if int(length) >= fixedWALExtentBufPoolMinSize {
+				payloadLease, payload = acquireFixedWALExtentBuf(int(length))
+			} else {
+				payloadLease = nil
+				payload = make([]byte, int(length))
+			}
 		} else {
 			payload = payload[:int(length)]
 		}
@@ -601,7 +757,7 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 		image []byte
 		lease *fixedWALExtentBufLease
 	)
-	if w.commandBufRetain > 0 && imageSize > w.commandBufRetain {
+	if (w.commandBufRetain > 0 && imageSize > w.commandBufRetain) || (cap(w.scratch) < imageSize && imageSize >= fixedWALExtentBufPoolMinSize) {
 		lease, image = acquireFixedWALExtentBuf(imageSize)
 		if lease != nil {
 			defer releaseFixedWALExtentBuf(lease)
@@ -622,7 +778,15 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 	binary.LittleEndian.PutUint64(header[48:56], uint64(end))
 	binary.LittleEndian.PutUint64(header[56:64], lsn)
 	binary.LittleEndian.PutUint64(header[64:72], lsn)
-	binary.LittleEndian.PutUint32(header[72:76], crc.Checksum(frame))
+	var frameCRC uint32
+	if len(frame) >= segmentHeaderSize {
+		// flush() already validated frame[4:8] == crc.Checksum(frame[segmentHeaderSize:]),
+		// so combine the 8-byte header CRC with the validated payload CRC in O(1).
+		frameCRC = crc32IEEECombine(crc.Checksum(frame[:segmentHeaderSize]), binary.LittleEndian.Uint32(frame[4:8]), len(frame)-segmentHeaderSize)
+	} else {
+		frameCRC = crc.Checksum(frame)
+	}
+	binary.LittleEndian.PutUint32(header[72:76], frameCRC)
 	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
 	copy(image[fixedWALWitnessSize:], frame)
 	padStart := fixedWALWitnessSize + len(frame)
