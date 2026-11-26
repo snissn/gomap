@@ -458,3 +458,116 @@ func TestForegroundReadObserverHooksConcurrentSwapAndUnregister(t *testing.T) {
 		}
 	}
 }
+
+func TestWithOneShotReadKeyScans(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	table := memtable.NewAppendOnlyWithCapacity(8)
+	table.Set([]byte("idx/a\x00\x00doc1"), nil)
+	table.Delete([]byte("idx/b\x00\x00doc0"))
+	table.Set([]byte("idx/b\x00\x00doc1"), nil)
+	table.Set([]byte("idx/b\x00\x00doc2"), nil)
+	table.Set([]byte("idx/c\x00\x00doc3"), nil)
+	table.Freeze()
+
+	_, rootIDs, err := d.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: table.NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroup: %v", err)
+	}
+	altRootID := rootIDs[0]
+
+	var staleView OneShotReadView
+	var visited []string
+	var firstKey []byte
+	var firstFound bool
+	if err := d.WithOneShotRead(func(view OneShotReadView) error {
+		staleView = view
+		var err error
+		firstKey, firstFound, err = view.SeekFirstLiveKeyAtRoot(altRootID, []byte("idx/b\x00\x00"), []byte("idx/b\x00\x01"), nil)
+		if err != nil {
+			return err
+		}
+		return view.VisitKeysAtRoot(altRootID, []byte("idx/b\x00\x00"), []byte("idx/b\x00\x01"), false, func(key []byte, deleted bool) (bool, error) {
+			if deleted {
+				t.Errorf("unexpected deleted key %q when includeTombstones=false", key)
+			}
+			visited = append(visited, string(key))
+			return true, nil
+		})
+	}); err != nil {
+		t.Fatalf("WithOneShotRead: %v", err)
+	}
+	if !firstFound || string(firstKey) != "idx/b\x00\x00doc1" {
+		t.Fatalf("SeekFirstLiveKeyAtRoot=(%q, %v), want (%q, true)", firstKey, firstFound, "idx/b\x00\x00doc1")
+	}
+	wantVisited := []string{"idx/b\x00\x00doc1", "idx/b\x00\x00doc2"}
+	if len(visited) != len(wantVisited) || visited[0] != wantVisited[0] || visited[1] != wantVisited[1] {
+		t.Fatalf("VisitKeysAtRoot=%v want %v", visited, wantVisited)
+	}
+
+	// Verify stale view rejection on both methods.
+	if err := d.WithOneShotRead(func(view OneShotReadView) error {
+		if _, _, err := staleView.SeekFirstLiveKeyAtRoot(altRootID, []byte("idx/b\x00\x00"), []byte("idx/b\x00\x01"), nil); !errors.Is(err, ErrClosed) {
+			t.Fatalf("stale SeekFirstLiveKeyAtRoot err=%v want ErrClosed", err)
+		}
+		if err := staleView.VisitKeysAtRoot(altRootID, []byte("idx/b\x00\x00"), []byte("idx/b\x00\x01"), false, func([]byte, bool) (bool, error) {
+			return true, nil
+		}); !errors.Is(err, ErrClosed) {
+			t.Fatalf("stale VisitKeysAtRoot err=%v want ErrClosed", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("second WithOneShotRead: %v", err)
+	}
+
+	// Zero-allocation budget for both key-scan methods with stack-allocated bounds.
+	var keyScratch [64]byte
+	seekAllocs := testing.AllocsPerRun(100, func() {
+		var startBuf [32]byte
+		var endBuf [32]byte
+		start := append(startBuf[:0], "idx/b\x00\x00"...)
+		end := append(endBuf[:0], "idx/b\x00\x01"...)
+		if err := d.WithOneShotRead(func(view OneShotReadView) error {
+			got, ok, err := view.SeekFirstLiveKeyAtRoot(altRootID, start, end, keyScratch[:0])
+			if err != nil || !ok || len(got) == 0 {
+				t.Fatalf("SeekFirstLiveKeyAtRoot=(%q, %v, %v)", got, ok, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if seekAllocs > 0 {
+		t.Fatalf("SeekFirstLiveKeyAtRoot allocs/op=%.0f want 0", seekAllocs)
+	}
+
+	visitAllocs := testing.AllocsPerRun(100, func() {
+		var startBuf [32]byte
+		var endBuf [32]byte
+		start := append(startBuf[:0], "idx/b\x00\x00"...)
+		end := append(endBuf[:0], "idx/b\x00\x01"...)
+		count := 0
+		if err := d.WithOneShotRead(func(view OneShotReadView) error {
+			return view.VisitKeysAtRoot(altRootID, start, end, false, func(key []byte, _ bool) (bool, error) {
+				if len(key) > 0 {
+					count++
+				}
+				return true, nil
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if count != 2 {
+			t.Fatalf("VisitKeysAtRoot count=%d want 2", count)
+		}
+	})
+	if visitAllocs > 0 {
+		t.Fatalf("VisitKeysAtRoot allocs/op=%.0f want 0", visitAllocs)
+	}
+}
