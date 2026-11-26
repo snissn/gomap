@@ -424,11 +424,10 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		uniqueRuns++
 		var prevPrefix, prevDocID []byte
 		for i, row := range run.entries {
-			docID, keyErr := indexKeyDocumentID(rt.def.valueType, row.key)
+			prefix, docID, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
 			if keyErr != nil {
 				return nil, keyErr
 			}
-			prefix := row.key[:len(row.key)-len(docID)]
 			if len(prefix) > 65535 {
 				return nil, errors.New("collections: index key too large")
 			}
@@ -505,8 +504,10 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			}
 			startDep := depOff
 			for _, row := range run.entries {
-				docID, _ := indexKeyDocumentID(rt.def.valueType, row.key)
-				prefix := row.key[: len(row.key)-len(docID) : len(row.key)-len(docID)]
+				prefix, _, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
+				if keyErr != nil {
+					return nil, keyErr
+				}
 				var end []byte
 				if endLen := uniquePrefixEndLen(prefix); endLen > 0 {
 					eStart := len(uniqueEndArena)
@@ -767,7 +768,10 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 			if onlyPending && hasPendingMax && bytes.Compare(dep.Key, pendingMax) > 0 {
 				break
 			}
-			docID := u.entries[i].key[len(dep.Key):]
+			docID, err := indexKeyDocumentID(u.valueType, u.entries[i].key)
+			if err != nil {
+				return err
+			}
 			start := dep.Key
 			end := dep.End
 			for {

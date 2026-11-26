@@ -265,3 +265,66 @@ func TestNativeEngineBuildSharedBatchTightBudgetBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeBulkInsertUniqueBSONOrderedV2SuffixBoundary(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, dir)
+	opts.MemtableMode = "cow_btree"
+	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+	owner, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Close() }()
+	backend, err := owner.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewCollectionManager(backend)
+	defer func() { _ = manager.Close() }()
+
+	_, err = manager.CreateCollection(&CollectionMeta{
+		Name:    "v2_unique_items",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+		Indexes: []IndexDefinition{
+			{Name: "email_v2", Field: "email", ValueType: IndexValueBSONOrderedV2, Unique: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection("v2_unique_items")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Intra-batch duplicate on IndexValueBSONOrderedV2 must fail with ErrUniqueIndexConflict.
+	docABC, _ := bson.Marshal(bson.D{{Key: "_id", Value: "abc"}, {Key: "email", Value: "dup@example.com"}})
+	docDEF, _ := bson.Marshal(bson.D{{Key: "_id", Value: "def"}, {Key: "email", Value: "dup@example.com"}})
+	if err := col.InsertBatchValidatedBSONNoResultIDs([][]byte{[]byte("abc"), []byte("def")}, [][]byte{docABC, docDEF}); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("intra-batch BSON V2 unique duplicate err=%v want ErrUniqueIndexConflict", err)
+	}
+
+	// Insert distinct value (including a doc ID with embedded NUL to exercise V2 ID escaping).
+	idWithNUL := []byte("a\x00b")
+	doc1, _ := bson.Marshal(bson.D{{Key: "_id", Value: "a\x00b"}, {Key: "email", Value: "live@example.com"}})
+	doc2, _ := bson.Marshal(bson.D{{Key: "_id", Value: "xyz"}, {Key: "email", Value: "other@example.com"}})
+	if err := col.InsertBatchValidatedBSONNoResultIDs([][]byte{idWithNUL, []byte("xyz")}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("initial BSON V2 unique bulk insert: %v", err)
+	}
+
+	// Existing-row duplicate against pending state must fail with ErrUniqueIndexConflict.
+	docConflictPending, _ := bson.Marshal(bson.D{{Key: "_id", Value: "new1"}, {Key: "email", Value: "live@example.com"}})
+	if err := col.InsertBatchValidatedBSONNoResultIDs([][]byte{[]byte("new1")}, [][]byte{docConflictPending}); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("pending BSON V2 unique duplicate err=%v want ErrUniqueIndexConflict", err)
+	}
+
+	// Existing-row duplicate after Checkpoint (settled base) must also fail with ErrUniqueIndexConflict.
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	docConflictBase, _ := bson.Marshal(bson.D{{Key: "_id", Value: "new2"}, {Key: "email", Value: "live@example.com"}})
+	if err := col.InsertBatchValidatedBSONNoResultIDs([][]byte{[]byte("new2")}, [][]byte{docConflictBase}); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("settled BSON V2 unique duplicate err=%v want ErrUniqueIndexConflict", err)
+	}
+}

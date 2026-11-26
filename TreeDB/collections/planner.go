@@ -2905,6 +2905,28 @@ func appendIndexValuePrefixSlice(dst []byte, encodedValue []byte) ([]byte, []byt
 	return next, next[start:len(next):len(next)], nil
 }
 
+func indexKeyValuePrefixAndDocumentID(valueType IndexValueType, key []byte) (prefix, docID []byte, err error) {
+	if valueType == IndexValueBSONOrderedV2 {
+		n, err := bsonIndexKeyValuePrefixLengthV2(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		docID, err := bsonIndexKeyDocumentIDV2(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		return key[:n:n], docID, nil
+	}
+	n, err := indexComponentLength(valueType, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(key) == n {
+		return nil, nil, errors.New("collections: malformed secondary index key: missing document id")
+	}
+	return key[:n:n], key[n:], nil
+}
+
 func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
 	if valueType == IndexValueBSONOrderedV2 {
 		return bsonIndexKeyDocumentIDV2(key)
