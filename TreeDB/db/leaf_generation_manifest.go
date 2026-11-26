@@ -840,6 +840,14 @@ func (db *DB) flushDeferredLeafGenerationManifest() error {
 	}
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
+	return db.flushDeferredLeafGenerationManifestLocked()
+}
+
+// The caller holds durablePublishMu.
+func (db *DB) flushDeferredLeafGenerationManifestLocked() error {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog || !db.leafGenerationManifestDirty.Load() {
+		return nil
+	}
 	for db.leafGenerationManifestDirty.Load() {
 		db.mu.RLock()
 		current := db.leafGenerationManifest

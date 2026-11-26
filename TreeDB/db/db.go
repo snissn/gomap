@@ -4603,7 +4603,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		}
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 || (post.sync && db.leafGenerationManifestDirty.Load()) {
+	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 || (post.sync && db.indexOuterLeavesInValueLog && db.leafGenerationManifestDirty.Load()) {
 		var (
 			persistErr                 error
 			pendingErr                 error

@@ -73,9 +73,6 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		if err := db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
-		if err := db.flushDeferredLeafGenerationManifest(); err != nil {
-			return stats, err
-		}
 	}
 
 	attempts := 1
@@ -124,7 +121,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		return stats, false, nil
 	}
 
-	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits)
+	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits, opts.DryRun)
 	if err != nil || !prepared {
 		return stats, false, err
 	}
@@ -206,7 +203,7 @@ type leafGenerationGCDecision struct {
 	zombieFileIDs       map[uint32]struct{}
 }
 
-func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits) (LeafGenerationGCStats, bool, error) {
+func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits, dryRun bool) (LeafGenerationGCStats, bool, error) {
 	var stats LeafGenerationGCStats
 	if err := ctx.Err(); err != nil {
 		return stats, false, err
@@ -252,6 +249,11 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 	}
 	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
 		return stats, false, err
+	}
+	if !dryRun {
+		if err := db.flushDeferredLeafGenerationManifestLocked(); err != nil {
+			return stats, false, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return stats, false, err

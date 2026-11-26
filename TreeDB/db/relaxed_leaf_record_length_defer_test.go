@@ -50,6 +50,20 @@ func TestRelaxedFinalizeDefersAdvisoryRecordLengthIndexSyncUntilCheckpoint(t *te
 		t.Fatalf("relaxed commits synchronously synced %d operational leaf-generation manifest files; want 0", got)
 	}
 
+	// Maintenance footprint admission must reject oversized requests BEFORE
+	// flushing any deferred manifest or advisory .lenidx files.
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		MaintenanceLimits: LeafGenerationMaintenanceLimits{NativeEntries: 1, NativeBytes: 1, PagerPages: 1},
+	}); err == nil {
+		t.Fatal("expected LeafGenerationPlan with tight MaintenanceLimits to fail admission")
+	}
+	if got := manifestSyncs.Load(); got != 0 {
+		t.Fatalf("rejected LeafGenerationPlan flushed %d deferred operational manifest updates; want 0", got)
+	}
+	if got := lenidxSyncs.Load(); got != 0 {
+		t.Fatalf("rejected LeafGenerationPlan flushed %d deferred .lenidx files; want 0", got)
+	}
+
 	// Checkpoint must flush both the deferred manifest and advisory .lenidx files to disk.
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
