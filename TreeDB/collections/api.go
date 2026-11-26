@@ -434,6 +434,13 @@ type collectionManagerOptions struct {
 	registerBackendHooks bool
 }
 
+type cachedCollectionCatalog struct {
+	pager      *pager.Pager
+	systemRoot uint64
+	commitSeq  uint64
+	catalog    *collectionCatalog
+}
+
 type Collection struct {
 	nativeSchemaCoordinator *collectionSchemaCoordinator
 	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
@@ -450,6 +457,7 @@ type Collection struct {
 	catalogCommitSeq           uint64
 	catalogSystemRoot          uint64
 	catalog                    *collectionCatalog
+	catalogCache               atomic.Pointer[cachedCollectionCatalog]
 	insertStatsMu              sync.RWMutex
 	lastInsertStats            *CollectionInsertStats
 	updateStatsMu              sync.RWMutex
@@ -1575,6 +1583,8 @@ type collectionWriteDomain struct {
 	loaded                    bool
 	meta                      CollectionMeta
 	catalog                   *collectionCatalog
+	catalogCache              atomic.Pointer[cachedCollectionCatalog]
+	bufferedEmpty             atomic.Bool
 	baseCommitSeq             uint64
 	baseSystemRoot            uint64
 	primaryRoot               uint64
@@ -3373,6 +3383,7 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 		updateCombineShards: defaultCollectionUpdateCombineShards,
 		schemaCoordinator:   schemaCoord,
 	}
+	domain.bufferedEmpty.Store(true)
 	domain.commandWALCoordinator.Store(m.commandWALCoordinator)
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	if schemaCoord != nil {
@@ -5330,7 +5341,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte, admission *co
 	resultID := bytes.Clone(id)
 	domain.table.SetEntry(resultID, document, page.ValuePtr{}, node.FlagInline)
 	domain.hasNoIndexTableWrites.Store(true)
-	domain.count++
+	domain.setBufferedCountLocked(domain.count + 1)
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked([][]byte{resultID}, domain.writeGeneration)
 	domain.mu.Unlock()
@@ -5553,7 +5564,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if len(entries) > 0 {
 		domain.hasNoIndexTableWrites.Store(true)
 	}
-	domain.count += len(entries)
+	domain.setBufferedCountLocked(domain.count + len(entries))
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
 	c.recordInsertBatchStats(CollectionInsertStats{
@@ -5648,6 +5659,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	domain.catalog = catalog
 	domain.baseCommitSeq = baseCommitSeq
 	domain.baseSystemRoot = baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(rootName)
 	domain.storagePolicy = options.dataStoragePolicy
 	return catalog, options, len(catalog.meta.Indexes) > 0, nil
@@ -5740,6 +5752,7 @@ func (c *Collection) revalidateBufferedWriteDomainAtSnapshotLocked(domain *colle
 	domain.catalog = catalog
 	domain.baseCommitSeq = currentCommitSeq
 	domain.baseSystemRoot = currentSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(primaryRootName)
 	domain.storagePolicy = options.dataStoragePolicy
 	c.meta = catalog.meta
@@ -6005,10 +6018,11 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain, r
 	domain.catalog = nextCatalog
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.hasNoIndexTableWrites.Store(false)
-	domain.count = 0
+	domain.setBufferedCountLocked(0)
 	domain.bufferedBytes = 0
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
@@ -6340,8 +6354,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(snap *backenddb.Snapshot, cat
 	domain.loaded = true
 	domain.meta = catalog.meta
 	domain.catalog = catalog
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
-	domain.count += len(plan.resultIDs)
+	domain.setBufferedCountLocked(domain.count + len(plan.resultIDs))
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
@@ -6578,8 +6593,9 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.loaded = true
 	domain.meta = catalog.meta
 	domain.catalog = catalog
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
-	domain.count += len(plan.resultIDs)
+	domain.setBufferedCountLocked(domain.count + len(plan.resultIDs))
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
@@ -6638,6 +6654,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.catalog = catalog
 	domain.baseCommitSeq = baseCommitSeq
 	domain.baseSystemRoot = baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.indexedPublishingUnits = nil
 	domain.indexedFlushUnits = nil
@@ -8133,8 +8150,9 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.catalog = checkpoint.catalog
 	domain.baseCommitSeq = checkpoint.baseCommitSeq
 	domain.baseSystemRoot = checkpoint.baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = checkpoint.primaryRoot
-	domain.count = checkpoint.count
+	domain.setBufferedCountLocked(checkpoint.count)
 	domain.bufferedBytes = checkpoint.bufferedBytes
 	domain.mutableCount = checkpoint.mutableCount
 	domain.mutableBytes = checkpoint.mutableBytes
@@ -10244,7 +10262,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		// whole domain would drop the tail now that async preparation is bounded.
 		emptyUnit := domain.indexedFlushUnits[0]
 		domain.indexedFlushUnits = domain.indexedFlushUnits[1:]
-		domain.count = subtractNonNegativeInt(domain.count, emptyUnit.docCount)
+		domain.setBufferedCountLocked(subtractNonNegativeInt(domain.count, emptyUnit.docCount))
 		domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, emptyUnit.byteCount)
 		resetIndexedFlushUnits([]indexedFlushUnit{emptyUnit})
 		rebuildBufferedPendingIndexesLocked(domain, meta.Name, domain.primaryRunIndex != nil)
@@ -11086,8 +11104,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain.catalog = nextCatalog
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(work.meta.Name))
-	domain.count = subtractNonNegativeInt(domain.count, work.docCount)
+	domain.setBufferedCountLocked(subtractNonNegativeInt(domain.count, work.docCount))
 	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.byteCount)
 	retainPrimaryDocumentCacheForCatalogLocked(domain, work.meta, newSystemRoot)
 	domain.clearIndexedAsyncFlushError()
@@ -11234,7 +11253,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		domain.columnCommandBytes = 0
 		domain.rawDocumentBytes = 0
 		domain.publicationBytes = 0
-		domain.count = 0
+		domain.setBufferedCountLocked(0)
 		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -11409,6 +11428,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.catalog = nextCatalog
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(publishMeta.Name))
 	retainPrimaryDocumentCacheForCatalogLocked(domain, publishMeta, newSystemRoot)
 	domain.indexedFlushUnits = nil
@@ -11435,7 +11455,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
-	domain.count = 0
+	domain.setBufferedCountLocked(0)
 	domain.indexedDeletesOnly = false
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
@@ -13495,8 +13515,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, publishMeta, publishRootNames, rootIDs)
 	c.meta = publishMeta
-	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 	c.recordInsertBatchStats(plan.stats.CollectionInsertStats, execOpts)
 	return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
@@ -20868,10 +20888,11 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	domain.catalog = plan.catalog
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	if plan.catalog != nil {
 		domain.primaryRoot = plan.catalog.rootID(direct.primaryRootName)
 	}
-	domain.count += modifiedCount
+	domain.setBufferedCountLocked(domain.count + modifiedCount)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
@@ -20937,10 +20958,11 @@ func (c *Collection) stageDirectNoIndexTableUpdateLocked(domain *collectionWrite
 	domain.catalog = plan.catalog
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	if plan.catalog != nil {
 		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
 	}
-	domain.count = saturatingAddNonNegativeInt(domain.count, newEntries)
+	domain.setBufferedCountLocked(saturatingAddNonNegativeInt(domain.count, newEntries))
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedByteDelta)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedByteDelta)
@@ -21262,10 +21284,11 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	domain.catalog = plan.catalog
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	if plan.catalog != nil {
 		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
 	}
-	domain.count += modifiedCount
+	domain.setBufferedCountLocked(domain.count + modifiedCount)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
@@ -21559,10 +21582,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.catalog = plan.catalog
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	if plan.catalog != nil {
 		domain.primaryRoot = plan.catalog.rootID(primaryRootName)
 	}
-	domain.count += modifiedCount
+	domain.setBufferedCountLocked(domain.count + modifiedCount)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
@@ -21845,6 +21869,28 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Sna
 	return c.catalogForSnapshotWithWriteDomainLockState(snap, true)
 }
 
+func (c *Collection) cachedCatalogForOneShotRead(p *pager.Pager, systemRoot, commitSeq uint64) *collectionCatalog {
+	if c == nil || p == nil || systemRoot == 0 {
+		return nil
+	}
+	if cached := c.catalogCache.Load(); cached != nil &&
+		cached.pager == p &&
+		cached.systemRoot == systemRoot &&
+		cached.commitSeq == commitSeq {
+		return cached.catalog
+	}
+	if domain := c.writeDomain; domain != nil {
+		if cached := domain.catalogCache.Load(); cached != nil &&
+			cached.pager == p &&
+			cached.systemRoot == systemRoot &&
+			cached.commitSeq == commitSeq {
+			c.catalogCache.Store(cached)
+			return cached.catalog
+		}
+	}
+	return nil
+}
+
 func (c *Collection) cachedCatalogForState(p *pager.Pager, systemRoot, commitSeq uint64) *collectionCatalog {
 	if c == nil || p == nil || systemRoot == 0 {
 		return nil
@@ -21898,7 +21944,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 		cached = nil
 	}
 	if cached != nil {
-		c.rememberCatalog(snap, cached)
+		c.rememberCatalogFromLoad(snap, cached)
 		return cached, nil
 	}
 
@@ -21906,7 +21952,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 	if err != nil {
 		return nil, err
 	}
-	c.rememberCatalog(snap, catalog)
+	c.rememberCatalogFromLoad(snap, catalog)
 	return catalog, nil
 }
 
@@ -21992,12 +22038,73 @@ func (c *Collection) commitSeqForSystemRoot(systemRoot uint64) uint64 {
 	return commitSeq
 }
 
+func (d *collectionWriteDomain) publishCatalogCacheLocked() {
+	if d == nil {
+		return
+	}
+	if !d.loaded || d.catalog == nil || d.baseSystemRoot == 0 {
+		d.catalogCache.Store(nil)
+		return
+	}
+	d.catalogCache.Store(&cachedCollectionCatalog{
+		pager:      d.catalog.pager,
+		systemRoot: d.baseSystemRoot,
+		commitSeq:  d.baseCommitSeq,
+		catalog:    d.catalog,
+	})
+}
+
+func (d *collectionWriteDomain) setBufferedCountLocked(n int) {
+	if d == nil {
+		return
+	}
+	d.count = n
+	d.bufferedEmpty.Store(n == 0)
+}
+
+func (c *Collection) rememberCatalogFromLoad(snap *backenddb.Snapshot, catalog *collectionCatalog) {
+	if c == nil || snap == nil || catalog == nil {
+		return
+	}
+	commitSeq := snapshotCommitSeq(snap)
+	systemRoot := snapshotSystemRoot(snap)
+	entry := &cachedCollectionCatalog{
+		pager:      catalog.pager,
+		systemRoot: systemRoot,
+		commitSeq:  commitSeq,
+		catalog:    catalog,
+	}
+	prev := c.catalogCache.Load()
+	sameBasis := prev != nil &&
+		prev.pager == entry.pager &&
+		prev.systemRoot == entry.systemRoot &&
+		prev.commitSeq == entry.commitSeq
+	if !sameBasis {
+		c.catalogCache.Store(entry)
+	}
+	if c.catalogMu.TryLock() {
+		if !sameBasis || c.catalog == nil || c.catalogSystemRoot != systemRoot || c.catalogCommitSeq != commitSeq {
+			c.catalogCommitSeq = commitSeq
+			c.catalogSystemRoot = systemRoot
+			c.catalog = catalog
+		}
+		c.catalogMu.Unlock()
+	}
+}
+
 func (c *Collection) rememberCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog) {
 	if c == nil || snap == nil || catalog == nil {
 		return
 	}
 	commitSeq := snapshotCommitSeq(snap)
 	systemRoot := snapshotSystemRoot(snap)
+	entry := &cachedCollectionCatalog{
+		pager:      catalog.pager,
+		systemRoot: systemRoot,
+		commitSeq:  commitSeq,
+		catalog:    catalog,
+	}
+	c.catalogCache.Store(entry)
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
@@ -22010,6 +22117,13 @@ func (c *Collection) rememberCatalogAtSystemRoot(systemRoot uint64, catalog *col
 		return
 	}
 	commitSeq := c.commitSeqForSystemRoot(systemRoot)
+	entry := &cachedCollectionCatalog{
+		pager:      catalog.pager,
+		systemRoot: systemRoot,
+		commitSeq:  commitSeq,
+		catalog:    catalog,
+	}
+	c.catalogCache.Store(entry)
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
@@ -22022,24 +22136,33 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 		return
 	}
 	domain := c.writeDomain
+	options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
+	var metaCopy CollectionMeta
+	var commitSeq uint64
+	if err == nil {
+		metaCopy = copyCollectionMeta(catalog.meta)
+		commitSeq = c.commitSeqForSystemRoot(systemRoot)
+	}
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count != 0 {
 		return
 	}
-	options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
+	domain.bufferedEmpty.Store(true)
 	if err != nil {
 		domain.loaded = false
+		domain.publishCatalogCacheLocked()
 		return
 	}
 	if !collectionMetaIndexSchemasEqual(domain.meta, catalog.meta) {
 		resetCollectionUpdateIndexAggregateStatsLocked(domain)
 	}
 	domain.loaded = true
-	domain.meta = copyCollectionMeta(catalog.meta)
+	domain.meta = metaCopy
 	domain.catalog = catalog
-	domain.baseCommitSeq = c.commitSeqForSystemRoot(systemRoot)
+	domain.baseCommitSeq = commitSeq
 	domain.baseSystemRoot = systemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.storagePolicy = options.dataStoragePolicy
 	domain.indexedFlushUnits = nil
@@ -22473,8 +22596,9 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	domain.catalog = catalog
 	domain.baseCommitSeq = baseCommitSeq
 	domain.baseSystemRoot = baseSystemRoot
+	domain.publishCatalogCacheLocked()
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(meta.Name))
-	domain.count += deleted
+	domain.setBufferedCountLocked(domain.count + deleted)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, deleted)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
@@ -23360,7 +23484,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 			needFallback = true
 			return nil
 		}
-		catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+		catalog := c.cachedCatalogForOneShotRead(view.Pager(), state.SystemRootPageID, state.CommitSeq)
 		if catalog == nil ||
 			catalog.nativeText != nil ||
 			columnStoreCanReconstructDocument(catalog.meta) ||
@@ -23420,6 +23544,9 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 		return nil, false, false, nil
 	}
 	domain := c.writeDomain
+	if domain.bufferedEmpty.Load() {
+		return nil, false, false, nil
+	}
 	domain.mu.RLock()
 	if domain.count == 0 {
 		domain.mu.RUnlock()
@@ -24414,7 +24541,7 @@ func (c *Collection) findByIndexExact(indexName, stringValue string, hasStringVa
 				needFallback = true
 				return nil
 			}
-			catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+			catalog := c.cachedCatalogForOneShotRead(view.Pager(), state.SystemRootPageID, state.CommitSeq)
 			if catalog == nil || catalog.nativeText != nil {
 				needFallback = true
 				return nil
@@ -24597,7 +24724,7 @@ func (c *Collection) findByIndexRange(indexName string, opts IndexRangeOptions) 
 				needFallback = true
 				return nil
 			}
-			catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+			catalog := c.cachedCatalogForOneShotRead(view.Pager(), state.SystemRootPageID, state.CommitSeq)
 			if catalog == nil || catalog.nativeText != nil {
 				needFallback = true
 				return nil
@@ -24752,7 +24879,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 					needFallback = true
 					return nil
 				}
-				catalog := c.cachedCatalogForState(view.Pager(), state.SystemRootPageID, state.CommitSeq)
+				catalog := c.cachedCatalogForOneShotRead(view.Pager(), state.SystemRootPageID, state.CommitSeq)
 				if catalog == nil || catalog.nativeText != nil {
 					needFallback = true
 					return nil
