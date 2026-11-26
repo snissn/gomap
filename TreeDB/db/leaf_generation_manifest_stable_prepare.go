@@ -252,6 +252,12 @@ func (closure *LeafGenerationManifestStablePreparedClosure) admitReplacementIden
 	return nil
 }
 
+func (closure *LeafGenerationManifestStablePreparedClosure) updateAdmittedReplacementIdentity(resourceID string, identity rootpublication.StableIdentity) {
+	closure.resourceID = strings.Clone(resourceID)
+	identity.Platform = closure.identity.Platform
+	closure.identity = identity
+}
+
 // All original namespace/proof completion callbacks run after the store lock
 // is released. Each constituent keeps its first actual physical outcome.
 func (closure *LeafGenerationManifestStablePreparedClosure) closeAuxiliary() error {
@@ -323,6 +329,7 @@ func (closure *LeafGenerationManifestStablePreparedClosure) closeReplacementFile
 	}
 	return first
 }
+
 // Abandon preserves the separate unpublished namespace action after Set
 // transfer. It claims that action once; refused cleanup is never replayed.
 func (closure *LeafGenerationManifestStablePreparedClosure) abandonUnpublished() error {

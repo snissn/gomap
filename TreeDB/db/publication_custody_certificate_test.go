@@ -510,10 +510,12 @@ func(e *privateErrorCapsule)Unwrap()error{return e.cause}
 
 func TestPublicationSourceGuardNotificationRejectsExposedState(t *testing.T) {
 	source := loadProductionPublicationGuardSource(t, `package db
+import "errors"
 type uncheckedNotificationError struct { State *DBState }
 func (*uncheckedNotificationError) Error() string { return "published state" }
 
 func (db *DB) notifyWithUncheckedCustody() {
+	db.reportError(errors.Join(&originalDBCleanupFailure{payload: db.state.Load()}))
 	db.reportError(&uncheckedNotificationError{State: db.state.Load()})
 	db.reportUnreviewedNotification(&originalDBCleanupFailure{payload: db.state.Load()})
 }

@@ -416,23 +416,114 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		}
 	}
 	// A recovery-selectable slot must retain its exact manifest identity until
-	// normal alternating publication overwrites that slot. Therefore the stable
-	// producer writes only immutable manifest.durable.<revision>.json children
-	// relative to the retained parent directory (never manifest.json).
-	const maxRevisionCreateAttempts = 64
-	var revisionName string
-	for attempt := 0; attempt < maxRevisionCreateAttempts; attempt++ {
-		revisionName = leafGenerationDurableManifestFileName(candidate.ManifestRevision)
+	// normal alternating publication overwrites that slot. Stage into a hidden
+	// temp child, write and fsync it first, then atomically publish the final
+	// immutable manifest.durable.<revision>.json name via no-replace hard link
+	// + temp unlink so an unfinished/empty revision can never appear under the
+	// authoritative durable revision filename.
+	const maxTempCreateAttempts = 64
+	var tempName string
+	for attempt := 0; attempt < maxTempCreateAttempts; attempt++ {
+		s.tempSeq++
+		tempName = fmt.Sprintf("manifest.durable.tmp.%016x", s.tempSeq)
 		if custody != nil {
-			revisionFile, err = custody.openReplacementFile(0, s, revisionName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+			revisionFile, err = custody.openReplacementFile(0, s, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		} else {
-			revisionFile, err = rootpublication.OpenStableChildFile(parent, revisionName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+			revisionFile, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		}
 		if err == nil {
 			break
 		}
 		if !os.IsExist(err) {
 			return nil, err
+		}
+	}
+	if revisionFile == nil {
+		return nil, fmt.Errorf("create stable manifest temp: exhausted %d exact-parent names", maxTempCreateAttempts)
+	}
+	defer func() {
+		if installed {
+			return
+		}
+		cleanupErr := s.unlinkStableRevisionLocked(revisionFile, tempName)
+		if cleanupErr == nil {
+			cleanupErr = s.syncStableRevisionDeletionLocked()
+		}
+		if cleanupErr != nil {
+			installed = true // Keep evidence in the store or the producer's cleanup receipt.
+			if custody != nil {
+				custody.earlyRollbackFailed = true
+			}
+			retErr = s.ambiguous(errors.Join(retErr, fmt.Errorf("clean stable manifest temp %q: %w", tempName, cleanupErr)))
+		}
+	}()
+	if err := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", revisionFile.Name(), parent, revisionFile, "", tempName); err != nil {
+		return nil, s.ambiguous(err)
+	}
+	if err := revisionFile.Chmod(0o600); err != nil {
+		return nil, err
+	}
+	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
+	if err != nil {
+		return nil, err
+	}
+	const maxRevisionCreateAttempts = 64
+	var revisionName string
+	admittedCustody := false
+	for attempt := 0; attempt < maxRevisionCreateAttempts; attempt++ {
+		if attempt > 0 {
+			if _, err := revisionFile.Seek(0, io.SeekStart); err != nil {
+				return nil, err
+			}
+			if err := revisionFile.Truncate(0); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := revisionFile.Write(data); err != nil {
+			return nil, err
+		}
+		if err := syncLeafGenerationManifestFile(revisionFile, s.leafDir); err != nil {
+			return nil, err
+		}
+		s.durabilityCounters.ContentSyncs.Add(1)
+		if attempt == 0 {
+			if hook := s.hooks.BeforeRename; hook != nil {
+				if err := hook(); err != nil {
+					return nil, err
+				}
+			}
+		}
+		revisionName = leafGenerationDurableManifestFileName(candidate.ManifestRevision)
+		if custody != nil {
+			// Admit the exact rollback name and identity before exposing the
+			// durable revision filename so capacity refusal rolls back cleanly.
+			rollbackIdentity := newIdentity
+			rollbackIdentity.Generation = candidate.ManifestRevision
+			if !admittedCustody {
+				if err := custody.admitReplacementIdentity(revisionName, rollbackIdentity); err != nil {
+					return nil, err
+				}
+				admittedCustody = true
+			} else {
+				custody.updateAdmittedReplacementIdentity(revisionName, rollbackIdentity)
+			}
+		}
+		if err := rootpublication.ValidateStableChildLink(parent, revisionFile, tempName); err != nil {
+			return nil, err
+		}
+		linkErr := rootpublication.LinkStableChildFileNoReplace(parent, tempName, revisionName)
+		if linkErr == nil {
+			installed = true
+			if err := rootpublication.RemoveStableChildFile(parent, tempName); err != nil {
+				return nil, s.ambiguous(err)
+			}
+			if err := observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceOuterLeaf, s.leafDir, revisionFile.Name(), filepath.Join(s.leafDir, revisionName), parent, revisionFile, tempName, revisionName); err != nil {
+				return nil, s.ambiguous(err)
+			}
+			break
+		}
+		if !os.IsExist(linkErr) {
+			return nil, linkErr
 		}
 		if candidate.ManifestRevision == ^uint64(0) {
 			return nil, fmt.Errorf("%w: manifest revision exhausted", ErrLeafGenerationManifestIncompatible)
@@ -443,57 +534,9 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			return nil, err
 		}
 	}
-	if revisionFile == nil {
+	if !installed {
 		return nil, fmt.Errorf("create stable manifest revision: exhausted %d exact-parent names", maxRevisionCreateAttempts)
 	}
-	defer func() {
-		if installed {
-			return
-		}
-		cleanupErr := s.unlinkStableRevisionLocked(revisionFile, revisionName)
-		if cleanupErr == nil {
-			cleanupErr = s.syncStableRevisionDeletionLocked()
-		}
-		if cleanupErr != nil {
-			installed = true // Keep evidence in the store or the producer's cleanup receipt.
-			if custody != nil {
-				custody.earlyRollbackFailed = true
-			}
-			retErr = s.ambiguous(errors.Join(retErr, fmt.Errorf("clean stable manifest revision %q: %w", revisionName, cleanupErr)))
-		}
-	}()
-	if err := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", revisionFile.Name(), parent, revisionFile, "", revisionName); err != nil {
-		return nil, s.ambiguous(err)
-	}
-	if err := revisionFile.Chmod(0o600); err != nil {
-		return nil, err
-	}
-	if _, err := revisionFile.Write(data); err != nil {
-		return nil, err
-	}
-	if err := syncLeafGenerationManifestFile(revisionFile, s.leafDir); err != nil {
-		return nil, err
-	}
-	s.durabilityCounters.ContentSyncs.Add(1)
-	if hook := s.hooks.BeforeRename; hook != nil {
-		if err := hook(); err != nil {
-			return nil, err
-		}
-	}
-	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
-	if err != nil {
-		return nil, err
-	}
-	if custody != nil {
-		// Admit the exact rollback name and identity while a refusal still
-		// needs only to unlink the new child.
-		rollbackIdentity := newIdentity
-		rollbackIdentity.Generation = candidate.ManifestRevision
-		if err := custody.admitReplacementIdentity(revisionName, rollbackIdentity); err != nil {
-			return nil, err
-		}
-	}
-	installed = true
 	if hook := s.hooks.BeforeDestinationValidation; hook != nil {
 		if err := hook(); err != nil {
 			return nil, s.ambiguous(err)

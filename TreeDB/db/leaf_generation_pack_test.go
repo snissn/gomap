@@ -206,8 +206,19 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError
 	if !strings.Contains(reported.Error(), "raw file 77") {
 		t.Fatalf("reported error=%q, want raw file id context", reported)
 	}
-	if _, err := os.Stat(leafGenerationManifestPath(LeafLogDirPath(dir))); err != nil {
-		t.Fatalf("manifest stat: %v", err)
+	leafDir := LeafLogDirPath(dir)
+	if db.leafGenerationManifestStore != nil && db.leafGenerationManifestStore.mode == leafGenerationManifestStable {
+		revPath := filepath.Join(leafDir, leafGenerationDurableManifestFileName(db.leafGenerationManifest.ManifestRevision))
+		if _, err := os.Stat(revPath); err != nil {
+			t.Fatalf("durable manifest revision stat (%s): %v", revPath, err)
+		}
+		if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+			t.Fatalf("stable platform must not create manifest.json: %v", err)
+		}
+	} else {
+		if _, err := os.Stat(leafGenerationManifestPath(leafDir)); err != nil {
+			t.Fatalf("manifest stat: %v", err)
+		}
 	}
 	if err := db.backgroundError(); err != nil {
 		t.Fatalf("optional sidecar error became a background storage error: %v", err)
@@ -801,8 +812,19 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("missing state before pack")
 	}
-	compatPath := leafGenerationManifestPath(LeafLogDirPath(dir))
-	compatBefore, err := os.ReadFile(compatPath)
+	leafDir := LeafLogDirPath(dir)
+	stableManifest := db.leafGenerationManifestStore != nil && db.leafGenerationManifestStore.mode == leafGenerationManifestStable
+	manifestCheckPath := leafGenerationManifestPath(leafDir)
+	if stableManifest {
+		db.mu.RLock()
+		manifestRev := db.leafGenerationManifest.ManifestRevision
+		db.mu.RUnlock()
+		manifestCheckPath = filepath.Join(leafDir, leafGenerationDurableManifestFileName(manifestRev))
+		if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+			t.Fatalf("stable platform must not create manifest.json before pack: %v", err)
+		}
+	}
+	manifestBefore, err := os.ReadFile(manifestCheckPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -829,9 +851,14 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if after, ok := db.StateToken(); !ok || after != before {
 		t.Fatalf("refused pack changed root state from %+v to %+v", before, after)
 	}
-	compatAfter, err := os.ReadFile(compatPath)
-	if err != nil || !bytes.Equal(compatBefore, compatAfter) {
-		t.Fatalf("refused pack changed compatibility manifest, read error = %v", err)
+	manifestAfter, err := os.ReadFile(manifestCheckPath)
+	if err != nil || !bytes.Equal(manifestBefore, manifestAfter) {
+		t.Fatalf("refused pack changed manifest %s, read error = %v", manifestCheckPath, err)
+	}
+	if stableManifest {
+		if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+			t.Fatalf("refused pack created manifest.json on stable platform: %v", err)
+		}
 	}
 	for _, fileID := range refusedFiles {
 		if db.valueLogManager.HasSegment(fileID) {
