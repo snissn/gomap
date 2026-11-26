@@ -361,6 +361,9 @@ func (db *DB) BorrowNativeSemanticCut() (backenddb.NativeSemanticBorrowedCut, er
 	if db == nil || db.cow == nil {
 		return nil, ErrCOWUnsupported
 	}
+	if !db.cow.budget.HasFastHeadroom(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeSemanticCapture{})))) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
 	cut := db.cow.retainCut()
 	if cut == nil {
 		return nil, backenddb.ErrClosed

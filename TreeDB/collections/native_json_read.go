@@ -119,6 +119,10 @@ func (m *NativeJSONManager) getIntoWithFormat(collection string, id, dst []byte)
 	return m.getIntoCapture(collection, id, dst)
 }
 
+func nativeTypedNeedsReconstruct(meta *CollectionMeta) bool {
+	return nativeTypedMeta(*meta) && meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
+}
+
 func (m *NativeJSONManager) getIntoBorrowedCut(cut backenddb.NativeSemanticBorrowedCut, collection string, id, dst []byte) (value []byte, format DocumentFormat, handled bool, resultErr error) {
 	engine, ok := cut.State().(*nativeEngineVersion)
 	if !ok || engine == nil {
@@ -132,7 +136,7 @@ func (m *NativeJSONManager) getIntoBorrowedCut(cut backenddb.NativeSemanticBorro
 	meta := col.schema.meta
 	format = meta.Options.DocumentFormat
 	typed := nativeTypedMeta(*meta)
-	if typed && meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
+	if nativeTypedNeedsReconstruct(meta) {
 		_ = cut.Release()
 		return nil, "", false, nil
 	}
@@ -241,7 +245,7 @@ func (m *NativeJSONManager) getIntoCapture(collection string, id, dst []byte) (v
 	meta := col.schema.meta
 	format = meta.Options.DocumentFormat
 	typed := nativeTypedMeta(*meta)
-	reconstruct := typed && meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
+	reconstruct := nativeTypedNeedsReconstruct(meta)
 	d, ok := col.domains.Get("primary")
 	if !ok {
 		return nil, format, tree.ErrKeyNotFound

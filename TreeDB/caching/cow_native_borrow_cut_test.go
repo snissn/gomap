@@ -1,10 +1,13 @@
 package caching
 
 import (
+	"errors"
 	"sync"
 	"testing"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestBorrowNativeSemanticCutZeroAllocAndConcurrentRace(t *testing.T) {
@@ -62,4 +65,33 @@ func TestBorrowNativeSemanticCutZeroAllocAndConcurrentRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+
+	// Exhaust in-flight COW budget: BorrowNativeSemanticCut must decline so
+	// callers fall back to locked admission and observe ErrCOWCapacity.
+	blocker, err := c.budget.AdmitNativeBytes(0)
+	if err != nil {
+		t.Fatalf("AdmitNativeBytes: %v", err)
+	}
+	if err := blocker.Resize(c.budget.Limits().MaxInFlightBytes - c.budget.Stats().ReservedBytes); err != nil {
+		blocker.Close()
+		t.Fatalf("Resize blocker: %v", err)
+	}
+	if _, err := db.BorrowNativeSemanticCut(); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+		blocker.Close()
+		t.Fatalf("full budget BorrowNativeSemanticCut err=%v want ErrNativeSemanticUnsupported", err)
+	}
+	if _, err := c.budget.AcquireExternalValue(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeSemanticCapture{})))); !errors.Is(err, memtable.ErrCOWCapacity) {
+		blocker.Close()
+		t.Fatalf("full budget AcquireExternalValue err=%v want ErrCOWCapacity", err)
+	}
+	blocker.Close()
+
+	// Once headroom returns, BorrowNativeSemanticCut succeeds lock-free again.
+	cut, err := db.BorrowNativeSemanticCut()
+	if err != nil {
+		t.Fatalf("post-release BorrowNativeSemanticCut: %v", err)
+	}
+	if err := cut.Release(); err != nil {
+		t.Fatalf("post-release Release: %v", err)
+	}
 }
