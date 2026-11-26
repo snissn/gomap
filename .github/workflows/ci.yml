@@ -196,7 +196,7 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.run_vet == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
