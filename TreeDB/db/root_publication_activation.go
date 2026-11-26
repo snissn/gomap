@@ -105,6 +105,7 @@ type rootPublicationVisibleInstallV1 struct {
 	newUserRootID                   uint64
 	recordVacuumMutation            func()
 	conditionalMutation             conditionalCommitMutation
+	rootReuseLocked                 bool
 	recordConditionalInsideActivate bool
 	conditionalRecorded             bool
 	activated                       bool
@@ -558,7 +559,24 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		return errors.New("missing root-publication allocator activation")
 	}
 	db := install.db
-	db.mu.Lock()
+	boundedLocked := false
+	for {
+		if !install.rootReuseLocked && !boundedLocked && db.boundedSnapshotCaptureCount.Load() > 0 {
+			db.boundedSnapshotCaptureMu.Lock()
+			boundedLocked = true
+		}
+		db.mu.Lock()
+		if !install.rootReuseLocked && !boundedLocked && db.boundedSnapshotCaptureCount.Load() > 0 {
+			db.mu.Unlock()
+			db.boundedSnapshotCaptureMu.Lock()
+			boundedLocked = true
+			continue
+		}
+		break
+	}
+	if boundedLocked {
+		defer db.boundedSnapshotCaptureMu.Unlock()
+	}
 	if db.meta.CommitSeq+1 != install.next.CommitSeq {
 		db.mu.Unlock()
 		return fmt.Errorf("%w: visible=%d candidate=%d", errDurableRootCandidateStale, db.meta.CommitSeq, install.next.CommitSeq)
@@ -1343,6 +1361,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if needRootReuseLock {
 		db.rootReuseMu.Lock()
 		rootReuseLocked = true
+		install.rootReuseLocked = true
 
 		// Prepare the exact visible tuple before acceptance and the installation
 		// latch, including the filter and predicted system-root publication epoch.

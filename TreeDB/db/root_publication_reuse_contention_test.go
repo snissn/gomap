@@ -211,3 +211,142 @@ func TestWaitFreeSnapshotAcquirePhaseFloorRespectsInFlightCapture(t *testing.T) 
 		t.Fatalf("minPinnedSnapshotCommitSeqForDurablePublish=%d want %d after drain", gotMinFinal, seqFinal)
 	}
 }
+
+func TestBoundedSnapshotAdmissionPreservesPublicationFenceUnderConcurrentSetSync(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if err := d.SetSync([]byte("k"), []byte("v0")); err != nil {
+		t.Fatalf("SetSync v0: %v", err)
+	}
+
+	// Deterministic check: pause inside admit while an ordinary SetSync runs
+	// on a default DATA-backed DB. SetSync must wait for the bounded capture
+	// rather than replacing snapshotViewRO and causing spurious ErrSnapshotCapacity.
+	entered := make(chan struct{})
+	resume := make(chan struct{})
+	snapCh := make(chan *Snapshot, 1)
+	snapErrCh := make(chan error, 1)
+	go func() {
+		snap, capErr := d.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error {
+			close(entered)
+			<-resume
+			return nil
+		})
+		snapCh <- snap
+		snapErrCh <- capErr
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bounded snapshot capture did not enter admit callback")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- d.SetSync([]byte("k"), []byte("v1"))
+	}()
+
+	select {
+	case wErr := <-writeDone:
+		close(resume)
+		t.Fatalf("ordinary SetSync crossed active bounded snapshot admission fence: %v", wErr)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	close(resume)
+	snap := <-snapCh
+	if capErr := <-snapErrCh; capErr != nil || snap == nil {
+		t.Fatalf("AcquireSnapshotWithAllocationAdmission=(%v, %v), want non-nil snapshot and nil error", snap, capErr)
+	}
+	got, err := snap.Get([]byte("k"))
+	if err != nil || string(got) != "v0" {
+		_ = snap.Close()
+		t.Fatalf("bounded snapshot Get(k)=(%q, %v), want v0", got, err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close bounded snapshot: %v", err)
+	}
+	if wErr := <-writeDone; wErr != nil {
+		t.Fatalf("SetSync v1: %v", wErr)
+	}
+
+	// Concurrent stress: continuous SetSync alongside bounded admission captures
+	// and ordinary Get readers must never produce spurious ErrSnapshotCapacity.
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	errCh := make(chan error, 4)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 2; !stop.Load(); i++ {
+			if err := d.SetSync([]byte("k"), []byte(fmt.Sprintf("v%d", i))); err != nil {
+				select {
+				case errCh <- fmt.Errorf("SetSync v%d: %w", i, err):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 64 && !stop.Load(); i++ {
+				s, err := d.AcquireSnapshotWithAllocationAdmission(func(SnapshotAllocationSizes) error {
+					return nil
+				})
+				if err != nil {
+					select {
+					case errCh <- fmt.Errorf("AcquireSnapshotWithAllocationAdmission iter %d: %w", i, err):
+					default:
+					}
+					stop.Store(true)
+					return
+				}
+				val, gErr := s.Get([]byte("k"))
+				cErr := s.Close()
+				if gErr != nil || len(val) == 0 || cErr != nil {
+					select {
+					case errCh <- fmt.Errorf("bounded read iter %d: val=%q getErr=%v closeErr=%v", i, val, gErr, cErr):
+					default:
+					}
+					stop.Store(true)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			if _, err := d.Get([]byte("k")); err != nil {
+				select {
+				case errCh <- fmt.Errorf("ordinary Get: %w", err):
+				default:
+				}
+				stop.Store(true)
+				return
+			}
+		}
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	stop.Store(true)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
+}

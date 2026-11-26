@@ -251,8 +251,14 @@ type DB struct {
 	// publication converts retired COW pages into reusable pages. Existing
 	// readers remain concurrent; only new generation captures wait for the
 	// matching durable and visible root install.
-	rootReuseMu      sync.RWMutex
-	publishPrepareMu sync.RWMutex
+	rootReuseMu sync.RWMutex
+	// boundedSnapshotCaptureMu serializes AcquireSnapshotWithAllocationAdmission
+	// against ordinary DATA root activations that bypass rootReuseMu.Lock(),
+	// preserving view-revalidation stability without stalling ordinary readers.
+	// Lock order: valueLogPublicationMu -> boundedSnapshotCaptureMu -> rootReuseMu -> db.mu.
+	boundedSnapshotCaptureMu    sync.RWMutex
+	boundedSnapshotCaptureCount atomic.Int32
+	publishPrepareMu            sync.RWMutex
 	// valueLogPublicationMu prevents snapshots and RefreshValueLogSet from
 	// observing segments while maintenance is promoting/registering them before
 	// the root/meta publication that makes them authoritative.
@@ -2023,12 +2029,24 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 }
 
 func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool) (*Snapshot, error) {
+	db.boundedSnapshotCaptureCount.Add(1)
+	defer db.boundedSnapshotCaptureCount.Add(-1)
+	db.boundedSnapshotCaptureMu.RLock()
+	defer db.boundedSnapshotCaptureMu.RUnlock()
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return nil, ErrClosed
 	}
-	return db.captureSnapshotViewBoundedLocked(snap, admit, bounded, db.snapshotViewRO.Load(), true)
+	// Sample the initial view under db.mu.RLock() after advertising this bounded
+	// capture and acquiring boundedSnapshotCaptureMu.RLock(). Any wait-free
+	// activate() either already published before this RLock or observes
+	// boundedSnapshotCaptureCount > 0 under db.mu.Lock() and waits for
+	// boundedSnapshotCaptureMu.Lock() until this capture completes.
+	db.mu.RLock()
+	view := db.snapshotViewRO.Load()
+	db.mu.RUnlock()
+	return db.captureSnapshotViewBoundedLocked(snap, admit, bounded, view, true)
 }
 
 // captureSnapshotViewBoundedLocked constructs from one explicit immutable tuple.
