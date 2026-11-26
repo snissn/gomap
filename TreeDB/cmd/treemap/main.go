@@ -563,7 +563,12 @@ func runCompact(dir string, args []string) {
 	if err != nil {
 		fatalf("Failed to open DB backend: %v", err)
 	}
+	commandWALEnabled := backend.CommandWALEnabled()
+	backendClosed := false
 	defer func() {
+		if backendClosed {
+			return
+		}
 		if err := cleanupBackend(); err != nil {
 			fatalf("Close DB backend: %v", err)
 		}
@@ -572,6 +577,19 @@ func runCompact(dir string, args []string) {
 	stats, err := backend.CompactStorage(context.Background(), compactOpts)
 	if err != nil {
 		fatalf("CompactStorage error: %v", err)
+	}
+	backendClosed = true
+	if err := cleanupBackend(); err != nil {
+		fatalf("Close DB backend: %v", err)
+	}
+	if commandWALEnabled && compactOpts.Mode == treedb.CompactStorageExhaustive {
+		mainDir := resolveMainDBDir(rootDir)
+		if _, err := treedbdb.PruneClosedEmptyCommandWALSegments(mainDir); err != nil {
+			fatalf("Prune empty command WAL segments: %v", err)
+		}
+		if err := treedbdb.RefreshCompactStorageUsage(mainDir, &stats); err != nil {
+			fatalf("Refresh compact storage usage: %v", err)
+		}
 	}
 	printCompactStorageStats(stats, *jsonOut)
 }

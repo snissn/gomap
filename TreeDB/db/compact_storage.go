@@ -11,10 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // CompactStorageMode selects how aggressively CompactStorage should reclaim
@@ -389,7 +392,200 @@ func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions
 // final audit.
 func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
 	opts.DryRun = false
-	return db.compactStorageWithOwner(ctx, opts, nil)
+	stats, err := db.compactStorageWithOwner(ctx, opts, nil)
+	if err != nil {
+		return stats, err
+	}
+	if err := db.settleCompactStorageCommandWAL(ctx, opts, &stats); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+// settleCompactStorageCommandWAL converges the command-WAL checkpoint fallback
+// and prunes covered command-WAL segments after exhaustive compaction. It must
+// run strictly outside db.maintenanceMu so RefreshCommandWALCheckpointFallback,
+// Checkpoint, and CleanupCommandWALCoveredSegmentsAtCheckpoint preserve the
+// canonical lock order without self-deadlock.
+func (db *DB) settleCompactStorageCommandWAL(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) error {
+	if db == nil || db.readOnly || !db.CommandWALEnabled() {
+		return nil
+	}
+	opts = normalizeCompactStorageOptions(opts)
+	if opts.DryRun || opts.Mode != CompactStorageExhaustive {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := db.runCompactStoragePhase(stats, "command-wal-settle", func() error {
+		if err := db.RefreshCommandWALCheckpointFallback(); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := db.Checkpoint(); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+	}); err != nil {
+		return err
+	}
+	leafGCReclaimed := false
+	if db.indexOuterLeavesInValueLog && stats != nil && (stats.LeafGenerationGC.GenerationsRetiring > 0 || stats.RemainingDebt.LeafGCGenerations > 0) {
+		if err := db.runCompactStoragePhase(stats, "leaf-generation-gc-after-command-wal-settle", func() error {
+			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+			prior := stats.LeafGenerationGC
+			gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{
+				ProtectedRootIDs:       protectedRootIDs,
+				ProtectedSystemRootIDs: protectedSystemRootIDs,
+			})
+			leafGCReclaimed = gc.GenerationsDeleted > 0 || gc.FilesDeleted > 0
+			gc.BytesDeleted += prior.BytesDeleted
+			gc.BytesEligible += prior.BytesEligible
+			gc.FilesDeleted += prior.FilesDeleted
+			gc.GenerationsDeleted += prior.GenerationsDeleted
+			gc.GenerationsEligible += prior.GenerationsEligible
+			stats.LeafGenerationGC = gc
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	if stats != nil {
+		if leafGCReclaimed {
+			final, err := db.CompactStoragePlan(ctx, opts)
+			if err != nil {
+				return err
+			}
+			addCompactStorageAuditStats(&stats.Audit, final.Audit)
+			stats.After = final.After
+			stats.RemainingDebt = final.RemainingDebt
+			if stats.ValueLogGC.SegmentsPending > stats.RemainingDebt.ValueLogGCSegments {
+				stats.RemainingDebt.ValueLogGCSegments = stats.ValueLogGC.SegmentsPending
+			}
+			if stats.ValueLogGC.BytesPending > stats.RemainingDebt.ValueLogGCBytes {
+				stats.RemainingDebt.ValueLogGCBytes = stats.ValueLogGC.BytesPending
+			}
+			stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, stats.RemainingDebt)
+			return nil
+		}
+		after, err := compactStorageUsage(db.dir)
+		if err != nil {
+			return err
+		}
+		stats.After = after
+	}
+	return nil
+}
+
+// RefreshCompactStorageUsage updates stats.After from the current on-disk
+// storage usage of backend directory dir.
+func RefreshCompactStorageUsage(dir string, stats *CompactStorageStats) error {
+	if stats == nil {
+		return nil
+	}
+	after, err := compactStorageUsage(dir)
+	if err != nil {
+		return err
+	}
+	stats.After = after
+	return nil
+}
+
+// PruneClosedEmptyCommandWALSegments removes preallocated empty (zero-logical-
+// byte) command-WAL segment containers from a cleanly closed backend directory
+// while holding the exclusive DB lock and journal owner lock. If any command-
+// WAL segment contains frames or fails container validation, no files are
+// removed.
+func PruneClosedEmptyCommandWALSegments(dir string) (int, error) {
+	if dir == "" {
+		return 0, errors.New("db dir required")
+	}
+	lock, err := lockfile.Acquire(filepath.Join(dir, "LOCK"))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = lock.Close() }()
+
+	walDir := WALDirPath(dir)
+	info, err := os.Stat(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, nil
+	}
+
+	owner, err := commitlog.AcquireJournalOwner(walDir)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = owner.Close() }()
+
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	var emptyPaths []string
+	for _, entry := range entries {
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+			continue
+		}
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		segPath := filepath.Join(walDir, entry.Name())
+		f, err := os.Open(segPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return 0, err
+		}
+		logicalSize, sizeErr := commitlog.LogicalFileSize(f)
+		closeErr := f.Close()
+		if sizeErr != nil || closeErr != nil || logicalSize != 0 {
+			// Retain all segments conservatively whenever any segment has
+			// frames or does not validate as an empty WAL container.
+			return 0, nil
+		}
+		emptyPaths = append(emptyPaths, segPath)
+	}
+	if len(emptyPaths) == 0 {
+		return 0, nil
+	}
+
+	removed := 0
+	for _, segPath := range emptyPaths {
+		if err := os.Remove(segPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, err
+		}
+		removed++
+	}
+	if removed > 0 {
+		if err := syncDirFn(walDir); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
 }
 
 // CompactStorageForPrivateCOW runs storage compaction for the cache's
@@ -995,7 +1191,43 @@ func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactSto
 	}
 	var debt CompactStorageDebt
 	populateCompactStorageIndexDebt(opts, report, &debt)
+	if !debt.IndexVacuumRequired && opts.Mode == CompactStorageExhaustive && db.compactStorageIndexChunkSlackReclaimable(report) {
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "chunk_slack"
+	}
 	return debt, nil
+}
+
+func (db *DB) compactStorageIndexChunkSlackReclaimable(report IndexVacuumTriggerReport) bool {
+	if db == nil || db.dir == "" {
+		return false
+	}
+	gen := db.idx.Load()
+	if gen == nil || gen.pager == nil {
+		return false
+	}
+	replacementChunk := vacuumReplacementChunkSize(db.chunkSize, gen)
+	if replacementChunk <= 0 || db.chunkSize <= replacementChunk {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(db.dir, indexFileName))
+	if err != nil || info.Size() <= replacementChunk {
+		return false
+	}
+	estPages := report.TotalPages
+	if report.FreelistReclaimablePages < estPages {
+		estPages -= report.FreelistReclaimablePages
+	}
+	if estPages < 2 {
+		estPages = 2
+	}
+	replacementChunkPages := uint64(replacementChunk / page.PageSize)
+	if replacementChunkPages == 0 {
+		return false
+	}
+	targetChunks := (estPages + replacementChunkPages - 1) / replacementChunkPages
+	currentChunks := uint64(info.Size()) / uint64(replacementChunk)
+	return currentChunks > targetChunks+1
 }
 
 func compactStorageIndexVacuumTransient(err error) bool {

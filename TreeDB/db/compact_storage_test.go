@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -3623,4 +3624,239 @@ func compactStoragePhaseSkippedWithReason(phases []CompactStoragePhaseStats, nam
 		}
 	}
 	return false
+}
+
+func TestCompactStorageExhaustiveShrinksFastProfileIndexAndPrunesCoveredWAL(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online index vacuum unsupported on windows")
+	}
+	for _, outerLeaves := range []bool{false, true} {
+		name := "inline_leaves"
+		if outerLeaves {
+			name = "outer_leaves_in_vlog"
+		}
+		t.Run(name, func(t *testing.T) {
+			if outerLeaves {
+				requireLeafGenerationPackPromotionSupport(t)
+			}
+			dir := t.TempDir()
+			const fastChunkSize = int64(4 << 20)
+			opts := Options{
+				Dir:                        dir,
+				ChunkSize:                  fastChunkSize,
+				KeepRecent:                 1,
+				CommandWAL:                 true,
+				Durability:                 DurabilityWALOnRelaxed,
+				DisableBackgroundPrune:     true,
+				IndexOuterLeavesInValueLog: outerLeaves,
+			}
+			d, err := Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			val := bytes.Repeat([]byte("c"), 180)
+			for round := 0; round < 3; round++ {
+				b := d.NewBatch()
+				for i := 0; i < 256; i++ {
+					k := []byte(fmt.Sprintf("k-%05d", i))
+					if err := b.Set(k, val); err != nil {
+						t.Fatalf("set: %v", err)
+					}
+				}
+				if err := b.Write(); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+				if err := b.Close(); err != nil {
+					t.Fatalf("close batch: %v", err)
+				}
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint: %v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			// Reopen with the same fastChunkSize, matching treemap compact.
+			compactor, err := Open(opts)
+			if err != nil {
+				t.Fatalf("reopen for compact: %v", err)
+			}
+			stats, err := compactor.CompactStorage(context.Background(), CompactStorageOptions{
+				Mode: CompactStorageExhaustive,
+			})
+			if err != nil {
+				_ = compactor.Close()
+				t.Fatalf("CompactStorage(exhaustive): %v", err)
+			}
+			if err := compactor.Close(); err != nil {
+				t.Fatalf("close compactor: %v", err)
+			}
+
+			indexInfo, err := os.Stat(filepath.Join(dir, indexFileName))
+			if err != nil {
+				t.Fatalf("stat index.db: %v", err)
+			}
+			if indexInfo.Size() >= 1<<20 {
+				t.Fatalf("exhaustive compact left small fast-profile index.db at %d bytes (want < 1 MiB)", indexInfo.Size())
+			}
+
+			walDir := resolveStorageLayout(dir).walDir
+			entries, err := os.ReadDir(walDir)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("readdir wal: %v", err)
+			}
+			for _, entry := range entries {
+				if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+					continue
+				}
+				f, err := os.Open(filepath.Join(walDir, entry.Name()))
+				if err != nil {
+					t.Fatalf("open wal entry %s: %v", entry.Name(), err)
+				}
+				logicalSize, sizeErr := commitlog.LogicalFileSize(f)
+				_ = f.Close()
+				if sizeErr != nil {
+					t.Fatalf("logical size %s: %v", entry.Name(), sizeErr)
+				}
+				if logicalSize != 0 {
+					t.Fatalf("exhaustive compact left non-empty covered command WAL segment %s with %d logical bytes", entry.Name(), logicalSize)
+				}
+			}
+			if _, err := PruneClosedEmptyCommandWALSegments(dir); err != nil {
+				t.Fatalf("PruneClosedEmptyCommandWALSegments: %v", err)
+			}
+			entries, err = os.ReadDir(walDir)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("readdir wal after prune: %v", err)
+			}
+			var walSegmentBytes int64
+			for _, entry := range entries {
+				if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+					continue
+				}
+				info, err := entry.Info()
+				if err != nil {
+					t.Fatalf("stat wal entry %s: %v", entry.Name(), err)
+				}
+				walSegmentBytes += info.Size()
+			}
+			if walSegmentBytes != 0 {
+				t.Fatalf("prune left %d bytes of empty command WAL segments under %s", walSegmentBytes, walDir)
+			}
+			if !stats.ByteMinimized || !stats.FullyCompacted {
+				t.Fatalf("expected ByteMinimized && FullyCompacted after exhaustive compact, got stats=%+v", stats)
+			}
+			if !compactStoragePhaseSeen(stats.Phases, "command-wal-settle") {
+				t.Fatalf("expected command-wal-settle phase in exhaustive compact: %+v", stats.Phases)
+			}
+
+			verify, err := Open(Options{Dir: dir, ReadOnly: true})
+			if err != nil {
+				t.Fatalf("reopen read-only: %v", err)
+			}
+			for i := 0; i < 256; i++ {
+				got, err := verify.Get([]byte(fmt.Sprintf("k-%05d", i)))
+				if err != nil {
+					_ = verify.Close()
+					t.Fatalf("get k-%05d: %v", i, err)
+				}
+				if !bytes.Equal(got, val) {
+					_ = verify.Close()
+					t.Fatalf("value mismatch for k-%05d", i)
+				}
+			}
+			if err := verify.Close(); err != nil {
+				t.Fatalf("close read-only verify: %v", err)
+			}
+
+			// Verify read-write reopen and subsequent writes continue cleanly
+			// with monotonic command-WAL LSNs after pruning empty WAL containers.
+			rw, err := Open(opts)
+			if err != nil {
+				t.Fatalf("reopen read-write after prune: %v", err)
+			}
+			if err := rw.SetSync([]byte("post-compact"), []byte("ok")); err != nil {
+				_ = rw.Close()
+				t.Fatalf("post-compact SetSync: %v", err)
+			}
+			if err := rw.Checkpoint(); err != nil {
+				_ = rw.Close()
+				t.Fatalf("post-compact Checkpoint: %v", err)
+			}
+			if err := rw.Close(); err != nil {
+				t.Fatalf("close read-write after prune: %v", err)
+			}
+			verify2, err := Open(Options{Dir: dir, ReadOnly: true})
+			if err != nil {
+				t.Fatalf("reopen read-only after post-compact write: %v", err)
+			}
+			defer func() { _ = verify2.Close() }()
+			gotPost, err := verify2.Get([]byte("post-compact"))
+			if err != nil || !bytes.Equal(gotPost, []byte("ok")) {
+				t.Fatalf("post-compact key mismatch: got=%q err=%v", gotPost, err)
+			}
+		})
+	}
+}
+
+func TestPruneClosedEmptyCommandWALSegmentsRetainsNonEmptySegments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.Set([]byte("keep"), []byte("value")); err != nil {
+		_ = d.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Create a non-empty command WAL segment directly without checkpointing it away.
+	walDir := WALDirPath(dir)
+	j, err := commitlog.OpenCommandJournal(walDir, commitlog.CommandJournalOptions{InitialLSN: 100})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("unpruned"),
+		Value: []byte("still-here"),
+	}})
+	if err != nil {
+		_ = j.Close()
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	if _, err := j.AppendCommand(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		DurabilityClass: commitlog.CommandDurabilityDurable,
+		Payload:         payload,
+	}); err != nil {
+		_ = j.Close()
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	if err := j.Sync(); err != nil {
+		_ = j.Close()
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close journal: %v", err)
+	}
+
+	removed, err := PruneClosedEmptyCommandWALSegments(dir)
+	if err != nil {
+		t.Fatalf("PruneClosedEmptyCommandWALSegments: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed=%d want 0 when non-empty command WAL segment exists", removed)
+	}
 }

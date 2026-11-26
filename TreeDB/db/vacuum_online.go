@@ -447,6 +447,34 @@ func (db *DB) VacuumIndexOnlineWithStats(ctx context.Context) (VacuumOnlineStats
 	return db.vacuumIndexOnlineWithStats(ctx, true)
 }
 
+func vacuumReplacementChunkSize(configuredChunkSize int64, gen *indexGen) int64 {
+	if configuredChunkSize <= 0 {
+		return defaultChunkSize
+	}
+	if configuredChunkSize <= defaultChunkSize {
+		return configuredChunkSize
+	}
+	var estLivePages uint64
+	if gen != nil && gen.pager != nil {
+		totalPages := gen.pager.PageCount()
+		estLivePages = totalPages
+		if gen.allocator != nil {
+			if freePages := gen.allocator.Counters().ReclaimablePages(); freePages < totalPages {
+				estLivePages = totalPages - freePages
+			}
+		}
+	}
+	// Keep the larger configured chunk size only when estimated live pages are
+	// large enough that one trailing chunk is modest relative to index size.
+	// Smaller compacted indexes cap at defaultChunkSize so vacuum shrinks
+	// index.db proportionally to live pages.
+	thresholdPages := uint64(configuredChunkSize/page.PageSize) * 4
+	if estLivePages <= thresholdPages {
+		return defaultChunkSize
+	}
+	return configuredChunkSize
+}
+
 func (db *DB) vacuumIndexOnlineWithStats(ctx context.Context, lockMaintenance bool) (VacuumOnlineStats, error) {
 	var stats VacuumOnlineStats
 	err := db.vacuumIndexOnlineProductionV1(ctx, lockMaintenance, &stats)
@@ -607,7 +635,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	}
 	_, newStatErr := os.Stat(newPath)
 	newCreated := os.IsNotExist(newStatErr)
-	newPager, err := pager.Open(newPath, db.chunkSize)
+	replacementChunkSize := vacuumReplacementChunkSize(db.chunkSize, db.idx.Load())
+	newPager, err := pager.Open(newPath, replacementChunkSize)
 	if err != nil {
 		return errors.Join(err, replacementGen.close())
 	}

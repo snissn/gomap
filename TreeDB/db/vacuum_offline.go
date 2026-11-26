@@ -132,7 +132,8 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 			return e
 		}
 		defer func() { retErr = errors.Join(retErr, roots.ReleaseWithError()) }()
-		pair, e := d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
+		replacementChunkSize := vacuumReplacementChunkSize(opts.ChunkSize, gen)
+		pair, e := d.newOfflinePrimaryPairV6(offlineScope, replacementChunkSize)
 		if e != nil {
 			return e
 		}
@@ -201,7 +202,8 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 
 	_, newStatErr := os.Stat(newPath)
 	newCreated := os.IsNotExist(newStatErr)
-	if err := replacement.openOfflineReplacementPagerV1(opts.Dir, opts.ChunkSize); err != nil {
+	replacementChunkSize := vacuumReplacementChunkSize(opts.ChunkSize, d.idx.Load())
+	if err := replacement.openOfflineReplacementPagerV1(opts.Dir, replacementChunkSize); err != nil {
 		return err
 	}
 	newPager = replacement.pager
