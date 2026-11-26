@@ -54,8 +54,29 @@ const (
 )
 
 type snapshotAcquireShardCounter struct {
-	atomic.Int32
-	_ [124]byte // pad to 128-byte cache line (covers 64B x86_64 and 128B arm64)
+	atomic.Int32              // phase 0 in-flight counter (embedded for compatibility)
+	alt          atomic.Int32 // phase 1 in-flight counter
+	_            [120]byte    // pad to 128-byte cache line (covers 64B x86_64 and 128B arm64)
+}
+
+func (c *snapshotAcquireShardCounter) addPhase(phase uint32, delta int32) {
+	if phase&1 == 0 {
+		c.Add(delta)
+	} else {
+		c.alt.Add(delta)
+	}
+}
+
+func (c *snapshotAcquireShardCounter) loadPhase(phase uint32) int32 {
+	if phase&1 == 0 {
+		return c.Load()
+	}
+	return c.alt.Load()
+}
+
+type paddedAtomicUint32 struct {
+	atomic.Uint32
+	_ [124]byte
 }
 
 type paddedAtomicUint64 struct {
@@ -114,8 +135,11 @@ type DB struct {
 	valueLogIdentityPins              *rootpublication.IdentityPinRegistry
 	snapshotViewRO                    atomic.Pointer[snapshotView]
 	_                                 [120]byte
+	snapshotAcquirePhase              paddedAtomicUint32
 	snapshotAcquireRO                 [snapshotAcquireShardCount]snapshotAcquireShardCounter
 	snapshotAcquireEpoch              paddedAtomicUint64
+	snapshotAcquirePhaseMu            sync.Mutex
+	snapshotAcquirePhaseFloor         [2]atomic.Uint64
 	flushReadContentionLastEpoch      atomic.Uint64
 	flushReadContentionLastSampleNano atomic.Int64
 	flushReadContentionUntilNano      atomic.Int64
@@ -1824,6 +1848,7 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapshot, oneShot bool) bool {
 	var rollbackManager *valuelog.Manager
 	var acqShard int
+	var acqPhase uint32
 	acquisitionStarted := false
 	db.rootReuseMu.RLock()
 	// One capture-exit defer keeps the ordinary read on Go's open-coded path.
@@ -1832,12 +1857,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 	defer func() {
 		defer db.rootReuseMu.RUnlock()
 		if acquisitionStarted {
-			defer func() {
-				// Publish completion before dropping the in-flight count so a
-				// minimum-reader scan cannot miss a just-registered snapshot.
-				db.snapshotAcquireEpoch.Add(1)
-				db.snapshotAcquireRO[acqShard].Add(-1)
-			}()
+			defer db.endSnapshotAcquire(acqShard, acqPhase)
 		}
 		if rollbackManager != nil {
 			rollbackManager.ReleaseSnapshotWrapper()
@@ -1850,8 +1870,7 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
 	acqShard = snapshotAcquireShard()
-	db.snapshotAcquireRO[acqShard].Add(1)
-	db.snapshotAcquireEpoch.Add(1)
+	acqPhase = db.beginSnapshotAcquire(acqShard)
 	acquisitionStarted = true
 	if db.closing.Load() {
 		return false
@@ -2018,14 +2037,8 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 // rediscover a newer visible basis or acquire teardown recursively.
 func (db *DB) captureSnapshotViewBoundedLocked(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool, view *snapshotView, current bool) (*Snapshot, error) {
 	acqShard := snapshotAcquireShard()
-	db.snapshotAcquireRO[acqShard].Add(1)
-	db.snapshotAcquireEpoch.Add(1)
-	defer func() {
-		// Publish the completion epoch before dropping the in-flight count so
-		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
-		db.snapshotAcquireEpoch.Add(1)
-		db.snapshotAcquireRO[acqShard].Add(-1)
-	}()
+	acqPhase := db.beginSnapshotAcquire(acqShard)
+	defer db.endSnapshotAcquire(acqShard, acqPhase)
 	if current && db.closing.Load() {
 		return nil, ErrClosed
 	}
@@ -3997,10 +4010,90 @@ func (db *DB) backgroundError() error {
 	return db.bgErr
 }
 
+func (db *DB) beginSnapshotAcquire(acqShard int) uint32 {
+	for {
+		phase := db.snapshotAcquirePhase.Load() & 1
+		db.snapshotAcquireRO[acqShard].addPhase(phase, 1)
+		if db.snapshotAcquirePhase.Load()&1 == phase {
+			db.snapshotAcquireEpoch.Add(1)
+			return phase
+		}
+		db.snapshotAcquireRO[acqShard].addPhase(phase, -1)
+	}
+}
+
+func (db *DB) endSnapshotAcquire(acqShard int, phase uint32) {
+	// Publish completion before dropping the in-flight count so a
+	// minimum-reader scan cannot miss a just-registered snapshot.
+	db.snapshotAcquireEpoch.Add(1)
+	db.snapshotAcquireRO[acqShard].addPhase(phase, -1)
+}
+
+func (db *DB) snapshotAcquirePhaseInFlight(phase uint32) int32 {
+	var total int32
+	for i := range db.snapshotAcquireRO {
+		total += db.snapshotAcquireRO[i].loadPhase(phase)
+	}
+	return total
+}
+
+func (db *DB) waitSnapshotAcquirePhaseZero(phase uint32) {
+	spinLimit := 512
+	if runtime.GOMAXPROCS(0) <= 1 {
+		spinLimit = 0
+	}
+	for spins := 0; ; spins++ {
+		if db.snapshotAcquirePhaseInFlight(phase) <= 0 {
+			return
+		}
+		if spins < spinLimit {
+			continue
+		}
+		if spins < spinLimit+512 {
+			runtime.Gosched()
+		} else {
+			time.Sleep(50 * time.Microsecond)
+		}
+	}
+}
+
+// tryAdvanceSnapshotAcquirePhase advances the 2-phase acquisition epoch without
+// waiting if the inactive phase is already drained. Callers must invoke this
+// after publishing snapshotViewRO with visibleRetentionFloor.
+func (db *DB) tryAdvanceSnapshotAcquirePhase(visibleRetentionFloor uint64) {
+	if db == nil || visibleRetentionFloor == 0 {
+		return
+	}
+	db.snapshotAcquirePhaseMu.Lock()
+	defer db.snapshotAcquirePhaseMu.Unlock()
+	active := db.snapshotAcquirePhase.Load() & 1
+	old := active ^ 1
+	if db.snapshotAcquirePhaseInFlight(old) != 0 {
+		return
+	}
+	db.snapshotAcquirePhaseFloor[old].Store(visibleRetentionFloor)
+	db.snapshotAcquirePhase.Store(old)
+}
+
+// drainPriorSnapshotAcquires drains every in-flight snapshot capture that could
+// have loaded an earlier snapshotViewRO (across both phases) without blocking
+// new readers on rootReuseMu.Lock(). Used only when the replaced state changes
+// ValueLogSet or primaryRoot ownership.
+func (db *DB) drainPriorSnapshotAcquires(visibleRetentionFloor uint64) {
+	db.snapshotAcquirePhaseMu.Lock()
+	defer db.snapshotAcquirePhaseMu.Unlock()
+	active := db.snapshotAcquirePhase.Load() & 1
+	old := active ^ 1
+	db.waitSnapshotAcquirePhaseZero(old)
+	db.snapshotAcquirePhaseFloor[old].Store(visibleRetentionFloor)
+	db.snapshotAcquirePhase.Store(old)
+	db.waitSnapshotAcquirePhaseZero(active)
+}
+
 func (db *DB) snapshotAcquireInFlight() int32 {
 	var total int32
 	for i := range db.snapshotAcquireRO {
-		total += db.snapshotAcquireRO[i].Load()
+		total += db.snapshotAcquireRO[i].Load() + db.snapshotAcquireRO[i].alt.Load()
 	}
 	return total
 }

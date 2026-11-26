@@ -92,21 +92,23 @@ type rootPublicationVisibleInstallV1 struct {
 	idx              *indexGen
 	next             page.MetaPageBody
 
-	post                        finalizeCommitPost
-	previousVisibleResources    *rootpublication.StableResourceSet
-	vlogRefCounts               *candidateValueLogRefCountsV1
-	valueLogSet                 *valuelog.Set
-	leafManifest                *leafGenerationManifest
-	installLeafManifest         bool
-	leafGenerationView          *leafGenerationView
-	commandWALPublish           bool
-	skipConditionalRootConflict bool
-	oldUserRootID               uint64
-	newUserRootID               uint64
-	recordVacuumMutation        func()
-	conditionalMutation         conditionalCommitMutation
-	activated                   bool
-	postActivationCompleted     bool
+	post                            finalizeCommitPost
+	previousVisibleResources        *rootpublication.StableResourceSet
+	vlogRefCounts                   *candidateValueLogRefCountsV1
+	valueLogSet                     *valuelog.Set
+	leafManifest                    *leafGenerationManifest
+	installLeafManifest             bool
+	leafGenerationView              *leafGenerationView
+	commandWALPublish               bool
+	skipConditionalRootConflict     bool
+	oldUserRootID                   uint64
+	newUserRootID                   uint64
+	recordVacuumMutation            func()
+	conditionalMutation             conditionalCommitMutation
+	recordConditionalInsideActivate bool
+	conditionalRecorded             bool
+	activated                       bool
+	postActivationCompleted         bool
 }
 
 // rootPublicationSealBaseV1 preserves only the publisher-time fields that
@@ -603,6 +605,17 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		admission.Abort()
 		db.mu.Unlock()
 		return err
+	}
+	if install.recordConditionalInsideActivate {
+		// Record conditional conflict history before exposing next.CommitSeq
+		// via db.meta / db.state / snapshotViewRO so no reader or ConditionalTxn
+		// can observe the successor without its conflict history already
+		// installed, avoiding an exclusive rootReuseMu.Lock() reader stall.
+		install.conditionalMutation.record(db, install.next.CommitSeq)
+		if !install.skipConditionalRootConflict {
+			db.conditionalRecordRootCommit(install.oldUserRootID, install.newUserRootID, install.post.commitSeq)
+		}
+		install.conditionalRecorded = true
 	}
 	db.meta = install.next
 	db.advanceEntryRevisionFloor(page.EntryRevision(install.next.MaxEntryRevision))
@@ -1317,23 +1330,34 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
-	// Acquire rootReuseMu only for the bounded visible-root handoff: snapshot
-	// view preparation, optional snapshot receipt, activation, and recording
-	// conditional conflict history.
-	db.rootReuseMu.Lock()
-	rootReuseLocked = true
+	// Ordinary DATA publications without an accepted-snapshot receipt, active
+	// conditional transactions, or visible-install test hooks publish their
+	// snapshotViewRO under db.mu.Lock() (recording conditional conflict history
+	// first) and then drain prior in-flight captures via the lock-free 2-phase
+	// acquisition epoch instead of stalling concurrent readers on rootReuseMu.Lock().
+	needRootReuseLock := opts.prepareSnapshotReceipt != nil ||
+		idx.primary != nil ||
+		db.conditionalActiveTxnCount.Load() > 0 ||
+		db.testDurableRootCandidatePreparedHook != nil ||
+		db.testAfterDurableRootVisibleInstallHook != nil
+	if needRootReuseLock {
+		db.rootReuseMu.Lock()
+		rootReuseLocked = true
 
-	// Prepare the exact visible tuple before acceptance and the installation
-	// latch, including the filter and predicted system-root publication epoch.
-	state := install.prepareState()
-	db.mu.RLock()
-	install.preparedView = db.prepareSnapshotView(idx, state, db.valueLogManager, opts.negativeCoverage)
-	db.mu.RUnlock()
+		// Prepare the exact visible tuple before acceptance and the installation
+		// latch, including the filter and predicted system-root publication epoch.
+		state := install.prepareState()
+		db.mu.RLock()
+		install.preparedView = db.prepareSnapshotView(idx, state, db.valueLogManager, opts.negativeCoverage)
+		db.mu.RUnlock()
 
-	if opts.prepareSnapshotReceipt != nil {
-		if err := opts.prepareSnapshotReceipt(install); err != nil {
-			return post, prePublishErr(fmt.Errorf("prepare accepted snapshot receipt: %w", err))
+		if opts.prepareSnapshotReceipt != nil {
+			if err := opts.prepareSnapshotReceipt(install); err != nil {
+				return post, prePublishErr(fmt.Errorf("prepare accepted snapshot receipt: %w", err))
+			}
 		}
+	} else {
+		install.recordConditionalInsideActivate = true
 	}
 
 	opts.releaseRootConstruction()
@@ -1408,13 +1432,39 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			opts.publishTiming.FinalizeHardAdmissionCount++
 		}
 	}
-	if hook := db.testAfterDurableRootVisibleInstallHook; hook != nil {
-		hook()
+	var conditionalErr error
+	if needRootReuseLock {
+		if hook := db.testAfterDurableRootVisibleInstallHook; hook != nil {
+			hook()
+		}
+		if !install.conditionalRecorded {
+			conditionalErr = install.recordConditionalPostActivation()
+		}
+		// Release rootReuseMu as soon as visible activation and conflict-history
+		// recording finish so readers do not wait on handle closes or ref-tracker updates.
+		releaseReuse()
+	} else {
+		if !install.conditionalRecorded {
+			conditionalErr = install.recordConditionalPostActivation()
+		}
+		visibleFloor := uint64(0)
+		if install.preparedState != nil {
+			visibleFloor = install.preparedState.primaryRetentionCommitV5()
+		}
+		oldState := install.post.oldState
+		oldSetReplaced := oldState != nil && (oldState.primaryRoot != nil ||
+			(install.preparedState != nil && oldState.ValueLogSet != install.preparedState.ValueLogSet))
+		if oldSetReplaced {
+			// Only drain prior in-flight captures when ValueLogSet or
+			// primaryRoot ownership actually changed before post-work releases
+			// the replaced object.
+			db.drainPriorSnapshotAcquires(visibleFloor)
+		} else {
+			// Wait-free epoch advance: keeps the conservative floor current
+			// without stalling the writer on any OS-preempted reader.
+			db.tryAdvanceSnapshotAcquirePhase(visibleFloor)
+		}
 	}
-	conditionalErr := install.recordConditionalPostActivation()
-	// Release rootReuseMu as soon as visible activation and conflict-history
-	// recording finish so readers do not wait on handle closes or ref-tracker updates.
-	releaseReuse()
 	if prev := install.previousVisibleResources; prev != nil {
 		install.previousVisibleResources = nil
 		prev.Release()

@@ -146,3 +146,68 @@ func TestFlushApplyReadContentionDetectorAndConcurrentMixedReopen(t *testing.T) 
 		}
 	}
 }
+
+func TestWaitFreeSnapshotAcquirePhaseFloorRespectsInFlightCapture(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	// Seed several commits so both 2-phase acquisition floors advance past 0.
+	for i := 1; i <= 4; i++ {
+		if err := d.SetSync([]byte("k"), []byte(fmt.Sprintf("v%d", i))); err != nil {
+			t.Fatalf("SetSync v%d: %v", i, err)
+		}
+	}
+	seqBefore := d.state.Load().primaryRetentionCommitV5()
+	if seqBefore < 4 {
+		t.Fatalf("seqBefore=%d want >= 4", seqBefore)
+	}
+
+	// Simulate an OS-preempted reader that entered beginSnapshotAcquire before
+	// subsequent commits and has not yet registered in idx.registry.
+	inFlightPhase := d.beginSnapshotAcquire(0)
+	inFlightFloor := d.snapshotAcquirePhaseFloor[inFlightPhase].Load()
+	if inFlightFloor > seqBefore {
+		t.Fatalf("inFlightFloor=%d exceeds seqBefore=%d", inFlightFloor, seqBefore)
+	}
+
+	// Ordinary commits with unchanged ValueLogSet must complete without blocking
+	// on the preempted reader, while minPinnedSnapshotCommitSeqForDurablePublish
+	// must stay conservatively clamped at or below inFlightFloor.
+	for i := 5; i <= 7; i++ {
+		if err := d.SetSync([]byte("k"), []byte(fmt.Sprintf("v%d", i))); err != nil {
+			t.Fatalf("SetSync v%d with in-flight capture: %v", i, err)
+		}
+	}
+	seqAfter := d.state.Load().primaryRetentionCommitV5()
+	if seqAfter <= seqBefore {
+		t.Fatalf("seqAfter=%d want > %d", seqAfter, seqBefore)
+	}
+
+	d.durablePublishMu.Lock()
+	gotMin := d.minPinnedSnapshotCommitSeqForDurablePublish(seqAfter)
+	d.durablePublishMu.Unlock()
+	if gotMin > inFlightFloor {
+		t.Fatalf("minPinnedSnapshotCommitSeqForDurablePublish=%d exceeded in-flight phase floor %d (seqAfter=%d)", gotMin, inFlightFloor, seqAfter)
+	}
+
+	// Complete the in-flight capture and verify subsequent commits advance the
+	// floor cleanly with zero leaked in-flight count.
+	d.endSnapshotAcquire(0, inFlightPhase)
+	if got := d.snapshotAcquireInFlight(); got != 0 {
+		t.Fatalf("snapshotAcquireInFlight=%d want 0", got)
+	}
+	if err := d.SetSync([]byte("k"), []byte("v8")); err != nil {
+		t.Fatalf("SetSync v8: %v", err)
+	}
+	seqFinal := d.state.Load().primaryRetentionCommitV5()
+	d.durablePublishMu.Lock()
+	gotMinFinal := d.minPinnedSnapshotCommitSeqForDurablePublish(seqFinal)
+	d.durablePublishMu.Unlock()
+	if gotMinFinal != seqFinal {
+		t.Fatalf("minPinnedSnapshotCommitSeqForDurablePublish=%d want %d after drain", gotMinFinal, seqFinal)
+	}
+}

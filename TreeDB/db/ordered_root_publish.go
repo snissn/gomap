@@ -1796,7 +1796,16 @@ func (db *DB) buildAppliedOrderedRootDeltaBatchValueLogRefDeltaWithOuterLeaves(i
 
 func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
-	if opts.serialApply {
+	// Under FlushAdmissionPolicyAuto, when flushApplyOptions throttled parallel
+	// apply down to 1 due to active concurrent reader contention, also disable
+	// SpanNativeApply so small mixed-workload batches run single-pass zipper
+	// Apply instead of ReadOnlyPrepare + stitchSpanNativeRecursive internal-node
+	// rebuilds.
+	contendedSerial := db != nil &&
+		db.flushAdmission.Policy == FlushAdmissionPolicyAuto &&
+		db.flushApplyConcurrency > 1 &&
+		applyOpts.ParallelApplyConcurrency <= 1
+	if opts.serialApply || contendedSerial {
 		applyOpts.ParallelApplyConcurrency = 1
 		applyOpts.SpanNativeApply = false
 		applyOpts.ParallelApplyWorkerPool = nil
@@ -3487,7 +3496,7 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		return result
 	}
 
-	if serialApply || !orderedRootDeltaBatchGroupParallelApplyEligible(ordered) {
+	if serialApply || db.hasConcurrentReadContentionForFlushApply() || !orderedRootDeltaBatchGroupParallelApplyEligible(ordered) {
 		for orderedIdx := range ordered {
 			results[orderedIdx] = applyOne(orderedIdx)
 			if results[orderedIdx].err != nil {
@@ -3498,15 +3507,19 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 	}
 
 	parallelRoots := 0
+	firstParallelIdx := -1
 	for orderedIdx := range ordered {
 		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+			if firstParallelIdx < 0 {
+				firstParallelIdx = orderedIdx
+			}
 			parallelRoots++
 		}
 	}
 
 	var wg sync.WaitGroup
 	for orderedIdx := range ordered {
-		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() {
+		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() || orderedIdx == firstParallelIdx {
 			continue
 		}
 		wg.Add(1)
@@ -3514,6 +3527,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			defer wg.Done()
 			results[orderedIdx] = applyOne(orderedIdx)
 		}(orderedIdx)
+	}
+	if firstParallelIdx >= 0 {
+		results[firstParallelIdx] = applyOne(firstParallelIdx)
 	}
 	wg.Wait()
 	for orderedIdx := range ordered {

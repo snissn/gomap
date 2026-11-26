@@ -67,12 +67,11 @@ func (db *DB) minPinnedCommitSeq(readersOnly bool) uint64 {
 
 // minPinnedSnapshotCommitSeqForDurablePublish computes a conservative lower
 // bound on all registered and in-flight snapshot pins without acquiring
-// rootReuseMu. Callers must hold durablePublishMu. Because every snapshotViewRO
-// publication installs its state while holding rootReuseMu.Lock() (draining all
-// prior in-flight captures), every in-flight capture after that unlock can only
-// register a retention commit >= visibleRetentionFloor. Therefore clamping the
-// scanned registered minimum to visibleRetentionFloor is exact for all pins
-// below visibleRetentionFloor while never blocking concurrent readers.
+// rootReuseMu. Callers must hold durablePublishMu. Every in-flight capture in
+// phase p is guaranteed to register a retention commit >= snapshotAcquirePhaseFloor[p].
+// Checking non-zero phase floors BEFORE scanning idx.registry ensures any
+// capture completing concurrently is accounted for in either its phase floor
+// or its registered pin, while never blocking concurrent readers or writers.
 func (db *DB) minPinnedSnapshotCommitSeqForDurablePublish(visibleRetentionFloor uint64) uint64 {
 	if db == nil {
 		return math.MaxUint64
@@ -83,8 +82,18 @@ func (db *DB) minPinnedSnapshotCommitSeqForDurablePublish(visibleRetentionFloor 
 		db.rootReuseMu.Unlock()
 		return min
 	}
-	db.idxMu.Lock()
 	min := visibleRetentionFloor
+	db.snapshotAcquirePhaseMu.Lock()
+	for phase := uint32(0); phase < 2; phase++ {
+		if db.snapshotAcquirePhaseInFlight(phase) > 0 {
+			if floor := db.snapshotAcquirePhaseFloor[phase].Load(); floor < min {
+				min = floor
+			}
+		}
+	}
+	db.snapshotAcquirePhaseMu.Unlock()
+
+	db.idxMu.Lock()
 	for _, gen := range db.idxAll {
 		min = minPinnedCommitSeqForIndexGen(min, gen, false)
 	}
