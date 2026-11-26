@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,10 +27,22 @@ func openTextV2CommandWALOrdinaryDB5829(tb testing.TB, profile treedb.Profile, d
 	if err != nil {
 		tb.Fatalf("OpenBackendWithCachedLeafLog(%s): %v", profile, err)
 	}
-	return d, closeDB
+	var closed atomic.Bool
+	closeOnce := func() error {
+		if closed.Swap(true) {
+			return nil
+		}
+		return closeDB()
+	}
+	if t, ok := tb.(*testing.T); ok {
+		t.Cleanup(func() {
+			_ = closeOnce()
+		})
+	}
+	return d, closeOnce
 }
 
-func openTextV2CommandWALNativeDB5829(tb testing.TB, profile treedb.Profile, dir string) (*treedb.DB, *backenddb.DB, nativeHNSWAdmissionBudget) {
+func openTextV2CommandWALNativeDB5829(tb testing.TB, profile treedb.Profile, dir string) (*treedb.DB, *backenddb.DB, nativeHNSWAdmissionBudget, func() error) {
 	tb.Helper()
 	opts := treedb.OptionsFor(profile, dir)
 	opts.MemtableMode = "cow_btree"
@@ -41,57 +52,88 @@ func openTextV2CommandWALNativeDB5829(tb testing.TB, profile treedb.Profile, dir
 	if err != nil {
 		tb.Fatalf("treedb.Open(%s, cow_btree): %v", profile, err)
 	}
+	var closed atomic.Bool
+	closeOnce := func() error {
+		if closed.Swap(true) {
+			return nil
+		}
+		return d.Close()
+	}
 	b, err := d.NativeSemanticBackend()
 	if err != nil {
-		_ = d.Close()
+		_ = closeOnce()
 		tb.Fatalf("NativeSemanticBackend: %v", err)
 	}
 	cut, err := b.CaptureNativeSemanticState()
 	if err != nil {
-		_ = d.Close()
+		_ = closeOnce()
 		tb.Fatalf("CaptureNativeSemanticState: %v", err)
 	}
 	budget := cut.NativeAllocator().(nativeHNSWAdmissionBudget)
 	if err := cut.Close(); err != nil {
-		_ = d.Close()
+		_ = closeOnce()
 		tb.Fatalf("cut.Close: %v", err)
 	}
-	return d, b, budget
+	if t, ok := tb.(*testing.T); ok {
+		t.Cleanup(func() {
+			_ = closeOnce()
+		})
+	}
+	return d, b, budget, closeOnce
 }
 
-func copyDirRecursive5829(t *testing.T, src, dst string) {
+func newTextV2CommandWALManager5829(t *testing.T, d *backenddb.DB) (*CollectionManager, func() error) {
 	t.Helper()
-	if err := filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	mgr := NewCollectionManager(d)
+	var closed atomic.Bool
+	closeOnce := func() error {
+		if closed.Swap(true) {
+			return nil
 		}
-		rel, err := filepath.Rel(src, path)
+		return mgr.Close()
+	}
+	t.Cleanup(func() {
+		_ = closeOnce()
+	})
+	return mgr, closeOnce
+}
+
+func copyCommandWALSegments5829(t *testing.T, srcWALDir, dstWALDir string) {
+	t.Helper()
+	if err := os.MkdirAll(dstWALDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", dstWALDir, err)
+	}
+	entries, err := os.ReadDir(srcWALDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", srcWALDir, err)
+	}
+	copied := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(name) {
+			continue
+		}
+		srcPath := filepath.Join(srcWALDir, name)
+		dstPath := filepath.Join(dstWALDir, name)
+		in, err := os.Open(srcPath)
 		if err != nil {
-			return err
+			t.Fatalf("Open(%s): %v", srcPath, err)
 		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		in, err := os.Open(path)
+		out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
-			return err
+			_ = in.Close()
+			t.Fatalf("OpenFile(%s): %v", dstPath, err)
 		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
+		_, copyErr := io.Copy(out, in)
+		closeInErr := in.Close()
+		closeOutErr := out.Close()
+		if err := errors.Join(copyErr, closeInErr, closeOutErr); err != nil {
+			t.Fatalf("copy WAL segment %s -> %s: %v", srcPath, dstPath, err)
 		}
-		if _, err := io.Copy(out, in); err != nil {
-			_ = out.Close()
-			return err
-		}
-		return out.Close()
-	}); err != nil {
-		t.Fatalf("copyDirRecursive5829(%s -> %s): %v", src, dst, err)
+		copied++
+	}
+	if copied == 0 {
+		t.Fatalf("copyCommandWALSegments5829(%s -> %s): no command WAL segments found", srcWALDir, dstWALDir)
 	}
 }
 
@@ -366,7 +408,7 @@ func TestTextV2CommandWALUnappliedReplayAndNoop5829(t *testing.T) {
 	// then replay the EXACT live-emitted WAL stream from LSN 0 into a fresh directory (proving true crash/unapplied WAL replay).
 	liveDir := t.TempDir()
 	d, closeDB := openTextV2CommandWALOrdinaryDB5829(t, treedb.ProfileCommandWALDurable, liveDir)
-	mgr := NewCollectionManager(d)
+	mgr, closeMgr := newTextV2CommandWALManager5829(t, d)
 	meta := &CollectionMeta{
 		Name: "docs",
 		TextIndexes: []TextIndexDefinition{{
@@ -430,8 +472,8 @@ func TestTextV2CommandWALUnappliedReplayAndNoop5829(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(replayMainDir, "format.json"), fmtBytes, 0o644); err != nil {
 		t.Fatalf("WriteFile format.json: %v", err)
 	}
-	copyDirRecursive5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
-	if err := mgr.Close(); err != nil {
+	copyCommandWALSegments5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
+	if err := closeMgr(); err != nil {
 		t.Fatalf("mgr.Close: %v", err)
 	}
 	if err := closeDB(); err != nil {
@@ -449,7 +491,7 @@ func TestTextV2CommandWALUnappliedReplayAndNoop5829(t *testing.T) {
 		_ = closeReplayed()
 		t.Fatalf("replayed AppliedCommandLSN=%d want %d", got, liveAppliedLSN)
 	}
-	replayedMgr := NewCollectionManager(replayedDB)
+	replayedMgr, closeReplayedMgr := newTextV2CommandWALManager5829(t, replayedDB)
 	replayedCol, err := replayedMgr.OpenCollection("docs")
 	if err != nil {
 		_ = replayedMgr.Close()
@@ -482,7 +524,7 @@ func TestTextV2CommandWALUnappliedReplayAndNoop5829(t *testing.T) {
 	}
 	baseLSN := replayedDB.State().AppliedCommandLSN
 	replayedBackendDir := replayedDB.Dir()
-	if err := replayedMgr.Close(); err != nil {
+	if err := closeReplayedMgr(); err != nil {
 		t.Fatalf("replayedMgr.Close: %v", err)
 	}
 	if err := closeReplayed(); err != nil {
@@ -673,7 +715,7 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 	t.Run("DisableTombstonePurge", func(t *testing.T) {
 		liveDir := t.TempDir()
 		d, closeDB := openTextV2CommandWALOrdinaryDB5829(t, treedb.ProfileCommandWALDurable, liveDir)
-		mgr := NewCollectionManager(d)
+		mgr, closeMgr := newTextV2CommandWALManager5829(t, d)
 		meta := &CollectionMeta{
 			Name: "docs",
 			TextIndexes: []TextIndexDefinition{{
@@ -727,8 +769,8 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(replayMainDir, "format.json"), fmtBytes, 0o644); err != nil {
 			t.Fatalf("WriteFile format.json: %v", err)
 		}
-		copyDirRecursive5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
-		if err := mgr.Close(); err != nil {
+		copyCommandWALSegments5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
+		if err := closeMgr(); err != nil {
 			t.Fatalf("mgr.Close: %v", err)
 		}
 		if err := closeDB(); err != nil {
@@ -765,7 +807,7 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 	t.Run("TargetPostingsPerBlock", func(t *testing.T) {
 		liveDir := t.TempDir()
 		d, closeDB := openTextV2CommandWALOrdinaryDB5829(t, treedb.ProfileCommandWALDurable, liveDir)
-		mgr := NewCollectionManager(d)
+		mgr, closeMgr := newTextV2CommandWALManager5829(t, d)
 		meta := &CollectionMeta{
 			Name: "docs",
 			TextIndexes: []TextIndexDefinition{{
@@ -819,8 +861,8 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(replayMainDir, "format.json"), fmtBytes, 0o644); err != nil {
 			t.Fatalf("WriteFile format.json: %v", err)
 		}
-		copyDirRecursive5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
-		if err := mgr.Close(); err != nil {
+		copyCommandWALSegments5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
+		if err := closeMgr(); err != nil {
 			t.Fatalf("mgr.Close: %v", err)
 		}
 		if err := closeDB(); err != nil {
@@ -848,7 +890,7 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 func TestTextV2CommandWALUnifiedLexicalAndVector5829(t *testing.T) {
 	dir := t.TempDir()
 	d, closeDB := openTextV2CommandWALOrdinaryDB5829(t, treedb.ProfileCommandWALDurable, dir)
-	mgr := NewCollectionManager(d)
+	mgr, closeMgr := newTextV2CommandWALManager5829(t, d)
 	vecDef := columnGraphRebuildVectorIndexDefinitionV2A(3, 4)
 	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
 	cfg.RetainedPayload = ColumnRetainedPayloadFull
@@ -939,7 +981,7 @@ func TestTextV2CommandWALUnifiedLexicalAndVector5829(t *testing.T) {
 	}
 
 	// Uncheckpointed close and reopen.
-	if err := mgr.Close(); err != nil {
+	if err := closeMgr(); err != nil {
 		t.Fatalf("mgr.Close: %v", err)
 	}
 	if err := closeDB(); err != nil {
@@ -983,8 +1025,8 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed} {
 		t.Run(string(profile), func(t *testing.T) {
 			dir := t.TempDir()
-			d, b, budget := openTextV2CommandWALNativeDB5829(t, profile, dir)
-			mgr := NewCollectionManager(b)
+			_, b, budget, closeD := openTextV2CommandWALNativeDB5829(t, profile, dir)
+			mgr, closeMgr := newTextV2CommandWALManager5829(t, b)
 			meta := &CollectionMeta{
 				Name: "docs",
 				TextIndexes: []TextIndexDefinition{{
@@ -1085,13 +1127,13 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(replayMainDir, "format.json"), fmtBytes, 0o644); err != nil {
 				t.Fatalf("WriteFile format.json: %v", err)
 			}
-			copyDirRecursive5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
+			copyCommandWALSegments5829(t, backenddb.WALDirPath(liveBackendDir), backenddb.WALDirPath(replayMainDir))
 
 			// Close live native COW DB WITHOUT calling Checkpoint() and verify reopen.
-			if err := mgr.Close(); err != nil {
+			if err := closeMgr(); err != nil {
 				t.Fatalf("mgr.Close live: %v", err)
 			}
-			if err := d.Close(); err != nil {
+			if err := closeD(); err != nil {
 				t.Fatalf("d.Close live: %v", err)
 			}
 			if s := budget.Stats(); s.TotalBytes != 0 || s.ExternalLeases != 0 {
@@ -1099,8 +1141,8 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 			}
 
 			// Reopen live dir (uncheckpointed close+reopen), verify MaintainTextIndex, then test in-place post-checkpoint unapplied replay.
-			d2, b2, budget2 := openTextV2CommandWALNativeDB5829(t, profile, dir)
-			mgr2 := NewCollectionManager(b2)
+			d2, b2, budget2, closeD2 := openTextV2CommandWALNativeDB5829(t, profile, dir)
+			mgr2, closeMgr2 := newTextV2CommandWALManager5829(t, b2)
 			col2, err := mgr2.OpenCollection("docs")
 			if err != nil {
 				t.Fatalf("OpenCollection reopened native: %v", err)
@@ -1139,10 +1181,10 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 			}
 			postCheckpointLSN := b2.State().AppliedCommandLSN
 			dirBackend := b2.Dir()
-			if err := mgr2.Close(); err != nil {
+			if err := closeMgr2(); err != nil {
 				t.Fatalf("mgr2.Close: %v", err)
 			}
-			if err := d2.Close(); err != nil {
+			if err := closeD2(); err != nil {
 				t.Fatalf("d2.Close: %v", err)
 			}
 			if s := budget2.Stats(); s.TotalBytes != 0 || s.ExternalLeases != 0 {
@@ -1152,28 +1194,24 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 			inPlaceEnv.LSN = postCheckpointLSN + 1
 			appendUnappliedCommandWALFrame5829(t, dirBackend, inPlaceEnv)
 			inPlaceBefore := workstats.Read().Replay
-			d3, b3, budget3 := openTextV2CommandWALNativeDB5829(t, profile, dir)
+			_, b3, budget3, closeD3 := openTextV2CommandWALNativeDB5829(t, profile, dir)
 			inPlaceAfter := workstats.Read().Replay
 			if inPlaceAfter.FramesApplied <= inPlaceBefore.FramesApplied {
-				_ = d3.Close()
 				t.Fatalf("expected in-place native post-checkpoint replay: before=%+v after=%+v", inPlaceBefore, inPlaceAfter)
 			}
 			if got := b3.State().AppliedCommandLSN; got != postCheckpointLSN+1 {
-				_ = d3.Close()
 				t.Fatalf("in-place native replayed LSN=%d want %d", got, postCheckpointLSN+1)
 			}
-			mgr3 := NewCollectionManager(b3)
+			mgr3, closeMgr3 := newTextV2CommandWALManager5829(t, b3)
 			col3, err := mgr3.OpenCollection("docs")
 			if err != nil {
-				_ = mgr3.Close()
-				_ = d3.Close()
 				t.Fatalf("OpenCollection in-place replayed native: %v", err)
 			}
 			assertTextV2StatusZeroDebt5829(t, col3, "lexical", 2)
-			if err := mgr3.Close(); err != nil {
+			if err := closeMgr3(); err != nil {
 				t.Fatalf("mgr3.Close: %v", err)
 			}
-			if err := d3.Close(); err != nil {
+			if err := closeD3(); err != nil {
 				t.Fatalf("d3.Close: %v", err)
 			}
 			if s := budget3.Stats(); s.TotalBytes != 0 || s.ExternalLeases != 0 {
@@ -1182,39 +1220,30 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 
 			// Forced full unapplied WAL replay from LSN 0 into replayDir using the exact live-emitted native COW WAL stream.
 			replayBefore := workstats.Read().Replay
-			rd, rb, rbudget := openTextV2CommandWALNativeDB5829(t, profile, replayDir)
+			_, rb, rbudget, closeRD := openTextV2CommandWALNativeDB5829(t, profile, replayDir)
 			replayAfter := workstats.Read().Replay
 			if replayAfter.FramesApplied <= replayBefore.FramesApplied {
-				_ = rd.Close()
 				t.Fatalf("expected native COW unapplied WAL replay to apply rewrite frame: before=%+v after=%+v", replayBefore, replayAfter)
 			}
-			rmgr := NewCollectionManager(rb)
+			rmgr, closeRMgr := newTextV2CommandWALManager5829(t, rb)
 			rcol, err := rmgr.OpenCollection("docs")
 			if err != nil {
-				_ = rmgr.Close()
-				_ = rd.Close()
 				t.Fatalf("OpenCollection replayed native: %v", err)
 			}
 			rstatus, rstorage := assertTextV2StatusZeroDebt5829(t, rcol, "lexical", 2)
 			if rstatus.SealedPostingBlocks != liveStatus.SealedPostingBlocks || rstorage.V2PositionEntries != liveStorage.V2PositionEntries {
-				_ = rmgr.Close()
-				_ = rd.Close()
 				t.Fatalf("replayed native status/storage mismatch: %+v/%+v vs %+v/%+v", rstatus, rstorage, liveStatus, liveStorage)
 			}
 			if got := searchIDs5829(t, rcol, TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10}); !reflect.DeepEqual(got, rankedLive) {
-				_ = rmgr.Close()
-				_ = rd.Close()
 				t.Fatalf("replayed native ranked=%v want %v", got, rankedLive)
 			}
 			if got := searchIDs5829(t, rcol, TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "refund updated"}, TopK: 10}); !reflect.DeepEqual(got, phraseLive) {
-				_ = rmgr.Close()
-				_ = rd.Close()
 				t.Fatalf("replayed native phrase=%v want %v", got, phraseLive)
 			}
-			if err := rmgr.Close(); err != nil {
+			if err := closeRMgr(); err != nil {
 				t.Fatalf("rmgr.Close: %v", err)
 			}
-			if err := rd.Close(); err != nil {
+			if err := closeRD(); err != nil {
 				t.Fatalf("rd.Close: %v", err)
 			}
 			if s := rbudget.Stats(); s.TotalBytes != 0 || s.ExternalLeases != 0 {
