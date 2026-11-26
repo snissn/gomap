@@ -42,13 +42,8 @@ func TestInlineLeafManifestCompatibilityFollowsDurableOutcome(t *testing.T) {
 			}
 			disableRootPublicationForLegacyVacuumBenchmark(t, database)
 			compatibilityPath := leafGenerationManifestPath(LeafLogDirPath(dir))
-			readCompat := func() []byte {
-				t.Helper()
-				contents, err := os.ReadFile(compatibilityPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return contents
+			if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+				t.Fatalf("stable open must not create manifest.json: %v", err)
 			}
 			readRevisions := func() []string {
 				t.Helper()
@@ -58,7 +53,7 @@ func TestInlineLeafManifestCompatibilityFollowsDurableOutcome(t *testing.T) {
 				}
 				return revisions
 			}
-			previous, beforeRevisions := readCompat(), readRevisions()
+			beforeRevisions := readRevisions()
 			before, _ := database.StateToken()
 			key := []byte("pack-concurrent-0000")
 			originalValue, err := database.Get(key)
@@ -103,13 +98,13 @@ func TestInlineLeafManifestCompatibilityFollowsDurableOutcome(t *testing.T) {
 			if err := database.SetSync(key, []byte("must fail closed")); !errors.Is(err, ErrRecoveryRequired) {
 				t.Fatalf("a later write advanced the failed handle: %v", err)
 			}
-			compatibilityAfter, afterRevisions := readCompat(), readRevisions()
-			if len(afterRevisions) != len(beforeRevisions)+1 || bytes.Equal(compatibilityAfter, previous) {
+			afterRevisions := readRevisions()
+			if len(afterRevisions) != len(beforeRevisions)+1 {
 				t.Fatalf("exact successor missing before terminal outcome: before=%v after=%v", beforeRevisions, afterRevisions)
 			}
 			inline := database.inlineLeafManifest
-			if inline == nil || inline.candidate == nil || inline.update.prepared == nil || !bytes.Equal(inline.update.prepared.previousView, previous) {
-				t.Fatal("failed publication lost the original compatibility rollback custody")
+			if inline == nil || inline.candidate == nil || inline.update.prepared == nil {
+				t.Fatal("failed publication lost the original prepared manifest custody")
 			}
 			switch {
 			case outcome.refuseBeforeMeta:
@@ -163,11 +158,14 @@ func TestInlineLeafManifestCompatibilityFollowsDurableOutcome(t *testing.T) {
 					t.Fatalf("Close retained %d identity pins", pins)
 				}
 			}
+			if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+				t.Errorf("stable outcome unexpectedly created manifest.json: %v", err)
+			}
 			if outcome.refuseBeforeMeta {
-				if !outcome.refuseAbandonSync && (!bytes.Equal(readCompat(), previous) || !slices.Equal(readRevisions(), beforeRevisions)) {
-					t.Errorf("Close did not restore the exact compatibility predecessor and remove the unapplied immutable successor")
+				if !outcome.refuseAbandonSync && !slices.Equal(readRevisions(), beforeRevisions) {
+					t.Errorf("Close did not remove the unapplied immutable successor")
 				}
-			} else if !bytes.Equal(readCompat(), compatibilityAfter) || !slices.Equal(readRevisions(), afterRevisions) {
+			} else if !slices.Equal(readRevisions(), afterRevisions) {
 				t.Errorf("Close rolled back a potentially durable successor")
 			}
 			reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))

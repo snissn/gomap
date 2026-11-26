@@ -1,7 +1,6 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -58,7 +57,16 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	// including every full inventory rescan; footprint limits are not pause budgets.
 	db.rootReuseMu.Lock()
 	defer db.rootReuseMu.Unlock()
+	db.mu.RLock()
+	var activeRevision uint64
+	if db.leafGenerationManifest != nil {
+		activeRevision = db.leafGenerationManifest.ManifestRevision
+	}
+	db.mu.RUnlock()
 	return db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {
+		if activeRevision != 0 && m.ManifestRevision == activeRevision {
+			return true
+		}
 		for _, gen := range m.Generations {
 			if db.leafGenerationPins.count(gen.GenerationID) > 0 {
 				return true
@@ -97,19 +105,25 @@ func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Conte
 	if s.mode != leafGenerationManifestStable || s.parent == nil || s.registry == nil || s.stableCapability == nil || !s.stableCapability() {
 		return rootpublication.ErrNamespacePersistenceUnsupported
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	parentID, err := rootpublication.StableIdentityFromFile(s.parent)
 	if err != nil {
 		return err
 	}
-	view, err := s.readStableCompatibilityViewLocked()
+	maxDiskRev, _, err := s.highestDurableManifestRevisionLocked()
 	if err != nil {
 		return err
 	}
-	current, err := decodeLeafGenerationManifest(view, leafGenerationManifestFileName)
-	if err != nil {
-		return err
+	currentRev := maxDiskRev
+	if s.currentRevision > currentRev {
+		currentRev = s.currentRevision
 	}
-	currentName := leafGenerationDurableManifestFileName(current.ManifestRevision)
+	if currentRev == 0 {
+		return rootpublication.ErrUnresolvedResource
+	}
+	currentName := leafGenerationDurableManifestFileName(currentRev)
 	// Saved names/digests control scheduling and detect inventory changes, never
 	// deletion authority. Every batch captures fresh exact handles and validates
 	// the entire directory before unlinking. This bounds descriptors independently
@@ -119,7 +133,7 @@ func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Conte
 	first := true
 	for {
 		entries, scannedBytes := 0, int64(0)
-		files, census, err := s.scanRevisionGCBatch(ctx, opts, held, parentID, currentName, view, first, inventory, pending, &entries, &scannedBytes)
+		files, census, err := s.scanRevisionGCBatch(ctx, opts, held, parentID, currentName, first, inventory, pending, &entries, &scannedBytes)
 		if err != nil {
 			return err
 		}
@@ -170,7 +184,7 @@ func closeRevisionGCBatch(files []leafManifestRevisionGCFile) {
 // Footprint limits are checked independently for each complete inventory, as
 // required by MaintenanceLimits; they are not cumulative I/O quotas. Each scan
 // rechecks current/held/registry protection from fresh captures.
-func (s *leafGenerationManifestStore) scanRevisionGCBatch(ctx context.Context, opts LeafGenerationGCOptions, held func(*leafGenerationManifest) bool, parentID rootpublication.StableIdentity, currentName string, view []byte, first bool, inventory map[string][32]byte, pending map[string]bool, entries *int, scannedBytes *int64) (files []leafManifestRevisionGCFile, census LeafGenerationGCStats, resultErr error) {
+func (s *leafGenerationManifestStore) scanRevisionGCBatch(ctx context.Context, opts LeafGenerationGCOptions, held func(*leafGenerationManifest) bool, parentID rootpublication.StableIdentity, currentName string, first bool, inventory map[string][32]byte, pending map[string]bool, entries *int, scannedBytes *int64) (files []leafManifestRevisionGCFile, census LeafGenerationGCStats, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			closeRevisionGCBatch(files)
@@ -232,9 +246,6 @@ func (s *leafGenerationManifestStore) scanRevisionGCBatch(ctx context.Context, o
 					return err
 				}
 				if name == currentName {
-					if !bytes.Equal(data, view) {
-						return rootpublication.ErrResourceConflict
-					}
 					currentFound = true
 				}
 				manifest, err := decodeLeafGenerationManifest(data, name)

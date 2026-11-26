@@ -226,15 +226,9 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 			}
 			priorRevisions := immutableNames()
 			compatibilityPath := leafGenerationManifestPath(LeafLogDirPath(dir))
-			readCompatibility := func() []byte {
-				t.Helper()
-				data, err := os.ReadFile(compatibilityPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return data
+			if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+				t.Fatalf("stable open must not create manifest.json: %v", err)
 			}
-			priorView := readCompatibility()
 			if err := leafLog.rotateLeaf(); err != nil {
 				t.Fatal(err)
 			}
@@ -253,8 +247,11 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 				if state, _ := database.StateToken(); state != initial {
 					t.Fatalf("refused operation changed visible state: before=%+v after=%+v", initial, state)
 				}
-				if !slices.Equal(immutableNames(), priorRevisions) || !bytes.Equal(readCompatibility(), priorView) {
+				if !slices.Equal(immutableNames(), priorRevisions) {
 					t.Fatalf("refused operation changed manifest namespace: before=%v after=%v", priorRevisions, immutableNames())
+				}
+				if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+					t.Fatalf("refused operation created manifest.json: %v", err)
 				}
 			}
 			checkRefusal(err, cut)

@@ -90,14 +90,14 @@ func TestOriginalPreparedManifestPhysicalCloseRefusalKeepsCustody(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	retainedMinimum := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*closure))) + retainedalloc.AllocationCharge(uint64(cap(closure.previousView)))
+	retainedMinimum := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*closure)))
 	closure.Release()
 	first := d.backgroundError()
-	if !errors.Is(first, os.ErrClosed) || !errors.Is(first, prior) || closure.resources != originalSet || len(closure.previousView) == 0 {
+	if !errors.Is(first, os.ErrClosed) || !errors.Is(first, prior) || closure.resources != originalSet {
 		t.Fatalf("lost actual original manifest cleanup: %v", first)
 	}
 	if owner.Bytes() < retainedMinimum {
-		t.Fatalf("refunded failed containing/rollback payload: bytes=%d minimum=%d", owner.Bytes(), retainedMinimum)
+		t.Fatalf("refunded failed containing payload: bytes=%d minimum=%d", owner.Bytes(), retainedMinimum)
 	}
 	after := owner.Bytes()
 	for i := 0; i < 3; i++ {
@@ -154,10 +154,9 @@ func TestOriginalPreparedClosureHeaderRefusesBeforeProducerEffects(t *testing.T)
 	}
 }
 
-// Fault the actual restored compatibility file after its namespace sync. The
-// original generic helper ignored this exact last Close; the same closure must
-// retain its real post-disposition failure without replaying the authorized
-// restore/unlink on a second observation.
+// Fault the actual abandoned revision handle after its deletion sync. The same
+// closure must retain its real post-disposition failure without replaying the
+// authorized unlink on a second observation.
 func TestOriginalPreparedManifestAbandonActualCloseRefusalKeepsCustody(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("exact manifest namespace unsupported")
@@ -185,31 +184,28 @@ func TestOriginalPreparedManifestAbandonActualCloseRefusalKeepsCustody(t *testin
 	d.bgErrMu.Lock()
 	d.bgErr = prior
 	d.bgErrMu.Unlock()
-	var originalRestore *os.File
+	var originalAbandoned *os.File
 	var closeInjected bool
-	var restores, unlinks int
+	var unlinks int
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Namespace == durabilitycut.NamespaceRename && event.NewPath == leafGenerationManifestPath(closure.store.leafDir) {
-			originalRestore = event.StablePath
-			restores++
-		}
 		if event.Namespace == durabilitycut.NamespaceUnlink {
+			originalAbandoned = event.StablePath
 			unlinks++
 		}
-		if event.Point == durabilitycut.AfterNewFileDirectorySync && originalRestore != nil && !closeInjected {
+		if event.Point == durabilitycut.AfterDeletionDirectorySync && originalAbandoned != nil && !closeInjected {
 			closeInjected = true
-			return originalRestore.Close()
+			return originalAbandoned.Close()
 		}
 		return nil
 	})
 	defer restore()
 	first := closure.abandonUnpublished()
 	if !closeInjected || !errors.Is(first, os.ErrClosed) {
-		t.Fatalf("ignored actual restored-file last Close: injected=%t err=%v", closeInjected, first)
+		t.Fatalf("ignored actual abandoned-file last Close: injected=%t err=%v", closeInjected, first)
 	}
-	restoreFileIndex := 4
-	if closure.replacementFiles[restoreFileIndex] != originalRestore || len(closure.previousView) == 0 || closure.metadata == nil || closure.metadata.Bytes() < closure.metadataCharge {
-		t.Fatal("failed physical completion lost original restore handle/buffers or admitted charge")
+	abandonFileIndex := 1
+	if closure.replacementFiles[abandonFileIndex] != originalAbandoned || closure.metadata == nil || closure.metadata.Bytes() < closure.metadataCharge {
+		t.Fatal("failed physical completion lost original abandon handle or admitted charge")
 	}
 	if !errors.Is(d.backgroundError(), first) || !errors.Is(d.backgroundError(), prior) {
 		t.Fatal("existing DB graph lost original post-disposition failure or sibling")
@@ -218,12 +214,12 @@ func TestOriginalPreparedManifestAbandonActualCloseRefusalKeepsCustody(t *testin
 	if _, err := os.Stat(exactPath); !os.IsNotExist(err) {
 		t.Fatalf("actual authorized unlink not reported truthfully: %v", err)
 	}
-	if restores != 1 || unlinks != 1 {
-		t.Fatalf("missing exact restore/unlink route: restores=%d unlinks=%d", restores, unlinks)
+	if unlinks != 1 {
+		t.Fatalf("missing exact unlink route: unlinks=%d", unlinks)
 	}
 	after := closure.metadata.Bytes()
 	for i := 0; i < 3; i++ {
-		if closure.abandonUnpublished() != first || closure.ReleaseWithError() != first || restores != 1 || unlinks != 1 || closure.metadata.Bytes() != after {
+		if closure.abandonUnpublished() != first || closure.ReleaseWithError() != first || unlinks != 1 || closure.metadata.Bytes() != after {
 			t.Fatal("repeat abandoned original replayed namespace or refunded failed payload")
 		}
 	}
@@ -270,7 +266,7 @@ func TestOriginalPreparedManifestAbandonAdmissionRefusesBeforeRestore(t *testing
 	})
 	defer restore()
 	first := closure.abandonUnpublished()
-	if !errors.Is(first, retainedalloc.ErrCapacity) || mutations != 0 || owner.Bytes() != baseline || len(closure.previousView) == 0 {
+	if !errors.Is(first, retainedalloc.ErrCapacity) || mutations != 0 || owner.Bytes() != baseline {
 		t.Fatalf("unadmitted abandonment changed namespace/debt: err=%v mutations=%d bytes=%d baseline=%d", first, mutations, owner.Bytes(), baseline)
 	}
 	if closure.abandonUnpublished() != first || owner.Bytes() != baseline {
