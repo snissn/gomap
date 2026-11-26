@@ -278,6 +278,17 @@ class TestCIScopeRouter(unittest.TestCase):
         non_durability = self._plan(changed_files=["TreeDB/db/vacuum_collection_publication_guard_test.go"])
         self.assertFalse(non_durability["escalate_os"])
 
+        # Multi-package PR with only one OS-escalating package escalates only that package.
+        mixed = self._plan(
+            changed_files=[
+                "TreeDB/pager/mmap_windows.go",
+                "TreeDB/mongo_gateway/standalone_test.go",
+            ]
+        )
+        self.assertTrue(mixed["escalate_os"])
+        self.assertEqual(mixed["os_macos_packages"], ["github.com/snissn/gomap/TreeDB/pager"])
+        self.assertEqual(mixed["os_windows_packages"], ["github.com/snissn/gomap/TreeDB/pager"])
+
         # Also detect OS build constraints in arbitrarily named .go files.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

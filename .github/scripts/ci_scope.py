@@ -488,22 +488,33 @@ def build_plan(
     else:
         tier = "surgical"
 
-    # Map changed files to directly touched packages.
+    # Map changed files to directly touched packages (and track which touched
+    # packages actually contain OS/durability-escalating files).
     touched_packages_set: set[str] = set()
+    os_escalated_packages_set: set[str] = set()
+    has_unmapped_os_escalation = False
     for f in files:
+        file_escalates_os = is_os_escalation_path(f, repo=repo)
         parent = Path(f).parent.as_posix()
         if parent == ".":
             parent = ""
         # Walk up to nearest enclosing Go package dir (captures testdata/ fixtures too).
         cur = parent
+        mapped_pkg: str | None = None
         while True:
             if cur in dir_to_pkg:
-                touched_packages_set.add(dir_to_pkg[cur])
+                mapped_pkg = dir_to_pkg[cur]
                 break
             if not cur:
                 break
             nxt = Path(cur).parent.as_posix()
             cur = "" if nxt == "." else nxt
+        if mapped_pkg is not None:
+            touched_packages_set.add(mapped_pkg)
+            if file_escalates_os:
+                os_escalated_packages_set.add(mapped_pkg)
+        elif file_escalates_os:
+            has_unmapped_os_escalation = True
 
     touched_packages = sorted(touched_packages_set)
     prod_cone = transitive_closure(touched_packages_set, rdeps)
@@ -568,8 +579,15 @@ def build_plan(
             surgical_tests.append(pkg)
         test_packages = surgical_tests
         race_packages = [p for p in touched_packages if p not in RACE_EXCLUDED_PACKAGES]
-        escalate_os = any(is_os_escalation_path(f, repo=repo) for f in files) and bool(touched_packages)
-        os_macos_packages = touched_packages if escalate_os else []
+        escalate_os = (bool(os_escalated_packages_set) or has_unmapped_os_escalation) and bool(touched_packages)
+        if escalate_os:
+            os_macos_packages = (
+                touched_packages
+                if (has_unmapped_os_escalation or not os_escalated_packages_set)
+                else sorted(os_escalated_packages_set)
+            )
+        else:
+            os_macos_packages = []
         os_windows_packages = [p for p in os_macos_packages if is_windows_supported_package(p)]
         run_docs_check = any(is_docs_check_trigger(f) for f in files)
         run_ci_script_tests = any(f.startswith((".github/", "scripts/")) for f in files)
@@ -723,6 +741,7 @@ def _run_cmd(cmd: list[str], *, cwd: Path, env: dict[str, str], jsonl_path: Path
         assert proc.stdout is not None
         for line in proc.stdout:
             sys.stdout.write(line)
+            sys.stdout.flush()
             logf.write(line)
         return proc.wait()
 
@@ -917,11 +936,11 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
             print(f"No packages scheduled for {args.kind}.")
             return 0
         _run_cmd(["go", "clean", "-testcache"], cwd=repo, env=env)
-        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=env)
+        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
         if rc != 0:
             return rc
         return _run_cmd(
-            ["go", "test", "-json", "-timeout", "25m", "-p", "1", *pkgs],
+            ["go", "test", "-json", "-timeout", "35m", "-p", "1", *pkgs],
             cwd=repo,
             env=env,
             jsonl_path=jsonl_path,

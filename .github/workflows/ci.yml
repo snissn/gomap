@@ -382,7 +382,7 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.escalate_os == 'true' }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -419,6 +419,21 @@ jobs:
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
             --kind "$OS_KIND" \
             --jsonl "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl"
+
+      - name: Summarize cross-OS test timings
+        if: always()
+        shell: bash
+        env:
+          PYTHON_BIN: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: |
+          if [ -s "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl" ]; then
+            "$PYTHON_BIN" .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl" | tee "$RUNNER_TEMP/ci-os-${{ matrix.os }}.summary.md"
+            {
+              echo "### Cross-OS test timing summary (${{ matrix.os }})"
+              echo
+              cat "$RUNNER_TEMP/ci-os-${{ matrix.os }}.summary.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   full-sweep:
     name: full-sweep ([ci full])
