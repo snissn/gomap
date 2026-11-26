@@ -2259,14 +2259,26 @@ Empty, truncated, malformed, or structurally invalid documents also fail open.
 
 On platforms with retained-directory relative operations, stable replacement
 writes and syncs one temporary file through its exact handle, renames it
-relative to the retained `leaf_vlog` directory, verifies the destination is
+relative to the retained `leaf_vlog` directory to the immutable
+`manifest.durable.<revision>.json` revision, verifies the destination is
 the same physical object, then syncs that exact directory once. The returned
 stable resource token binds the SHA-256 digest of the exact version-2 bytes and
-uses `manifest_revision` as its immutable generation. The replacement also
-persists an immutable `manifest.durable.<revision>.json` revision. Durable-root
+uses `manifest_revision` as its immutable generation. Durable-root
 publication consumes that exact stable token in `DependencyManifestV1`; the
-fixed `manifest.json` path is a compatibility view, not the selected revision's
-identity.
+fixed `manifest.json` path is a diagnostic/operational compatibility view, not
+the selected revision's recovery identity. Forward replacement writes,
+atomically renames, and link-validates `manifest.json`; when `durabilitycut` is
+not enabled, forward compatibility-view replacement omits the redundant
+compatibility-view file and directory syncs because recovery exclusively reads
+the immutable `manifest.durable.<revision>.json` revision bound by the selected
+durable root. Abandonment rollback and `durabilitycut` fault-injection runs
+retain full compatibility-view file and directory syncs. Independent
+durable-root dependency syncs (`StableResourceSet.SyncThrough`), distinct
+directory namespace stabilizations (`StabilizeStableNamespaceTokens`), and
+multi-segment advisory `.lenidx` rebuild syncs may execute concurrently across
+distinct handles/directories when `durabilitycut` is disabled, preserving
+deterministic error ordering and strict sequential execution when
+`durabilitycut` is enabled.
 
 An ordinary successor may reuse its inherited revision while the candidate's
 external leaf files are covered by it. A successor that needs a new raw file

@@ -634,8 +634,15 @@ Checkpoint serializes through `flushMu`, takes exclusive write admission for a
 brief source/WAL frontier cut, then releases writer/admission locks before
 value-log sync, backend build/publication and handoff cleanup. Post-frontier
 writers are admitted only under the existing command-WAL cutover contract;
-NoWAL retains its full checkpoint drain. Applied-LSN coverage and cleanup use
-the existing dependency-prefix and sealed dual-meta authorities.
+NoWAL retains its full checkpoint drain. For explicit relaxed command-WAL
+checkpoints (`DurabilityWALOnRelaxed` when `durabilitycut` and checkpoint test
+hooks are inactive), frontier capture defers active WAL segment rotation until
+after durable-root `WaitThrough(visibleCommitSeq)` proves `durableAppliedLSN >=
+frontier`; teardown then rotates the superseded active WAL segment without
+fsyncing it immediately before cleanup unlinks it, falling back to synchronous
+rotation if concurrent post-frontier writes advance `frontier >
+durableAppliedLSN`. Applied-LSN coverage and cleanup use the existing
+dependency-prefix and sealed dual-meta authorities.
 
 Backend compact/vacuum, GC/rewrite and leaf-generation maintenance serialize
 through the same flush fence and refresh an equivalent backend basis while
