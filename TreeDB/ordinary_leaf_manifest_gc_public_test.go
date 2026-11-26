@@ -173,7 +173,13 @@ func TestOrdinaryLeafPublicationAfterUnreachableGenerationGC(t *testing.T) {
 	leafDir := filepath.Join(opts.Dir, "maindb", "leaf_vlog")
 	operationalPackState := func() string {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(leafDir, "manifest.json"))
+		path := filepath.Join(leafDir, "manifest.json")
+		if durable, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json")); err != nil {
+			t.Fatal(err)
+		} else if len(durable) > 0 {
+			path = durable[len(durable)-1]
+		}
+		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}

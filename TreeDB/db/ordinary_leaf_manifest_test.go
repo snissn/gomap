@@ -226,15 +226,9 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 			}
 			priorRevisions := immutableNames()
 			compatibilityPath := leafGenerationManifestPath(LeafLogDirPath(dir))
-			readCompatibility := func() []byte {
-				t.Helper()
-				data, err := os.ReadFile(compatibilityPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return data
+			if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+				t.Fatalf("stable open must not create manifest.json: %v", err)
 			}
-			priorView := readCompatibility()
 			if err := leafLog.rotateLeaf(); err != nil {
 				t.Fatal(err)
 			}
@@ -253,8 +247,11 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 				if state, _ := database.StateToken(); state != initial {
 					t.Fatalf("refused operation changed visible state: before=%+v after=%+v", initial, state)
 				}
-				if !slices.Equal(immutableNames(), priorRevisions) || !bytes.Equal(readCompatibility(), priorView) {
+				if !slices.Equal(immutableNames(), priorRevisions) {
 					t.Fatalf("refused operation changed manifest namespace: before=%v after=%v", priorRevisions, immutableNames())
+				}
+				if _, err := os.Stat(compatibilityPath); !os.IsNotExist(err) {
+					t.Fatalf("refused operation created manifest.json: %v", err)
 				}
 			}
 			checkRefusal(err, cut)
@@ -272,8 +269,9 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 			continueSync := make(chan struct{})
 			retrying.Store(route == "inline")
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				base := filepath.Base(event.Path)
 				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
-					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					(strings.HasPrefix(base, "manifest.durable.") || strings.HasPrefix(base, "manifest.stage.tmp.")) && blocked.CompareAndSwap(false, true) {
 					close(syncEntered)
 					<-continueSync
 				}
@@ -455,8 +453,9 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 			cut := errors.New("refuse manifest content sync after raw command append")
 			var blocked atomic.Bool
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				base := filepath.Base(event.Path)
 				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
-					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					(strings.HasPrefix(base, "manifest.durable.") || strings.HasPrefix(base, "manifest.stage.tmp.")) && blocked.CompareAndSwap(false, true) {
 					close(syncEntered)
 					<-continueSync
 					return cut

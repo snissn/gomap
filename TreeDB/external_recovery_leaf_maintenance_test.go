@@ -121,7 +121,13 @@ func TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts(t *testing.T
 		var name string
 		var info os.FileInfo
 		inspect(func() error {
-			raw, err := os.ReadFile(filepath.Join(leafDir, "manifest.json"))
+			path := filepath.Join(leafDir, "manifest.json")
+			if durable, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json")); err != nil {
+				return err
+			} else if len(durable) > 0 {
+				path = durable[len(durable)-1]
+			}
+			raw, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}

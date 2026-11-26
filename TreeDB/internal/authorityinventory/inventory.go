@@ -52,7 +52,7 @@ func buildRows() []Row {
 	}
 
 	for _, field := range []string{"Version", "ManifestRevision", "CurrentGenerationID", "NextGenerationID", "Generations"} {
-		add(active("db.leafGenerationManifest."+field, "leaf-generation manifest", "immutable manifest replacement", "saveLeafGenerationManifest", "pinned temporary file plus final manifest namespace generation", "encoded manifest digest", "temporary create then rename to manifest.json", "leaf-generation manifest publication adapter", "load and validate leaf-generation manifest", "leaf-generation manifest replacement owner"))
+		add(active("db.leafGenerationManifest."+field, "leaf-generation manifest", "immutable manifest replacement", "saveLeafGenerationManifest", "pinned immutable revision file plus retained parent namespace generation", "encoded manifest digest", "immutable manifest.durable.<revision>.json create (compatibility: temporary create then rename to manifest.json)", "leaf-generation manifest publication adapter", "load and validate leaf-generation manifest", "leaf-generation manifest replacement owner"))
 	}
 	for _, field := range []string{"GenerationID", "State", "FileIDs", "CreatedCommitSeq", "SealedCommitSeq", "RetiredCommitSeq", "DeletedCommitSeq", "PublishedCommitSeq"} {
 		add(active("db.leafGenerationRecord."+field, "leaf-generation manifest entry", "sealed leaf-generation closure", "leaf-generation pack/rewrite scheduler", "generation ID plus every referenced leaf FileID identity", "manifest digest plus sealed file digests/frontiers", "leaf generation files and manifest replacement", "leaf-generation manifest publication adapter", "manifest validation plus segment registration and CRC", "leaf-generation GC with manifest and segment pins"))

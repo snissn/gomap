@@ -22,7 +22,7 @@ func TestRelaxedFinalizeDefersAdvisoryRecordLengthIndexSyncUntilCheckpoint(t *te
 			lenidxSyncs.Add(1)
 		}
 		if (e.Point == durabilitycut.BeforeDependencyFileSync || e.Point == durabilitycut.BeforeNewFileDirectorySync) &&
-			(strings.Contains(e.Path, leafGenerationManifestFileName) || strings.Contains(e.Path, "manifest.durable.")) {
+			(strings.Contains(e.Path, leafGenerationManifestFileName) || strings.Contains(e.Path, "manifest.durable.") || strings.Contains(e.Path, "manifest.stage.tmp.")) {
 			manifestSyncs.Add(1)
 		}
 		return nil

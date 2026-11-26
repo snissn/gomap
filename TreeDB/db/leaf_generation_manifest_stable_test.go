@@ -3,10 +3,13 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -51,7 +54,11 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	if manifest.ManifestRevision != 1 {
 		t.Fatalf("ManifestRevision=%d want 1", manifest.ManifestRevision)
 	}
-	data, err := os.ReadFile(leafGenerationManifestPath(leafDir))
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Fatalf("stable replacement must not create manifest.json: %v", err)
+	}
+	revisionPath := filepath.Join(leafDir, leafGenerationDurableManifestFileName(1))
+	data, err := os.ReadFile(revisionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +80,8 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	if got := counters.NamespaceSyncs.Load(); got != 1 {
 		t.Fatalf("namespace syncs=%d want exactly 1", got)
 	}
-	if creates != 2 || renames != 1 || contentSyncs != 2 || namespaceSyncs != 2 {
-		t.Fatalf("durability observations create=%d rename=%d content-sync=%d namespace-sync=%d want 2,1,2,2", creates, renames, contentSyncs, namespaceSyncs)
+	if creates != 1 || renames != 1 || contentSyncs != 1 || namespaceSyncs != 1 {
+		t.Fatalf("durability observations create=%d rename=%d content-sync=%d namespace-sync=%d want 1,1,1,1", creates, renames, contentSyncs, namespaceSyncs)
 	}
 	if got := registry.PinCount(token.Identity()); got != 1 {
 		t.Fatalf("pin count=%d want 1", got)
@@ -101,11 +108,18 @@ func TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind(t *testi
 		t.Fatalf("Replace after path rebind: %v", err)
 	}
 	token.Release()
-	if _, err := os.Stat(filepath.Join(retainedDir, leafGenerationManifestFileName)); err != nil {
-		t.Fatalf("retained exact parent manifest: %v", err)
+	revisionName := leafGenerationDurableManifestFileName(1)
+	if _, err := os.Stat(filepath.Join(retainedDir, revisionName)); err != nil {
+		t.Fatalf("retained exact parent manifest revision: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(retainedDir, leafGenerationManifestFileName)); !os.IsNotExist(err) {
+		t.Fatalf("stable replacement must not create manifest.json in retained parent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, revisionName)); !os.IsNotExist(err) {
+		t.Fatalf("diagnostic replacement path became authoritative: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationManifestFileName)); !os.IsNotExist(err) {
-		t.Fatalf("diagnostic replacement path became authoritative: %v", err)
+		t.Fatalf("diagnostic replacement path created manifest.json: %v", err)
 	}
 }
 
@@ -145,8 +159,8 @@ func TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind(t *
 	if err := model.MaterializeStable(crashDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", leafGenerationManifestFileName)); err != nil {
-		t.Fatalf("retained crash manifest: %v", err)
+	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", leafGenerationManifestFileName)); !os.IsNotExist(err) {
+		t.Fatalf("stable replacement must not materialize manifest.json: %v", err)
 	}
 	revisionName := leafGenerationDurableManifestFileName(1)
 	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", revisionName)); err != nil {
@@ -197,7 +211,7 @@ func TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind
 
 func TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision(t *testing.T) {
 	leafDir := t.TempDir()
-	staleName := leafGenerationManifestFileName + ".tmp.0000000000000001"
+	staleName := "manifest.stage.tmp.0000000000000001"
 	stalePath := filepath.Join(leafDir, staleName)
 	if err := os.WriteFile(stalePath, []byte("unknown-stale-temp"), 0o600); err != nil {
 		t.Fatal(err)
@@ -272,20 +286,30 @@ func TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen(t *t
 }
 
 func TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError(t *testing.T) {
-	leafDir := t.TempDir()
-	if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(`{"version":`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
-	defer store.Close()
+	for _, tc := range []struct {
+		name     string
+		fileName string
+	}{
+		{name: "durable_revision", fileName: leafGenerationDurableManifestFileName(1)},
+		{name: "legacy_manifest_json", fileName: leafGenerationManifestFileName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leafDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(leafDir, tc.fileName), []byte(`{"version":`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+			defer store.Close()
 
-	_, err := store.Replace(newLeafGenerationManifest(10))
-	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
-		t.Fatalf("Replace error=%v want ErrLeafGenerationManifestIncompatible", err)
-	}
-	var syntaxErr *json.SyntaxError
-	if !errors.As(err, &syntaxErr) {
-		t.Fatalf("Replace error=%v does not preserve json.SyntaxError", err)
+			_, err := store.Replace(newLeafGenerationManifest(10))
+			if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+				t.Fatalf("Replace error=%v want ErrLeafGenerationManifestIncompatible", err)
+			}
+			var syntaxErr *json.SyntaxError
+			if !errors.As(err, &syntaxErr) {
+				t.Fatalf("Replace error=%v does not preserve json.SyntaxError", err)
+			}
+		})
 	}
 }
 
@@ -372,7 +396,8 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 		t.Fatal(err)
 	}
 	first.Release()
-	wantOld, err := os.ReadFile(leafGenerationManifestPath(leafDir))
+	oldRevisionPath := filepath.Join(leafDir, leafGenerationDurableManifestFileName(1))
+	wantOld, err := os.ReadFile(oldRevisionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,14 +405,14 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	revisionName := leafGenerationDurableManifestFileName(2)
+	tempName := "manifest.stage.tmp.0000000000000002"
 	var deletion []string
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		switch {
 		case event.Namespace == durabilitycut.NamespaceUnlink:
 			deletion = append(deletion, string(event.Namespace))
-			if event.StableParent != store.parent || event.StablePath == nil || event.StableOldName != revisionName {
-				t.Errorf("unlink did not observe the exact retained parent and revision: %+v", event)
+			if event.StableParent != store.parent || event.StablePath == nil || event.StableOldName != tempName {
+				t.Errorf("unlink did not observe the exact retained parent and temp: %+v", event)
 			}
 		case event.Point == durabilitycut.BeforeDeletionDirectorySync, event.Point == durabilitycut.AfterDeletionDirectorySync:
 			deletion = append(deletion, string(event.Point))
@@ -400,7 +425,7 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	defer restore()
 	cut := errors.New("pre-rename cut")
 	store.hooks.BeforeRename = func() error {
-		// The revision link could already survive a crash before the producer's
+		// The staging temp link could already survive a crash before the producer's
 		// own directory sync. Establish that outcome deterministically.
 		if err := store.parent.Sync(); err != nil {
 			t.Fatal(err)
@@ -413,7 +438,7 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Replace error=%v want pre-rename cut without recovery-required", err)
 	}
-	gotOld, err := os.ReadFile(leafGenerationManifestPath(leafDir))
+	gotOld, err := os.ReadFile(oldRevisionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,10 +452,13 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if err := model.MaterializeStable(crashDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(crashDir, revisionName)); !os.IsNotExist(err) {
-		t.Errorf("early rollback revision survived modeled crash: %v", err)
+	if _, err := os.Stat(filepath.Join(crashDir, tempName)); !os.IsNotExist(err) {
+		t.Errorf("early rollback temp survived modeled crash: %v", err)
 	}
-	temps, err := filepath.Glob(filepath.Join(leafDir, leafGenerationManifestFileName+".tmp.*"))
+	if _, err := os.Stat(filepath.Join(crashDir, leafGenerationDurableManifestFileName(2))); !os.IsNotExist(err) {
+		t.Errorf("pre-rename revision appeared in modeled crash: %v", err)
+	}
+	temps, err := filepath.Glob(filepath.Join(leafDir, "manifest.stage.tmp.*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +478,7 @@ func TestStableLeafGenerationManifestPreRenameRebindPreservesForeignChild(t *tes
 		t.Fatal(err)
 	}
 	first.Release()
-	path := filepath.Join(leafDir, leafGenerationDurableManifestFileName(2))
+	path := filepath.Join(leafDir, "manifest.stage.tmp.0000000000000002")
 	const foreign = "foreign manifest"
 	var foreignIdentity os.FileInfo
 	cut := errors.New("pre-rename cut after rebind")
@@ -513,12 +541,16 @@ func TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence(
 		t.Fatalf("poisoned retry error=%v want ErrRecoveryRequired", err)
 	}
 	store.Close()
-	loaded, ok, err := loadLeafGenerationManifest(leafDir)
-	if err != nil || !ok {
-		t.Fatalf("reopen compatibility manifest: ok=%v err=%v", ok, err)
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Fatalf("stable replacement must not create manifest.json: %v", err)
 	}
-	if loaded.ManifestRevision != 1 {
-		t.Fatalf("compatibility ManifestRevision=%d want prior complete revision 1", loaded.ManifestRevision)
+	priorBytes, err := os.ReadFile(filepath.Join(leafDir, leafGenerationDurableManifestFileName(1)))
+	if err != nil {
+		t.Fatalf("prior durable revision: %v", err)
+	}
+	prior, err := decodeLeafGenerationManifest(priorBytes, leafGenerationDurableManifestFileName(1))
+	if err != nil || prior.ManifestRevision != 1 {
+		t.Fatalf("prior revision=%v err=%v want revision 1", prior, err)
 	}
 	durableBytes, err := os.ReadFile(filepath.Join(leafDir, leafGenerationDurableManifestFileName(2)))
 	if err != nil {
@@ -527,6 +559,13 @@ func TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence(
 	durable, err := decodeLeafGenerationManifest(durableBytes, leafGenerationDurableManifestFileName(2))
 	if err != nil || durable.ManifestRevision != 2 {
 		t.Fatalf("durable revision=%v err=%v want revision 2", durable, err)
+	}
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok {
+		t.Fatalf("reopen manifest: ok=%v err=%v", ok, err)
+	}
+	if loaded.ManifestRevision != 2 {
+		t.Fatalf("reopen ManifestRevision=%d want complete revision 2", loaded.ManifestRevision)
 	}
 	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
 		t.Fatalf("close leak pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
@@ -712,5 +751,259 @@ func TestCompatibleLeafGenerationManifestSaveDoesNotCertifyStableToken(t *testin
 	}
 	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStableLeafGenerationManifestNeverCreatesManifestJSONAcrossLifecycle(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable manifest replacement requires exact relative namespace support")
+	}
+	dir := t.TempDir()
+	opts := Options{Dir: dir, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	database.SetLeafPageLog(writer)
+	defer func() {
+		if writer != nil {
+			_ = writer.Close()
+		}
+	}()
+	leafDir := LeafLogDirPath(dir)
+	assertNoManifestJSON := func(stage string) {
+		t.Helper()
+		if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+			t.Fatalf("%s: unexpected manifest.json on stable platform: %v", stage, err)
+		}
+	}
+	assertNoManifestJSON("initial open")
+
+	// Advance multiple commits / manifest closures, pin one, abandon one.
+	for i := 0; i < 4; i++ {
+		if i > 0 {
+			if err := writer.rotateLeaf(); err != nil {
+				t.Fatalf("rotateLeaf %d: %v", i, err)
+			}
+		}
+		if err := database.SetSync([]byte(fmt.Sprintf("k-%02d", i)), []byte(fmt.Sprintf("v-%02d", i))); err != nil {
+			t.Fatalf("SetSync %d: %v", i, err)
+		}
+	}
+	pinnedClosure, err := database.PrepareLeafGenerationManifestStableClosure()
+	if err != nil {
+		t.Fatalf("PrepareLeafGenerationManifestStableClosure pinned: %v", err)
+	}
+	pinnedName := leafGenerationDurableManifestFileName(pinnedClosure.Revision())
+	for i := 0; i < 4; i++ {
+		c, err := database.PrepareLeafGenerationManifestStableClosure()
+		if err != nil {
+			pinnedClosure.Release()
+			t.Fatalf("PrepareLeafGenerationManifestStableClosure %d: %v", i, err)
+		}
+		c.Release()
+	}
+	database.mu.RLock()
+	activeRev := database.leafGenerationManifest.ManifestRevision
+	candidate := database.leafGenerationManifest.clone()
+	database.mu.RUnlock()
+
+	abandoned, _, err := database.prepareLeafGenerationManifestStableCandidate(candidate)
+	if err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("prepare abandoned candidate: %v", err)
+	}
+	abandonedName := leafGenerationDurableManifestFileName(abandoned.Revision())
+	abandonedResources, err := abandoned.TakeStableResources()
+	if err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("TakeStableResources abandoned: %v", err)
+	}
+	abandonedResources.Release()
+	if err := abandoned.abandonUnpublished(); err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("abandonUnpublished: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, abandonedName)); !os.IsNotExist(err) {
+		pinnedClosure.Release()
+		t.Fatalf("abandoned revision %s still exists: %v", abandonedName, err)
+	}
+	assertNoManifestJSON("after abandonment")
+
+	// GC must retain pinned and current active revisions while deleting unreferenced ones.
+	stats, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("LeafGenerationGC with pin: %v", err)
+	}
+	if stats.ManifestRevisionsDeleted == 0 {
+		pinnedClosure.Release()
+		t.Fatalf("expected unreferenced manifest revisions deleted, stats=%+v", stats)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, pinnedName)); err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("pinned revision %s removed by GC: %v", pinnedName, err)
+	}
+	database.mu.RLock()
+	activeRevAfterGC1 := database.leafGenerationManifest.ManifestRevision
+	database.mu.RUnlock()
+	if activeRevAfterGC1 < activeRev {
+		pinnedClosure.Release()
+		t.Fatalf("active revision regressed after GC1: got %d want >= %d", activeRevAfterGC1, activeRev)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationDurableManifestFileName(activeRevAfterGC1))); err != nil {
+		pinnedClosure.Release()
+		t.Fatalf("active revision %s removed by GC1: %v", leafGenerationDurableManifestFileName(activeRevAfterGC1), err)
+	}
+	pinnedClosure.Release()
+	stats2, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC after release: %v", err)
+	}
+	if stats2.ManifestRevisionsDeleted == 0 {
+		t.Fatalf("expected released revision %s deleted, stats=%+v", pinnedName, stats2)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, pinnedName)); !os.IsNotExist(err) {
+		t.Fatalf("released revision %s still exists: %v", pinnedName, err)
+	}
+	database.mu.RLock()
+	activeRevAfterGC2 := database.leafGenerationManifest.ManifestRevision
+	database.mu.RUnlock()
+	if activeRevAfterGC2 < activeRevAfterGC1 {
+		t.Fatalf("active revision regressed after GC2: got %d want >= %d", activeRevAfterGC2, activeRevAfterGC1)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationDurableManifestFileName(activeRevAfterGC2))); err != nil {
+		t.Fatalf("active revision %s missing after GC2: %v", leafGenerationDurableManifestFileName(activeRevAfterGC2), err)
+	}
+	assertNoManifestJSON("after GC")
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	writer = nil
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen without manifest.json: %v", err)
+	}
+	defer reopened.Close()
+	assertNoManifestJSON("after reopen")
+	for i := 0; i < 4; i++ {
+		got, err := reopened.Get([]byte(fmt.Sprintf("k-%02d", i)))
+		if err != nil || string(got) != fmt.Sprintf("v-%02d", i) {
+			t.Fatalf("Get(k-%02d)=%q err=%v", i, got, err)
+		}
+	}
+	nextClosure, err := reopened.PrepareLeafGenerationManifestStableClosure()
+	if err != nil {
+		t.Fatalf("PrepareLeafGenerationManifestStableClosure after reopen: %v", err)
+	}
+	if nextClosure.Revision() <= activeRevAfterGC2 {
+		t.Fatalf("post-reopen revision=%d must exceed prior active revision=%d", nextClosure.Revision(), activeRevAfterGC2)
+	}
+	nextClosure.Release()
+	assertNoManifestJSON("after post-reopen replacement")
+}
+
+// TestStableLeafGenerationManifestCrashAtNamespaceCreateReopensCleanly verifies
+// that sudden process death immediately after NamespaceCreate during the first
+// Open leaves only an unpublished staging temp file (never an empty
+// manifest.durable.<rev>.json), so the next Open bootstraps cleanly instead of
+// failing with ErrLeafGenerationManifestIncompatible.
+func TestStableLeafGenerationManifestCrashAtNamespaceCreateReopensCleanly(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace not supported")
+	}
+	if crashDir := os.Getenv("TREEDB_TEST_CRASH_AT_MANIFEST_CREATE_DIR"); crashDir != "" {
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Namespace == durabilitycut.NamespaceCreate &&
+				event.Resource == durabilitycut.ResourceOuterLeaf &&
+				filepath.Clean(filepath.Dir(event.NewPath)) == filepath.Clean(LeafLogDirPath(crashDir)) {
+				os.Exit(99)
+			}
+			return nil
+		})
+		defer restore()
+		opts := Options{
+			Dir:                        crashDir,
+			IndexOuterLeavesInValueLog: true,
+			DisableBackgroundPrune:     true,
+		}
+		_, _ = Open(opts)
+		os.Exit(1)
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStableLeafGenerationManifestCrashAtNamespaceCreateReopensCleanly$")
+	cmd.Env = append(os.Environ(), "TREEDB_TEST_CRASH_AT_MANIFEST_CREATE_DIR="+dir)
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 99 {
+		t.Fatalf("subprocess exit=%v want exit code 99 at NamespaceCreate", err)
+	}
+
+	leafDir := LeafLogDirPath(dir)
+	durableMatches, globErr := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(durableMatches) != 0 {
+		t.Fatalf("unfinished creation exposed durable manifest filenames: %v", durableMatches)
+	}
+	tmpMatches, globErr := filepath.Glob(filepath.Join(leafDir, "manifest.stage.tmp.*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(tmpMatches) != 1 {
+		t.Fatalf("expected 1 orphaned staging temp file after crash, got %v", tmpMatches)
+	}
+
+	reopened, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		DisableBackgroundPrune:     true,
+	})
+	if err != nil {
+		t.Fatalf("Open after crash at NamespaceCreate failed: %v", err)
+	}
+	if reopened.leafGenerationManifest == nil || reopened.leafGenerationManifest.ManifestRevision == 0 {
+		_ = reopened.Close()
+		t.Fatalf("expected bootstrapped leaf generation manifest after crash recovery, got %+v", reopened.leafGenerationManifest)
+	}
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		_ = reopened.Close()
+		t.Fatalf("reopen must not create manifest.json on stable platform: %v", err)
+	}
+	// Verify that an orphaned staging file never blocks subsequent manifest
+	// revision GC census scans.
+	if _, err := reopened.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		_ = reopened.Close()
+		t.Fatalf("LeafGenerationGC with orphaned staging file failed: %v", err)
+	}
+	closure, err := reopened.PrepareLeafGenerationManifestStableClosure()
+	if err != nil {
+		_ = reopened.Close()
+		t.Fatalf("PrepareLeafGenerationManifestStableClosure after crash recovery: %v", err)
+	}
+	revAfterCrash := closure.Revision()
+	closure.Release()
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close after crash recovery: %v", err)
+	}
+	reopened2, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		DisableBackgroundPrune:     true,
+	})
+	if err != nil {
+		t.Fatalf("second Open after crash recovery failed: %v", err)
+	}
+	defer reopened2.Close()
+	if reopened2.leafGenerationManifest == nil || reopened2.leafGenerationManifest.ManifestRevision < revAfterCrash {
+		t.Fatalf("reopened manifest revision=%+v want >= %d", reopened2.leafGenerationManifest, revAfterCrash)
 	}
 }

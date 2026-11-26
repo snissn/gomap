@@ -2245,28 +2245,33 @@ Encoding rules:
 
 #### Split-leaf generation manifest
 
-`leaf_vlog/manifest.json` is a version-2 JSON document. In addition to the
-current/next generation IDs and generation records, it contains the required
-non-zero `manifest_revision`. The revision identifies the immutable physical
-manifest replacement, not merely the logical current generation: every
-successful rewrite increments it, including GC, reconcile, and offline-vacuum
-rewrites that leave `current_generation_id` unchanged.
+The split-leaf generation manifest is a version-2 JSON document stored under
+`leaf_vlog/`. In addition to the current/next generation IDs and generation
+records, it contains the required non-zero `manifest_revision`. The revision
+identifies the immutable physical manifest replacement, not merely the logical
+current generation: every successful rewrite increments it, including GC,
+reconcile, and offline-vacuum rewrites that leave `current_generation_id`
+unchanged.
 
 Version 1 and version-2 documents with a zero revision are deliberately
 incompatible in this pre-alpha format. Open fails with the typed incompatible
 manifest error; TreeDB does not infer a revision or migrate the file in place.
 Empty, truncated, malformed, or structurally invalid documents also fail open.
 
-On platforms with retained-directory relative operations, stable replacement
-writes and syncs one temporary file through its exact handle, renames it
-relative to the retained `leaf_vlog` directory, verifies the destination is
-the same physical object, then syncs that exact directory once. The returned
-stable resource token binds the SHA-256 digest of the exact version-2 bytes and
-uses `manifest_revision` as its immutable generation. The replacement also
-persists an immutable `manifest.durable.<revision>.json` revision. Durable-root
-publication consumes that exact stable token in `DependencyManifestV1`; the
-fixed `manifest.json` path is a compatibility view, not the selected revision's
-identity. Independent durable-root dependency syncs
+On platforms with retained-directory relative operations (Linux/macOS,
+`leafGenerationManifestStable`), stable replacement persists only immutable
+`leaf_vlog/manifest.durable.<revision>.json` revisions (it does not create or
+maintain `leaf_vlog/manifest.json`). Each replacement creates the new immutable
+revision file via `O_CREATE|O_EXCL` relative to the retained `leaf_vlog`
+directory, writes and syncs it through its exact handle, verifies the linked
+child is the same physical object, and syncs that exact parent directory once.
+The returned stable resource token binds the SHA-256 digest of the exact
+version-2 bytes and uses `manifest_revision` as its immutable generation.
+Durable-root publication consumes that exact stable token in
+`DependencyManifestV1`. On compatibility platforms without retained-directory
+relative operations (such as Windows, `leafGenerationManifestCompatibility`),
+TreeDB persists `leaf_vlog/manifest.json` via temporary file creation and
+rename. Independent durable-root dependency syncs
 (`StableResourceSet.SyncThrough`), distinct directory namespace stabilizations
 (`StabilizeStableNamespaceTokens`), and multi-segment advisory `.lenidx`
 rebuild syncs may execute concurrently across distinct handles/directories when

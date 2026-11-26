@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -777,7 +778,7 @@ func (db *DB) noteLeafGenerationWritableFileID(fileID uint32, commitSeq uint64) 
 	return db.noteLeafGenerationWritableFileIDs([]uint32{rawFileID}, commitSeq)
 }
 
-func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, error) {
+func loadCompatibilityLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, error) {
 	path := leafGenerationManifestPath(leafDir)
 	if path == "" {
 		return nil, false, errors.New("missing leaf_vlog dir")
@@ -796,6 +797,49 @@ func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, 
 	return manifest, true, nil
 }
 
+func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, error) {
+	if leafDir == "" {
+		return nil, false, errors.New("missing leaf_vlog dir")
+	}
+	entries, err := os.ReadDir(leafDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	var maxRev uint64
+	var maxName string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		rev, ok := parseLeafGenerationDurableManifestFileName(entry.Name())
+		if !ok {
+			continue
+		}
+		if rev > maxRev {
+			maxRev = rev
+			maxName = entry.Name()
+		}
+	}
+	if maxRev > 0 {
+		data, err := os.ReadFile(filepath.Join(leafDir, maxName))
+		if err != nil {
+			return nil, false, err
+		}
+		manifest, err := decodeLeafGenerationManifest(data, maxName)
+		if err != nil {
+			return nil, false, err
+		}
+		if manifest.ManifestRevision != maxRev {
+			return nil, false, fmt.Errorf("%w: %s manifest_revision=%d does not match filename revision=%d", ErrLeafGenerationManifestIncompatible, maxName, manifest.ManifestRevision, maxRev)
+		}
+		return manifest, true, nil
+	}
+	return loadCompatibilityLeafGenerationManifest(leafDir)
+}
+
 func decodeLeafGenerationManifest(data []byte, diagnosticName string) (*leafGenerationManifest, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: decode %s: empty file", ErrLeafGenerationManifestIncompatible, diagnosticName)
@@ -811,9 +855,20 @@ func decodeLeafGenerationManifest(data []byte, diagnosticName string) (*leafGene
 }
 
 func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest) error {
-	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	mode := leafGenerationManifestReplacementModeForPlatform()
+	var registry *rootpublication.IdentityPinRegistry
+	if mode == leafGenerationManifestStable {
+		if err := os.MkdirAll(leafDir, 0o700); err != nil {
+			return err
+		}
+		registry = rootpublication.NewIdentityPinRegistry()
+	}
+	store := newLeafGenerationManifestStore(leafDir, registry, mode, nil)
 	defer store.Close()
-	_, err := store.Replace(manifest)
+	token, err := store.Replace(manifest)
+	if token != nil {
+		token.Release()
+	}
 	return err
 }
 

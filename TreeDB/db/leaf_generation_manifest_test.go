@@ -1152,9 +1152,26 @@ func TestOpenReadOnly_IndexOuterLeavesInValueLog_MissingManifestUsesSynthetic(t 
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close writeable: %v", err)
 	}
-	manifestPath := leafGenerationManifestPath(LeafLogDirPath(dir))
-	if err := os.Remove(manifestPath); err != nil {
-		t.Fatalf("Remove(manifest): %v", err)
+	leafDir := LeafLogDirPath(dir)
+	manifestPath := leafGenerationManifestPath(leafDir)
+	removed := 0
+	if err := os.Remove(manifestPath); err == nil {
+		removed++
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("Remove(manifest.json): %v", err)
+	}
+	durableMatches, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json"))
+	if err != nil {
+		t.Fatalf("Glob(manifest.durable): %v", err)
+	}
+	for _, p := range durableMatches {
+		if err := os.Remove(p); err != nil {
+			t.Fatalf("Remove(%s): %v", p, err)
+		}
+		removed++
+	}
+	if removed == 0 {
+		t.Fatalf("expected at least one manifest file in %s before removal", leafDir)
 	}
 
 	ro, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true, ReadOnly: true})
@@ -1170,6 +1187,10 @@ func TestOpenReadOnly_IndexOuterLeavesInValueLog_MissingManifestUsesSynthetic(t 
 		t.Fatalf("CurrentGenerationID=%d, want %d", got, want)
 	}
 	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
-		t.Fatalf("expected read-only open to leave manifest absent, got %v", err)
+		t.Fatalf("expected read-only open to leave manifest.json absent, got %v", err)
+	}
+	afterDurable, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json"))
+	if err != nil || len(afterDurable) != 0 {
+		t.Fatalf("expected read-only open to leave durable manifests absent, got %v err=%v", afterDurable, err)
 	}
 }

@@ -104,14 +104,8 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 		}
 	})
 	leafDir := resolveStorageLayout(database.dir).leafVLogDir
-	compatPath := leafGenerationManifestPath(leafDir)
-	view := func() []byte {
-		t.Helper()
-		data, err := os.ReadFile(compatPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Fatalf("stable open must not create manifest.json: %v", err)
 	}
 	immutableNames := func() []string {
 		t.Helper()
@@ -121,7 +115,7 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 		}
 		return names
 	}
-	beforeView, beforeNames := view(), immutableNames()
+	beforeNames := immutableNames()
 	database.mu.RLock()
 	candidate := database.leafGenerationManifest.clone()
 	database.mu.RUnlock()
@@ -168,14 +162,14 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 		var receipt *originalDBCleanupFailure
 		if !errors.As(err, &receipt) {
 			t.Error("refused deletion fence omitted the original cleanup receipt")
-		} else if original, ok := receipt.payload.(*LeafGenerationManifestStablePreparedClosure); !ok || original.replacementFiles[1] == nil || !errors.Is(original.replacementErrors[1], os.ErrClosed) {
+		} else if original, ok := receipt.payload.(*LeafGenerationManifestStablePreparedClosure); !ok || original.replacementFiles[0] == nil || !errors.Is(original.replacementErrors[0], os.ErrClosed) {
 			t.Errorf("receipt did not retain the original revision file and failed completion: %T", receipt.payload)
 		}
 		if got := owner.Bytes(); got <= beforeBytes {
 			t.Errorf("refused deletion fence shed original cleanup metadata: got %d baseline %d", got, beforeBytes)
 		}
-		if !bytes.Equal(beforeView, view()) || !slices.Equal(beforeNames, immutableNames()) {
-			t.Error("refused deletion fence changed the compatibility view or left the unlinked name visible")
+		if !slices.Equal(beforeNames, immutableNames()) {
+			t.Error("refused deletion fence left the unlinked name visible")
 		}
 		if _, err := database.PrepareLeafGenerationManifestStableClosure(); !errors.Is(err, ErrRecoveryRequired) {
 			t.Errorf("prepare after refused deletion fence=%v want recovery required", err)
@@ -189,7 +183,7 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 		if got := owner.Bytes(); got <= beforeBytes {
 			t.Errorf("refused rollback shed original cleanup metadata: got %d baseline %d", got, beforeBytes)
 		}
-		if bytes.Equal(beforeView, view()) || slices.Equal(beforeNames, immutableNames()) {
+		if slices.Equal(beforeNames, immutableNames()) {
 			t.Errorf("refused rollback lost the installed manifest evidence")
 		}
 		if _, _, err := database.leafGenerationManifestStore.Load(); !errors.Is(err, ErrRecoveryRequired) {
@@ -200,8 +194,8 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 		}
 		return
 	}
-	if after := view(); !bytes.Equal(beforeView, after) {
-		t.Errorf("compatibility view changed after admission refusal\nbefore=%s\nafter=%s", beforeView, after)
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Errorf("admission refusal created manifest.json: %v", err)
 	}
 	if after := immutableNames(); !slices.Equal(beforeNames, after) {
 		t.Errorf("immutable names changed after admission refusal\nbefore=%v\nafter=%v", beforeNames, after)
@@ -242,7 +236,13 @@ func TestLeafGenerationManifestStablePreparedClosureAbandonUnpublishedRestoresVi
 		t.Fatal(err)
 	}
 	defer database.Close()
-	beforeView, err := os.ReadFile(leafGenerationManifestPath(resolveStorageLayout(database.dir).leafVLogDir))
+	leafDir := resolveStorageLayout(database.dir).leafVLogDir
+	beforeLoaded, ok, err := database.leafGenerationManifestStore.Load()
+	if err != nil || !ok {
+		t.Fatalf("Load before prepare: ok=%v err=%v", ok, err)
+	}
+	beforePath := filepath.Join(leafDir, leafGenerationDurableManifestFileName(beforeLoaded.ManifestRevision))
+	beforeView, err := os.ReadFile(beforePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,14 +266,21 @@ func TestLeafGenerationManifestStablePreparedClosureAbandonUnpublishedRestoresVi
 	if err := closure.abandonUnpublished(); err != nil {
 		t.Fatalf("second abandonUnpublished: %v", err)
 	}
-	afterView, err := os.ReadFile(leafGenerationManifestPath(resolveStorageLayout(database.dir).leafVLogDir))
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); !os.IsNotExist(err) {
+		t.Fatalf("stable abandonment must not create manifest.json: %v", err)
+	}
+	afterLoaded, ok, err := database.leafGenerationManifestStore.Load()
+	if err != nil || !ok || afterLoaded.ManifestRevision != beforeLoaded.ManifestRevision {
+		t.Fatalf("Load after abandonment: ok=%v rev=%v want=%d err=%v", ok, afterLoaded, beforeLoaded.ManifestRevision, err)
+	}
+	afterView, err := os.ReadFile(beforePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(afterView, beforeView) {
-		t.Fatalf("compatibility manifest changed after abandonment\nbefore=%s\nafter=%s", beforeView, afterView)
+		t.Fatalf("prior durable manifest changed after abandonment\nbefore=%s\nafter=%s", beforeView, afterView)
 	}
-	exactPath := filepath.Join(resolveStorageLayout(database.dir).leafVLogDir, leafGenerationDurableManifestFileName(closure.Revision()))
+	exactPath := filepath.Join(leafDir, leafGenerationDurableManifestFileName(closure.Revision()))
 	if _, err := os.Stat(exactPath); !os.IsNotExist(err) {
 		t.Fatalf("unpublished exact manifest remains at %q: %v", exactPath, err)
 	}
