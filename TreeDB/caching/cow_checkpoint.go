@@ -31,7 +31,7 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 
 func (db *DB) checkpointCOWColumnCompactionProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, projected *backenddb.NativeProjectedGenerationPressure) error {
 	defer db.observeCOWCheckpointRun(time.Now())
-	return db.materializeCOWPrefixProjectedWithLeafPack(ctx, automatic, operation, cowCheckpointMaterialization, projected, !automatic && operation == nil)
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, cowCheckpointMaterialization, projected, !automatic && operation == nil)
 }
 
 // checkpointCOWPressure runs a full durable COW checkpoint boundary for
@@ -39,7 +39,7 @@ func (db *DB) checkpointCOWColumnCompactionProjected(ctx context.Context, automa
 // triggering synchronous leaf-generation pack+GC maintenance.
 func (db *DB) checkpointCOWPressure(ctx context.Context, projected *backenddb.NativeProjectedGenerationPressure) error {
 	defer db.observeCOWCheckpointRun(time.Now())
-	return db.materializeCOWPrefixProjectedWithLeafPack(ctx, false, nil, cowCheckpointMaterialization, projected, false)
+	return db.materializeCOWPrefixProjected(ctx, false, nil, cowCheckpointMaterialization, projected, false)
 }
 
 func (db *DB) observeCOWCheckpointRun(start time.Time) {
@@ -225,14 +225,10 @@ func cowGenerationAdmissionError(generationPressure bool, err error) error {
 // retirement, leaving journal rotation and covered-file maintenance to the already
 // running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
 func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) error {
-	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil)
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil, false)
 }
 
-func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) error {
-	return db.materializeCOWPrefixProjectedWithLeafPack(ctx, automatic, operation, mode, projected, false)
-}
-
-func (db *DB) materializeCOWPrefixProjectedWithLeafPack(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure, reclaimLeafDebt bool) error {
+func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure, reclaimLeafDebt bool) error {
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -406,7 +402,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		return err
 	}
 	flushedDirty := frontier != nil && len(frontier.frozen) > 0
-	err = db.flushCOWFrozenCutWithColumnCompactionAndWALSync(true, &publish, frontier, operation != nil, operation, generationPressure, !deferRelaxedWALSync)
+	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure, !deferRelaxedWALSync)
 	frontier = nil
 	if err != nil {
 		return err

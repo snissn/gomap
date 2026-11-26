@@ -519,14 +519,10 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 
 // forceIdle is private to the exact-basis, fully sealed fallback predicate path.
 func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) error {
-	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, false)
+	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, false, true)
 }
 
-func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool) (retErr error) {
-	return db.flushCOWFrozenCutWithColumnCompactionAndWALSync(syncFlush, publish, cut, forceIdle, operation, generationPressure, true)
-}
-
-func (db *DB) flushCOWFrozenCutWithColumnCompactionAndWALSync(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool, syncCommandWAL bool) (retErr error) {
+func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool, syncCommandWAL bool) (retErr error) {
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
 	// from this immutable cut and its exact captured disk basis below.

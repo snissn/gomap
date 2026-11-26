@@ -286,7 +286,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 				}
 			}
 		}
-		err = db.materializeCOWPrefixProjected(context.Background(), false, nil, cowSynchronousPressureMaterialization, projected)
+		err = db.materializeCOWPrefixProjected(context.Background(), false, nil, cowSynchronousPressureMaterialization, projected, false)
 	} else {
 		err = db.checkpointCOWPressure(context.Background(), projected)
 	}
