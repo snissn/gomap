@@ -134,6 +134,7 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         for step in download_steps:
             self.assertEqual(step["with"]["name"], "${{ needs.preflight.outputs.plan_artifact }}")
         # Cross-compile steps and retained script suites exist
+        self.assertGreaterEqual(doc["jobs"]["vet-and-cross-compile"]["timeout-minutes"], 25)
         vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet-and-cross-compile"]["steps"])
         self.assertIn("--kind cross-darwin", vet_script)
         self.assertIn("--kind cross-windows", vet_script)

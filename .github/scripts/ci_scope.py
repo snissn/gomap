@@ -825,6 +825,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_run_shard(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    # Runtime test/race shards cap GOMAXPROCS=2 and GOMEMLIMIT=4GiB to avoid RSS
+    # spikes across concurrent memtables; compile-only steps use all runner vCPUs.
+    compile_env = dict(os.environ, GOWORK="off", GOMEMLIMIT="6GiB")
+    compile_env.pop("GOMAXPROCS", None)
     env = dict(os.environ, GOWORK="off", GOMEMLIMIT="4GiB", GOMAXPROCS="2")
     jsonl_path = Path(args.jsonl) if args.jsonl else None
 
@@ -833,33 +837,33 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         if not pkgs:
             print("Draft PR touches no Go packages; compile/vet skipped.")
             return 0
-        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=env)
+        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
         if rc != 0:
             return rc
-        return _run_cmd(["go", "test", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=env)
+        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "vet":
         pkgs = plan.get("vet_packages", [])
         if not pkgs:
             print("No Go packages in vet cone.")
             return 0
-        return _run_cmd(["go", "vet", *pkgs], cwd=repo, env=env)
+        return _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "cross-darwin":
         pkgs = plan.get("darwin_cross_packages", [])
         if not pkgs:
             print("No Go packages for darwin cross-compile.")
             return 0
-        xenv = dict(env, CGO_ENABLED="0", GOOS="darwin", GOARCH="arm64")
-        return _run_cmd(["go", "test", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        xenv = dict(compile_env, CGO_ENABLED="0", GOOS="darwin", GOARCH="arm64")
+        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "cross-windows":
         pkgs = plan.get("windows_cross_packages", [])
         if not pkgs:
             print("No Windows-supported Go packages in affected cone.")
             return 0
-        xenv = dict(env, CGO_ENABLED="0", GOOS="windows", GOARCH="amd64")
-        return _run_cmd(["go", "test", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        xenv = dict(compile_env, CGO_ENABLED="0", GOOS="windows", GOARCH="amd64")
+        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "test":
         shards = plan.get("test_shards", [])
