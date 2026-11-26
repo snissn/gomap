@@ -994,38 +994,84 @@ func TestOpenStandaloneServerAppliesExplicitZeroUpdateCoalescingBatch(t *testing
 	}
 }
 
+var (
+	standaloneServerBinOnce sync.Once
+	standaloneServerBinDir  string
+	standaloneServerBinPath string
+	standaloneServerBinErr  error
+)
+
+func standaloneServerTestBinary(t *testing.T) string {
+	t.Helper()
+	standaloneServerBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "treedb-mongo-gateway-bin-*")
+		if err != nil {
+			standaloneServerBinErr = err
+			return
+		}
+		standaloneServerBinDir = dir
+		binName := "treedb-mongo-gateway-test"
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+		outPath := filepath.Join(dir, binName)
+		cmd := exec.Command("go", "build", "-o", outPath, "./server.go")
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			standaloneServerBinErr = errors.New("go build ./server.go: " + err.Error() + "\n" + string(out))
+			return
+		}
+		standaloneServerBinPath = outPath
+	})
+	if standaloneServerBinErr != nil {
+		t.Fatalf("%v", standaloneServerBinErr)
+	}
+	return standaloneServerBinPath
+}
+
+func cleanupStandaloneServerTestBinary() {
+	if standaloneServerBinDir != "" {
+		_ = os.RemoveAll(standaloneServerBinDir)
+	}
+}
+
 func TestStandaloneServerGoRunHelp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
 
+	bin := standaloneServerTestBinary(t)
 	cases := []struct {
 		name string
 		dir  string
+		prog string
 		args []string
 	}{
 		{
 			name: "package dir",
-			args: []string{"run", "./server.go", "-help"},
+			prog: bin,
+			args: []string{"-help"},
 		},
 		{
 			name: "short help",
-			args: []string{"run", "./server.go", "-h"},
+			prog: bin,
+			args: []string{"-h"},
 		},
 		{
 			name: "repo root documented path",
 			dir:  "../..",
+			prog: "go",
 			args: []string{"run", "./TreeDB/mongo_gateway/server.go", "-help"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command("go", tc.args...)
+			cmd := exec.Command(tc.prog, tc.args...)
 			cmd.Dir = tc.dir
 			cmd.Env = append(os.Environ(), "GOWORK=off")
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				t.Fatalf("go %s: %v\n%s", strings.Join(tc.args, " "), err, out)
+				t.Fatalf("%s %s: %v\n%s", tc.prog, strings.Join(tc.args, " "), err, out)
 			}
 			if !bytes.Contains(out, []byte("TreeDB root directory")) || !bytes.Contains(out, []byte("-document-format")) {
 				t.Fatalf("help output missing expected flags:\n%s", out)
@@ -1038,7 +1084,7 @@ func TestStandaloneServerGoRunDefaultDirUsesMongoGatewayDir(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
-	cmd := exec.Command("go", "run", "./server.go", "-help")
+	cmd := exec.Command(standaloneServerTestBinary(t), "-help")
 	cmd.Env = append(os.Environ(),
 		"GOWORK=off",
 		"MONGO_GATEWAY_DIR=/tmp/mongo-gateway-env",
@@ -1046,7 +1092,7 @@ func TestStandaloneServerGoRunDefaultDirUsesMongoGatewayDir(t *testing.T) {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go run ./server.go -help: %v\n%s", err, out)
+		t.Fatalf("standalone server -help: %v\n%s", err, out)
 	}
 	if !bytes.Contains(out, []byte(`/tmp/mongo-gateway-env`)) {
 		t.Fatalf("help output missing MONGO_GATEWAY_DIR default:\n%s", out)
@@ -1057,11 +1103,11 @@ func TestStandaloneServerGoRunMissingDirError(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
-	cmd := exec.Command("go", "run", "./server.go", "-dir", "")
+	cmd := exec.Command(standaloneServerTestBinary(t), "-dir", "")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("go run ./server.go -dir \"\" succeeded unexpectedly:\n%s", out)
+		t.Fatalf("standalone server -dir \"\" succeeded unexpectedly:\n%s", out)
 	}
 	if !bytes.Contains(out, []byte("TreeDB root directory -dir is required")) {
 		t.Fatalf("missing-dir output missing context:\n%s", out)
@@ -1075,11 +1121,11 @@ func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
-	cmd := exec.Command("go", "run", "./server.go", "-max-open-cursors", "-1")
+	cmd := exec.Command(standaloneServerTestBinary(t), "-max-open-cursors", "-1")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("go run ./server.go -max-open-cursors -1 succeeded unexpectedly:\n%s", out)
+		t.Fatalf("standalone server -max-open-cursors -1 succeeded unexpectedly:\n%s", out)
 	}
 	if !bytes.Contains(out, []byte("-max-open-cursors must be >= 0")) {
 		t.Fatalf("negative limit output missing context:\n%s", out)
@@ -1100,11 +1146,11 @@ func TestStandaloneServerGoRunListenErrorDoesNotCreateDir(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 
 	dir := filepath.Join(t.TempDir(), "db")
-	cmd := exec.Command("go", "run", "./server.go", "-addr", ln.Addr().String(), "-dir", dir)
+	cmd := exec.Command(standaloneServerTestBinary(t), "-addr", ln.Addr().String(), "-dir", dir)
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("go run ./server.go with occupied addr succeeded unexpectedly:\n%s", out)
+		t.Fatalf("standalone server with occupied addr succeeded unexpectedly:\n%s", out)
 	}
 	if !bytes.Contains(out, []byte("mongo gateway server: listen on")) {
 		t.Fatalf("listen failure output missing context:\n%s", out)
@@ -1118,11 +1164,11 @@ func TestStandaloneServerGoRunUnknownFlagErrorPrintedOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
-	cmd := exec.Command("go", "run", "./server.go", "-unknown")
+	cmd := exec.Command(standaloneServerTestBinary(t), "-unknown")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("go run ./server.go -unknown succeeded unexpectedly:\n%s", out)
+		t.Fatalf("standalone server -unknown succeeded unexpectedly:\n%s", out)
 	}
 	if got := bytes.Count(out, []byte("flag provided but not defined: -unknown")); got != 1 {
 		t.Fatalf("unknown flag output has %d parse errors, want 1:\n%s", got, out)

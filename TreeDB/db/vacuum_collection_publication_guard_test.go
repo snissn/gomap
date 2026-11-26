@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -2406,73 +2407,163 @@ func publicationGuardCallGraphReaches(calls map[*types.Func]map[*types.Func]stru
 	return false
 }
 
-func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *publicationGuardSource {
-	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	dir := filepath.Dir(currentFile)
-	cmd := exec.Command("go", "list", "-deps", "-export", "-json", ".")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	out, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("go list production package: %v\n%s", err, exitErr.Stderr)
-		}
-		t.Fatalf("go list production package: %v", err)
-	}
-	type listedPackage struct {
-		ImportPath string
-		Imports    []string
-		Dir        string
-		GoFiles    []string
-		CgoFiles   []string
-		Export     string
-	}
-	exports := make(map[string]string)
-	packages := make(map[string]listedPackage)
-	var production listedPackage
-	decoder := json.NewDecoder(strings.NewReader(string(out)))
-	for {
-		var listed listedPackage
-		if err := decoder.Decode(&listed); err != nil {
-			if err == io.EOF {
-				break
-			}
-			t.Fatalf("decode go list output: %v", err)
-		}
-		packages[listed.ImportPath] = listed
-		if listed.Export != "" {
-			exports[listed.ImportPath] = listed.Export
-		}
-		if listed.ImportPath == publicationGuardPackagePath {
-			production = listed
-		}
-	}
-	if production.Dir == "" || len(production.GoFiles) == 0 {
-		t.Fatalf("go list did not return production files for %s", publicationGuardPackagePath)
-	}
+type publicationGuardListedPackage struct {
+	ImportPath string
+	Imports    []string
+	Dir        string
+	GoFiles    []string
+	CgoFiles   []string
+	Export     string
+}
 
-	fset := token.NewFileSet()
-	files := make([]*ast.File, 0, len(production.GoFiles)+len(production.CgoFiles)+len(fixtures))
-	for _, name := range append(production.GoFiles, production.CgoFiles...) {
-		file, err := parser.ParseFile(fset, filepath.Join(production.Dir, name), nil, parser.SkipObjectResolution)
+type publicationGuardImmutableMetadata struct {
+	exports     map[string]string
+	packages    map[string]publicationGuardListedPackage
+	production  publicationGuardListedPackage
+	sourcePaths map[string]bool
+	fileBytes   map[string][]byte
+}
+
+var (
+	publicationGuardMetadataOnce sync.Once
+	publicationGuardMetadataVal  *publicationGuardImmutableMetadata
+	publicationGuardMetadataErr  error
+
+	publicationGuardBaseOnce sync.Once
+	publicationGuardBaseVal  *publicationGuardSource
+	publicationGuardBaseErr  error
+)
+
+func loadPublicationGuardImmutableMetadata(dir string) (*publicationGuardImmutableMetadata, error) {
+	publicationGuardMetadataOnce.Do(func() {
+		cmd := exec.Command("go", "list", "-deps", "-export", "-json", ".")
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		out, err := cmd.Output()
 		if err != nil {
-			t.Fatalf("parse production file %s: %v", name, err)
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				publicationGuardMetadataErr = fmt.Errorf("go list production package: %v\n%s", err, exitErr.Stderr)
+				return
+			}
+			publicationGuardMetadataErr = fmt.Errorf("go list production package: %v", err)
+			return
+		}
+		exports := make(map[string]string)
+		packages := make(map[string]publicationGuardListedPackage)
+		var production publicationGuardListedPackage
+		decoder := json.NewDecoder(strings.NewReader(string(out)))
+		for {
+			var listed publicationGuardListedPackage
+			if err := decoder.Decode(&listed); err != nil {
+				if err == io.EOF {
+					break
+				}
+				publicationGuardMetadataErr = fmt.Errorf("decode go list output: %v", err)
+				return
+			}
+			packages[listed.ImportPath] = listed
+			if listed.Export != "" {
+				exports[listed.ImportPath] = listed.Export
+			}
+			if listed.ImportPath == publicationGuardPackagePath {
+				production = listed
+			}
+		}
+		if production.Dir == "" || len(production.GoFiles) == 0 {
+			publicationGuardMetadataErr = fmt.Errorf("go list did not return production files for %s", publicationGuardPackagePath)
+			return
+		}
+
+		// Export data for a dependent package contains its own imported named
+		// types. Source-check every local reverse dependency of the body-audited
+		// package so all callers share the same original type identities.
+		sourcePaths := map[string]bool{
+			"errors": true,
+			"fmt":    true,
+			"github.com/snissn/gomap/TreeDB/internal/rootpublication":   true,
+			"github.com/snissn/gomap/TreeDB/pager":                      true,
+			"github.com/snissn/gomap/TreeDB/freelist":                   true,
+			"github.com/snissn/gomap/TreeDB/internal/bulk":              true,
+			"github.com/snissn/gomap/TreeDB/internal/commandwalbarrier": true,
+			"github.com/snissn/gomap/TreeDB/internal/iterator":          true,
+		}
+		for changed := true; changed; {
+			changed = false
+			for path, listed := range packages {
+				if sourcePaths[path] || !strings.HasPrefix(path, "github.com/snissn/gomap/") {
+					continue
+				}
+				for _, dependency := range listed.Imports {
+					if sourcePaths[dependency] {
+						sourcePaths[path] = true
+						changed = true
+						break
+					}
+				}
+			}
+		}
+
+		// Preload immutable production and source-checked dependency file bytes once.
+		fileBytes := make(map[string][]byte)
+		readFileOnce := func(fullPath string) error {
+			if _, ok := fileBytes[fullPath]; ok {
+				return nil
+			}
+			data, err := os.ReadFile(fullPath)
+			if err != nil {
+				return err
+			}
+			fileBytes[fullPath] = data
+			return nil
+		}
+		for _, name := range append(append([]string(nil), production.GoFiles...), production.CgoFiles...) {
+			if err := readFileOnce(filepath.Join(production.Dir, name)); err != nil {
+				publicationGuardMetadataErr = fmt.Errorf("read production file %s: %v", name, err)
+				return
+			}
+		}
+		for path := range sourcePaths {
+			listed := packages[path]
+			for _, name := range listed.GoFiles {
+				if err := readFileOnce(filepath.Join(listed.Dir, name)); err != nil {
+					publicationGuardMetadataErr = fmt.Errorf("read dependency file %s/%s: %v", path, name, err)
+					return
+				}
+			}
+		}
+
+		publicationGuardMetadataVal = &publicationGuardImmutableMetadata{
+			exports:     exports,
+			packages:    packages,
+			production:  production,
+			sourcePaths: sourcePaths,
+			fileBytes:   fileBytes,
+		}
+	})
+	return publicationGuardMetadataVal, publicationGuardMetadataErr
+}
+
+func buildProductionPublicationGuardSource(meta *publicationGuardImmutableMetadata, fixtures ...string) (*publicationGuardSource, error) {
+	fset := token.NewFileSet()
+	prodNames := append(append([]string(nil), meta.production.GoFiles...), meta.production.CgoFiles...)
+	files := make([]*ast.File, 0, len(prodNames)+len(fixtures))
+	for _, name := range prodNames {
+		fullPath := filepath.Join(meta.production.Dir, name)
+		file, err := parser.ParseFile(fset, fullPath, meta.fileBytes[fullPath], parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parse production file %s: %v", name, err)
 		}
 		files = append(files, file)
 	}
 	for i, fixture := range fixtures {
 		file, err := parser.ParseFile(fset, fmt.Sprintf("publication_guard_fixture_%d.go", i), fixture, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatalf("parse production guard fixture: %v", err)
+			return nil, fmt.Errorf("parse production guard fixture: %v", err)
 		}
 		files = append(files, file)
 	}
 	lookup := func(path string) (io.ReadCloser, error) {
-		exportPath := exports[path]
+		exportPath := meta.exports[path]
 		if exportPath == "" {
 			return nil, fmt.Errorf("publication guard: no export data for %s", path)
 		}
@@ -2480,25 +2571,6 @@ func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *pub
 	}
 	info := publicationGuardTypesInfo()
 	fallback := importer.ForCompiler(fset, "gc", lookup)
-	// Export data for a dependent package contains its own imported named
-	// types. Source-check every local reverse dependency of the body-audited
-	// package so all callers share the same original type identities.
-	sourcePaths := map[string]bool{"errors": true, "fmt": true, "github.com/snissn/gomap/TreeDB/internal/rootpublication": true, "github.com/snissn/gomap/TreeDB/pager": true, "github.com/snissn/gomap/TreeDB/freelist": true, "github.com/snissn/gomap/TreeDB/internal/bulk": true, "github.com/snissn/gomap/TreeDB/internal/commandwalbarrier": true, "github.com/snissn/gomap/TreeDB/internal/iterator": true}
-	for changed := true; changed; {
-		changed = false
-		for path, listed := range packages {
-			if sourcePaths[path] || !strings.HasPrefix(path, "github.com/snissn/gomap/") {
-				continue
-			}
-			for _, dependency := range listed.Imports {
-				if sourcePaths[dependency] {
-					sourcePaths[path] = true
-					changed = true
-					break
-				}
-			}
-		}
-	}
 	checked := make(map[string]*types.Package)
 	extraFiles := make([]*ast.File, 0)
 	custodyFiles := make([]*ast.File, 0)
@@ -2507,13 +2579,14 @@ func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *pub
 		if pkg := checked[path]; pkg != nil {
 			return pkg, nil
 		}
-		if !sourcePaths[path] {
+		if !meta.sourcePaths[path] {
 			return fallback.Import(path)
 		}
-		listed := packages[path]
+		listed := meta.packages[path]
 		var parsed []*ast.File
 		for _, name := range listed.GoFiles {
-			file, e := parser.ParseFile(fset, filepath.Join(listed.Dir, name), nil, parser.SkipObjectResolution)
+			fullPath := filepath.Join(listed.Dir, name)
+			file, e := parser.ParseFile(fset, fullPath, meta.fileBytes[fullPath], parser.SkipObjectResolution)
 			if e != nil {
 				return nil, e
 			}
@@ -2551,14 +2624,54 @@ func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *pub
 	config := types.Config{Importer: sourceImporter}
 	pkg, err := config.Check(publicationGuardPackagePath, fset, files, info)
 	if err != nil {
-		t.Fatalf("type-check production package: %v", err)
+		return nil, fmt.Errorf("type-check production package: %v", err)
 	}
 	files = append(files, extraFiles...)
-	return &publicationGuardSource{fset: fset, pkg: pkg, files: files, custodyFiles: custodyFiles, info: info}
+	return &publicationGuardSource{fset: fset, pkg: pkg, files: files, custodyFiles: custodyFiles, info: info}, nil
+}
+
+func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *publicationGuardSource {
+	t.Helper()
+	if dbTestRaceEnabled {
+		t.Skip("skipping static AST publication source guard under -race; verified in normal test runs")
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	meta, err := loadPublicationGuardImmutableMetadata(filepath.Dir(currentFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) == 0 {
+		publicationGuardBaseOnce.Do(func() {
+			publicationGuardBaseVal, publicationGuardBaseErr = buildProductionPublicationGuardSource(meta)
+		})
+		if publicationGuardBaseErr != nil {
+			t.Fatal(publicationGuardBaseErr)
+		}
+		// Return shallow slice clones so callers never mutate shared slice headers.
+		return &publicationGuardSource{
+			fset:         publicationGuardBaseVal.fset,
+			pkg:          publicationGuardBaseVal.pkg,
+			files:        append([]*ast.File(nil), publicationGuardBaseVal.files...),
+			custodyFiles: append([]*ast.File(nil), publicationGuardBaseVal.custodyFiles...),
+			info:         publicationGuardBaseVal.info,
+		}
+	}
+	// Fixture-injected tests always type-check into a fresh isolated FileSet/Info.
+	src, err := buildProductionPublicationGuardSource(meta, fixtures...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return src
 }
 
 func loadPublicationGuardFixture(t *testing.T, body string) *publicationGuardSource {
 	t.Helper()
+	if dbTestRaceEnabled {
+		t.Skip("skipping static AST publication source guard under -race; verified in normal test runs")
+	}
 	const prelude = `package guardfixture
 import ("sync/atomic";"fmt";"errors")
 var _=fmt.Errorf
