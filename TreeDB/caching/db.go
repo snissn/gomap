@@ -3542,6 +3542,79 @@ func (db *DB) advanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
 	return nil
 }
 
+func (db *DB) detachSealedLeafPageLogSegments(sealedRawFileIDs map[uint32]struct{}) error {
+	if db == nil || !db.indexOuterLeavesInValueLog || len(sealedRawFileIDs) == 0 {
+		return nil
+	}
+	var errs []error
+	for _, l := range db.leafLogAppendLanesSnapshot() {
+		if l == nil {
+			continue
+		}
+		if err := db.detachLeafLogAppendLaneIfSealed(l, sealedRawFileIDs); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (db *DB) detachLeafLogAppendLaneIfSealed(l *lane, sealedRawFileIDs map[uint32]struct{}) error {
+	if db == nil || l == nil || len(sealedRawFileIDs) == 0 {
+		return nil
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlogPath == "" || l.vlogSeq <= 0 {
+		return nil
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+	if err != nil {
+		return err
+	}
+	rawFileID := page.ValueLogSegmentID(fileID)
+	if _, ok := sealedRawFileIDs[rawFileID]; !ok {
+		return nil
+	}
+	db.advanceLeafLogAppendSeqAtLeast(l.vlogSeq)
+	return db.detachLeafLogAppendLaneMuHeld(l)
+}
+
+func (db *DB) detachLeafLogAppendLaneMuHeld(l *lane) error {
+	if l == nil {
+		return nil
+	}
+	if w := l.vlog; w != nil {
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		if !db.relaxedSync {
+			if err := w.Sync(); err != nil {
+				return err
+			}
+		}
+		closeErr := w.Close()
+		l.vlog = nil
+		l.vlogPath = ""
+		l.vlogCaps = vlogWriterCaps{}
+		l.vlogLiveBytes.Store(0)
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		l.vlogDirty.Store(false)
+		l.vlogSyncPending.Store(false)
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+		return closeErr
+	}
+	l.vlogPath = ""
+	l.vlogCaps = vlogWriterCaps{}
+	l.vlogLiveBytes.Store(0)
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
+	l.vlogDirty.Store(false)
+	l.vlogSyncPending.Store(false)
+	l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	return nil
+}
+
 func (db *DB) nextLeafLogAppendSeq() (int, error) {
 	seq, err := db.reserveLeafLogAppendSequence(0)
 	return int(seq), err

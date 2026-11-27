@@ -358,6 +358,31 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 		if err := db.flushDeferredLeafGenerationManifestLocked(); err != nil {
 			return stats, false, err
 		}
+		if db.leafPageLog != nil {
+			db.mu.RLock()
+			var sealedRawFileIDs map[uint32]struct{}
+			if db.leafGenerationManifest != nil {
+				for _, gen := range db.leafGenerationManifest.Generations {
+					if gen.State != leafGenerationStateSealed || len(gen.FileIDs) == 0 {
+						continue
+					}
+					if sealedRawFileIDs == nil {
+						sealedRawFileIDs = make(map[uint32]struct{}, len(db.leafGenerationManifest.Generations))
+					}
+					for _, rawID := range gen.FileIDs {
+						if rawID != 0 {
+							sealedRawFileIDs[rawID] = struct{}{}
+						}
+					}
+				}
+			}
+			db.mu.RUnlock()
+			if len(sealedRawFileIDs) > 0 {
+				if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedRawFileIDs); err != nil {
+					return stats, false, err
+				}
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return stats, false, err

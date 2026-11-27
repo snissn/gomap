@@ -24,6 +24,7 @@ var _ backenddb.LeafPagePreparedStableLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPagePreparedStableBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPagePreparedChildRefStableBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageLogSealedSegmentDetacher = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
@@ -667,6 +668,13 @@ func (l *cachingLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint
 		return nil
 	}
 	return l.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
+}
+
+func (l *cachingLeafPageLog) DetachSealedLeafPageLogSegments(sealedRawFileIDs map[uint32]struct{}) error {
+	if l == nil || l.db == nil {
+		return nil
+	}
+	return l.db.detachSealedLeafPageLogSegments(sealedRawFileIDs)
 }
 
 func (l *cachingLeafPageLog) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {

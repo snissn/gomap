@@ -85,6 +85,14 @@ type LeafPageLogCompactStorageHandoff interface {
 	AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error
 }
 
+// LeafPageLogSealedSegmentDetacher is implemented by internally owned
+// multi-lane leaf-page-log writers that can detach worker lanes still parked
+// on already-sealed generations so LeafGenerationGC can reclaim them without
+// eagerly allocating empty replacement segments.
+type LeafPageLogSealedSegmentDetacher interface {
+	DetachSealedLeafPageLogSegments(sealedRawFileIDs map[uint32]struct{}) error
+}
+
 // CompactStorageLeafPageLogOwnerClassification is the compact-owner production
 // support contract attached to fail-closed exhaustive compact errors.
 type CompactStorageLeafPageLogOwnerClassification struct {
@@ -928,13 +936,25 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 		leafPackPassesRemaining--
 		var pack LeafGenerationPackRunOnceStats
 		phaseName := fmt.Sprintf("leaf-generation-pack-%d", pass+1)
-		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
+		packErr := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
 			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 			pack, err = db.compactStorageLeafGenerationPackRunOnceWithOwner(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked, compactLeafPackCreatedFileIDs, &compactLeafPackPlanState, owner)
 			return err
-		}); err != nil {
-			return stats, err
+		})
+		if packErr != nil {
+			if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) {
+				if len(stats.Phases) > 0 {
+					phase := &stats.Phases[len(stats.Phases)-1]
+					phase.Status = CompactStoragePhaseStatusUnsupported
+					phase.Reason = packErr.Error()
+					phase.Skipped = true
+					phase.SkipReason = packErr.Error()
+				}
+				leafPackPassesRemaining = 0
+				break
+			}
+			return stats, packErr
 		}
 		stats.LeafGenerationPacks = append(stats.LeafGenerationPacks, pack)
 		if !pack.Ran {
@@ -1453,6 +1473,18 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 				}
 			}
 		}
+	} else if db.leafPageLog != nil && len(rawFileIDs) > 0 {
+		sealedSet := make(map[uint32]struct{}, len(rawFileIDs))
+		for _, rawID := range rawFileIDs {
+			if rawID != 0 {
+				sealedSet[rawID] = struct{}{}
+			}
+		}
+		if len(sealedSet) > 0 {
+			if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedSet); err != nil {
+				return false, err
+			}
+		}
 	}
 
 	if err := db.replaceLeafGenerationManifest(nextManifest); err != nil {
@@ -1531,29 +1563,42 @@ func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactS
 			(*leafPackPassesRemaining)--
 			var pack LeafGenerationPackRunOnceStats
 			phaseName := fmt.Sprintf("settle-leaf-generation-pack-%d", pass+1)
-			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+			packErr := db.runCompactStoragePhase(stats, phaseName, func() error {
 				var err error
 				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 				pack, err = db.compactStorageLeafGenerationPackRunOnceWithOwner(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), lockMaintenance, ignoredLeafPackRawFileIDs, leafPackPlanState, owner)
 				return err
-			}); err != nil {
-				return err
-			}
-			stats.LeafGenerationPacks = append(stats.LeafGenerationPacks, pack)
-			if !pack.Ran {
-				if len(stats.Phases) > 0 {
-					stats.Phases[len(stats.Phases)-1].Skipped = true
-					stats.Phases[len(stats.Phases)-1].SkipReason = pack.SkipReason
+			})
+			if packErr != nil {
+				if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) {
+					if len(stats.Phases) > 0 {
+						phase := &stats.Phases[len(stats.Phases)-1]
+						phase.Status = CompactStoragePhaseStatusUnsupported
+						phase.Reason = packErr.Error()
+						phase.Skipped = true
+						phase.SkipReason = packErr.Error()
+					}
+					*leafPackPassesRemaining = 0
+				} else {
+					return packErr
 				}
 			} else {
-				compactStorageRememberLeafPackCreatedFileIDs(ignoredLeafPackRawFileIDs, pack)
-				if err := db.refreshCompactStorageLeafPageLog(compactLeafLog); err != nil {
-					return err
-				}
-				if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-					return db.checkpoint(!lockMaintenance)
-				}); err != nil {
-					return err
+				stats.LeafGenerationPacks = append(stats.LeafGenerationPacks, pack)
+				if !pack.Ran {
+					if len(stats.Phases) > 0 {
+						stats.Phases[len(stats.Phases)-1].Skipped = true
+						stats.Phases[len(stats.Phases)-1].SkipReason = pack.SkipReason
+					}
+				} else {
+					compactStorageRememberLeafPackCreatedFileIDs(ignoredLeafPackRawFileIDs, pack)
+					if err := db.refreshCompactStorageLeafPageLog(compactLeafLog); err != nil {
+						return err
+					}
+					if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
+						return db.checkpoint(!lockMaintenance)
+					}); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -3049,6 +3094,23 @@ func compactStorageAdvanceLeafPageLogSeqAtLeast(log LeafPageLog, seq uint32) err
 		return fmt.Errorf("treedb: compact storage leaf-page-log owner %T cannot advance after handoff", log)
 	}
 	return handoff.AdvanceCompactStorageLeafPageLogSeqAtLeast(seq)
+}
+
+func detachSealedLeafPageLogSegments(log LeafPageLog, sealedRawFileIDs map[uint32]struct{}) error {
+	if log == nil || len(sealedRawFileIDs) == 0 {
+		return nil
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return detachSealedLeafPageLogSegments(wrapped.inner, sealedRawFileIDs)
+	}
+	if group, ok := log.(*leafPageLogLaneGroup); ok {
+		return group.detachSealedLeafPageLogSegments(sealedRawFileIDs)
+	}
+	detacher, ok := log.(LeafPageLogSealedSegmentDetacher)
+	if !ok {
+		return nil
+	}
+	return detacher.DetachSealedLeafPageLogSegments(sealedRawFileIDs)
 }
 
 func compactStorageLeafPageLogOwnerClass(log LeafPageLog) CompactStorageLeafPageLogOwnerClass {

@@ -30,6 +30,7 @@ var _ backenddb.LeafPageLogCurrentSegmentProvider = (*cachingLeafPageLogGroup)(n
 var _ backenddb.LeafPageLogSegmentRegistrationObserver = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogLaneProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageLogSealedSegmentDetacher = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLogGroup)(nil)
 
 func (g *cachingLeafPageLogGroup) laneForWorkerIndex(workerIndex int) (*lane, bool) {
@@ -297,6 +298,13 @@ func (g *cachingLeafPageLogGroup) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq
 		return nil
 	}
 	return g.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
+}
+
+func (g *cachingLeafPageLogGroup) DetachSealedLeafPageLogSegments(sealedRawFileIDs map[uint32]struct{}) error {
+	if g == nil || g.db == nil {
+		return nil
+	}
+	return g.db.detachSealedLeafPageLogSegments(sealedRawFileIDs)
 }
 
 func (g *cachingLeafPageLogGroup) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
