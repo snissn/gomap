@@ -580,18 +580,37 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		return
 	}
 
-	// Split samples into disjoint train (even) and holdout eval (odd) slices so
-	// dictionary evaluation measures true out-of-sample generalization rather
-	// than in-sample memorization of history bytes.
+	// Split samples into disjoint train and holdout eval slices balanced by byte
+	// count (while preserving at least 4 samples in each partition) so dictionary
+	// evaluation measures true out-of-sample generalization even on alternating
+	// small/large record streams.
 	trainSamples := make([][]byte, 0, (len(validSamples)+1)/2)
 	evalSamples := make([][]byte, 0, len(validSamples)/2)
 	trainRawTotal := 0
+	evalRawTotal := 0
 	for i, sample := range validSamples {
-		if i%2 == 0 {
+		rem := len(validSamples) - i
+		needTrain := 4 - len(trainSamples)
+		needEval := 4 - len(evalSamples)
+		var assignTrain bool
+		switch {
+		case needTrain > 0 && rem <= needTrain:
+			assignTrain = true
+		case needEval > 0 && rem <= needEval:
+			assignTrain = false
+		case trainRawTotal < evalRawTotal:
+			assignTrain = true
+		case evalRawTotal < trainRawTotal:
+			assignTrain = false
+		default:
+			assignTrain = len(trainSamples) <= len(evalSamples)
+		}
+		if assignTrain {
 			trainSamples = append(trainSamples, sample)
 			trainRawTotal += len(sample)
 		} else {
 			evalSamples = append(evalSamples, sample)
+			evalRawTotal += len(sample)
 		}
 	}
 	if len(trainSamples) < 4 || len(evalSamples) < 4 || trainRawTotal < 2048 {

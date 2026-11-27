@@ -248,3 +248,45 @@ func TestShapeAndValidateDict_DoesNotZeroPadShorterDict(t *testing.T) {
 		t.Fatalf("shapeAndValidateDict zero-padded shorter dict: got len=%d want=%d", len(shaped), len(dict))
 	}
 }
+
+func TestTrainerTrain_AlternatingSampleSizesBalancePartitions(t *testing.T) {
+	tr := NewTrainer(TrainConfig{
+		TrainBytes:     32 << 10,
+		DictBytes:      16 << 10,
+		MinRecords:     8,
+		MaxRecordBytes: 4 << 10,
+		SampleStride:   1,
+	}, Config{Kind: KindZSTD, Level: zstd.SpeedFastest}, false, false)
+	if tr == nil {
+		t.Fatalf("expected non-nil trainer")
+	}
+	defer tr.Close()
+
+	// Alternate 64-byte and 2048-byte structured records (32 records = 33792 B).
+	// Naive even/odd splitting would place only 1024 B in trainSamples and drop
+	// the batch; byte-balanced partitioning trains a valid dictionary.
+	smallBase := bytes.Repeat([]byte(`{"k":"v","t":1},`), 4)
+	largeBase := bytes.Repeat([]byte(`{"collection":"orders","status":"confirmed","region":"us-west-2","payload":"structured-field-data"},`), 22)[:2048]
+	samples := make([][]byte, 32)
+	for i := range samples {
+		if i%2 == 0 {
+			buf := append([]byte(nil), smallBase[:64]...)
+			copy(buf[len(buf)-4:], fmt.Sprintf("%04d", i))
+			samples[i] = buf
+		} else {
+			buf := append([]byte(nil), largeBase...)
+			copy(buf[len(buf)-4:], fmt.Sprintf("%04d", i))
+			samples[i] = buf
+		}
+	}
+
+	tr.train(samples, 16<<10, zstd.SpeedFastest, 1)
+
+	p, ok := tr.ActiveProfile()
+	if !ok || p == nil {
+		t.Fatalf("expected accepted profile for alternating 64B/2048B corpus")
+	}
+	if p.TotalRatio >= 0.5 {
+		t.Fatalf("expected strong holdout compression on structured alternating corpus, got TotalRatio=%.4f", p.TotalRatio)
+	}
+}

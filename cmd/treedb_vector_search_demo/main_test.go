@@ -233,7 +233,7 @@ func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
 	if !cfg.IndexOuterLeavesInValueLog || !cfg.LeafPrefixCompression || !cfg.IndexColumnarLeaves || !cfg.IndexPackedValuePtr || cfg.IndexInternalBaseDelta {
 		t.Fatalf("index format config lost bench profile knobs: %+v", cfg)
 	}
-	if cfg.ValueLogCompression != "auto" || cfg.ValueLogBlockCodec != "snappy" || cfg.ValueLogAutoPolicy != "balanced" {
+	if cfg.ValueLogCompression != "block" || cfg.ValueLogBlockCodec != "lz4" || cfg.ValueLogAutoPolicy != "balanced" {
 		t.Fatalf("value-log format config lost bench profile knobs: %+v", cfg)
 	}
 }
