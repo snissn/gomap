@@ -101,10 +101,20 @@ KNOWN_SLOW_TEST_WEIGHTS: dict[str, dict[str, float]] = {
         "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication": 65.0,
         "TestVacuumRaceMissingKey": 60.0,
         "TestCompactIndex_AllocatesNewPagesByAppending": 29.0,
+        "TestCompactIndexRetiresOldPages": 24.0,
+        "TestPublicationSourceGuardNotificationRejectsExposedState": 22.0,
         "TestIndexVacuumTriggerReportMatchesFragmentationSpan": 20.0,
+        "TestDurableRootMetadataReuseProcessCut4627": 16.0,
         "TestLeafFillTarget_IsEnforced": 15.0,
         "TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs": 15.0,
-        "TestPublicationSourceGuardNotificationRejectsExposedState": 14.0,
+        "TestPublicationSourceGuardCustodyCertificateInventory": 12.0,
+    },
+    "github.com/snissn/gomap/TreeDB/caching": {
+        "TestCOWCoalescedBoundarySurvivesWritesBeforeKernelCapture": 19.0,
+        "TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady": 8.0,
+        "TestCheckpoint_DoesNotKickVlogGenerationRewrite_WALOn": 8.0,
+        "TestCOWGenerationWorkerRetriesFinalSnapshotAdmission": 7.0,
+        "TestCOWGenerationWorkerRetriesBasisRefreshSuccessorAdmission": 4.0,
     },
     "github.com/snissn/gomap/TreeDB/mongo_gateway": {
         "TestStandaloneNativeDictionaryCachePolicy": 60.0,
@@ -118,7 +128,33 @@ KNOWN_SLOW_TEST_WEIGHTS: dict[str, dict[str, float]] = {
     },
 }
 
-# Dynamic sharding targets tuned for ~4-5 minute Linux wall-clock on wide PRs.
+# Measured macOS / Windows normal-test weights (seconds, from runs 45913798272, 45921039362, 45923011505)
+MACOS_WEIGHTS: dict[str, float] = {
+    "github.com/snissn/gomap/TreeDB/nativewire": 525.0,
+    "github.com/snissn/gomap/TreeDB": 240.0,
+    "github.com/snissn/gomap/TreeDB/collections": 240.0,
+    "github.com/snissn/gomap/TreeDB/db": 195.0,
+    "github.com/snissn/gomap/TreeDB/caching": 85.0,
+    "github.com/snissn/gomap/cmd/unified_bench": 75.0,
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": 60.0,
+    "github.com/snissn/gomap/TreeDB/mvcc": 45.0,
+    "github.com/snissn/gomap/TreeDB/internal/commitlog": 30.0,
+    "github.com/snissn/gomap/TreeDB/internal/rootpublication": 18.0,
+}
+
+WINDOWS_WEIGHTS: dict[str, float] = {
+    "github.com/snissn/gomap/TreeDB/nativewire": 850.0,
+    "github.com/snissn/gomap/TreeDB": 780.0,
+    "github.com/snissn/gomap/TreeDB/collections": 650.0,
+    "github.com/snissn/gomap/TreeDB/db": 390.0,
+    "github.com/snissn/gomap/TreeDB/caching": 200.0,
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": 130.0,
+    "github.com/snissn/gomap/TreeDB/mvcc": 100.0,
+    "github.com/snissn/gomap/TreeDB/internal/commitlog": 60.0,
+    "github.com/snissn/gomap/TreeDB/internal/rootpublication": 15.0,
+}
+
+# Dynamic sharding targets tuned for ~4-5 minute wall-clock on wide PRs.
 COMPILE_SHARD_MIN_PACKAGES = 45
 TARGET_NORMAL_SHARD_SECONDS = 135.0
 TARGET_MAIN_NORMAL_SHARD_SECONDS = 165.0
@@ -132,7 +168,20 @@ RACE_SPLIT_THRESHOLD_SECONDS = 175.0
 MAX_RACE_SHARDS = 12
 MAX_RACE_SLICES_PER_PACKAGE = 6
 
+# OS-escalated sharding targets (<5m wall-clock on macOS and Windows, while
+# keeping tiny packages on 1 runner so 10x macOS billing isn't wasted).
+TARGET_MACOS_SHARD_SECONDS = 130.0
+MACOS_SPLIT_THRESHOLD_SECONDS = 140.0
+MAX_MACOS_SHARDS = 4
+MAX_MACOS_SLICES_PER_PACKAGE = 3
+
+TARGET_WINDOWS_SHARD_SECONDS = 135.0
+WINDOWS_SPLIT_THRESHOLD_SECONDS = 150.0
+MAX_WINDOWS_SHARDS = 6
+MAX_WINDOWS_SLICES_PER_PACKAGE = 6
+
 SPLIT_TEST_CHUNK_MAX_BYTES = 28000
+WINDOWS_SPLIT_TEST_CHUNK_MAX_BYTES = 12000
 
 # Heavy indirect downstream suites skipped in Tier 1 surgical normal tests unless
 # directly touched or one of their subsystem prefixes was touched.
@@ -833,11 +882,35 @@ def build_plan(
         slice_compile_overhead=45.0,
     )
 
-    referenced_pkgs = set(test_packages) | set(race_packages)
+    # Build OS-escalated shards (macOS <=4 shards, Windows <=6 shards; tiny packages stay 1 shard).
+    macos_pkg_weights = {p: MACOS_WEIGHTS.get(p, NORMAL_WEIGHTS.get(p, 2.0) * 1.3) for p in os_macos_packages}
+    windows_pkg_weights = {p: WINDOWS_WEIGHTS.get(p, NORMAL_WEIGHTS.get(p, 2.0) * 2.5) for p in os_windows_packages}
+    os_macos_shards = build_weighted_shards(
+        os_macos_packages,
+        macos_pkg_weights,
+        target_shard_seconds=TARGET_MACOS_SHARD_SECONDS,
+        split_threshold=MACOS_SPLIT_THRESHOLD_SECONDS,
+        max_shards=MAX_MACOS_SHARDS,
+        max_slices_per_pkg=MAX_MACOS_SLICES_PER_PACKAGE,
+        default_weight=3.0,
+        slice_compile_overhead=30.0,
+    )
+    os_windows_shards = build_weighted_shards(
+        os_windows_packages,
+        windows_pkg_weights,
+        target_shard_seconds=TARGET_WINDOWS_SHARD_SECONDS,
+        split_threshold=WINDOWS_SPLIT_THRESHOLD_SECONDS,
+        max_shards=MAX_WINDOWS_SHARDS,
+        max_slices_per_pkg=MAX_WINDOWS_SLICES_PER_PACKAGE,
+        default_weight=5.0,
+        slice_compile_overhead=40.0,
+    )
+
+    referenced_pkgs = set(test_packages) | set(race_packages) | set(os_macos_packages) | set(os_windows_packages)
     pkg_dirs = {p: pkg_to_dir[p] for p in sorted(referenced_pkgs) if p in pkg_to_dir}
 
     return {
-        "schema": 2,
+        "schema": 3,
         "event_name": event_name,
         "base_sha": base_sha,
         "head_sha": head_sha,
@@ -861,7 +934,9 @@ def build_plan(
         "pkg_dirs": pkg_dirs,
         "escalate_os": escalate_os,
         "os_macos_packages": os_macos_packages,
+        "os_macos_shards": os_macos_shards,
         "os_windows_packages": os_windows_packages,
+        "os_windows_shards": os_windows_shards,
         "run_docs_check": run_docs_check,
         "run_ci_script_tests": run_ci_script_tests,
         "run_python_client": run_python_client,
@@ -876,27 +951,26 @@ def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
     cross_windows_ids = [s["id"] for s in plan["cross_windows_shards"]]
     test_ids = [s["id"] for s in plan["test_shards"]]
     race_ids = [s["id"] for s in plan["race_shards"]]
-    os_runners: list[str] = []
-    if plan["escalate_os"]:
-        if plan["os_macos_packages"]:
-            os_runners.append("macos-latest")
-        if plan["os_windows_packages"]:
-            os_runners.append("windows-latest")
+    os_macos_ids = [s["id"] for s in plan["os_macos_shards"]]
+    os_windows_ids = [s["id"] for s in plan["os_windows_shards"]]
 
     run_vet = bool(vet_ids)
     run_cross_darwin = bool(cross_darwin_ids)
     run_cross_windows = bool(cross_windows_ids)
     run_test = bool(test_ids) or plan["run_python_client"]
     run_race = bool(race_ids)
-    escalate_os = bool(os_runners)
+    escalate_macos = bool(plan["escalate_os"] and os_macos_ids)
+    escalate_windows = bool(plan["escalate_os"] and os_windows_ids)
+    escalate_os = escalate_macos or escalate_windows
     # GitHub Actions rejects empty matrix vectors even on skipped jobs; always
-    # emit a safe non-empty fallback vector gated by the boolean run_* flag.
+    # emit a safe non-empty fallback vector gated by the boolean run_* / escalate_* flag.
     effective_vet_ids = vet_ids if vet_ids else [0]
     effective_cross_darwin_ids = cross_darwin_ids if cross_darwin_ids else [0]
     effective_cross_windows_ids = cross_windows_ids if cross_windows_ids else [0]
     effective_test_ids = test_ids if test_ids else [0]
     effective_race_ids = race_ids if race_ids else [0]
-    effective_os_runners = os_runners if os_runners else ["ubuntu-latest"]
+    effective_os_macos_ids = os_macos_ids if os_macos_ids else [0]
+    effective_os_windows_ids = os_windows_ids if os_windows_ids else [0]
 
     lines = [
         f"tier={plan['tier']}",
@@ -916,7 +990,10 @@ def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
         f"run_race={'true' if run_race else 'false'}",
         f"race_shards_json={json.dumps(effective_race_ids)}",
         f"escalate_os={'true' if escalate_os else 'false'}",
-        f"os_runners_json={json.dumps(effective_os_runners)}",
+        f"escalate_macos={'true' if escalate_macos else 'false'}",
+        f"os_macos_shards_json={json.dumps(effective_os_macos_ids)}",
+        f"escalate_windows={'true' if escalate_windows else 'false'}",
+        f"os_windows_shards_json={json.dumps(effective_os_windows_ids)}",
     ]
     with path.open("a", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -934,7 +1011,7 @@ def write_step_summary(plan: dict[str, Any], path: Path) -> None:
         f"- **Vet / cross-compile cones:** vet={len(plan['vet_packages'])} ({len(plan['vet_shards'])} shard), darwin={len(plan['darwin_cross_packages'])} ({len(plan['cross_darwin_shards'])} shard), windows={len(plan['windows_cross_packages'])} ({len(plan['cross_windows_shards'])} shard)",
         f"- **Normal Linux test packages:** {len(plan['test_packages'])} across {len(plan['test_shards'])} shard(s) (total est. {plan['estimated_normal_seconds']}s, max shard est. {max_test_est}s)",
         f"- **Touched `-race` packages:** {len(plan['race_packages'])} across {len(plan['race_shards'])} shard(s) (total est. {plan.get('estimated_race_seconds', 0.0)}s, max shard est. {max_race_est}s)",
-        f"- **OS escalation:** `{plan['escalate_os']}` (macOS: {len(plan['os_macos_packages'])} pkg, Windows: {len(plan['os_windows_packages'])} pkg)",
+        f"- **OS escalation:** `{plan['escalate_os']}` (macOS: {len(plan['os_macos_packages'])} pkg across {len(plan['os_macos_shards'])} shard(s), Windows: {len(plan['os_windows_packages'])} pkg across {len(plan['os_windows_shards'])} shard(s))",
         f"- **Extra gates:** `docs_check={plan['run_docs_check']}`, `ci_script_tests={plan['run_ci_script_tests']}`, `python_client={plan['run_python_client']}`",
     ]
     if plan["touched_packages"]:
@@ -985,8 +1062,10 @@ def _run_package_slice(
 ) -> int:
     """Compile a test binary once with full runner vCPUs and execute one weighted slice via test2json."""
     pkg_dir = _resolve_package_dir(repo, plan, pkg)
-    with tempfile.TemporaryDirectory(prefix="ci-slice-") as td:
-        bin_path = Path(td) / "pkg.test"
+    bin_name = "pkg.test.exe" if os.name == "nt" else "pkg.test"
+    chunk_max_bytes = WINDOWS_SPLIT_TEST_CHUNK_MAX_BYTES if os.name == "nt" else SPLIT_TEST_CHUNK_MAX_BYTES
+    with tempfile.TemporaryDirectory(prefix="ci-slice-", ignore_cleanup_errors=True) as td:
+        bin_path = Path(td) / bin_name
         compile_cmd = ["go", "test", "-vet=off", "-c", "-o", str(bin_path), pkg]
         if race:
             compile_cmd.insert(2, "-race")
@@ -1019,7 +1098,7 @@ def _run_package_slice(
         chunk_len = 0
         for name in selected:
             escaped = re.escape(name)
-            if chunk and chunk_len + len(escaped) + 1 > SPLIT_TEST_CHUNK_MAX_BYTES:
+            if chunk and chunk_len + len(escaped) + 1 > chunk_max_bytes:
                 chunks.append(chunk)
                 chunk = [escaped]
                 chunk_len = len(escaped)
@@ -1239,21 +1318,56 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         return 0
 
     if args.kind in ("os-macos", "os-windows"):
-        key = "os_macos_packages" if args.kind == "os-macos" else "os_windows_packages"
-        pkgs = plan.get(key, [])
-        if not pkgs:
-            print(f"No packages scheduled for {args.kind}.")
-            return 0
-        _run_cmd(["go", "clean", "-testcache"], cwd=repo, env=env)
-        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
-        if rc != 0:
-            return rc
-        return _run_cmd(
-            ["go", "test", "-json", "-timeout", "35m", "-p", "1", *pkgs],
-            cwd=repo,
-            env=env,
-            jsonl_path=jsonl_path,
-        )
+        shard_key = "os_macos_shards" if args.kind == "os-macos" else "os_windows_shards"
+        shards = plan.get(shard_key)
+        if shards is not None:
+            shard = next((s for s in shards if s["id"] == args.shard_index), None)
+            if shard is None or (not shard.get("packages") and not shard.get("slices")):
+                print(f"No packages scheduled for {args.kind} shard {args.shard_index}.")
+                return 0
+            pkgs = shard.get("packages", [])
+            slices = shard.get("slices", [])
+        else:
+            key = "os_macos_packages" if args.kind == "os-macos" else "os_windows_packages"
+            pkgs = plan.get(key, [])
+            slices = []
+            if not pkgs:
+                print(f"No packages scheduled for {args.kind}.")
+                return 0
+
+        # Run native OS go vet once per whole package and once on slice index 0
+        # of each split package (warming GOCACHE dependencies at full runner vCPUs),
+        # then execute tests with -vet=off to avoid redundant vetting.
+        vet_targets = list(pkgs) + [sl["package"] for sl in slices if sl["index"] == 0]
+        if vet_targets:
+            rc = _run_cmd(["go", "vet", *sorted(set(vet_targets))], cwd=repo, env=compile_env)
+            if rc != 0:
+                return rc
+        if pkgs:
+            rc = _run_cmd(
+                ["go", "test", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *pkgs],
+                cwd=repo,
+                env=env,
+                jsonl_path=jsonl_path,
+            )
+            if rc != 0:
+                return rc
+        for sl in slices:
+            rc = _run_package_slice(
+                sl["package"],
+                sl["index"],
+                sl["count"],
+                race=False,
+                timeout="25m",
+                repo=repo,
+                plan=plan,
+                compile_env=compile_env,
+                run_env=env,
+                jsonl_path=jsonl_path,
+            )
+            if rc != 0:
+                return rc
+        return 0
 
     print(f"Unknown shard kind: {args.kind}", file=sys.stderr)
     return 2

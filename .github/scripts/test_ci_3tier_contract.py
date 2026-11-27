@@ -121,7 +121,7 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertIn("ci-gate", doc["jobs"])
         self.assertEqual(doc["jobs"]["ci-gate"]["name"], "CI Gate")
         gate_needs = set(doc["jobs"]["ci-gate"]["needs"])
-        for req_job in ("vet", "cross-compile-darwin", "cross-compile-windows", "test-linux", "race-linux", "test-os-escalated", "full-sweep"):
+        for req_job in ("vet", "cross-compile-darwin", "cross-compile-windows", "test-linux", "race-linux", "test-os-macos", "test-os-windows", "full-sweep"):
             self.assertIn(req_job, gate_needs)
         # Producer artifact identity is exported by preflight so selective reruns succeed
         self.assertIn("plan_artifact", doc["jobs"]["preflight"]["outputs"])
@@ -132,7 +132,7 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
             for step in job.get("steps", [])
             if str(step.get("uses", "")).startswith("actions/download-artifact@")
         ]
-        self.assertEqual(len(download_steps), 7)
+        self.assertEqual(len(download_steps), 8)
         for step in download_steps:
             self.assertEqual(step["with"]["name"], "${{ needs.preflight.outputs.plan_artifact }}")
         # Parallel vet + cross-compile jobs and retained script suites exist
@@ -360,6 +360,25 @@ class TestCIScopeRouter(unittest.TestCase):
         self.assertTrue(mixed["escalate_os"])
         self.assertEqual(mixed["os_macos_packages"], ["github.com/snissn/gomap/TreeDB/pager"])
         self.assertEqual(mixed["os_windows_packages"], ["github.com/snissn/gomap/TreeDB/pager"])
+        # Tiny OS package stays on 1 macOS & 1 Windows shard (no extra VM overhead).
+        self.assertEqual(len(mixed["os_macos_shards"]), 1)
+        self.assertEqual(len(mixed["os_windows_shards"]), 1)
+
+        # Heavy OS-escalated PR (TreeDB/db + TreeDB/caching) dynamically shards macOS & Windows under 5m.
+        heavy_os = self._plan(
+            changed_files=[
+                "TreeDB/db/durable_root_runtime.go",
+                "TreeDB/caching/stable_leaf_resource.go",
+            ]
+        )
+        self._assert_shards_cover_packages(heavy_os["os_macos_shards"], heavy_os["os_macos_packages"])
+        self._assert_shards_cover_packages(heavy_os["os_windows_shards"], heavy_os["os_windows_packages"])
+        self.assertGreaterEqual(len(heavy_os["os_macos_shards"]), 2)
+        self.assertLessEqual(len(heavy_os["os_macos_shards"]), 4)
+        self.assertGreaterEqual(len(heavy_os["os_windows_shards"]), 4)
+        self.assertLessEqual(len(heavy_os["os_windows_shards"]), 6)
+        self.assertLessEqual(max(s["estimated_seconds"] for s in heavy_os["os_macos_shards"]), 140.0)
+        self.assertLessEqual(max(s["estimated_seconds"] for s in heavy_os["os_windows_shards"]), 140.0)
 
         # Also detect OS build constraints in arbitrarily named .go files.
         with tempfile.TemporaryDirectory() as td:
@@ -421,12 +440,15 @@ class TestCIScopeRouter(unittest.TestCase):
             self.assertEqual(kv["run_test"], "false")
             self.assertEqual(kv["run_race"], "false")
             self.assertEqual(kv["escalate_os"], "false")
+            self.assertEqual(kv["escalate_macos"], "false")
+            self.assertEqual(kv["escalate_windows"], "false")
             self.assertTrue(json.loads(kv["vet_shards_json"]))
             self.assertTrue(json.loads(kv["cross_darwin_shards_json"]))
             self.assertTrue(json.loads(kv["cross_windows_shards_json"]))
             self.assertTrue(json.loads(kv["test_shards_json"]))
             self.assertTrue(json.loads(kv["race_shards_json"]))
-            self.assertTrue(json.loads(kv["os_runners_json"]))
+            self.assertTrue(json.loads(kv["os_macos_shards_json"]))
+            self.assertTrue(json.loads(kv["os_windows_shards_json"]))
 
 
 class TestWindowsFullShardPartition(unittest.TestCase):

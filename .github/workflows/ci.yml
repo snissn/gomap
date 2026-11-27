@@ -56,7 +56,10 @@ jobs:
       run_race: ${{ steps.scope.outputs.run_race }}
       race_shards_json: ${{ steps.scope.outputs.race_shards_json }}
       escalate_os: ${{ steps.scope.outputs.escalate_os }}
-      os_runners_json: ${{ steps.scope.outputs.os_runners_json }}
+      escalate_macos: ${{ steps.scope.outputs.escalate_macos }}
+      os_macos_shards_json: ${{ steps.scope.outputs.os_macos_shards_json }}
+      escalate_windows: ${{ steps.scope.outputs.escalate_windows }}
+      os_windows_shards_json: ${{ steps.scope.outputs.os_windows_shards_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -449,16 +452,16 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  test-os-escalated:
-    name: os-escalated (${{ matrix.os }})
+  test-os-macos:
+    name: os-escalated (macos)-${{ matrix.shard }}
     needs: preflight
-    if: ${{ needs.preflight.outputs.escalate_os == 'true' }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    if: ${{ needs.preflight.outputs.escalate_macos == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.preflight.outputs.os_runners_json) }}
+        shard: ${{ fromJSON(needs.preflight.outputs.os_macos_shards_json) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -479,31 +482,83 @@ jobs:
           cache-dependency-path: |
             go.sum
 
-      - name: Run targeted cross-OS tests
+      - name: Run targeted macOS tests
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-          PYTHON_BIN: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
-          OS_KIND: ${{ runner.os == 'Windows' && 'os-windows' || 'os-macos' }}
         run: |
-          "$PYTHON_BIN" .github/scripts/ci_scope.py run-shard \
+          python3 .github/scripts/ci_scope.py run-shard \
             --repo . \
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
-            --kind "$OS_KIND" \
-            --jsonl "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl"
+            --kind os-macos \
+            --shard-index "${{ matrix.shard }}" \
+            --jsonl "$RUNNER_TEMP/ci-os-macos-${{ matrix.shard }}.jsonl"
 
-      - name: Summarize cross-OS test timings
+      - name: Summarize macOS test timings
         if: always()
         shell: bash
-        env:
-          PYTHON_BIN: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
         run: |
-          if [ -s "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl" ]; then
-            "$PYTHON_BIN" .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-os-${{ matrix.os }}.jsonl" | tee "$RUNNER_TEMP/ci-os-${{ matrix.os }}.summary.md"
+          if [ -s "$RUNNER_TEMP/ci-os-macos-${{ matrix.shard }}.jsonl" ]; then
+            python3 .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-os-macos-${{ matrix.shard }}.jsonl" | tee "$RUNNER_TEMP/ci-os-macos-${{ matrix.shard }}.summary.md"
             {
-              echo "### Cross-OS test timing summary (${{ matrix.os }})"
+              echo "### Cross-OS test timing summary (macos shard ${{ matrix.shard }})"
               echo
-              cat "$RUNNER_TEMP/ci-os-${{ matrix.os }}.summary.md"
+              cat "$RUNNER_TEMP/ci-os-macos-${{ matrix.shard }}.summary.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  test-os-windows:
+    name: os-escalated (windows)-${{ matrix.shard }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.escalate_windows == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.os_windows_shards_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.preflight.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run targeted Windows tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python .github/scripts/ci_scope.py run-shard \
+            --repo . \
+            --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
+            --kind os-windows \
+            --shard-index "${{ matrix.shard }}" \
+            --jsonl "$RUNNER_TEMP/ci-os-windows-${{ matrix.shard }}.jsonl"
+
+      - name: Summarize Windows test timings
+        if: always()
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/ci-os-windows-${{ matrix.shard }}.jsonl" ]; then
+            python .github/scripts/summarize_go_test_json.py "$RUNNER_TEMP/ci-os-windows-${{ matrix.shard }}.jsonl" | tee "$RUNNER_TEMP/ci-os-windows-${{ matrix.shard }}.summary.md"
+            {
+              echo "### Cross-OS test timing summary (windows shard ${{ matrix.shard }})"
+              echo
+              cat "$RUNNER_TEMP/ci-os-windows-${{ matrix.shard }}.summary.md"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -525,7 +580,8 @@ jobs:
       - cross-compile-windows
       - test-linux
       - race-linux
-      - test-os-escalated
+      - test-os-macos
+      - test-os-windows
       - full-sweep
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -542,7 +598,8 @@ jobs:
           RUN_CROSS_WINDOWS: ${{ needs.preflight.outputs.run_cross_windows }}
           RUN_TEST: ${{ needs.preflight.outputs.run_test }}
           RUN_RACE: ${{ needs.preflight.outputs.run_race }}
-          ESCALATE_OS: ${{ needs.preflight.outputs.escalate_os }}
+          ESCALATE_MACOS: ${{ needs.preflight.outputs.escalate_macos }}
+          ESCALATE_WINDOWS: ${{ needs.preflight.outputs.escalate_windows }}
           DOCS_RESULT: ${{ needs.docs-checks.result }}
           DRAFT_RESULT: ${{ needs.draft-vet-compile.result }}
           VET_RESULT: ${{ needs.vet.result }}
@@ -550,7 +607,8 @@ jobs:
           CROSS_WINDOWS_RESULT: ${{ needs.cross-compile-windows.result }}
           TEST_RESULT: ${{ needs.test-linux.result }}
           RACE_RESULT: ${{ needs.race-linux.result }}
-          OS_RESULT: ${{ needs.test-os-escalated.result }}
+          OS_MACOS_RESULT: ${{ needs.test-os-macos.result }}
+          OS_WINDOWS_RESULT: ${{ needs.test-os-windows.result }}
           FULL_SWEEP_RESULT: ${{ needs.full-sweep.result }}
         run: |
           set -euo pipefail
@@ -597,7 +655,8 @@ jobs:
           check_result "cross-compile-windows" "$RUN_CROSS_WINDOWS" "$CROSS_WINDOWS_RESULT" || failed=1
           check_result "test-linux" "$RUN_TEST" "$TEST_RESULT" || failed=1
           check_result "race-linux" "$RUN_RACE" "$RACE_RESULT" || failed=1
-          check_result "test-os-escalated" "$ESCALATE_OS" "$OS_RESULT" || failed=1
+          check_result "test-os-macos" "$ESCALATE_MACOS" "$OS_MACOS_RESULT" || failed=1
+          check_result "test-os-windows" "$ESCALATE_WINDOWS" "$OS_WINDOWS_RESULT" || failed=1
           check_result "full-sweep" "$CI_FULL" "$FULL_SWEEP_RESULT" || failed=1
 
           if [[ "$failed" -ne 0 ]]; then
