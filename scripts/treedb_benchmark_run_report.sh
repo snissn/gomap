@@ -25,7 +25,7 @@ MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
 MONGO_LOAD_SCALING_DOCS="${MONGO_LOAD_SCALING_DOCS:-}"
 MONGO_LOAD_SCALING_BATCH_SIZE="${MONGO_LOAD_SCALING_BATCH_SIZE:-1000}"
-MONGO_LOAD_PRODUCERS="${MONGO_LOAD_PRODUCERS:-1,2,4,8,16,32}"
+MONGO_LOAD_PRODUCERS="${MONGO_LOAD_PRODUCERS:-}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
@@ -34,7 +34,7 @@ MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 MONGO_READERS="${MONGO_READERS:-1,2,4,8,16,32}"
-MONGO_WRITERS="${MONGO_WRITERS:-1,2,4,8,16,32}"
+MONGO_WRITERS="${MONGO_WRITERS:-}"
 MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-}"
 MONGO_TREEDB_OPEN_MODE="${MONGO_TREEDB_OPEN_MODE:-legacy}"
 MONGO_TREEDB_MEMTABLE_MODE="${MONGO_TREEDB_MEMTABLE_MODE:-}"
@@ -327,6 +327,48 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$DURABILITY_TIER" ]]; then
+  DURABILITY_TIER=$(printf '%s' "$DURABILITY_TIER" | tr '[:upper:]' '[:lower:]')
+  case "$DURABILITY_TIER" in
+    fast)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-no_wal_fast}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-no_wal_fast}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-OFF}"
+      if [[ -z "$DURABILITY_NOTE" ]]; then
+        DURABILITY_NOTE="fast tier: TreeDB no_wal_fast, SQLite WAL+OFF; MongoDB 8 removed --nojournal, so w:1 (j:false) is MongoDB 8 fastest acknowledged write mode"
+      fi
+      ;;
+    relaxed)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_relaxed}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_relaxed}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-NORMAL}"
+      DURABILITY_NOTE="${DURABILITY_NOTE:-relaxed tier: TreeDB command_wal_relaxed, MongoDB w:1 (j:false, default WiredTiger journaling), SQLite WAL+NORMAL}"
+      ;;
+    durable)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_durable}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_durable}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1_j}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-FULL}"
+      if [[ "$TIER" == "pr" ]]; then
+        MONGO_UPDATES="${MONGO_UPDATES:-1000}"
+        MONGO_CONCURRENT_WRITES="${MONGO_CONCURRENT_WRITES:-2000}"
+      fi
+      MONGO_WRITERS="${MONGO_WRITERS:-1,2,4,8,16}"
+      MONGO_LOAD_PRODUCERS="${MONGO_LOAD_PRODUCERS:-1,2,4,8,16}"
+      DURABILITY_NOTE="${DURABILITY_NOTE:-durable tier: TreeDB command_wal_durable, MongoDB w:1+j:true (fsync WiredTiger journal before every write ack), SQLite WAL+FULL}"
+      ;;
+    *)
+      echo "invalid --durability-tier $DURABILITY_TIER (want fast, relaxed, or durable)" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 case "$TIER" in
   smoke)
     RAW_KEYS="${RAW_KEYS:-50000}"
@@ -364,41 +406,8 @@ case "$TIER" in
     ;;
 esac
 
-if [[ -n "$DURABILITY_TIER" ]]; then
-  DURABILITY_TIER=$(printf '%s' "$DURABILITY_TIER" | tr '[:upper:]' '[:lower:]')
-  case "$DURABILITY_TIER" in
-    fast)
-      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-no_wal_fast}"
-      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-no_wal_fast}"
-      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
-      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
-      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-OFF}"
-      if [[ -z "$DURABILITY_NOTE" ]]; then
-        DURABILITY_NOTE="fast tier: TreeDB no_wal_fast, SQLite WAL+OFF; MongoDB 8 removed --nojournal, so w:1 (j:false) is MongoDB 8 fastest acknowledged write mode"
-      fi
-      ;;
-    relaxed)
-      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_relaxed}"
-      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_relaxed}"
-      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
-      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
-      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-NORMAL}"
-      DURABILITY_NOTE="${DURABILITY_NOTE:-relaxed tier: TreeDB command_wal_relaxed, MongoDB w:1 (j:false, default WiredTiger journaling), SQLite WAL+NORMAL}"
-      ;;
-    durable)
-      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_durable}"
-      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_durable}"
-      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1_j}"
-      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
-      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-FULL}"
-      DURABILITY_NOTE="${DURABILITY_NOTE:-durable tier: TreeDB command_wal_durable, MongoDB w:1+j:true (fsync WiredTiger journal before every write ack), SQLite WAL+FULL}"
-      ;;
-    *)
-      echo "invalid --durability-tier $DURABILITY_TIER (want fast, relaxed, or durable)" >&2
-      exit 2
-      ;;
-  esac
-fi
+MONGO_LOAD_PRODUCERS="${MONGO_LOAD_PRODUCERS:-1,2,4,8,16,32}"
+MONGO_WRITERS="${MONGO_WRITERS:-1,2,4,8,16,32}"
 
 COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_relaxed}"
 SQLITE_JOURNAL_MODE=$(printf '%s' "${SQLITE_JOURNAL_MODE:-WAL}" | tr '[:lower:]' '[:upper:]')

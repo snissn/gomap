@@ -38,6 +38,7 @@ type collectionSchemaCoordinator struct {
 	// collapse without blocking single-row group commit coalescing.
 	nativeBulkInsertMu                     sync.Mutex
 	nativeBulkPreimageOnce                 sync.Once
+	nativeBulkPreimageCap                  int
 	nativeBulkPreimageTokens               chan struct{}
 	nativeBSONSetMu                        sync.Mutex
 	nativeBSONSetActive                    bool
@@ -74,7 +75,10 @@ type collectionSchemaCoordinator struct {
 	typedGraphWorkEpoch          uint64
 }
 
-const nativeBulkPreimageMaxConcurrent = 4
+const (
+	nativeBulkPreimageMaxConcurrent        = 4
+	nativeBulkPreimageMaxConcurrentDurable = 16
+)
 
 // acquireBulkPreimageSlot bounds concurrent off-gate bulk insert preimages per
 // collection so parallel producers overlap CPU preparation with serialized
@@ -85,8 +89,12 @@ func (coord *collectionSchemaCoordinator) acquireBulkPreimageSlot() func() {
 		return func() {}
 	}
 	coord.nativeBulkPreimageOnce.Do(func() {
-		tokens := make(chan struct{}, nativeBulkPreimageMaxConcurrent)
-		for range nativeBulkPreimageMaxConcurrent {
+		capSlots := coord.nativeBulkPreimageCap
+		if capSlots <= 0 {
+			capSlots = nativeBulkPreimageMaxConcurrent
+		}
+		tokens := make(chan struct{}, capSlots)
+		for range capSlots {
 			tokens <- struct{}{}
 		}
 		coord.nativeBulkPreimageTokens = tokens
@@ -292,6 +300,9 @@ func collectionSchemaCoordinatorForDBCollection(db *backenddb.DB, collection str
 	coord := dbCoord.collections[collection]
 	if coord == nil {
 		coord = &collectionSchemaCoordinator{}
+		if db.NativeCommandWALGroupCommitActive() {
+			coord.nativeBulkPreimageCap = nativeBulkPreimageMaxConcurrentDurable
+		}
 		dbCoord.collections[collection] = coord
 	}
 	return coord

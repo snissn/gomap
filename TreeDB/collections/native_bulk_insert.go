@@ -1026,7 +1026,22 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 	}
 	if coord != nil {
 		coord.nativeBulkInsertMu.Lock()
-		defer coord.nativeBulkInsertMu.Unlock()
+		locked := true
+		defer func() {
+			if locked {
+				coord.nativeBulkInsertMu.Unlock()
+			}
+		}()
+		tx, err := m.beginPreparedPooled(name)
+		if err == nil && tx != nil && m.db != nil && m.db.NativeCommandWALGroupCommitActive() {
+			tx.beforeDurableWait = func() {
+				if locked {
+					locked = false
+					coord.nativeBulkInsertMu.Unlock()
+				}
+			}
+		}
+		return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 	}
 	tx, err := m.beginPreparedPooled(name)
 	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)

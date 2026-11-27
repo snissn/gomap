@@ -76,6 +76,7 @@ type NativeJSONTxn struct {
 	singleStageLease     [1]*memtable.COWExternalLease
 	logicalGroup         nativeJSONLogicalGroup
 	preparedPub          backenddb.NativePreparedPublication
+	beforeDurableWait    func()
 	admitStage0          func(uint64) error
 	charge               uint64
 	failure              error
@@ -852,7 +853,8 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
 	}(plan)
-	t.preparedPub = backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall}
+	t.preparedPub = backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall, BeforeDurableWait: t.beforeDurableWait}
+	t.beforeDurableWait = nil
 	native := &t.preparedPub
 	if retry != nil && len(t.dependencies) >= 2 {
 		// The singleton's original catalog dependency precedes the point read
@@ -1073,6 +1075,7 @@ func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *mem
 	t.dependencies = nil
 	clear(t.inlineDeps[:])
 	t.preparedPub = backenddb.NativePreparedPublication{}
+	t.beforeDurableWait = nil
 
 	if t.custody != nil {
 		record := t.custody.ReleaseNativeCustody()

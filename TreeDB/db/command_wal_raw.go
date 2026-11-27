@@ -1014,13 +1014,19 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix, allowZeroFron
 	db.commandWALCleanupOlderRoot.Store(proof.olderCommitSeq())
 	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
 	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
-	// A valid zero frontier still permits positively validated empty fixed
-	// containers to be reclaimed. For opportunistic checkpoint/close cleanup
-	// when no closed non-active fixed container exists, no segment can be
-	// reclaimed at frontier 0; skip scanning retained stream segments while
-	// still flushing any pending deletion-directory sync debt.
-	if allowZeroFrontierSkip && proof.cleanupThrough == 0 && db.testCommandWALCleanupHooks == nil {
-		hasCandidate, precheckErr := db.hasZeroFrontierReclaimableCommandWALCandidate(proof)
+	// Opportunistic checkpoint/close cleanup can skip a full WAL scan when no
+	// segment in the WAL directory can possibly be reclaimed (either at frontier
+	// 0 with no empty fixed container, or at a positive frontier with no closed
+	// non-active command-WAL segments), while still flushing any pending
+	// deletion-directory sync debt.
+	if allowZeroFrontierSkip && db.testCommandWALCleanupHooks == nil {
+		var hasCandidate bool
+		var precheckErr error
+		if proof.cleanupThrough == 0 {
+			hasCandidate, precheckErr = db.hasZeroFrontierReclaimableCommandWALCandidate(proof)
+		} else {
+			hasCandidate, precheckErr = db.hasClosedNonActiveCommandWALSegment(proof)
+		}
 		if precheckErr != nil {
 			if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
 				return commandWALCleanupWithHardError(precheckErr, syncErr)

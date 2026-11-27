@@ -155,16 +155,42 @@ func TestStandaloneNativeJournalReceiptFallbackAndFailure(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			before := s.Stats()
-			// Catalog auto-create and multi-document commands remain uncovered.
-			for i, docs := range []bson.A{{standaloneReceiptTestDocument("seed", 1)}, {standaloneReceiptTestDocument("multi1", 2), standaloneReceiptTestDocument("multi2", 3)}} {
-				command := bson.D{{Key: "insert", Value: "rows"}, {Key: "documents", Value: docs}, {Key: "writeConcern", Value: bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}}, {Key: "$db", Value: "app"}}
-				assertOK(t, serveCommand(t, s.Server, int32(i+1), command))
-			}
-			if got := writeConcernBenchmarkStat(t, s.Stats(), "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total"); got != 2 {
-				t.Fatalf("uncovered DDL/multi command force=%d want2", got)
-			}
 			before, beforeACK := s.Stats(), s.Server.StandaloneWriteConcernStats()
+			// Catalog auto-create remains uncovered and uses the standalone prefix fence.
+			autoCreateCmd := bson.D{{Key: "insert", Value: "rows"}, {Key: "documents", Value: bson.A{standaloneReceiptTestDocument("seed", 1)}}, {Key: "writeConcern", Value: bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}}, {Key: "$db", Value: "app"}}
+			assertOK(t, serveCommand(t, s.Server, 1, autoCreateCmd))
+			afterAutoCreate, afterAutoCreateACK := s.Stats(), s.Server.StandaloneWriteConcernStats()
+			if got := writeConcernBenchmarkStat(t, afterAutoCreate, "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total"); got != 1 {
+				t.Fatalf("uncovered auto-create command force=%d want 1", got)
+			}
+			if afterAutoCreateACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 1 || afterAutoCreateACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 1 {
+				t.Fatalf("uncovered auto-create ACK mismatch: before=%+v after=%+v", beforeACK, afterAutoCreateACK)
+			}
+			// Multi-document BSON insert on an existing collection completes via its own
+			// operation receipt with real WAL syncs and zero redundant forced groups.
+			multiCmd := bson.D{{Key: "insert", Value: "rows"}, {Key: "documents", Value: bson.A{standaloneReceiptTestDocument("multi1", 2), standaloneReceiptTestDocument("multi2", 3)}}, {Key: "writeConcern", Value: bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}}, {Key: "$db", Value: "app"}}
+			assertOK(t, serveCommand(t, s.Server, 2, multiCmd))
+			afterMulti, afterMultiACK := s.Stats(), s.Server.StandaloneWriteConcernStats()
+			if got := writeConcernBenchmarkStat(t, afterMulti, "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, afterAutoCreate, "treedb.command_wal.group_commit.forced_total"); got != 0 {
+				t.Fatalf("covered multi-doc BSON insert issued redundant force=%d want 0", got)
+			}
+			if got := writeConcernBenchmarkStat(t, afterMulti, "treedb.command_wal.sync.count_total") - writeConcernBenchmarkStat(t, afterAutoCreate, "treedb.command_wal.sync.count_total"); got < 1 {
+				t.Fatalf("covered multi-doc BSON insert syncs=%d want >=1", got)
+			}
+			if afterMultiACK.JournalAcknowledgements-afterAutoCreateACK.JournalAcknowledgements != 1 || afterMultiACK.PhysicalSyncBoundaries-afterAutoCreateACK.PhysicalSyncBoundaries != 1 {
+				t.Fatalf("covered multi-doc BSON insert ACK mismatch: before=%+v after=%+v", afterAutoCreateACK, afterMultiACK)
+			}
+			// Uncovered write commands (such as delete) still use the standalone prefix fence.
+			deleteCmd := bson.D{{Key: "delete", Value: "rows"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "multi2"}}}, {Key: "limit", Value: 1}}}}, {Key: "writeConcern", Value: bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}}, {Key: "$db", Value: "app"}}
+			assertOK(t, serveCommand(t, s.Server, 3, deleteCmd))
+			afterDelete, afterDeleteACK := s.Stats(), s.Server.StandaloneWriteConcernStats()
+			if got := writeConcernBenchmarkStat(t, afterDelete, "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total"); got != 2 {
+				t.Fatalf("uncovered auto-create/delete command force=%d want 2", got)
+			}
+			if afterDeleteACK.JournalAcknowledgements-afterMultiACK.JournalAcknowledgements != 1 || afterDeleteACK.PhysicalSyncBoundaries-afterMultiACK.PhysicalSyncBoundaries != 1 {
+				t.Fatalf("uncovered delete ACK mismatch: before=%+v after=%+v", afterMultiACK, afterDeleteACK)
+			}
+			before, beforeACK = afterDelete, afterDeleteACK
 			var calls atomic.Int32
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
 				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync {
@@ -194,8 +220,8 @@ func TestStandaloneNativeJournalReceiptFallbackAndFailure(t *testing.T) {
 				t.Fatal("selected failure issued a masking second force")
 			}
 			assertStandaloneJournalRouteStats(t, s.Server, map[string]uint64{
-				"Insert.SharedFreshFence": 2, "Insert.ReceiptFailed": 1,
-				"Insert.ReceiptWaitAttempted": 1, "Insert.ReceiptInstalled": 1,
+				"Insert.SharedFreshFence": 1, "Insert.ReceiptSettled": 1, "Insert.ReceiptFailed": 1,
+				"Insert.ReceiptWaitAttempted": 2, "Insert.ReceiptInstalled": 2,
 			})
 		})
 	}

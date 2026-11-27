@@ -2,6 +2,7 @@ package caching
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -274,7 +275,9 @@ func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([
 	var scratches []*compactLeafLogPayloadScratch
 	defer func() {
 		for _, scratch := range scratches {
-			putCompactLeafLogPayloadScratch(scratch)
+			if scratch != nil {
+				putCompactLeafLogPayloadScratch(scratch)
+			}
 		}
 		putCompactLeafLogPayloadScratchPtrRef(scratchRef, scratches)
 	}()
@@ -286,27 +289,86 @@ func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([
 			encodeObserved = true
 		}
 	}
-	for i, leafPage := range leafPages {
-		scratch := getCompactLeafLogPayloadScratch()
-		encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
-		if err != nil {
-			putCompactLeafLogPayloadScratch(scratch)
-			observeEncode()
-			return nil, nil, err
-		}
-		if compacted {
-			if scratchRef == nil {
-				scratchRef = getCompactLeafLogPayloadScratchPtrRefCap(len(leafPages))
-				scratches = scratchRef.ptrs[:0]
+	workers := 1
+	if len(leafPages) >= 16 {
+		if procs := runtime.GOMAXPROCS(0); procs > 1 {
+			workers = min(4, procs)
+			if workers > len(leafPages)/4 {
+				workers = max(1, len(leafPages)/4)
 			}
-			scratch.buf = encodedLeafPage
-			scratches = append(scratches, scratch)
-		} else {
-			putCompactLeafLogPayloadScratch(scratch)
 		}
-		records[i] = valuelog.Record{
-			RID:   startRID + uint64(i),
-			Value: encodedLeafPage,
+	}
+	if workers > 1 {
+		scratchRef = getCompactLeafLogPayloadScratchPtrRefCap(len(leafPages))
+		scratches = scratchRef.ptrs[:len(leafPages)]
+		clear(scratches)
+		var workerErrs [4]error
+		chunk := (len(leafPages) + workers - 1) / workers
+		runRange := func(w, start, end int) {
+			for i := start; i < end; i++ {
+				scratch := getCompactLeafLogPayloadScratch()
+				encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPages[i])
+				if err != nil {
+					putCompactLeafLogPayloadScratch(scratch)
+					workerErrs[w] = err
+					return
+				}
+				if compacted {
+					scratch.buf = encodedLeafPage
+					scratches[i] = scratch
+				} else {
+					putCompactLeafLogPayloadScratch(scratch)
+				}
+				records[i] = valuelog.Record{
+					RID:   startRID + uint64(i),
+					Value: encodedLeafPage,
+				}
+			}
+		}
+		var wg sync.WaitGroup
+		for w := 1; w < workers; w++ {
+			start := w * chunk
+			if start >= len(leafPages) {
+				break
+			}
+			end := min(start+chunk, len(leafPages))
+			wg.Add(1)
+			go func(w, start, end int) {
+				defer wg.Done()
+				runRange(w, start, end)
+			}(w, start, end)
+		}
+		runRange(0, 0, min(chunk, len(leafPages)))
+		wg.Wait()
+		for w := 0; w < workers; w++ {
+			if workerErrs[w] != nil {
+				observeEncode()
+				return nil, nil, workerErrs[w]
+			}
+		}
+	} else {
+		for i, leafPage := range leafPages {
+			scratch := getCompactLeafLogPayloadScratch()
+			encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
+			if err != nil {
+				putCompactLeafLogPayloadScratch(scratch)
+				observeEncode()
+				return nil, nil, err
+			}
+			if compacted {
+				if scratchRef == nil {
+					scratchRef = getCompactLeafLogPayloadScratchPtrRefCap(len(leafPages))
+					scratches = scratchRef.ptrs[:0]
+				}
+				scratch.buf = encodedLeafPage
+				scratches = append(scratches, scratch)
+			} else {
+				putCompactLeafLogPayloadScratch(scratch)
+			}
+			records[i] = valuelog.Record{
+				RID:   startRID + uint64(i),
+				Value: encodedLeafPage,
+			}
 		}
 	}
 	observeEncode()

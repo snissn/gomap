@@ -167,6 +167,104 @@ func BenchmarkInsertMany100kBSONSettled(b *testing.B) {
 	}
 }
 
+func BenchmarkInsertManyDurableConcurrentBatches(b *testing.B) {
+	const (
+		totalDocs = 32000
+		batchSize = 1000
+		producers = 8
+	)
+	ids, docs := buildS19GatewayBSONDocs(b, totalDocs)
+
+	for _, idx := range []int{0, 1} {
+		b.Run(fmt.Sprintf("idx=%d", idx), func(b *testing.B) {
+			b.ReportAllocs()
+			var totalInsertNs int64
+			var totalSyncs uint64
+			for iter := 0; iter < b.N; iter++ {
+				b.StopTimer()
+				dir := b.TempDir()
+				opts := treedb.OptionsForSemantic(treedb.ProfileCommandWALDurable, dir)
+				opts.BackgroundCheckpointInterval = -1
+				owner, err := treedb.Open(opts)
+				if err != nil {
+					b.Fatalf("open durable treedb: %v", err)
+				}
+				backend, err := owner.NativeSemanticBackend()
+				if err != nil {
+					_ = owner.Close()
+					b.Fatalf("native semantic backend: %v", err)
+				}
+				mgr := NewCollectionManager(backend)
+				meta := &CollectionMeta{
+					Name:    "users",
+					Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+					Indexes: s19IndexDefs(idx),
+				}
+				if _, err := mgr.CreateCollection(meta); err != nil {
+					_ = mgr.Close()
+					_ = owner.Close()
+					b.Fatalf("create collection: %v", err)
+				}
+				col, err := mgr.OpenCollection("users")
+				if err != nil {
+					_ = mgr.Close()
+					_ = owner.Close()
+					b.Fatalf("open collection: %v", err)
+				}
+				syncsBefore := parseStatUint64(b, owner.Stats(), "treedb.command_wal.group_commit.syncs_total")
+				b.StartTimer()
+
+				t0 := time.Now()
+				batchCh := make(chan int, totalDocs/batchSize)
+				for batchIdx := 0; batchIdx < totalDocs/batchSize; batchIdx++ {
+					batchCh <- batchIdx
+				}
+				close(batchCh)
+				var wg sync.WaitGroup
+				errCh := make(chan error, producers)
+				for p := 0; p < producers; p++ {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						for batchIdx := range batchCh {
+							lo := batchIdx * batchSize
+							hi := lo + batchSize
+							if err := col.InsertBatchValidatedBSONNoResultIDs(ids[lo:hi], docs[lo:hi]); err != nil {
+								errCh <- err
+								return
+							}
+						}
+					}()
+				}
+				wg.Wait()
+				close(errCh)
+				for err := range errCh {
+					if err != nil {
+						b.Fatalf("durable insert batch: %v", err)
+					}
+				}
+				t1 := time.Now()
+
+				b.StopTimer()
+				totalInsertNs += t1.Sub(t0).Nanoseconds()
+				syncsAfter := parseStatUint64(b, owner.Stats(), "treedb.command_wal.group_commit.syncs_total")
+				totalSyncs += syncsAfter - syncsBefore
+				if err := mgr.Close(); err != nil {
+					b.Fatalf("close manager: %v", err)
+				}
+				if err := owner.Close(); err != nil {
+					b.Fatalf("close owner: %v", err)
+				}
+			}
+			if totalInsertNs > 0 {
+				docsPerSec := float64(totalDocs*b.N) / (float64(totalInsertNs) / 1e9)
+				b.ReportMetric(docsPerSec, "docs/s")
+			}
+			b.ReportMetric(float64(totalSyncs)/float64(b.N), "syncs/op")
+		})
+	}
+}
+
 func TestMSDRadixSortSecondaryRootEntriesMatchesSortFunc(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	cases := []struct {

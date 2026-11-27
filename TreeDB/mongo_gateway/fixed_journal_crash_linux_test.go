@@ -43,13 +43,19 @@ func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 	if dir := os.Getenv(childDir); dir != "" {
 		owner := open(filepath.Join(dir, "db"))
 		client, _, _, _ := startStandaloneMongoClientForTest(t, owner)
+		// Precreate the BSON collection so all 32 concurrent multi-document
+		// InsertMany requests deterministically take the covered operation-receipt
+		// group-commit path instead of racing on cold catalog auto-create.
+		if err := client.Database("diagnostic").CreateCollection(ctx, "docs"); err != nil {
+			t.Fatalf("precreate diagnostic.docs: %v", err)
+		}
 		journal := true
 		coll := client.Database("diagnostic").Collection("docs", options.Collection().SetWriteConcern(&writeconcern.WriteConcern{W: 1, Journal: &journal}))
+		beforeStats := owner.Stats()
+		beforeACK := owner.Server.StandaloneWriteConcernStats()
 		var group sync.WaitGroup
 		failures := make(chan error, requests)
 		start := make(chan struct{})
-		// Multi-document wire inserts use the standalone prefix fence. The
-		// receipt crash test independently covers mutation-owned completion.
 		group.Add(requests)
 		for request := range requests {
 			go func() {
@@ -73,13 +79,41 @@ func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 		if t.Failed() {
 			t.FailNow()
 		}
+		afterBatchACK := owner.Server.StandaloneWriteConcernStats()
+		afterBatchStats := owner.Stats()
+		if afterBatchACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != requests ||
+			afterBatchACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != requests ||
+			afterBatchACK.SyncFailures != beforeACK.SyncFailures ||
+			afterBatchACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
+			t.Fatalf("covered batch journal ACK proof: before=%+v after=%+v", beforeACK, afterBatchACK)
+		}
+		if forced := writeConcernBenchmarkStat(t, afterBatchStats, "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, beforeStats, "treedb.command_wal.group_commit.forced_total"); forced != 0 {
+			t.Fatalf("covered multi-doc BSON InsertMany forced journal groups = %d, want 0", forced)
+		}
+		if syncOps := writeConcernBenchmarkStat(t, afterBatchStats, "treedb.command_wal.sync.count_total") - writeConcernBenchmarkStat(t, beforeStats, "treedb.command_wal.sync.count_total"); syncOps < 1 {
+			t.Fatalf("covered multi-doc BSON InsertMany WAL sync ops = %d, want >= 1", syncOps)
+		}
+		if fileSyncs := writeConcernBenchmarkStat(t, afterBatchStats, "treedb.command_wal.file_sync.calls_total") - writeConcernBenchmarkStat(t, beforeStats, "treedb.command_wal.file_sync.calls_total"); fileSyncs < 1 {
+			t.Fatalf("covered multi-doc BSON InsertMany WAL file syncs = %d, want >= 1", fileSyncs)
+		}
+		// Separately exercise the uncovered standalone prefix fence (catalog
+		// auto-create) before SIGKILL so both receipt-covered and prefix-fenced
+		// crash recovery are verified with zero cache checkpoints.
+		uncoveredColl := client.Database("diagnostic").Collection("uncovered_docs", options.Collection().SetWriteConcern(&writeconcern.WriteConcern{W: 1, Journal: &journal}))
+		uncoveredRes, err := uncoveredColl.InsertOne(ctx, standaloneNativeJournalDocument("uncovered-00", 1000))
+		if err != nil || uncoveredRes == nil || !uncoveredRes.Acknowledged || uncoveredRes.InsertedID != "uncovered-00" {
+			t.Fatalf("uncovered auto-create insert result=%+v err=%v", uncoveredRes, err)
+		}
 		ack := owner.Server.StandaloneWriteConcernStats()
 		stats := owner.Stats()
-		if ack.JournalAcknowledgements != requests || ack.SyncFailures != 0 {
-			t.Fatalf("journal ACK proof: %+v", ack)
+		if ack.JournalAcknowledgements-afterBatchACK.JournalAcknowledgements != 1 ||
+			ack.PhysicalSyncBoundaries-afterBatchACK.PhysicalSyncBoundaries != 1 ||
+			ack.SyncFailures != afterBatchACK.SyncFailures ||
+			ack.UncertainOutcomes != afterBatchACK.UncertainOutcomes {
+			t.Fatalf("uncovered journal ACK proof: before=%+v after=%+v", afterBatchACK, ack)
 		}
-		if steps := writeConcernBenchmarkStat(t, stats, "treedb.command_wal.group_commit.forced_total"); steps != requests {
-			t.Fatalf("forced journal groups = %d, want %d", steps, requests)
+		if forced := writeConcernBenchmarkStat(t, stats, "treedb.command_wal.group_commit.forced_total") - writeConcernBenchmarkStat(t, afterBatchStats, "treedb.command_wal.group_commit.forced_total"); forced != 1 {
+			t.Fatalf("uncovered forced journal groups = %d, want 1", forced)
 		}
 		if checkpoints := writeConcernBenchmarkStat(t, stats, "treedb.cache.checkpoint.runs"); checkpoints != 0 {
 			t.Fatalf("cache checkpoint runs = %d, want no physical checkpoints before kill", checkpoints)
@@ -177,5 +211,10 @@ kill:
 		}
 		requireStandaloneNativeJournalDocument(t, document, id, index)
 	}
-	t.Logf("SIGKILL after %d real driver ACKs with no cache checkpoint; all %d typed rows verified on fresh owner", requests, count)
+	var uncoveredDoc bson.Raw
+	if err := client.Database("diagnostic").Collection("uncovered_docs").FindOne(t.Context(), bson.D{{Key: "_id", Value: "uncovered-00"}}).Decode(&uncoveredDoc); err != nil {
+		t.Fatalf("missing recovered uncovered document: %v", err)
+	}
+	requireStandaloneNativeJournalDocument(t, uncoveredDoc, "uncovered-00", 1000)
+	t.Logf("SIGKILL after %d concurrent receipt ACKs + 1 uncovered prefix-fence ACK with no cache checkpoint; all %d + 1 typed rows verified on fresh owner", requests, count)
 }

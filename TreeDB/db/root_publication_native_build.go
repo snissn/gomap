@@ -65,7 +65,16 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 	}))
 	var leafPageLog bulk.LeafPageAppender
 	if opts.outerLeavesInValueLog {
-		leafPageLog = opts.leafPageLog
+		// Native COW readers strictly require CRC-verified read-cache entries
+		// with COW shape certificates and cannot reuse unverified write-side
+		// cache copies. Skipping write-side cache population during cold native
+		// builds avoids 4 KiB memmoves and slab churn while keeping dependency
+		// cuts and leaf-generation record-length accounting intact.
+		if hintLog, ok := opts.leafPageLog.(*leafPageLogWithRecordLengthHints); ok && group.db.nativeSemanticActive.Load() {
+			leafPageLog = hintLog.withoutReadCache()
+		} else {
+			leafPageLog = opts.leafPageLog
+		}
 	}
 	collectRefDelta := opts.outerLeavesInValueLog || group.db.shouldCollectValueLogRefDelta(group.baseSeq)
 	var refDelta *valueLogRefDelta

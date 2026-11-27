@@ -200,6 +200,14 @@ type NativePreparedPublication struct {
 	// application locks. It grants no assignment or installation authority.
 	// The publisher detaches it before calling, including on assigned failure.
 	ObserveAssigned func(uint64) error
+	// BeforeDurableWait runs once synchronously on the publisher goroutine after
+	// logical COW installation and durable WAL registration have succeeded and
+	// writer/publication gates have been released, immediately before awaiting
+	// durable WAL completion. Callers use it to release outer serialization gates
+	// (such as per-collection bulk insert gates) so concurrent producers can
+	// overlap WAL appends into the same group-commit sync wave before any ACK is
+	// returned. The publisher always detaches it before calling and on every exit.
+	BeforeDurableWait func()
 }
 
 // NativeLogicalPlan is an original transaction-owned immutable operation plan.
