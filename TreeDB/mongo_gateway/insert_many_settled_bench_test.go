@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -287,17 +289,54 @@ func TestMongoGatewayInsertManyDurableUsesSharedJournalReceipt(t *testing.T) {
 	syncsBefore := parseStat("treedb.command_wal.group_commit.syncs_total")
 	forcedBefore := parseStat("treedb.command_wal.group_commit.forced_total")
 
+	// Deterministically overlap concurrent InsertMany batches at the CommandWAL
+	// sync boundary: hold the first physical WAL sync until at least 3 other
+	// concurrent batches have appended while it is in flight (bounded by 200ms
+	// so a lock-hold regression cannot deadlock). This proves workers release
+	// nativeBulkInsertMu before awaiting durable sync and coalesce into a shared
+	// group-commit wave even under GOMAXPROCS=1 or slow runners.
+	var (
+		firstSyncHeld atomic.Bool
+		appendsInSync atomic.Int32
+		releaseOnce   sync.Once
+		releaseSync   = make(chan struct{})
+	)
+	restoreCut := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource != durabilitycut.ResourceCommandWAL {
+			return nil
+		}
+		switch e.Point {
+		case durabilitycut.BeforeDependencyFileSync:
+			if firstSyncHeld.CompareAndSwap(false, true) {
+				timer := time.NewTimer(200 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-releaseSync:
+				case <-timer.C:
+				}
+			}
+		case durabilitycut.AfterDependencyAppend:
+			if firstSyncHeld.Load() && appendsInSync.Add(1) >= 3 {
+				releaseOnce.Do(func() { close(releaseSync) })
+			}
+		}
+		return nil
+	}))
+	defer restoreCut()
+
 	batchCh := make(chan int, numBatches)
 	for i := 0; i < numBatches; i++ {
 		batchCh <- i
 	}
 	close(batchCh)
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	errCh := make(chan error, producers)
 	for p := 0; p < producers; p++ {
 		wg.Add(1)
 		go func(pid int) {
 			defer wg.Done()
+			<-start
 			var input bytes.Reader
 			rw := &readWriter{r: &input}
 			var readBuf, writeBuf []byte
@@ -310,10 +349,43 @@ func TestMongoGatewayInsertManyDurableUsesSharedJournalReceipt(t *testing.T) {
 					errCh <- err
 					return
 				}
+				header, replyBody, err := wire.ReadMessage(bytes.NewReader(rw.w.Bytes()), 0)
+				if err != nil {
+					errCh <- fmt.Errorf("batch %d read wire reply: %w", batchIdx, err)
+					return
+				}
+				if header.OpCode != wire.OpMsg {
+					errCh <- fmt.Errorf("batch %d unexpected reply opcode=%d", batchIdx, header.OpCode)
+					return
+				}
+				msg, err := wire.ParseMsg(replyBody)
+				if err != nil {
+					errCh <- fmt.Errorf("batch %d parse OP_MSG reply: %w", batchIdx, err)
+					return
+				}
+				raw := bson.Raw(msg.Body)
+				if !mongoCommandResponseOK(msg.Body) {
+					errCh <- fmt.Errorf("batch %d reply not ok: %s", batchIdx, raw)
+					return
+				}
+				if n, ok := raw.Lookup("n").Int32OK(); !ok || n != batchSize {
+					errCh <- fmt.Errorf("batch %d reply n=%d (ok=%t), want %d: %s", batchIdx, n, ok, batchSize, raw)
+					return
+				}
+				if raw.Lookup("writeErrors").Type != 0 {
+					errCh <- fmt.Errorf("batch %d unexpected writeErrors: %s", batchIdx, raw)
+					return
+				}
+				if raw.Lookup("writeConcernError").Type != 0 {
+					errCh <- fmt.Errorf("batch %d unexpected writeConcernError: %s", batchIdx, raw)
+					return
+				}
 			}
 		}(p)
 	}
+	close(start)
 	wg.Wait()
+	restoreCut()
 	close(errCh)
 	for err := range errCh {
 		if err != nil {

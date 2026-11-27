@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -772,6 +775,41 @@ func TestNativeBulkInsertDurableGroupCommitOverlapAndCrashRecovery(t *testing.T)
 	statsBefore := owner.Stats()
 	syncsBefore := parseStatUint64(t, statsBefore, "treedb.command_wal.group_commit.syncs_total")
 
+	// Deterministically overlap concurrent InsertMany batches at the CommandWAL
+	// sync boundary: hold the first physical WAL sync until at least 3 other
+	// concurrent batches have appended while it is in flight (bounded by 200ms
+	// so a lock-hold regression cannot deadlock). This proves workers release
+	// nativeBulkInsertMu before awaiting durable sync and coalesce into a shared
+	// group-commit wave even under GOMAXPROCS=1 or slow runners.
+	var (
+		firstSyncHeld atomic.Bool
+		appendsInSync atomic.Int32
+		releaseOnce   sync.Once
+		releaseSync   = make(chan struct{})
+	)
+	restoreCut := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource != durabilitycut.ResourceCommandWAL {
+			return nil
+		}
+		switch e.Point {
+		case durabilitycut.BeforeDependencyFileSync:
+			if firstSyncHeld.CompareAndSwap(false, true) {
+				timer := time.NewTimer(200 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-releaseSync:
+				case <-timer.C:
+				}
+			}
+		case durabilitycut.AfterDependencyAppend:
+			if firstSyncHeld.Load() && appendsInSync.Add(1) >= 3 {
+				releaseOnce.Do(func() { close(releaseSync) })
+			}
+		}
+		return nil
+	}))
+	defer restoreCut()
+
 	start := make(chan struct{})
 	errs := make([]error, producers)
 	var wg sync.WaitGroup
@@ -797,6 +835,7 @@ func TestNativeBulkInsertDurableGroupCommitOverlapAndCrashRecovery(t *testing.T)
 	}
 	close(start)
 	wg.Wait()
+	restoreCut()
 
 	for p, err := range errs {
 		if err != nil {
