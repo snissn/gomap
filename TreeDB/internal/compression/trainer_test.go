@@ -2,6 +2,7 @@ package compression
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"math"
 	"testing"
@@ -187,5 +188,63 @@ func TestNewTrainer_BootstrapMinRecordsRespectsLowerMinRecords(t *testing.T) {
 	defer tr.Close()
 	if got, want := tr.bootstrapMinRecords, uint64(8); got != want {
 		t.Fatalf("bootstrapMinRecords respect lower minRecords: got=%d want=%d", got, want)
+	}
+}
+
+func TestTrainerTrain_HoldoutPreventsInSampleMemorizationOnRandomNoise(t *testing.T) {
+	tr := NewTrainer(TrainConfig{
+		TrainBytes:     64 << 10,
+		DictBytes:      128 << 10,
+		MinRecords:     8,
+		MaxRecordBytes: 8 << 10,
+		SampleStride:   1,
+	}, Config{Kind: KindZSTD, Level: zstd.SpeedFastest}, false, false)
+	if tr == nil {
+		t.Fatalf("expected non-nil trainer")
+	}
+	defer tr.Close()
+	tr.SetAutotuneCandidates([]int{1, 2, 4, 8}, []int{64 << 10, 128 << 10}, []int{64 << 10, 128 << 10})
+
+	// 32 x 4 KiB = 128 KiB of pure incompressible cryptographic noise.
+	// Previously, historyMax copied all 128 KiB and evaluated on the same
+	// samples, reporting a bogus ~0.005 ratio and publishing a 128 KiB dict.
+	samples := make([][]byte, 32)
+	for i := range samples {
+		buf := make([]byte, 4096)
+		if _, err := rand.Read(buf); err != nil {
+			t.Fatalf("rand.Read: %v", err)
+		}
+		samples[i] = buf
+	}
+
+	tr.train(samples, 128<<10, zstd.SpeedFastest, 1)
+
+	p, ok := tr.ActiveProfile()
+	if !ok || p == nil {
+		return
+	}
+	if p.TotalRatio < 0.98 {
+		t.Fatalf("expected incompressible random noise to evaluate >=0.98 on holdout, got TotalRatio=%.4f (PayloadRatio=%.4f, HistoryBytes=%d, DictBytes=%d)",
+			p.TotalRatio, p.PayloadRatio, p.HistoryBytes, p.DictBytes)
+	}
+	if p.HistoryBytes > (16*4096)/4 {
+		t.Fatalf("expected history capped at <=25%% of disjoint train corpus (%d B), got %d B", (16*4096)/4, p.HistoryBytes)
+	}
+}
+
+func TestShapeAndValidateDict_DoesNotZeroPadShorterDict(t *testing.T) {
+	hist := bytes.Repeat([]byte("structured-json-field:"), 256)
+	sample := append([]byte("doc:"), bytes.Repeat([]byte("structured-json-field:"), 64)...)
+	dict, err := buildAndValidateDict(1, [][]byte{sample}, hist, zstd.SpeedFastest, nil, nil)
+	if err != nil {
+		t.Fatalf("buildAndValidateDict: %v", err)
+	}
+	target := len(dict) + 16<<10
+	shaped, err := shapeAndValidateDict(dict, target, zstd.SpeedFastest, nil)
+	if err != nil {
+		t.Fatalf("shapeAndValidateDict: %v", err)
+	}
+	if len(shaped) != len(dict) {
+		t.Fatalf("shapeAndValidateDict zero-padded shorter dict: got len=%d want=%d", len(shaped), len(dict))
 	}
 }

@@ -1713,10 +1713,9 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			unitPayloadBytes = rawPayloadBytes
 		}
 		if dictID == 0 {
-			if db.vlogSelectorEnabled(mode) {
-				return vlogWriteBlock, db.valueLogBlockCodec, false
-			}
-			return vlogWriteOff, db.valueLogBlockCodec, false
+			// Fall back to stateless block compression while dictionary training
+			// warms up so early writes do not land uncompressed.
+			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
 		if db.vlogSelectorEnabled(mode) &&
 			outerLeafPayload &&

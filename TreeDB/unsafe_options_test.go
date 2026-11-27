@@ -105,7 +105,7 @@ func TestOptions_InvalidValueLogAutoPolicy(t *testing.T) {
 	}
 }
 
-func TestOptions_DefaultValueLogCompressionAuto(t *testing.T) {
+func TestOptions_DefaultValueLogCompressionBlock(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
@@ -114,7 +114,29 @@ func TestOptions_DefaultValueLogCompressionAuto(t *testing.T) {
 	defer db.Close()
 
 	stats := db.Stats()
+	if _, ok := stats["treedb.cache.vlog_auto.probe_attempts"]; ok {
+		t.Fatalf("did not expect auto compression stats key in default block/lz4 configuration")
+	}
+	if _, ok := stats["treedb.cache.vlog_dict.trainer.profile_attempts"]; ok {
+		t.Fatalf("did not expect dict trainer stats key in default block/lz4 configuration")
+	}
+}
+
+func TestOptions_ExplicitValueLogCompressionAutoExposesSelectorStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			Compression: treedb.ValueLogCompressionAuto,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
 	if _, ok := stats["treedb.cache.vlog_auto.probe_attempts"]; !ok {
-		t.Fatalf("expected auto compression stats key in default configuration")
+		t.Fatalf("expected auto compression stats key in explicit auto configuration")
 	}
 }
