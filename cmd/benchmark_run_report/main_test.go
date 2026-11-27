@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1273,4 +1276,368 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func TestCollectionLifecycleRowsDistinguishTreeDBAndSQLiteJSON(t *testing.T) {
+	rows := []collectionRow{
+		{ConfigName: "sqlite_json_0_indexes", Engine: "sqlite_wal_normal", Format: "json", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 397.2},
+		{ConfigName: "sqlite_json_0_indexes", Engine: "sqlite_wal_normal", Format: "json", IndexCount: 0, Phase: "sqlite_vacuum", BytesPerDoc: 368.4},
+		{ConfigName: "sqlite_native_columns_0_indexes", Engine: "sqlite_wal_normal", Format: "native-columns", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 240.0},
+		{ConfigName: "sqlite_native_columns_0_indexes", Engine: "sqlite_wal_normal", Format: "native-columns", IndexCount: 0, Phase: "sqlite_vacuum", BytesPerDoc: 221.5},
+		{ConfigName: "treedb_json_collection_0_indexes", Engine: "treedb_fast", Format: "json", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 195.0},
+		{ConfigName: "treedb_json_collection_0_indexes", Engine: "treedb_fast", Format: "json", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 24.2},
+		{ConfigName: "treedb_bson_collection_0_indexes", Engine: "treedb_fast", Format: "bson", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 180.0},
+		{ConfigName: "treedb_bson_collection_0_indexes", Engine: "treedb_fast", Format: "bson", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 21.8},
+		{ConfigName: "treedb_template_v1_raw_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 150.0},
+		{ConfigName: "treedb_template_v1_raw_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 20.1},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 140.0},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 18.8},
+	}
+
+	lifecycle := collectionLifecycleRows(rows)
+	wantOrder := []string{
+		"TreeDB Template V1",
+		"TreeDB Template V1 Raw",
+		"TreeDB BSON",
+		"TreeDB JSON",
+		"SQLite Native",
+		"SQLite JSON",
+	}
+	if len(lifecycle.Series) != len(wantOrder) {
+		t.Fatalf("series count = %d, want %d: %+v", len(lifecycle.Series), len(wantOrder), lifecycle.Series)
+	}
+	seenColors := make(map[string]string)
+	byName := make(map[string]chartSeries)
+	for i, s := range lifecycle.Series {
+		if s.Name != wantOrder[i] {
+			t.Fatalf("series[%d].Name = %q, want %q", i, s.Name, wantOrder[i])
+		}
+		if strings.Contains(s.Name, "/ i0") {
+			t.Fatalf("lifecycle series %q should not include redundant index suffix", s.Name)
+		}
+		if prev, dup := seenColors[s.Color]; dup {
+			t.Fatalf("color collision %q between %q and %q", s.Color, prev, s.Name)
+		}
+		seenColors[s.Color] = s.Name
+		byName[s.Name] = s
+	}
+
+	postIdx := indexOf(lifecycle.Categories, "post insert")
+	vacIdx := indexOf(lifecycle.Categories, "SQLite VACUUM")
+	if postIdx < 0 || vacIdx < 0 {
+		t.Fatalf("expected post insert and SQLite VACUUM phases, got %v", lifecycle.Categories)
+	}
+	if got := byName["TreeDB JSON"].Values[postIdx]; got != 195.0 {
+		t.Fatalf("TreeDB JSON post_insert = %v, want 195.0 (collided with SQLite JSON?)", got)
+	}
+	if got := byName["SQLite JSON"].Values[postIdx]; got != 397.2 {
+		t.Fatalf("SQLite JSON post_insert = %v, want 397.2 (collided with TreeDB JSON?)", got)
+	}
+	if got := byName["TreeDB JSON"].Values[vacIdx]; got != 0 {
+		t.Fatalf("TreeDB JSON should not have SQLite VACUUM value, got %v", got)
+	}
+	if got := byName["SQLite JSON"].Values[vacIdx]; got != 368.4 {
+		t.Fatalf("SQLite JSON SQLite VACUUM = %v, want 368.4", got)
+	}
+}
+
+func TestCollectionSeriesColorsDistinctAndDeterministic(t *testing.T) {
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"TreeDB\x00template-v1", "#2563eb"},
+		{"TreeDB Template V1", "#2563eb"},
+		{"TreeDB\x00template-v1-raw", "#0891b2"},
+		{"TreeDB Template V1 Raw", "#0891b2"},
+		{"TreeDB\x00bson", "#7c3aed"},
+		{"TreeDB BSON", "#7c3aed"},
+		{"TreeDB\x00json", "#d97706"},
+		{"TreeDB JSON", "#d97706"},
+		{"SQLite\x00native-columns", "#059669"},
+		{"SQLite Native", "#059669"},
+		{"SQLite\x00json", "#dc2626"},
+		{"SQLite JSON", "#dc2626"},
+		{"MongoDB", "#15803d"},
+		{"TreeDB", "#2563eb"},
+	}
+	for _, tc := range cases {
+		if got := collectionSeriesColor(tc.key); got != tc.want {
+			t.Errorf("collectionSeriesColor(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+
+	// Verify per-chart deduplication guarantees zero collisions even for arbitrary series.
+	series := assignDistinctSeriesColors([]chartSeries{
+		{Name: "Template V1 vs Native Columns", Color: "#d97706"},
+		{Name: "BSON vs Native Columns", Color: "#d97706"},
+		{Name: "JSON vs JSON", Color: "#d97706"},
+		{Name: "Msgpack vs Native Columns", Color: "#d97706"},
+		{Name: "TreeDB BSON", Color: "#d97706"},
+	})
+	used := make(map[string]string)
+	for _, s := range series {
+		if prev, dup := used[s.Color]; dup {
+			t.Fatalf("duplicate color %q assigned to %q and %q", s.Color, prev, s.Name)
+		}
+		used[s.Color] = s.Name
+	}
+	if got := series[4].Color; got != "#7c3aed" {
+		t.Fatalf("known series TreeDB BSON color = %q, want #7c3aed", got)
+	}
+}
+
+func TestNiceLinearAndLogAxisTicks(t *testing.T) {
+	axisMax, ticks := niceLinearAxis(397.2, "B/doc")
+	if axisMax != 400 {
+		t.Fatalf("niceLinearAxis(397.2) max = %v, want 400", axisMax)
+	}
+	wantTicks := []float64{0, 100, 200, 300, 400}
+	if !reflect.DeepEqual(ticks, wantTicks) {
+		t.Fatalf("niceLinearAxis(397.2) ticks = %v, want %v", ticks, wantTicks)
+	}
+
+	byteMax, byteTicks := niceLinearAxis(228*1024*1024, "bytes")
+	if byteMax != 250*1024*1024 {
+		t.Fatalf("niceLinearAxis(228 MiB) max = %v, want 250 MiB", byteMax)
+	}
+	if len(byteTicks) != 6 || formatAxisTick(byteTicks[len(byteTicks)-1], "bytes") != "250 MiB" {
+		t.Fatalf("unexpected byte ticks: %v", byteTicks)
+	}
+
+	logMin, logMax, logTicks := niceLogAxis(18.8, 397.2, "B/doc")
+	if !(logMin < 18.8 && logMax > 397.2) {
+		t.Fatalf("niceLogAxis(18.8, 397.2) bounds [%v, %v] do not enclose range", logMin, logMax)
+	}
+	if len(logTicks) < 4 {
+		t.Fatalf("expected >=4 nice log ticks, got %v", logTicks)
+	}
+}
+
+func TestBarChartNarrowAndNearZeroBarsReadable(t *testing.T) {
+	categories := []string{"post insert", "online maint", "offline compact", "offline rewrite", "exhaustive", "SQLite VACUUM"}
+	series := []chartSeries{
+		{Name: "TreeDB Template V1", Values: []float64{140, 90, 45, 30, 18.8, 0}, Color: "#2563eb"},
+		{Name: "TreeDB BSON", Values: []float64{180, 110, 50, 32, 2.1, 0}, Color: "#7c3aed"},
+		{Name: "TreeDB JSON", Values: []float64{195, 120, 55, 35, 24.4, 0}, Color: "#d97706"},
+		{Name: "SQLite Native", Values: []float64{240, 0, 0, 0, 0, 221.5}, Color: "#059669"},
+		{Name: "SQLite JSON", Values: []float64{397.2, 0, 0, 0, 0, 368.4}, Color: "#dc2626"},
+	}
+
+	html := compactVerticalBarChart("Bytes/doc by lifecycle phase, 0 indexes", categories, "phase", series, "B/doc")
+	for _, want := range []string{
+		"rotate(-90)",           // narrow bars get crisp rotated labels
+		">18.8</text>",          // near-zero exhaustive value is labeled
+		">2.1</text>",           // tiny value is labeled
+		"height=\"3.0\"",        // minimum visible >= 3px bar stub for 2.1 on 400 scale
+		"scale-toggle",          // wide dynamic range gets Linear/Log toggle
+		"data-scale=\"linear\"", // static HTML defaults to linear
+		"scale-linear",          // linear SVG layer
+		"scale-log",             // log SVG layer
+		">400</text>",           // nice rounded Y-axis top tick
+		"<details class=\"chart-values\"><summary>Exact values</summary>",
+		"18.8 B/doc",
+		"397.2 B/doc",
+		"class=\"legend-item\"",
+		"data-series=\"0\"",
+		"data-cat=\"4\"",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("narrow/near-zero chart missing %q\n%s", want, html)
+		}
+	}
+
+	// Wide bars (2 categories x 1 series -> barW >> 26) should render horizontal labels without -90 rotation on bar-val.
+	wideHTML := compactVerticalBarChart("Wide bars", []string{"a", "b"}, "cat", []chartSeries{
+		{Name: "TreeDB BSON", Values: []float64{100, 120}, Color: "#7c3aed"},
+	}, "B/doc")
+	if strings.Contains(wideHTML, "class=\"bar-val\" data-series=\"0\" transform=\"translate(") {
+		t.Fatalf("wide bars should use horizontal labels, not rotated\n%s", wideHTML)
+	}
+	if !strings.Contains(wideHTML, ">100</text>") || !strings.Contains(wideHTML, ">120</text>") {
+		t.Fatalf("wide bars missing value labels\n%s", wideHTML)
+	}
+	if strings.Contains(wideHTML, "scale-toggle") {
+		t.Fatalf("narrow dynamic range (120/100 < 4) should omit Linear/Log toggle\n%s", wideHTML)
+	}
+}
+
+func TestChartInteractiveQOLTooltipsLegendAndExactValues(t *testing.T) {
+	// Include NaN in a lineChart series to verify chart-meta JSON serialization never fails.
+	html := lineChart("Storage footprint vs secondary indexes", []string{"0", "1", "2"}, "secondary indexes", "storage bytes", []chartSeries{
+		{Name: "TreeDB", Values: []float64{13.8 * 1024 * 1024, math.NaN(), 25 * 1024 * 1024}, Color: "#2563eb"},
+		{Name: "MongoDB", Values: []float64{228 * 1024 * 1024, 240 * 1024 * 1024, 260 * 1024 * 1024}, Color: "#15803d"},
+	}, "bytes")
+
+	for _, want := range []string{
+		"scale-toggle",
+		"scale-log",
+		"class=\"chart-meta\"",
+		"class=\"chart-item\"",
+		"class=\"legend-item\"",
+		"<details class=\"chart-values\"><summary>Exact values</summary>",
+		"13.80 MiB",
+		"228.00 MiB",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("line chart missing %q\n%s", want, html)
+		}
+	}
+
+	re := regexp.MustCompile(`<script type="application/json" class="chart-meta">([^<]+)</script>`)
+	m := re.FindStringSubmatch(html)
+	if len(m) < 2 {
+		t.Fatalf("failed to locate chart-meta JSON payload\n%s", html)
+	}
+	var payload chartMetaPayload
+	if err := json.Unmarshal([]byte(m[1]), &payload); err != nil {
+		t.Fatalf("invalid chart-meta JSON: %v\nraw=%s", err, m[1])
+	}
+	if len(payload.Series) != 2 || payload.Series[0].Values[1] != nil || payload.Series[0].Formatted[1] != "-" {
+		t.Fatalf("unexpected chart-meta payload for NaN point: %+v", payload)
+	}
+}
+
+func TestReportCSSPreventsHorizontalClipping(t *testing.T) {
+	css := reportCSS()
+	for _, want := range []string{
+		"overflow-x:clip",
+		"overflow-wrap:anywhere",
+		"min-width:0",
+		".mini-table { min-width:0;",
+		".chart:not([data-scale=\"log\"]) .scale-log { display:none; }",
+		".chart[data-scale=\"log\"] .scale-linear { display:none; }",
+	} {
+		if !strings.Contains(css, want) {
+			t.Fatalf("reportCSS missing layout/clipping guard %q", want)
+		}
+	}
+	if strings.Contains(css, "100vw") {
+		t.Fatalf("reportCSS should avoid 100vw scrollbar overflow")
+	}
+}
+
+func TestBenchmarkContextBannerRendersAndOmitsGracefully(t *testing.T) {
+	fullHTML := renderHTML(reportData{
+		Config: config{Title: "banner test", RunRoot: t.TempDir()},
+		RunMetadata: runMetadata{
+			"tier":                       "full",
+			"mongo_treedb_open_mode":     "cached",
+			"mongo_treedb_profile":       "command_wal_relaxed",
+			"mongo_treedb_memtable_mode": "auto",
+			"mongo_mode":                 "docker",
+			"mongo_image":                "mongo:8.0",
+			"mongo_write_concern":        "w:1",
+		},
+		Collections: []collectionRow{
+			{ConfigName: "sqlite_native_columns_0_indexes", Engine: "sqlite_wal_normal", Format: "native-columns", IndexCount: 0, Phase: "sqlite_vacuum", BytesPerDoc: 20},
+		},
+	})
+	for _, want := range []string{
+		"context-banner",
+		"Benchmark Configuration &amp; Durability Contract",
+		"TreeDB open mode:",
+		"cached",
+		"TreeDB durability:",
+		"command_wal_relaxed",
+		"tone-relaxed",
+		"mongo:8.0 (docker)",
+		"MongoDB write concern:",
+		"w:1",
+		"SQLite journal/sync:",
+		"WAL / NORMAL (sqlite_wal_normal)",
+	} {
+		if !strings.Contains(fullHTML, want) {
+			t.Fatalf("context banner missing %q\n%s", want, fullHTML)
+		}
+	}
+
+	durableHTML := renderHTML(reportData{
+		Config:      config{Title: "durable test", RunRoot: t.TempDir()},
+		RunMetadata: runMetadata{"mongo_treedb_profile": "command_wal_durable"},
+	})
+	if !strings.Contains(durableHTML, "tone-durable") || !strings.Contains(durableHTML, "command_wal_durable") {
+		t.Fatalf("durable profile should render tone-durable badge\n%s", durableHTML)
+	}
+
+	fastHTML := renderHTML(reportData{
+		Config:      config{Title: "fast test", RunRoot: t.TempDir()},
+		RunMetadata: runMetadata{"mongo_treedb_profile": "no_wal_fast"},
+	})
+	if !strings.Contains(fastHTML, "tone-fast") || !strings.Contains(fastHTML, "no_wal_fast") {
+		t.Fatalf("no_wal_fast profile should render tone-fast badge\n%s", fastHTML)
+	}
+
+	// Minimal fixture without RUNBOOK.md or durability metadata omits banner cleanly.
+	minimalHTML := renderHTML(reportData{
+		Config: config{Title: "minimal", RunRoot: t.TempDir()},
+		MongoLoadModes: []loadModeRow{
+			{Indexes: 0, Target: "treedb", Config: "treedb_bson_driver", OpsPerSec: 1000},
+		},
+	})
+	if strings.Contains(minimalHTML, "class=\"context-banner\"") {
+		t.Fatalf("minimal report without durability metadata should omit context banner\n%s", minimalHTML)
+	}
+}
+
+func TestFormatExactChartValueBytesPreservesExactIntegerCount(t *testing.T) {
+	if got, want := formatExactChartValue(512, "bytes"), "512 B"; got != want {
+		t.Fatalf("512 bytes = %q, want %q", got, want)
+	}
+	got1024 := formatExactChartValue(1024, "bytes")
+	got1025 := formatExactChartValue(1025, "bytes")
+	if got1024 != "1,024 B (1.00 KiB)" {
+		t.Fatalf("1024 bytes = %q, want %q", got1024, "1,024 B (1.00 KiB)")
+	}
+	if got1025 != "1,025 B (1.00 KiB)" {
+		t.Fatalf("1025 bytes = %q, want %q", got1025, "1,025 B (1.00 KiB)")
+	}
+	if got1024 == got1025 {
+		t.Fatalf("1024 and 1025 bytes should remain distinguishable in exact value formatting")
+	}
+	// Axis ticks and bar labels stay compact.
+	if got, want := formatAxisTick(1024*1024, "bytes"), "1 MiB"; got != want {
+		t.Fatalf("axis tick 1 MiB = %q, want %q", got, want)
+	}
+	if got, want := formatBarLabelValue(1024*1024, "bytes"), "1M"; got != want {
+		t.Fatalf("bar label 1 MiB = %q, want %q", got, want)
+	}
+}
+
+func TestChartItemsKeyboardAccessibleWithFocusAndEscapeHandlers(t *testing.T) {
+	barHTML := compactVerticalBarChart("Bytes/doc", []string{"post insert"}, "phase", []chartSeries{
+		{Name: "TreeDB BSON", Values: []float64{1025}, Color: "#7c3aed"},
+	}, "bytes")
+	lineHTML := lineChart("Footprint", []string{"0", "1"}, "indexes", "bytes", []chartSeries{
+		{Name: "TreeDB", Values: []float64{1024, 1025}, Color: "#2563eb"},
+	}, "bytes")
+	loadHTML := loadModeBarChart("Load", []string{"BSON driver", "BSON direct"}, []float64{1024, 2048}, []float64{1025, 0}, "bytes", "Bytes")
+	rawHTML := rawEngineGroupedBarChart("Raw", []rawEngineRun{{Profile: "fast", Checkpoint: "no checkpoint between tests", Results: map[string]float64{"random_read": 5000}}}, []string{"random_read"}, []rawEngineVariant{{Profile: "fast", Checkpoint: "no checkpoint between tests", Label: "fast / no checkpoint between tests", Color: "#d97706"}})
+
+	for name, doc := range map[string]string{"bar": barHTML, "line": lineHTML, "load": loadHTML, "raw": rawHTML} {
+		for _, want := range []string{
+			`class="chart-item" tabindex="0" role="graphics-symbol" aria-label="`,
+		} {
+			if !strings.Contains(doc, want) {
+				t.Fatalf("%s chart missing keyboard-accessible chart-item attributes %q\n%s", name, want, doc)
+			}
+		}
+	}
+	if !strings.Contains(barHTML, "1,025 B (1.00 KiB)") {
+		t.Fatalf("bar chart exact values missing exact integer byte count\n%s", barHTML)
+	}
+
+	js := reportInteractiveJS()
+	for _, want := range []string{
+		"addEventListener('focusin'",
+		"addEventListener('focusout'",
+		"addEventListener('keydown'",
+		"ev.key === 'Escape'",
+		"aria-describedby",
+		"positionTipForElement",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("reportInteractiveJS missing keyboard tooltip handler %q", want)
+		}
+	}
 }
