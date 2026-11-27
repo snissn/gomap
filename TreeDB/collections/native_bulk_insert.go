@@ -1039,13 +1039,6 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 					locked = false
 					coord.nativeBulkInsertMu.Unlock()
 				}
-				// Logical COW publication and WAL frame append have already
-				// copied pre's payloads. Release pre's COW budget lease before
-				// blocking on durable fdatasync so concurrent group-commit
-				// waves do not accumulate idle preimage reservations.
-				if pre != nil {
-					pre.Close()
-				}
 			}
 		}
 		return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
