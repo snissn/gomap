@@ -242,6 +242,7 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	seal.primary = &allocation.primary
 	seal.primary.dataParentCoverage = runtime.primaryDataParentCoverageV6(seal, base)
 	seal.dependenciesCovered = dependenciesCovered
+	seal.dependenciesPreSynced = member.dependenciesPreSynced
 	seal.metadata = runtime.idx.primary.MetadataOwner()
 	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)

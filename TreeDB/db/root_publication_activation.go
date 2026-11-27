@@ -66,6 +66,7 @@ type rootPublicationVisibleMemberV1 struct {
 	transaction              *rootpublication.DurableRootTransaction
 	primary                  *rootpublication.PreparedPrimaryRootV5
 	primaryRecordTransferred bool
+	dependenciesPreSynced    bool
 	sequence                 uint64
 	next                     page.MetaPageBody
 	prepared                 *freelist.PreparedCOWCandidateV1
@@ -129,28 +130,29 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalMu          sync.Mutex
-	disposalErr         error
-	disposalFailure     originalDBCleanupFailure
-	metadata            *retainedalloc.Owner
-	metadataCharge      uint64
-	primary             *primaryPublicationSealV5
-	latestSequence      uint64
-	groupLength         int
-	idx                 *indexGen
-	base                rootPublicationSealBaseV1
-	next                page.MetaPageBody
-	resources           *rootpublication.StableResourceSet
-	dependenciesCovered bool
-	manifest            *rootpublication.DependencyManifestV1
-	prepared            *freelist.PreparedCOWCandidateV1
-	prefix              []*freelist.PreparedCOWCandidateV1
-	token               *rootpublication.StableResourceToken
-	record              rootpublication.DurableRootRecordV1
-	meta                page.DurableMetaV1
-	target              uint64
-	materialized        bool
-	released            bool
+	disposalMu            sync.Mutex
+	disposalErr           error
+	disposalFailure       originalDBCleanupFailure
+	metadata              *retainedalloc.Owner
+	metadataCharge        uint64
+	primary               *primaryPublicationSealV5
+	latestSequence        uint64
+	groupLength           int
+	idx                   *indexGen
+	base                  rootPublicationSealBaseV1
+	next                  page.MetaPageBody
+	resources             *rootpublication.StableResourceSet
+	dependenciesCovered   bool
+	dependenciesPreSynced bool
+	manifest              *rootpublication.DependencyManifestV1
+	prepared              *freelist.PreparedCOWCandidateV1
+	prefix                []*freelist.PreparedCOWCandidateV1
+	token                 *rootpublication.StableResourceToken
+	record                rootpublication.DurableRootRecordV1
+	meta                  page.DurableMetaV1
+	target                uint64
+	materialized          bool
+	released              bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -303,9 +305,23 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 	return db.initializeRootPublicationRuntimeModeV1(idx, false)
 }
 
+func (db *DB) seedStableIndexNamespaceProof(idx *indexGen) error {
+	if db == nil || db.readOnly || db.dir == "" || idx == nil || idx.pager == nil || !rootpublication.StableRelativeNamespaceSupported() {
+		return nil
+	}
+	ns, err := idx.stableIndexNamespaceToken(db.dir)
+	if err != nil {
+		return err
+	}
+	return ns.ReleaseWithError()
+}
+
 func (db *DB) initializeRootPublicationRuntimeModeV1(idx *indexGen, startup bool) error {
 	if db == nil || idx == nil || db.durableRoot.record.CommitSeq == 0 {
 		return errors.New("missing root-publication durable base")
+	}
+	if err := db.seedStableIndexNamespaceProof(idx); err != nil {
+		return err
 	}
 	runtime, err := newRootPublicationRuntimeModeV1(db, idx, db.durableRoot, db.meta, startup)
 	if err != nil {
@@ -749,6 +765,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install *rootPublicationVisibleInstallV1,
 	dependencyBytes uint64,
 	indexBytes uint64,
+	dependenciesPreSynced bool,
 	timing *CommandWALPublishTiming,
 	limits *PreparedRootPublicationLimits,
 ) (_ *rootpublication.PreparedRootCandidate, transferred bool, err error) {
@@ -927,7 +944,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	}()
 	member := &rootPublicationVisibleMemberV1{
 		sequence: next.CommitSeq, next: next, prepared: prepared, primary: primary,
-		resources: visibleResources, install: install, preparedLimits: limits,
+		dependenciesPreSynced: dependenciesPreSynced,
+		resources:             visibleResources, install: install, preparedLimits: limits,
 	}
 
 	runtime.mu.Lock()
@@ -1258,6 +1276,19 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			retErr = errors.Join(retErr, db.releaseCapturedRootResources(resources))
 		}
 	}()
+	dependenciesPreSynced := manifestUpdate.dependenciesPreSynced
+	if manifestUpdate.prepared == nil && leafManifest == nil {
+		opManifest, opRawFileIDs, opPreSynced, opErr := db.prepareSyncOperationalLeafManifest(resources, next, syncWrite, &post, &opts)
+		if opErr != nil {
+			return post, prePublishErr(opErr)
+		}
+		if opManifest != nil {
+			leafManifest, leafManifestRawFileIDs = opManifest, opRawFileIDs
+		}
+		if opPreSynced {
+			dependenciesPreSynced = true
+		}
+	}
 
 	rootReuseLocked := false
 	releaseReuse := func() {
@@ -1320,7 +1351,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidate, transferred, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
+		dependencyBytes, 0, dependenciesPreSynced, &candidateTiming, opts.preparedLimits,
 	)
 	if transferred {
 		if copied != nil {
@@ -1669,6 +1700,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	memberResources := member.resources
 	memberNext := member.next
+	memberDependenciesPreSynced := member.dependenciesPreSynced
 	var previousAuxiliary []uint64
 	if previous := runtime.activeSeal; previous != nil {
 		previousAuxiliary = previous.prepared.AuxiliaryPageIDs()
@@ -1886,7 +1918,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
 		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
-		target: target, dependenciesCovered: dependenciesCovered,
+		target: target, dependenciesCovered: dependenciesCovered, dependenciesPreSynced: memberDependenciesPreSynced,
 	}
 	seal.disposalFailure.payload = seal
 	runtime.debt = append(runtime.debt, prepared)
@@ -2051,10 +2083,11 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		}
 	}
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		installAuthority:    installAuthority,
-		resources:           seal.resources,
-		dependenciesCovered: seal.dependenciesCovered,
-		materialize:         func() error { return runtime.materializeSeal(seal) },
+		installAuthority:      installAuthority,
+		resources:             seal.resources,
+		dependenciesCovered:   seal.dependenciesCovered || (!durabilitycut.Enabled() && seal.dependenciesPreSynced),
+		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
+		materialize:           func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
 			// V6 stages its opposite capsule before the sole PRIMARY fence.
 			// Other PRIMARY formats retain the original pre-authority sync.

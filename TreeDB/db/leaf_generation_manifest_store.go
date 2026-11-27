@@ -778,6 +778,36 @@ func (s *leafGenerationManifestStore) syncStableRevisionDeletionLocked() error {
 	return durabilitycut.EmitStablePath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent)
 }
 
+func (s *leafGenerationManifestStore) syncParentDir() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	if s.parentErr != nil {
+		return s.parentErr
+	}
+	if s.parent == nil {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir); err != nil {
+			return err
+		}
+		if err := syncDirFn(s.leafDir); err != nil {
+			return err
+		}
+		return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir)
+	}
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent); err != nil {
+		return err
+	}
+	if err := s.parent.Sync(); err != nil {
+		return err
+	}
+	return durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent)
+}
+
 func syncLeafGenerationManifestFile(file *os.File, root string) error {
 	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceOuterLeaf, root, file.Name(), file); err != nil {
 		return err

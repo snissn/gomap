@@ -265,9 +265,10 @@ type durableRootPublishCandidateV1 struct {
 	meta               page.DurableMetaV1
 	target             uint64
 
-	materialized bool
-	metaMutated  bool
-	released     bool
+	materialized          bool
+	metaMutated           bool
+	released              bool
+	dependenciesPreSynced bool
 }
 
 func (candidate *durableRootPublishCandidateV1) release() error {
@@ -2126,19 +2127,20 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
-	dependenciesCovered bool                 // exact completed parent proof, prepared by coordinator
-	installAuthority    func() (bool, error) // Selected complete capsule authority replaces DATA META.
-	resources           *rootpublication.StableResourceSet
-	materialize         func() error
-	syncIndex           func() error
-	sink                freelist.AppendPageSink
-	target              uint64
-	meta                page.DurableMetaV1
-	syncMeta            func() error
-	dir                 string
-	indexPath           string
-	beforeMetaWrite     func() error
-	beforeMetaSync      func() error
+	dependenciesCovered   bool                 // exact completed parent proof, prepared by coordinator
+	installAuthority      func() (bool, error) // Selected complete capsule authority replaces DATA META.
+	resources             *rootpublication.StableResourceSet
+	syncPendingLeafLogDir func() error
+	materialize           func() error
+	syncIndex             func() error
+	sink                  freelist.AppendPageSink
+	target                uint64
+	meta                  page.DurableMetaV1
+	syncMeta              func() error
+	dir                   string
+	indexPath             string
+	beforeMetaWrite       func() error
+	beforeMetaSync        func() error
 }
 
 type stableResourceDependencySyncPhaseV1 uint8
@@ -2175,6 +2177,11 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 					return false, err
 				}
 			}
+		}
+	}
+	if tx.syncPendingLeafLogDir != nil {
+		if err := tx.syncPendingLeafLogDir(); err != nil {
+			return false, fmt.Errorf("sync durable-root leaf-log directory: %w", err)
 		}
 	}
 	if tx.materialize != nil {
@@ -2340,8 +2347,7 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	}
 	dependenciesCovered := false
 	if !durabilitycut.Enabled() && candidate.resources != nil && candidate.token != nil && candidate.idx != nil &&
-		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 && candidate.base.slot <= 1 &&
-		candidate.base.slotResources[candidate.base.slot] != nil {
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 && candidate.base.slot <= 1 && candidate.base.slotResources[candidate.base.slot] != nil {
 		completed := candidate.base.dataCompletion
 		if completed.pager == candidate.idx.pager && completed.incarnation == candidate.token.Generation() && completed.identity == candidate.token.Identity() {
 			if covered, covErr := candidate.resources.DependenciesCoveredBy(candidate.base.slotResources[candidate.base.slot]); covErr == nil {
@@ -2349,15 +2355,18 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 			}
 		}
 	}
+	dependenciesPreSynced := !durabilitycut.Enabled() && candidate.dependenciesPreSynced &&
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0
 	metaPath := filepath.Join(db.dir, indexFileName)
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		resources:           candidate.resources,
-		dependenciesCovered: dependenciesCovered,
-		materialize:         func() error { return db.materializeDurableRootCandidateV1(candidate) },
-		syncIndex:           candidate.token.SyncThrough,
-		sink:                durablePagerSinkV1{pager: candidate.idx.pager},
-		target:              candidate.target,
-		meta:                candidate.meta,
+		resources:             candidate.resources,
+		dependenciesCovered:   dependenciesCovered || dependenciesPreSynced,
+		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
+		materialize:           func() error { return db.materializeDurableRootCandidateV1(candidate) },
+		syncIndex:             candidate.token.SyncThrough,
+		sink:                  durablePagerSinkV1{pager: candidate.idx.pager},
+		target:                candidate.target,
+		meta:                  candidate.meta,
 		syncMeta: func() error {
 			return candidate.token.WithPinnedFile(func(file *os.File) error {
 				return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})

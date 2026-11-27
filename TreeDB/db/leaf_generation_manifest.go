@@ -887,8 +887,13 @@ func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) er
 	if db == nil {
 		return ErrClosed
 	}
+	leafDirSeq := db.leafLogDirUnsyncedSeq.Load()
 	if db.leafGenerationManifestStore == nil {
-		return saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest)
+		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+			return err
+		}
+		db.markLeafLogDirSyncedThrough(leafDirSeq)
+		return nil
 	}
 	token, err := db.leafGenerationManifestStore.Replace(manifest)
 	if token != nil {
@@ -896,6 +901,9 @@ func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) er
 		// ordering owner lands, current paths explicitly release the exact pin
 		// after the replacement itself is certified.
 		token.Release()
+	}
+	if err == nil {
+		db.markLeafLogDirSyncedThrough(leafDirSeq)
 	}
 	return err
 }

@@ -909,7 +909,38 @@ stats update is not a valid source of recovery truth.
 Stable split-leaf manifest replacement syncs the immutable revision file and
 its retained parent, then syncs the separate compatibility file and its rename.
 The exact immutable token carries the completed content and namespace frontiers
-into the root publisher.
+into the root publisher. When `durabilitycut` is disabled, flushing and syncing the
+candidate's already-captured external dependency handles executes sequentially
+before staging and syncing that replacement revision (both bound immutable
+replacements and pre-enqueue operational manifest replacements on synchronous
+commits before a root inherits a manifest token); both barriers complete before
+index data sync or any durable meta write (a dependency sync failure aborts
+before creating the replacement manifest), avoiding same-directory journal and
+directory-lock contention while recording a per-seal pre-sync flag separate from
+published-parent coverage so the publisher skips redundant dependency syncs only
+when `durabilitycut` is disabled without letting an unpublished seal claim
+published-parent coverage.
+
+On platforms with stable relative namespace support, uncaptured split-leaf
+segment creation (`leaf_vlog/value-l*.log`) defers its parent-directory sync so
+the same-directory manifest replacement sync covers both the new segment entry
+and the immutable manifest revision; a fail-closed pre-meta barrier syncs
+`leaf_vlog` whenever no manifest replacement covered the deferred creation
+sequence. Writable `Open` seeds the `index.db` namespace creation proof so the
+first publication revalidates the cached proof without performing an extra
+parent-directory `fsync` during `Checkpoint()`. Periodic GC/checkpoint
+persistence of the optional `vlog_ref_counts.meta` cache skips rewriting an
+already-present valid empty V6 cache file when tracked ordinary `value_vlog`
+counts remain empty and no ordinary `value_vlog` segments exist (while clean
+`Close()` refreshes `CommitSeq` once for zero-scan reopen, and startup rebuild
+scans run with `leafPageReadCache` disabled). Opportunistic checkpoint/close WAL cleanup
+(`CleanupCommandWALCoveredSegmentsAtCheckpoint` and `Close`) checks closed
+segment headers (and for fixed containers, the first extent witness at offset
+4096) at cleanup frontier `0` to avoid scanning retained stream segments or
+non-empty fixed containers when no potentially empty fixed-container candidate
+exists (while still flushing any pending WAL deletion-directory sync debt), and
+locked closed-stream scans reuse `CleanupReadBuffer` across closed stream
+segments.
 
 Once a root selects an immutable leaf manifest, ordinary inline and queued
 successors check that authority against their captured external leaf resources.

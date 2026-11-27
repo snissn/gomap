@@ -875,7 +875,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 	if db.closing.Load() {
 		return ErrClosed
 	}
-	return db.cleanupCommandWALCoveredSegmentsV1(false)
+	return db.cleanupCommandWALCoveredSegmentsV1(false, false)
 }
 
 // CleanupCommandWALCoveredSegmentsAtCheckpoint performs opportunistic cleanup
@@ -887,7 +887,15 @@ func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 // propagates; explicit cleanup callers continue to receive the unavailable
 // authority error from CleanupCommandWALCoveredSegments.
 func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
-	return normalizeCommandWALCheckpointCleanupError(db.CleanupCommandWALCoveredSegments(false))
+	if db == nil || !db.commandWAL {
+		return nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	return normalizeCommandWALCheckpointCleanupError(db.cleanupCommandWALCoveredSegmentsV1(false, true))
 }
 
 // CleanupCommandWALCoveredPrefix consumes cleanup debt created by
@@ -904,7 +912,7 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 	if db.closing.Load() {
 		return false, ErrClosed
 	}
-	err := db.cleanupCommandWALCoveredSegmentsV1(true)
+	err := db.cleanupCommandWALCoveredSegmentsV1(true, true)
 	// The exact refusal means deletion preflight found a live pin before any
 	// unlink. A joined error can include namespace damage and must propagate.
 	if err == rootpublication.ErrResourcePinned ||
@@ -924,13 +932,13 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld bool) error {
 	var err error
 	if maintenanceAlreadyHeld {
-		err = db.cleanupCommandWALCoveredSegmentsV1(false)
+		err = db.cleanupCommandWALCoveredSegmentsV1(false, true)
 	} else {
 		if !db.maintenanceMu.TryLock() {
 			return nil
 		}
 		defer db.maintenanceMu.Unlock()
-		err = db.cleanupCommandWALCoveredSegmentsV1(false)
+		err = db.cleanupCommandWALCoveredSegmentsV1(false, true)
 	}
 	return normalizeCommandWALCheckpointCleanupError(err)
 }
@@ -970,7 +978,7 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 // DB.Close after writers and root publication have drained but before the
 // journal owner is detached. External callers must use the admission-checked
 // CleanupCommandWALCoveredSegments method above.
-func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr error) {
+func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix, allowZeroFrontierSkip bool) (retErr error) {
 	db.commandWALCleanupMu.Lock()
 	defer db.commandWALCleanupMu.Unlock()
 	cleanupStart := time.Now()
@@ -1007,8 +1015,22 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
 	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
 	// A valid zero frontier still permits positively validated empty fixed
-	// containers to be reclaimed. Scan the complete retained replay lineage
-	// and apply the same active-generation, identity and pin gates below.
+	// containers to be reclaimed. For opportunistic checkpoint/close cleanup
+	// when no closed non-active fixed container exists, no segment can be
+	// reclaimed at frontier 0; skip scanning retained stream segments while
+	// still flushing any pending deletion-directory sync debt.
+	if allowZeroFrontierSkip && proof.cleanupThrough == 0 && db.testCommandWALCleanupHooks == nil {
+		hasCandidate, precheckErr := db.hasZeroFrontierReclaimableCommandWALCandidate(proof)
+		if precheckErr != nil {
+			if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
+				return commandWALCleanupWithHardError(precheckErr, syncErr)
+			}
+			return precheckErr
+		}
+		if !hasCandidate {
+			return db.syncCommandWALCleanupNamespaceIfDirty()
+		}
+	}
 	scanStart := time.Now()
 	decisions, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
 	proof.segments = decisions

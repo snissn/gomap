@@ -29732,6 +29732,11 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		return err
 	}
 
+	type leafLogDirSyncNotifier interface {
+		NoteLeafLogDirSyncPending()
+	}
+	leafDirNotifier, hasLeafDirNotifier := db.backend.(leafLogDirSyncNotifier)
+
 	if l.vlog != nil {
 		oldSize := l.vlog.Size()
 		var rotateErr error
@@ -29780,6 +29785,11 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 			}
 			rotationErr = err
 		}
+		if capture == nil && hasLeafDirNotifier && db.isLeafLogAppendLane(l) {
+			if uncertified, ok := any(l.vlog).(interface{ StableCreationNamespaceUncertified() bool }); ok && uncertified.StableCreationNamespaceUncertified() {
+				leafDirNotifier.NoteLeafLogDirSyncPending()
+			}
+		}
 		l.vlogRotateTotal.Add(1)
 		// Avoid counting an "idle rotation" when there was no previous segment.
 		if oldPath != "" && oldLiveBytes <= 0 {
@@ -29810,13 +29820,22 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		}
 	} else {
 		var w *valuelog.Writer
+		deferredLeafDirSync := false
 		if db.isLeafLogAppendLane(l) {
-			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+			if capture == nil && hasLeafDirNotifier && rootpublication.StableRelativeNamespaceSupported() {
+				w, err = valuelog.NewWriterWithStableResourcePinRegistryDeferredDirSync(path, fileID, db.valueLogIdentityPins)
+				deferredLeafDirSync = true
+			} else {
+				w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+			}
 		} else {
 			w, err = valuelog.NewWriterWithMetadata(path, fileID, db.valueLogIdentityPins.MetadataOwner())
 		}
 		if err != nil {
 			return err
+		}
+		if deferredLeafDirSync && w.StableCreationNamespaceUncertified() {
+			leafDirNotifier.NoteLeafLogDirSyncPending()
 		}
 		// Segment creation is treated as a rotation from "no current segment" for observability.
 		l.vlogRotateTotal.Add(1)
