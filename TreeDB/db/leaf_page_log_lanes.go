@@ -695,6 +695,24 @@ func (g *leafPageLogLaneGroup) advanceCompactStorageLeafPageLogSeqAtLeast(seq ui
 	return err
 }
 
+func (g *leafPageLogLaneGroup) detachSealedLeafPageLogSegments(sealedRawFileIDs map[uint32]struct{}) error {
+	if g == nil || len(sealedRawFileIDs) == 0 {
+		return nil
+	}
+	lanes, locks := g.snapshotLanesAndLocks()
+	var err error
+	for i, lane := range lanes {
+		if lane == nil {
+			continue
+		}
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
+		err = errors.Join(err, detachSealedLeafPageLogSegments(lane, sealedRawFileIDs))
+		lock.Unlock()
+	}
+	return err
+}
+
 func (g *leafPageLogLaneGroup) leafValueLogLanes() []LeafPageLog {
 	if g == nil {
 		return nil

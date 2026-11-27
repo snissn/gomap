@@ -2344,6 +2344,16 @@ per-seal pre-sync flag separate from published-parent coverage so the publisher
 skips redundant dependency syncs only when `durabilitycut` is disabled without
 letting an unpublished seal claim published-parent coverage.
 
+When destructive `LeafGenerationGC` runs with `DetachSealedCurrentWriters=true`
+(enabled by `CompactStorage` `leaf-generation-gc` and `settle-leaf-generation-gc`
+passes) or when `CompactStorage` seals the current writable generation without a
+replacement rewrite writer, any multi-lane leaf-log worker parked on a sealed
+generation flushes, syncs when strict sync is enabled, closes its handle, drops
+matching sealed entries from pending created-segment registration, demotes the
+segment from current-writable tracking, and clears its active path without
+creating an empty successor file. Dry-run inspection never mutates or detaches
+writer lanes; see [value-log lifecycle §5.1](value-log-lifecycle.md#51-periodic-whole-generation-leaf-reclamation).
+
 On platforms with stable relative namespace support, uncaptured split-leaf
 segment creation (`leaf_vlog/value-l*.log`) may defer its parent-directory
 `fsync` and notify the backend so the same-directory manifest replacement
