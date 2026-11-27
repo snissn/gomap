@@ -68,13 +68,22 @@ func TestValidateChunkSizeForEmbedder(t *testing.T) {
 		t.Fatalf("explicit lower MaxContextTokens override: err=%v want ErrContextWindowExceeded", err)
 	}
 
-	// Unknown limit behavior.
-	for _, emb := range []Embedder{nil, embUnknown, embZeroLimit} {
+	// Unknown limit behavior (including negative reporter return).
+	embNegLimit := contextWindowStubEmbedder{dims: 64, maxContextTokens: -5}
+	for _, emb := range []Embedder{nil, embUnknown, embZeroLimit, embNegLimit} {
 		if err := ValidateChunkSizeForEmbedder(3000, emb, ContextBudgetOptions{RequireKnownLimit: false}); err != nil {
 			t.Fatalf("unknown limit with RequireKnownLimit=false: unexpected err=%v", err)
 		}
 		if err := ValidateChunkSizeForEmbedder(3000, emb, ContextBudgetOptions{RequireKnownLimit: true}); !errors.Is(err, ErrContextWindowUnknown) {
 			t.Fatalf("unknown limit with RequireKnownLimit=true: err=%v want ErrContextWindowUnknown", err)
+		}
+	}
+
+	// Typed-nil embedder implementing ContextWindowReporter fails closed with ErrInvalidEmbedder.
+	var typedNil *contextWindowStubEmbedder
+	for _, opts := range []ContextBudgetOptions{{}, {MaxContextTokens: 512}} {
+		if err := ValidateChunkSizeForEmbedder(100, typedNil, opts); !errors.Is(err, ErrInvalidEmbedder) {
+			t.Fatalf("typed-nil embedder (opts=%+v): err=%v want ErrInvalidEmbedder", opts, err)
 		}
 	}
 
@@ -161,12 +170,28 @@ func TestValidateTextsForContextWindow(t *testing.T) {
 		t.Fatalf("error %q should include failing index 2 and rune count 1281", err.Error())
 	}
 
-	// Unknown limit behavior.
-	if err := ValidateTextsForContextWindow(failBatch, embUnknown, ContextBudgetOptions{RequireKnownLimit: false}); err != nil {
-		t.Fatalf("unknown limit with RequireKnownLimit=false: unexpected err=%v", err)
+	// Unknown limit behavior (including negative reporter return).
+	embNegLimit := contextWindowStubEmbedder{dims: 64, maxContextTokens: -5}
+	for _, emb := range []Embedder{nil, embUnknown, embNegLimit} {
+		if err := ValidateTextsForContextWindow(failBatch, emb, ContextBudgetOptions{RequireKnownLimit: false}); err != nil {
+			t.Fatalf("unknown limit with RequireKnownLimit=false: unexpected err=%v", err)
+		}
+		if err := ValidateTextsForContextWindow(failBatch, emb, ContextBudgetOptions{RequireKnownLimit: true}); !errors.Is(err, ErrContextWindowUnknown) {
+			t.Fatalf("unknown limit with RequireKnownLimit=true: err=%v want ErrContextWindowUnknown", err)
+		}
 	}
-	if err := ValidateTextsForContextWindow(failBatch, embUnknown, ContextBudgetOptions{RequireKnownLimit: true}); !errors.Is(err, ErrContextWindowUnknown) {
-		t.Fatalf("unknown limit with RequireKnownLimit=true: err=%v want ErrContextWindowUnknown", err)
+
+	// Typed-nil embedder implementing ContextWindowReporter fails closed with ErrInvalidEmbedder.
+	var typedNil *contextWindowStubEmbedder
+	for _, opts := range []ContextBudgetOptions{{}, {MaxContextTokens: 512}} {
+		if err := ValidateTextsForContextWindow(okBatch, typedNil, opts); !errors.Is(err, ErrInvalidEmbedder) {
+			t.Fatalf("typed-nil embedder (opts=%+v): err=%v want ErrInvalidEmbedder", opts, err)
+		}
+	}
+
+	// Huge context window does not overflow int to negative.
+	if err := ValidateTextsForContextWindow(okBatch, nil, ContextBudgetOptions{MaxContextTokens: math.MaxInt, MinRunesPerToken: 10}); err != nil {
+		t.Fatalf("large MaxContextTokens overflowed: %v", err)
 	}
 
 	// Invalid options fail closed even on empty slice.

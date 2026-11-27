@@ -41,11 +41,18 @@ chunks, err := chunking.SplitChunks("parent-doc-id", sourceText, cfg)
     to the end of chunk `N`, while attaching structural/prefix separators (such
     as `"\n## "`, `"\nfunc "`, `"\ndef "`, `"\n\\section"`, `"## "`) to the
     start of chunk `N+1` (keeping a leading `'\n'` at the end of chunk `N`).
-  - `SnapOverlapToBoundary`: when `true` and `Overlap > 0`, snaps the raw
-    overlap start (`end - Overlap`) forward within `[end-Overlap, end)` to a
-    clean line boundary (`'\n'`) first, or else a whitespace word boundary,
-    preserving a raw start that already sits immediately after `'\n'` or
-    whitespace and falling back to `end - Overlap` for unbroken tokens.
+  - `SnapOverlapToBoundary`: when `true` and `Overlap > 0`, computes
+    `rawStart := end - Overlap` and resolves the next chunk start using a
+    deterministic 5-step priority:
+    1. Keep `rawStart` if `rawStart > 0 && runes[rawStart-1] == '\n'` (already
+       aligned to a clean line boundary).
+    2. Else scan forward in `[rawStart, end)` for the first `'\n'` with
+       `idx+1 < end` and snap to `idx + 1`.
+    3. Else keep `rawStart` if `rawStart > 0 && unicode.IsSpace(runes[rawStart-1])`
+       (already aligned to a word boundary).
+    4. Else scan forward in `[rawStart, end)` for the first
+       `unicode.IsSpace(runes[idx])` with `idx+1 < end` and snap to `idx + 1`.
+    5. Else fall back to `rawStart` (for example, a single unbroken token).
   - **Format-aware separator presets:** in addition to `DefaultSeparators()`,
     the package provides `MarkdownSeparators()`, `CodeSeparators()`, and
     `LaTeXSeparators()` (each returning a fresh slice ending with the `""`

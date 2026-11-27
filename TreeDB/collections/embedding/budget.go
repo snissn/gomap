@@ -50,6 +50,12 @@ func resolveContextBudget(emb Embedder, opts ContextBudgetOptions) (maxTokens in
 		minRunesPerToken = defaultMinRunesPerToken
 	}
 
+	if emb != nil {
+		if err := ValidateEmbedder(emb); err != nil {
+			return 0, 0, 0, false, err
+		}
+	}
+
 	maxTokens = opts.MaxContextTokens
 	if maxTokens == 0 && emb != nil {
 		if reporter, ok := emb.(ContextWindowReporter); ok {

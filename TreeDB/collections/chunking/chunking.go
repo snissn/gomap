@@ -37,9 +37,14 @@ const (
 	// `size` runes (the final window may be shorter).
 	StrategyFixedWindow Strategy = "fixed_window"
 	// StrategyRecursive fills each size window at the furthest boundary of the
-	// first configured separator present, then advances by end-overlap. It
-	// falls through progressively finer separators; an empty separator causes
-	// an immediate hard split for that window.
+	// first configured separator present, then advances by end-overlap (or snaps
+	// forward to a line/word boundary in [end-overlap, end) when
+	// SnapOverlapToBoundary is true). By default separators stay at the end of
+	// chunk N; setting SeparatorPlacementStart attaches structural/prefix
+	// separators to the start of chunk N+1 while keeping delimiter-only
+	// separators at the end of chunk N. It falls through progressively finer
+	// separators; an empty separator causes an immediate hard split for that
+	// window.
 	StrategyRecursive Strategy = "recursive"
 )
 

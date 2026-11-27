@@ -534,6 +534,68 @@ func TestBoundaryOptionsEdgeCasesDeterminismAndUTF8(t *testing.T) {
 				SnapOverlapToBoundary: true,
 			},
 		},
+		{
+			name: "max overlap Size-1 with Start and Snap",
+			text: "alpha beta\ngamma delta\n## Heading\nepsilon zeta",
+			cfg: Config{
+				Strategy:              StrategyRecursive,
+				SizeUnit:              SizeUnitRunes,
+				Size:                  12,
+				Overlap:               11,
+				Separators:            MarkdownSeparators(),
+				SeparatorPlacement:    SeparatorPlacementStart,
+				SnapOverlapToBoundary: true,
+			},
+		},
+		{
+			name: "SnapOverlapToBoundary true with Overlap 0",
+			text: "first line\n## Second\nthird line here",
+			cfg: Config{
+				Strategy:              StrategyRecursive,
+				SizeUnit:              SizeUnitRunes,
+				Size:                  18,
+				Overlap:               0,
+				Separators:            MarkdownSeparators(),
+				SeparatorPlacement:    SeparatorPlacementStart,
+				SnapOverlapToBoundary: true,
+			},
+		},
+		{
+			name: "input starting with leading newline heading",
+			text: "\n## First\n## Second",
+			cfg: Config{
+				Strategy:           StrategyRecursive,
+				SizeUnit:           SizeUnitRunes,
+				Size:               12,
+				Overlap:            0,
+				Separators:         MarkdownSeparators(),
+				SeparatorPlacement: SeparatorPlacementStart,
+			},
+		},
+		{
+			name: "multibyte Unicode structural separator with newline",
+			text: "Intro text.\n§ 1 Alpha clause.\n§ 2 Beta clause.",
+			cfg: Config{
+				Strategy:           StrategyRecursive,
+				SizeUnit:           SizeUnitRunes,
+				Size:               24,
+				Overlap:            0,
+				Separators:         []string{"\n§ ", "\n", " ", ""},
+				SeparatorPlacement: SeparatorPlacementStart,
+			},
+		},
+		{
+			name: "multibyte Unicode structural separator without newline",
+			text: "§ 1 Alpha § 2 Beta § 3 Gamma",
+			cfg: Config{
+				Strategy:           StrategyRecursive,
+				SizeUnit:           SizeUnitRunes,
+				Size:               16,
+				Overlap:            0,
+				Separators:         []string{"§ ", " ", ""},
+				SeparatorPlacement: SeparatorPlacementStart,
+			},
+		},
 	}
 
 	for _, tc := range corpus {
@@ -548,6 +610,66 @@ func TestBoundaryOptionsEdgeCasesDeterminismAndUTF8(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSeparatorPlacementStartLeadingNewlineHeadingAndUnicodeStructural(t *testing.T) {
+	// Leading "\n## First\n## Second" with Overlap == 0: leading "\n" terminates
+	// chunk 0 cleanly at i+1=1, and each subsequent heading starts on chunk N+1.
+	doc := "\n## First\n## Second"
+	cfg := Config{
+		Strategy:           StrategyRecursive,
+		SizeUnit:           SizeUnitRunes,
+		Size:               12,
+		Overlap:            0,
+		Separators:         []string{"\n## ", ""},
+		SeparatorPlacement: SeparatorPlacementStart,
+	}
+	chunks := mustChunk(t, "leading-nl", doc, cfg)
+	assertChunkInvariants(t, doc, cfg, chunks)
+	if len(chunks) != 3 || chunks[0].Text != "\n" || chunks[1].Text != "## First\n" || chunks[2].Text != "## Second" {
+		t.Fatalf("leading newline heading chunks=%#v want [\"\\n\", \"## First\\n\", \"## Second\"]", chunks)
+	}
+
+	// Same input with full MarkdownSeparators() also preserves invariants and
+	// never leaves "## " detached at the end of chunk 0 or chunk 1.
+	cfgMD := cfg
+	cfgMD.Separators = MarkdownSeparators()
+	mdChunks := mustChunk(t, "leading-nl-md", doc, cfgMD)
+	assertChunkInvariants(t, doc, cfgMD, mdChunks)
+	if len(mdChunks) < 3 || mdChunks[0].Text != "\n" || mdChunks[1].Text != "## First\n" || !strings.HasPrefix(mdChunks[2].Text, "## ") {
+		t.Fatalf("leading newline heading (MarkdownSeparators) chunks=%#v", mdChunks)
+	}
+
+	// Multi-byte Unicode structural separators "\n§ " and "§ " attach to chunk N+1.
+	docNL := "Intro text.\n§ 1 Alpha.\n§ 2 Beta."
+	cfgNL := Config{
+		Strategy:           StrategyRecursive,
+		SizeUnit:           SizeUnitRunes,
+		Size:               20,
+		Overlap:            0,
+		Separators:         []string{"\n§ ", "\n", " ", ""},
+		SeparatorPlacement: SeparatorPlacementStart,
+	}
+	nlChunks := mustChunk(t, "sec-nl", docNL, cfgNL)
+	assertChunkInvariants(t, docNL, cfgNL, nlChunks)
+	if len(nlChunks) < 3 || !strings.HasPrefix(nlChunks[1].Text, "§ 1") || !strings.HasPrefix(nlChunks[2].Text, "§ 2") {
+		t.Fatalf("expected \"§ \" sections at chunk starts, got %#v", nlChunks)
+	}
+
+	docBare := "§ 1 Alpha § 2 Beta § 3 Gamma"
+	cfgBare := Config{
+		Strategy:           StrategyRecursive,
+		SizeUnit:           SizeUnitRunes,
+		Size:               16,
+		Overlap:            0,
+		Separators:         []string{"§ ", ""},
+		SeparatorPlacement: SeparatorPlacementStart,
+	}
+	bareChunks := mustChunk(t, "sec-bare", docBare, cfgBare)
+	assertChunkInvariants(t, docBare, cfgBare, bareChunks)
+	if len(bareChunks) != 3 || bareChunks[0].Text != "§ 1 Alpha " || bareChunks[1].Text != "§ 2 Beta " || bareChunks[2].Text != "§ 3 Gamma" {
+		t.Fatalf("expected 3 \"§ \" sections, got %#v", bareChunks)
 	}
 }
 
