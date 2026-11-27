@@ -365,6 +365,61 @@ func (c *Collection) openNativeReadView() (*CollectionReadView, error) {
 	return &CollectionReadView{collection: c, nativeRead: read, nativeLease: lease}, nil
 }
 
+// InspectNativeMeta borrows the current pinned native semantic cut and invokes
+// fn with a read-only view of the collection's CollectionMeta without
+// allocating a CollectionReadView, capturing a new handle, or copying
+// IndexDefinitions.
+//
+// Callers MUST treat meta as strictly read-only and MUST NOT retain meta or any
+// slices or pointers inside meta past fn.
+//
+// Returns (true, err) when the collection is native and a borrowed cut was
+// inspected (including ErrCollectionNotFound when the collection no longer
+// exists in the cut), or (false, nil) when the collection is non-native or a
+// borrowed cut is unavailable so the caller should fall back to
+// OpenCollectionReadView.
+func (c *Collection) InspectNativeMeta(fn func(meta *CollectionMeta) error) (handled bool, resultErr error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.nativeJSON == nil || c.nativeJSON.db == nil {
+		return false, nil
+	}
+	if fn == nil {
+		return false, errors.New("collections: nil native metadata inspector")
+	}
+	if c.manager.isClosing() {
+		return false, backenddb.ErrClosed
+	}
+	cut, err := c.nativeJSON.db.BorrowNativeSemanticCut()
+	if err != nil {
+		if errors.Is(err, backenddb.ErrClosed) {
+			return false, err
+		}
+		return false, nil
+	}
+	defer func() {
+		relErr := cut.Release()
+		if handled {
+			resultErr = errors.Join(resultErr, relErr)
+		}
+	}()
+	engine, ok := cut.State().(*nativeEngineVersion)
+	if !ok || engine == nil {
+		return false, nil
+	}
+	col, ok := engine.names.Get(c.name)
+	if !ok {
+		handled = true
+		return true, errors.Join(ErrCollectionNotFound, tree.ErrKeyNotFound)
+	}
+	if col.schema == nil || col.schema.meta == nil {
+		return false, nil
+	}
+	handled = true
+	return true, fn(col.schema.meta)
+}
+
 func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
 	if v.closed || v.nativeRead == nil {
 		return DocumentFetchResponse{}, backenddb.ErrClosed

@@ -1187,7 +1187,99 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 		return findResponsePayload{document: doc}, err
 	}
-	ns := db + "." + collection
+	ns := name
+	if !plan.hint.present && plan.projection.present {
+		if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayloadFast(col, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
+			if errors.Is(err, collections.ErrCollectionNotFound) {
+				doc, err := marshalCursorResponse(db, collection, bson.A{})
+				return findResponsePayload{document: doc}, err
+			}
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			return payload, nil
+		}
+	}
+	if !plan.hint.present && !plan.projection.present {
+		maxDocs := s.maxFindScanDocuments()
+		isRangeCand := pureIndexedRangeLimitCandidate(plan, maxDocs)
+		isEqCand := !isRangeCand && pureIndexedEqualityLimitCandidate(plan, maxDocs)
+		if isRangeCand || isEqCand {
+			var (
+				fastIndexName string
+				fastFormat    collections.DocumentFormat
+				fastOpts      collections.IndexRangeOptions
+				fastLimit     int
+				fastMatched   bool
+				fastEmpty     bool
+			)
+			inspected, inspectErr := col.InspectNativeMeta(func(meta *collections.CollectionMeta) error {
+				if isRangeCand {
+					idx, opts, limit, ok, empty, planErr := pureIndexedRangeLimitPlanMeta(meta, plan, maxDocs)
+					if planErr != nil || !ok {
+						return planErr
+					}
+					fastIndexName = idx.Name
+					fastFormat = meta.Options.DocumentFormat
+					fastOpts = opts
+					fastLimit = limit
+					fastEmpty = empty
+					fastMatched = true
+					return nil
+				}
+				idx, opts, limit, ok, planErr := pureIndexedEqualityLimitPlanMeta(meta, plan, maxDocs)
+				if planErr != nil || !ok {
+					return planErr
+				}
+				fastIndexName = idx.Name
+				fastFormat = meta.Options.DocumentFormat
+				fastOpts = opts
+				fastLimit = limit
+				fastMatched = true
+				return nil
+			})
+			if errors.Is(inspectErr, collections.ErrCollectionNotFound) {
+				doc, err := marshalCursorResponse(db, collection, bson.A{})
+				return findResponsePayload{document: doc}, err
+			}
+			if inspectErr != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", inspectErr.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			if inspected && fastMatched {
+				normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
+				if err != nil {
+					doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+					return findResponsePayload{document: doc}, err
+				}
+				if fastEmpty {
+					return findResponsePayload{
+						kind: findResponsePayloadRaw,
+						raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
+					}, nil
+				}
+				if normalizedBatchSize >= fastLimit {
+					fastOpts.Limit = fastLimit
+					return findResponsePayload{
+						kind: findResponsePayloadIndexedRange,
+						indexedRange: indexedRangeCursorResponse{
+							col:           col,
+							format:        fastFormat,
+							server:        s,
+							ns:            ns,
+							indexName:     fastIndexName,
+							opts:          fastOpts,
+							batchKey:      "firstBatch",
+							maxBatchBytes: s.maxFindBatchBytes(),
+							cursorOwner:   cursorOwner,
+							singleBatch:   singleBatch,
+						},
+					}, nil
+				}
+			}
+		}
+	}
 	view, err := col.OpenCollectionReadView()
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		if plan.hint.present {
@@ -1346,6 +1438,85 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	}
 	doc, err := marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
 	return findResponsePayload{document: doc}, err
+}
+
+func (s *Server) findSimpleProjectedPrimaryEqualityPayloadFast(col *collections.Collection, ns string, plan findPlan, batchSize int, batchSizeSet bool) (findResponsePayload, bool, error) {
+	if !plan.projection.present {
+		return findResponsePayload{}, false, nil
+	}
+	value, ok := simplePrimaryEqualityFindValue(plan)
+	if !ok {
+		return findResponsePayload{}, false, nil
+	}
+	normalizedBatchSize, err := normalizeBatchSize(batchSize, batchSizeSet, defaultCursorBatchSize)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	if normalizedBatchSize < 1 {
+		return findResponsePayload{}, false, nil
+	}
+	var keyStack [128]byte
+	key, err := encodePrimaryKeyInto(keyStack[:0], value)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	canPoolBuf := plan.projection.mode != projectionNone || plan.projection.idSpecified
+	var (
+		bufPtr *[]byte
+		docBuf []byte
+	)
+	if canPoolBuf {
+		bufPtr = fastPrimaryFindDocBufPool.Get().(*[]byte)
+		docBuf = (*bufPtr)[:0]
+	}
+	stored, format, found, err := col.GetIntoWithFormat(key, docBuf)
+	defer func() {
+		if bufPtr != nil {
+			if cap(stored) <= fastPrimaryFindDocBufMaxCap {
+				*bufPtr = stored[:0]
+				fastPrimaryFindDocBufPool.Put(bufPtr)
+			}
+			bufPtr = nil
+		}
+	}()
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	if !found || len(stored) == 0 {
+		return findResponsePayload{
+			kind: findResponsePayloadRaw,
+			raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
+		}, true, nil
+	}
+	var doc wire.Document
+	if format == collections.DocumentFormatBSON {
+		doc = wire.Document(stored)
+	} else {
+		decoder, err := newFindDocumentDecoder(col, format)
+		if err != nil {
+			return findResponsePayload{}, true, err
+		}
+		defer func() { _ = decoder.Close() }()
+		doc, err = decoder.decode(stored)
+		if err != nil {
+			return findResponsePayload{}, true, err
+		}
+	}
+	projected, err := projectDocumentWithProjection(doc, plan.projection)
+	if err != nil {
+		return findResponsePayload{}, true, err
+	}
+	if bufPtr != nil && len(projected) > 0 && len(stored) > 0 && &projected[0] == &stored[0] {
+		bufPtr = nil
+	}
+	docBytes := findBatchDocumentBytes(projected, 0)
+	if findBatchOverheadBytes+docBytes > s.maxFindBatchBytes() {
+		return findResponsePayload{}, true, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, s.maxFindBatchBytes())
+	}
+	return findResponsePayload{
+		kind: findResponsePayloadRaw,
+		raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: []wire.Document{projected}},
+	}, true, nil
 }
 
 func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Collection, meta collections.CollectionMeta, view *collections.CollectionReadView, ns string, plan findPlan, batchSize int, batchSizeSet bool) (findResponsePayload, bool, error) {

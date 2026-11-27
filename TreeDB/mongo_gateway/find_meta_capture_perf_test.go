@@ -236,6 +236,17 @@ func TestFindMetaCaptureSingleCutAndNoLeaseLeak(t *testing.T) {
 					}),
 					want: "user-00025",
 				},
+				{
+					name: "PureAgeRangeLimit10",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(30)}}}}},
+						{Key: "limit", Value: int32(10)},
+						{Key: "singleBatch", Value: true},
+					}),
+					want: "",
+				},
 			}
 
 			for _, q := range cases {
@@ -244,11 +255,15 @@ func TestFindMetaCaptureSingleCutAndNoLeaseLeak(t *testing.T) {
 					const iters = 10
 					for i := 0; i < iters; i++ {
 						docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, q.cmd))
-						if len(docs) != 1 {
-							t.Fatalf("got %d docs want 1", len(docs))
-						}
-						if gotID := bson.Raw(docs[0]).Lookup("_id").StringValue(); gotID != q.want {
-							t.Fatalf("got _id=%q want %q", gotID, q.want)
+						if q.want != "" {
+							if len(docs) != 1 {
+								t.Fatalf("got %d docs want 1", len(docs))
+							}
+							if gotID := bson.Raw(docs[0]).Lookup("_id").StringValue(); gotID != q.want {
+								t.Fatalf("got _id=%q want %q", gotID, q.want)
+							}
+						} else if len(docs) != 10 {
+							t.Fatalf("got %d docs want 10", len(docs))
 						}
 					}
 					afterCaptures := cowStatUint64(t, server, "treedb.cache.cow.capture_calls_total")
@@ -265,6 +280,194 @@ func TestFindMetaCaptureSingleCutAndNoLeaseLeak(t *testing.T) {
 							q.name, afterLeases, baseLeases, afterActiveCuts, baseActiveCuts, afterViews, baseViews)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestFindBorrowedMetaFastPathsSettledZeroCaptureAndEdgeCases(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		bsonV2EmailIndex bool
+	}{
+		{name: "StringEmailIndex", bsonV2EmailIndex: false},
+		{name: "BSONOrderedV2EmailIndex", bsonV2EmailIndex: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, collName := openStandaloneCOWBSONFixture(t, collections.DocumentFormatBSON, tc.bsonV2EmailIndex, 64)
+			if err := server.Collections.CheckpointStorage(); err != nil {
+				t.Fatalf("CheckpointStorage: %v", err)
+			}
+			ctx := context.Background()
+
+			// Warm collection cache before measuring settled COW captures.
+			warmCmd := mustMarshalWireDoc(t, bson.D{
+				{Key: "find", Value: collName},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "email", Value: "user-00010@example.com"}}},
+				{Key: "limit", Value: int32(1)},
+				{Key: "singleBatch", Value: true},
+			})
+			if docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, warmCmd)); len(docs) != 1 {
+				t.Fatalf("warm find got %d docs want 1", len(docs))
+			}
+
+			baseLeases := cowStatUint64(t, server, "treedb.cache.cow.external_leases")
+			baseActiveCuts := cowStatUint64(t, server, "treedb.cache.cow.active_cuts")
+			baseViews := cowStatUint64(t, server, "treedb.cache.cow.views")
+
+			settledCases := []struct {
+				name     string
+				cmd      wire.Document
+				wantDocs int
+				wantID   string
+			}{
+				{
+					name: "FindOneByEmail",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "email", Value: "user-00025@example.com"}}},
+						{Key: "limit", Value: int32(1)},
+						{Key: "singleBatch", Value: true},
+					}),
+					wantDocs: 1,
+					wantID:   "user-00025",
+				},
+				{
+					name: "FindByEmailUniqueNoLimit",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "email", Value: "user-00025@example.com"}}},
+						{Key: "singleBatch", Value: true},
+					}),
+					wantDocs: 1,
+					wantID:   "user-00025",
+				},
+				{
+					name: "FindOneByPrimaryID",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "_id", Value: "user-00025"}}},
+						{Key: "limit", Value: int32(1)},
+						{Key: "singleBatch", Value: true},
+					}),
+					wantDocs: 1,
+					wantID:   "user-00025",
+				},
+				{
+					name: "FindOneByPrimaryIDProjected",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "_id", Value: "user-00025"}}},
+						{Key: "projection", Value: bson.D{{Key: "email", Value: int32(1)}}},
+						{Key: "limit", Value: int32(1)},
+						{Key: "singleBatch", Value: true},
+					}),
+					wantDocs: 1,
+					wantID:   "user-00025",
+				},
+				{
+					name: "PureAgeRangeLimit10",
+					cmd: mustMarshalWireDoc(t, bson.D{
+						{Key: "find", Value: collName},
+						{Key: "$db", Value: "app"},
+						{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(30)}}}}},
+						{Key: "limit", Value: int32(10)},
+						{Key: "singleBatch", Value: true},
+					}),
+					wantDocs: 10,
+				},
+			}
+
+			for _, q := range settledCases {
+				t.Run(q.name, func(t *testing.T) {
+					beforeCaptures := cowStatUint64(t, server, "treedb.cache.cow.capture_calls_total")
+					const iters = 10
+					for i := 0; i < iters; i++ {
+						docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, q.cmd))
+						if len(docs) != q.wantDocs {
+							t.Fatalf("got %d docs want %d", len(docs), q.wantDocs)
+						}
+						if q.wantID != "" {
+							if gotID := bson.Raw(docs[0]).Lookup("_id").StringValue(); gotID != q.wantID {
+								t.Fatalf("got _id=%q want %q", gotID, q.wantID)
+							}
+						}
+					}
+					afterCaptures := cowStatUint64(t, server, "treedb.cache.cow.capture_calls_total")
+					if delta := afterCaptures - beforeCaptures; delta != 0 {
+						t.Fatalf("settled %s performed %d COW captures over %d ops, want 0", q.name, delta, iters)
+					}
+					afterLeases := cowStatUint64(t, server, "treedb.cache.cow.external_leases")
+					afterActiveCuts := cowStatUint64(t, server, "treedb.cache.cow.active_cuts")
+					afterViews := cowStatUint64(t, server, "treedb.cache.cow.views")
+					if afterLeases > baseLeases || afterActiveCuts > baseActiveCuts || afterViews > baseViews {
+						t.Fatalf("COW leak after settled %s: leases=%d(base %d) active_cuts=%d(base %d) views=%d(base %d)",
+							q.name, afterLeases, baseLeases, afterActiveCuts, baseActiveCuts, afterViews, baseViews)
+					}
+				})
+			}
+
+			// Incompatible scalar against typed index must return empty cleanly.
+			incompatibleCmd := mustMarshalWireDoc(t, bson.D{
+				{Key: "find", Value: collName},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "email", Value: int64(42)}}},
+				{Key: "limit", Value: int32(1)},
+				{Key: "singleBatch", Value: true},
+			})
+			if docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, incompatibleCmd)); len(docs) != 0 {
+				t.Fatalf("incompatible scalar find got %d docs want 0", len(docs))
+			}
+
+			// Missing collection returns empty without hint and errors with hint.
+			missingRangeCmd := mustMarshalWireDoc(t, bson.D{
+				{Key: "find", Value: "missing_coll"},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(30)}}}}},
+				{Key: "limit", Value: int32(10)},
+			})
+			if docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, missingRangeCmd)); len(docs) != 0 {
+				t.Fatalf("missing collection range find got %d docs want 0", len(docs))
+			}
+			hintMissingCmd := mustMarshalWireDoc(t, bson.D{
+				{Key: "find", Value: "missing_coll"},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(30)}}}}},
+				{Key: "hint", Value: "age_1"},
+				{Key: "limit", Value: int32(10)},
+			})
+			resp := mustFindResponse(t, server.Server, ctx, hintMissingCmd)
+			if okVal, _ := bson.Raw(resp).Lookup("ok").AsInt64OK(); okVal != 0 {
+				t.Fatalf("expected error for hinted find on missing collection, got %s", bson.Raw(resp).String())
+			}
+
+			// Index DDL visibility: dropping secondary indexes must immediately
+			// disable the borrowed-meta indexed fast paths and fall back cleanly.
+			col, err := server.Collections.OpenCollection("app." + collName)
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			if _, err := col.DropIndex("age_1"); err != nil {
+				t.Fatalf("DropIndex(age_1): %v", err)
+			}
+			if _, err := col.DropIndex("email_1"); err != nil {
+				t.Fatalf("DropIndex(email_1): %v", err)
+			}
+			for _, q := range settledCases {
+				docs := extractFirstBatchDocs(t, mustFindResponse(t, server.Server, ctx, q.cmd))
+				if len(docs) != q.wantDocs {
+					t.Fatalf("post-drop-index %s got %d docs want %d", q.name, len(docs), q.wantDocs)
+				}
+				if q.wantID != "" {
+					if gotID := bson.Raw(docs[0]).Lookup("_id").StringValue(); gotID != q.wantID {
+						t.Fatalf("post-drop-index %s got _id=%q want %q", q.name, gotID, q.wantID)
+					}
+				}
 			}
 		})
 	}
@@ -975,6 +1178,77 @@ func BenchmarkFindOneIndexedBSONStandaloneCOW(b *testing.B) {
 				{Key: "filter", Value: bson.D{{Key: "_id", Value: fmt.Sprintf("user-%05d", i)}}},
 				{Key: "projection", Value: bson.D{{Key: "email", Value: int32(1)}}},
 				{Key: "limit", Value: int32(1)},
+				{Key: "singleBatch", Value: true},
+			})
+		})
+	})
+}
+
+func BenchmarkFindAgeRangeLimit10StandaloneCOW(b *testing.B) {
+	ctx := context.Background()
+
+	runBench := func(b *testing.B, settle bool, buildCmd func(coll string, i int) wire.Document) {
+		const docCount = 1024
+		server, collName := openStandaloneCOWBSONFixture(b, collections.DocumentFormatBSON, false, docCount)
+		if settle {
+			if err := server.Collections.CheckpointStorage(); err != nil {
+				b.Fatalf("CheckpointStorage: %v", err)
+			}
+		}
+		cmds := make([]wire.Document, 32)
+		for i := range cmds {
+			cmds[i] = buildCmd(collName, i)
+		}
+		var dst []byte
+		var err error
+		dst, err = server.Server.findMsgResponseInto(ctx, dst[:0], cmds[0], 1, 1, 1)
+		if err != nil {
+			b.Fatalf("warm findMsgResponseInto: %v", err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			dst, err = server.Server.findMsgResponseInto(ctx, dst[:0], cmds[i%len(cmds)], int32(i+1), int32(i+1), 1)
+			if err != nil {
+				b.Fatalf("findMsgResponseInto: %v", err)
+			}
+		}
+		b.StopTimer()
+		_ = math.Abs(float64(len(dst)))
+	}
+
+	b.Run("SingleBound_GTE", func(b *testing.B) {
+		runBench(b, false, func(coll string, i int) wire.Document {
+			return mustMarshalWireDoc(b, bson.D{
+				{Key: "find", Value: coll},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(20 + (i % 30))}}}}},
+				{Key: "limit", Value: int32(10)},
+				{Key: "singleBatch", Value: true},
+			})
+		})
+	})
+
+	b.Run("Settled_SingleBound_GTE", func(b *testing.B) {
+		runBench(b, true, func(coll string, i int) wire.Document {
+			return mustMarshalWireDoc(b, bson.D{
+				{Key: "find", Value: coll},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(20 + (i % 30))}}}}},
+				{Key: "limit", Value: int32(10)},
+				{Key: "singleBatch", Value: true},
+			})
+		})
+	})
+
+	b.Run("TwoBound_GTE_LTE", func(b *testing.B) {
+		runBench(b, false, func(coll string, i int) wire.Document {
+			lo := int64(20 + (i % 20))
+			return mustMarshalWireDoc(b, bson.D{
+				{Key: "find", Value: coll},
+				{Key: "$db", Value: "app"},
+				{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: lo}, {Key: "$lte", Value: lo + 10}}}}},
+				{Key: "limit", Value: int32(10)},
 				{Key: "singleBatch", Value: true},
 			})
 		})
