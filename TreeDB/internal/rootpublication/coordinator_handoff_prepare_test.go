@@ -422,3 +422,55 @@ func TestStopCancelsPrepareAndWakesBuilderBlockedOnGate(t *testing.T) {
 		t.Fatalf("stop leaked prepare gate/builder: preparing=%t stats=%+v", preparing, coordinator.Stats())
 	}
 }
+
+func TestHandoffDrainedAfterStopRequiresOriginalDurableUnpoisonedCoordinator(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		stopping       bool
+		stopped        bool
+		durable        uint64
+		visible        uint64
+		pending        bool
+		activeDispatch uint64
+		poison         error
+		stopErr        error
+		handoffErr     error
+		waitErr        error
+		foreign        bool
+		want           bool
+	}{
+		{name: "drained", stopped: true, durable: 3, waitErr: ErrClosed, want: true},
+		{name: "waiter_stopped", stopped: true, durable: 2, waitErr: ErrPublicationStopped, want: true},
+		{name: "stopping_after_drain", stopping: true, durable: 2, waitErr: ErrPublicationStopped, want: true},
+		{name: "still_live", durable: 3, waitErr: ErrClosed},
+		{name: "foreign", stopped: true, durable: 3, waitErr: ErrClosed, foreign: true},
+		{name: "uncovered", stopped: true, durable: 1, waitErr: ErrClosed},
+		{name: "pending", stopped: true, durable: 3, waitErr: ErrClosed, pending: true},
+		{name: "newer_visible", stopping: true, durable: 2, visible: 3, waitErr: ErrClosed},
+		{name: "publisher_active", stopping: true, durable: 3, activeDispatch: 1, waitErr: ErrClosed},
+		{name: "failed_handoff", stopped: true, durable: 3, handoffErr: ErrRecoveryHandoffUnavailable, waitErr: ErrClosed},
+		{name: "poisoned", stopped: true, durable: 3, waitErr: ErrClosed, poison: ErrRecoveryRequired},
+		{name: "not_drained", stopped: true, durable: 3, waitErr: ErrClosed, stopErr: ErrPublicationStopped},
+		{name: "other_error", stopped: true, durable: 3, waitErr: ErrRecoveryRequired},
+		{name: "joined_error", stopped: true, durable: 3, waitErr: errors.Join(ErrClosed, ErrRecoveryRequired)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Coordinator{
+				stopping: tc.stopping, stopped: tc.stopped, durable: Frontier{commitSeq: tc.durable},
+				visible: Frontier{commitSeq: tc.visible}, activeDispatch: tc.activeDispatch,
+				poison: tc.poison, stopErr: tc.stopErr, recoveryHandoffErr: tc.handoffErr,
+			}
+			if tc.pending {
+				c.pending = make([]pendingEntry, 1)
+			}
+			owner := c
+			if tc.foreign {
+				owner = &Coordinator{}
+			}
+			receipt := &BuilderHandoffReceipt{coordinator: owner, sequence: 2}
+			if got := c.HandoffDrainedAfterStop(receipt, tc.waitErr); got != tc.want {
+				t.Fatalf("covered handoff = %t; want %t", got, tc.want)
+			}
+		})
+	}
+}

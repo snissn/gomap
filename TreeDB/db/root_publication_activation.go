@@ -1183,6 +1183,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
+	// The receipt and its waits belong to this coordinator. Online vacuum
+	// can stop it and clear runtime.coordinator once we release the gate.
+	coordinator := runtime.coordinator
 	// Each publication owns an independently complete PRIMARY construction.
 	// System-only changes copy the immutable directory; bulk/manual DATA
 	// builders enter the same construction boundary as zipper mutations.
@@ -1447,9 +1450,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	var receipt *rootpublication.BuilderHandoffReceipt
 	var enqueueErr error
 	if opts.acceptedPrefixCut != nil {
-		receipt, enqueueErr = runtime.coordinator.EnqueueBuiltAcceptedCut(candidate, builder, *opts.acceptedPrefixCut)
+		receipt, enqueueErr = coordinator.EnqueueBuiltAcceptedCut(candidate, builder, *opts.acceptedPrefixCut)
 	} else {
-		receipt, enqueueErr = runtime.coordinator.EnqueueBuilt(candidate, builder)
+		receipt, enqueueErr = coordinator.EnqueueBuilt(candidate, builder)
 	}
 	if !needRootReuseLock {
 		// Release root construction locks only after EnqueueBuilt has activated
@@ -1556,8 +1559,17 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if opts.commandWALSeal != nil {
 		return post, nil
 	}
+	if hook := db.testBeforeAcceptedRootPublicationWaitHook; hook != nil {
+		hook(install.post.physicalSeal)
+	}
+	drainedAfterStop := func(waitErr error) bool {
+		// A physical frontier doesn't prove an attached logical owner's
+		// post-publication custody join has finished successfully.
+		return !db.commandWAL && opts.acceptedPrefixCut == nil && db.acceptedPrefix.Load() == nil &&
+			coordinator.HandoffDrainedAfterStop(receipt, waitErr) && !db.publicationPoisoned.Load()
+	}
 	admissionStart := time.Now()
-	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+	if err := coordinator.WaitForAdmission(context.Background(), receipt); err != nil && !drainedAfterStop(err) {
 		if opts.publishTiming != nil {
 			opts.publishTiming.FinalizeAdmissionWait += time.Since(admissionStart)
 		}
@@ -1571,9 +1583,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// and debt prefix in their fixed publisher tranche. Keep their admission
 	// token live until the coordinator has completed that work, including on
 	// command-WAL databases where ordinary commits may return after admission.
-	if runtime.coordinator.StartupSynchronous() || opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
+	if coordinator.StartupSynchronous() || opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
 		durabilityStart := time.Now()
-		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
+		if err := coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil && !drainedAfterStop(err) {
 			if opts.publishTiming != nil {
 				opts.publishTiming.FinalizeDurabilityWait += time.Since(durabilityStart)
 			}

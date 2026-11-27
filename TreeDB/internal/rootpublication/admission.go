@@ -186,6 +186,20 @@ func (c *Coordinator) WaitForAdmission(ctx context.Context, receipt *BuilderHand
 	return c.waitForAdmission(ctx, receipt.sequence, receipt.failureGeneration)
 }
 
+// HandoffDrainedAfterStop resolves a stop error from a post-acceptance
+// wait only when this coordinator already made the exact handoff durable.
+// A replacement coordinator, a failed drain, and poison cannot certify it.
+func (c *Coordinator) HandoffDrainedAfterStop(receipt *BuilderHandoffReceipt, waitErr error) bool {
+	if c == nil || receipt == nil || receipt.coordinator != c || (waitErr != ErrClosed && waitErr != ErrPublicationStopped) {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return (c.stopping || c.stopped) && c.poison == nil && c.stopErr == nil && c.recoveryHandoffErr == nil &&
+		c.activeDispatch == 0 && len(c.pending) == 0 &&
+		c.durable.commitSeq >= c.visible.commitSeq && c.durable.commitSeq >= receipt.sequence
+}
+
 func (t *BuilderToken) Nested() (*BuilderToken, error) {
 	if t == nil || t.handle == nil {
 		return nil, ErrClosed
