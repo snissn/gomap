@@ -13,8 +13,17 @@ import (
 // (covered by TestServerCloseStopsInsertCoalescers and
 // TestServerCloseStopsUpdateCoalescers). Tests that never close their server
 // would otherwise report these bounded-lifetime workers as leaks.
+type cleanupTestingM struct {
+	m *testing.M
+}
+
+func (c cleanupTestingM) Run() int {
+	defer cleanupStandaloneServerTestBinary()
+	return c.m.Run()
+}
+
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m,
+	goleak.VerifyTestMain(cleanupTestingM{m: m},
 		goleak.IgnoreAnyFunction("github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop"),
 		goleak.IgnoreAnyFunction("github.com/snissn/gomap/TreeDB/mongo_gateway.(*mongoInsertCoalescer).run"),
 		goleak.IgnoreAnyFunction("github.com/snissn/gomap/TreeDB/mongo_gateway.(*mongoUpdateCoalescer).run"),
