@@ -8,3 +8,5 @@ import (
 )
 
 func syncWALData(file *os.File) error { return stableio.SyncFile(file) }
+
+func hintWALInitWriteback(*os.File, int64, int64) {}

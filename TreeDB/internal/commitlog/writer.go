@@ -1339,6 +1339,7 @@ func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
 	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
 	w.fixed.pending = pending
+	w.fixed.recordPendingFrame(int64(size))
 	w.size += int64(size)
 	return nil
 }
@@ -1401,6 +1402,7 @@ func (w *Writer) appendFixedRawKVPointCommandV2Direct(class CommandDurabilityCla
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
 	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
 	w.fixed.pending = pending
+	w.fixed.recordPendingFrame(int64(total))
 	w.size += int64(total)
 	return nil
 }
