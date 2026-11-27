@@ -397,7 +397,19 @@ func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
 		t.Fatalf("ignored source should demonstrate the status gap: %v", err)
 	}
 
-	goBinary, err := resolveGoBinary(filepath.Join(runtime.GOROOT(), "bin", "go"+executableSuffix()))
+	goTool := ""
+	if goroot := runtime.GOROOT(); goroot != "" {
+		goTool = filepath.Join(goroot, "bin", "go"+executableSuffix())
+	} else if goroot := os.Getenv("GOROOT"); goroot != "" {
+		goTool = filepath.Join(goroot, "bin", "go"+executableSuffix())
+	} else {
+		lookedUp, err := exec.LookPath("go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		goTool = lookedUp
+	}
+	goBinary, err := resolveGoBinary(goTool)
 	if err != nil {
 		t.Fatal(err)
 	}

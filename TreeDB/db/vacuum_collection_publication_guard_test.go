@@ -1740,6 +1740,64 @@ func (ta *publicationGuardTaintAnalysis) retainErrorOperands(fn *types.Func, typ
 	return changed
 }
 
+var (
+	publicationGuardGOROOTOnce sync.Once
+	publicationGuardGOROOTVal  string
+
+	publicationGuardFixtureExportsOnce sync.Once
+	publicationGuardFixtureExports     map[string]string
+	publicationGuardFixtureExportsErr  error
+)
+
+func publicationGuardGOROOT() string {
+	publicationGuardGOROOTOnce.Do(func() {
+		if root := strings.TrimSpace(runtime.GOROOT()); root != "" {
+			publicationGuardGOROOTVal = root
+			return
+		}
+		if root := strings.TrimSpace(os.Getenv("GOROOT")); root != "" {
+			publicationGuardGOROOTVal = root
+			return
+		}
+		if out, err := exec.Command("go", "env", "GOROOT").Output(); err == nil {
+			publicationGuardGOROOTVal = strings.TrimSpace(string(out))
+		}
+	})
+	return publicationGuardGOROOTVal
+}
+
+func loadPublicationGuardFixtureExports() (map[string]string, error) {
+	publicationGuardFixtureExportsOnce.Do(func() {
+		cmd := exec.Command("go", "list", "-json", "-export", "-deps", "sync/atomic")
+		output, err := cmd.Output()
+		if err != nil {
+			publicationGuardFixtureExportsErr = fmt.Errorf("go list -export -deps sync/atomic: %w", err)
+			return
+		}
+		exports := make(map[string]string)
+		dec := json.NewDecoder(bytes.NewReader(output))
+		for {
+			var listed struct {
+				ImportPath string
+				Export     string
+			}
+			err := dec.Decode(&listed)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				publicationGuardFixtureExportsErr = fmt.Errorf("decode go list output: %w", err)
+				return
+			}
+			if listed.Export != "" {
+				exports[listed.ImportPath] = listed.Export
+			}
+		}
+		publicationGuardFixtureExports = exports
+	})
+	return publicationGuardFixtureExports, publicationGuardFixtureExportsErr
+}
+
 // These summaries are bound to the audited toolchain source. A source change
 // fails closed until the header-only operations are audited again. TypeOf only
 // exposes type metadata; ValueOf/Elem preserve the original alias, and Set is
@@ -1748,7 +1806,14 @@ func (ta *publicationGuardTaintAnalysis) verifySource(relative, digest string) b
 	if verified, found := ta.verifiedSource[relative]; found {
 		return verified
 	}
-	content, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "src", relative))
+	goroot := publicationGuardGOROOT()
+	var content []byte
+	var err error
+	if goroot != "" {
+		content, err = os.ReadFile(filepath.Join(goroot, "src", relative))
+	} else {
+		err = os.ErrNotExist
+	}
 	verified := err == nil && fmt.Sprintf("%x", sha256.Sum256(content)) == digest
 	ta.verifiedSource[relative] = verified
 	return verified
@@ -2710,7 +2775,21 @@ func (db *DB) publishSnapshotView() {}
 		t.Fatalf("parse fixture: %v", err)
 	}
 	info := publicationGuardTypesInfo()
-	config := types.Config{Importer: importer.Default()}
+	imp := importer.Default()
+	if runtime.GOROOT() == "" && os.Getenv("GOROOT") == "" {
+		exports, err := loadPublicationGuardFixtureExports()
+		if err != nil {
+			t.Fatalf("load fixture exports: %v", err)
+		}
+		imp = importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+			exportPath := exports[path]
+			if exportPath == "" {
+				return nil, fmt.Errorf("publication guard fixture: no export data for %s", path)
+			}
+			return os.Open(exportPath)
+		})
+	}
+	config := types.Config{Importer: imp}
 	pkg, err := config.Check("example.test/guardfixture", fset, []*ast.File{file}, info)
 	if err != nil {
 		t.Fatalf("type-check fixture: %v", err)
