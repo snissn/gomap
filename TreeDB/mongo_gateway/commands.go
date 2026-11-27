@@ -2823,9 +2823,10 @@ type mongoUpdateCoalescer struct {
 }
 
 type mongoUpdateCoalescerRequest struct {
-	col  *collections.Collection
-	item mongoUpdateItem
-	done chan mongoUpdateCoalescerResult
+	col       *collections.Collection
+	item      mongoUpdateItem
+	done      chan mongoUpdateCoalescerResult
+	completed bool
 }
 
 type mongoUpdateCoalescerResult struct {
@@ -3084,13 +3085,13 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest) {
 	c.workerBatches.Add(1)
 	if err := req.item.budget.checkDeadline(); err != nil {
-		req.done <- mongoUpdateCoalescerResult{err: err}
+		completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{err: err})
 		return
 	}
-	completed := false
 	defer func() {
 		if r := recover(); r != nil {
-			if !completed && req.done != nil {
+			if !req.completed && req.done != nil {
+				req.completed = true
 				select {
 				case req.done <- mongoUpdateCoalescerResult{err: errMongoUpdateCoalescerBatchAborted}:
 				default:
@@ -3099,8 +3100,7 @@ func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest)
 		}
 	}()
 	matched, modified, err := runMongoUpdateOne(req.col, req.item)
-	completed = true
-	req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
 }
 
 func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerRequest) {
@@ -3110,7 +3110,8 @@ func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerReq
 		if r := recover(); r != nil && !batchDone {
 			abortRes := mongoUpdateCoalescerResult{err: errMongoUpdateCoalescerBatchAborted}
 			for i := range batch {
-				if batch[i].done != nil {
+				if !batch[i].completed && batch[i].done != nil {
+					batch[i].completed = true
 					select {
 					case batch[i].done <- abortRes:
 					default:
@@ -3829,7 +3830,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if err != nil && !installed {
 		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
 			completeMongoUpdateCoalescerBatchExcept(batch, index)
-			batch[index].done <- mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)}
+			completeMongoUpdateCoalescerRequest(&batch[index], mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)})
 			return
 		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
@@ -3855,19 +3856,28 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 			batch[i].item.budget.journal.completion = journal.completion
 			batch[i].item.budget.journal.err = journal.err
 		}
-		batch[i].done <- mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified}
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified})
 	}
+}
+
+func completeMongoUpdateCoalescerRequest(req *mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
+	if req.completed || req.done == nil {
+		return
+	}
+	req.completed = true
+	req.done <- result
 }
 
 func filterExpiredMongoUpdateCoalescerRequests(batch []mongoUpdateCoalescerRequest) []mongoUpdateCoalescerRequest {
 	kept := 0
 	for i := range batch {
 		if err := batch[i].item.budget.checkDeadline(); err != nil {
-			batch[i].done <- mongoUpdateCoalescerResult{err: err}
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
 		if kept != i {
 			batch[kept] = batch[i]
+			batch[i] = mongoUpdateCoalescerRequest{completed: true}
 		}
 		kept++
 	}
@@ -3876,7 +3886,7 @@ func filterExpiredMongoUpdateCoalescerRequests(batch []mongoUpdateCoalescerReque
 
 func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
 	for i := range batch {
-		batch[i].done <- result
+		completeMongoUpdateCoalescerRequest(&batch[i], result)
 	}
 }
 
@@ -3886,11 +3896,11 @@ func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest
 			continue
 		}
 		if err := batch[i].item.budget.checkDeadline(); err != nil {
-			batch[i].done <- mongoUpdateCoalescerResult{err: err}
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
 		matched, modified, err := runMongoUpdateOne(batch[i].col, batch[i].item)
-		batch[i].done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
 	}
 }
 
@@ -4008,11 +4018,11 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	for i := range batch {
 		if err := batch[i].item.budget.checkDeadline(); err != nil {
-			batch[i].done <- mongoUpdateCoalescerResult{err: err}
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
 		matched, modified, err := runMongoUpdateOne(batch[i].col, batch[i].item)
-		batch[i].done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
 	}
 }
 

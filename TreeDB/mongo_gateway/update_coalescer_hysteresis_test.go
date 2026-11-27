@@ -431,6 +431,222 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		}
 	})
 
+	t.Run("PanicRecoveryNeverDoubleCompletesExpiredOrSequentialRequests", func(t *testing.T) {
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 8)
+		defer func() { _ = s.Close() }()
+
+		col, err := s.Collections.OpenCollection("app." + collName)
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+
+		makeItem := func(id, val int64, budget *mongoWriteBudget) mongoUpdateItem {
+			item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: val}}}}},
+			}))
+			if err != nil {
+				t.Fatalf("parseMongoUpdateItem: %v", err)
+			}
+			item.budget = budget
+			return item
+		}
+
+		// Case 1: [Live0(panic hook), Live1, Expired2] and [Live0(panic hook), Expired1, Live2]
+		// Using cap-2 channels ensures any duplicate send from panic fan-out is caught immediately.
+		for _, tc := range []struct {
+			name        string
+			expiredSlot int
+		}{
+			{name: "TrailingExpired", expiredSlot: 2},
+			{name: "MiddleExpiredCompacted", expiredSlot: 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c := &mongoUpdateCoalescer{
+					maxBatch:          8,
+					useLeaderFollower: true,
+					lfWakeCh:          make(chan struct{}, 1),
+					stoppedCh:         make(chan struct{}),
+					done:              make(chan struct{}),
+				}
+				panicBudget := newMongoWriteBudget(1)
+				panicBudget.beforeNativeUpdateBatchHook = func() {
+					panic("injected batch hook panic")
+				}
+				expiredBudget := newMongoWriteBudget(1)
+				expiredBudget.deadline = time.Now().Add(-time.Second)
+
+				done0 := make(chan mongoUpdateCoalescerResult, 2)
+				done1 := make(chan mongoUpdateCoalescerResult, 2)
+				done2 := make(chan mongoUpdateCoalescerResult, 2)
+				var batch []mongoUpdateCoalescerRequest
+				if tc.expiredSlot == 2 {
+					batch = []mongoUpdateCoalescerRequest{
+						{col: col, item: makeItem(0, 10, panicBudget), done: done0},
+						{col: col, item: makeItem(1, 11, newMongoWriteBudget(1)), done: done1},
+						{col: col, item: makeItem(2, 12, expiredBudget), done: done2},
+					}
+				} else {
+					batch = []mongoUpdateCoalescerRequest{
+						{col: col, item: makeItem(0, 10, panicBudget), done: done0},
+						{col: col, item: makeItem(1, 11, expiredBudget), done: done1},
+						{col: col, item: makeItem(2, 12, newMongoWriteBudget(1)), done: done2},
+					}
+				}
+				c.runHotWorkerBatch(batch)
+
+				chans := []chan mongoUpdateCoalescerResult{done0, done1, done2}
+				for i, ch := range chans {
+					if got := len(ch); got != 1 {
+						t.Fatalf("slot[%d] received %d results want exactly 1", i, got)
+					}
+					res := <-ch
+					if i == tc.expiredSlot {
+						if res.err == nil || !strings.Contains(res.err.Error(), "exceeded its execution-time budget") {
+							t.Fatalf("expired slot[%d] res=%+v want budget error", i, res)
+						}
+					} else {
+						if res.err == nil || !strings.Contains(res.err.Error(), "batch aborted") {
+							t.Fatalf("live slot[%d] res=%+v want batch aborted error", i, res)
+						}
+					}
+				}
+			})
+		}
+
+		// Case 2: End-to-end pooled-channel regression with [Live0(panic), Live1, Expired2]
+		// through runMongoUpdateCoalesced: recycled channels in mongoUpdateResultChanPool
+		// must never be poisoned by a late abort send.
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			t.Fatal("expected cached coalescer")
+		}
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
+
+		e2ePanicBudget := newMongoWriteBudget(1)
+		e2ePanicBudget.beforeNativeUpdateBatchHook = func() {
+			panic("injected e2e batch panic")
+		}
+		e2eExpBudget := newMongoWriteBudget(1)
+		e2eExpBudget.deadline = time.Now().Add(time.Hour)
+
+		e2eRes0 := make(chan mongoUpdateCoalescerResult, 1)
+		e2eRes1 := make(chan mongoUpdateCoalescerResult, 1)
+		e2eRes2 := make(chan mongoUpdateCoalescerResult, 1)
+		deadline := time.Now().Add(5 * time.Second)
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(0, 20, e2ePanicBudget))
+			e2eRes0 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		for time.Now().Before(deadline) && coalescer.queuedLen() < 1 {
+			time.Sleep(time.Millisecond)
+		}
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(1, 21, newMongoWriteBudget(1)))
+			e2eRes1 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		for time.Now().Before(deadline) && coalescer.queuedLen() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(2, 22, e2eExpBudget))
+			e2eRes2 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		for time.Now().Before(deadline) && coalescer.queuedLen() < 3 {
+			time.Sleep(time.Millisecond)
+		}
+		e2eExpBudget.deadline = time.Now().Add(-time.Second)
+		releaseLeader()
+
+		if r0 := <-e2eRes0; r0.err == nil || !strings.Contains(r0.err.Error(), "batch aborted") {
+			t.Fatalf("e2e live0 res=%+v want batch aborted error", r0)
+		}
+		if r1 := <-e2eRes1; r1.err == nil || !strings.Contains(r1.err.Error(), "batch aborted") {
+			t.Fatalf("e2e live1 res=%+v want batch aborted error", r1)
+		}
+		if r2 := <-e2eRes2; r2.err == nil || !strings.Contains(r2.err.Error(), "exceeded its execution-time budget") {
+			t.Fatalf("e2e expired2 res=%+v want budget error", r2)
+		}
+		for i := 0; i < 64; i++ {
+			ch := getMongoUpdateResultChan()
+			select {
+			case leaked := <-ch:
+				t.Fatalf("pooled channel %d poisoned with stale result: %+v", i, leaked)
+			default:
+			}
+			putMongoUpdateResultChan(ch)
+		}
+
+		// Case 3: Sequential fallback where item 0 completes and item 1 panics.
+		// Item 0 must receive only its original success result (no second abort send),
+		// while items 1 and 2 each receive exactly one abort error.
+		cSeq := &mongoUpdateCoalescer{
+			maxBatch:          8,
+			useLeaderFollower: true,
+			lfWakeCh:          make(chan struct{}, 1),
+			stoppedCh:         make(chan struct{}),
+			done:              make(chan struct{}),
+		}
+		seqPanicItem, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+			{Key: "q", Value: bson.D{{Key: "tag", Value: "tag-04"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int64(444)}}}}},
+		}))
+		if err != nil {
+			t.Fatalf("parse sequential filter update: %v", err)
+		}
+		seqPanicItem.selector = s.Server
+		seqPanicItem.budget = newMongoWriteBudget(64)
+		s.Server.filterWriteSelectedHook = func() {
+			panic("injected sequential panic")
+		}
+		defer func() {
+			s.Server.filterWriteSelectedHook = nil
+		}()
+
+		seqDone0 := make(chan mongoUpdateCoalescerResult, 2)
+		seqDone1 := make(chan mongoUpdateCoalescerResult, 2)
+		seqDone2 := make(chan mongoUpdateCoalescerResult, 2)
+		seqBatch := []mongoUpdateCoalescerRequest{
+			{col: col, item: makeItem(3, 333, newMongoWriteBudget(1)), done: seqDone0},
+			{col: col, item: seqPanicItem, done: seqDone1},
+			{col: col, item: makeItem(5, 555, newMongoWriteBudget(1)), done: seqDone2},
+		}
+		cSeq.runHotWorkerBatch(seqBatch)
+		s.Server.filterWriteSelectedHook = nil
+
+		if got := len(seqDone0); got != 1 {
+			t.Fatalf("sequential completed item0 received %d results want exactly 1", got)
+		}
+		if r0 := <-seqDone0; r0.err != nil || !r0.matched || !r0.modified {
+			t.Fatalf("sequential item0 res=%+v want matched,modified,nil", r0)
+		}
+		if got := len(seqDone1); got != 1 {
+			t.Fatalf("sequential panicking item1 received %d results want exactly 1", got)
+		}
+		if r1 := <-seqDone1; r1.err == nil || !strings.Contains(r1.err.Error(), "batch aborted") {
+			t.Fatalf("sequential item1 res=%+v want batch aborted error", r1)
+		}
+		if got := len(seqDone2); got != 1 {
+			t.Fatalf("sequential trailing item2 received %d results want exactly 1", got)
+		}
+		if r2 := <-seqDone2; r2.err == nil || !strings.Contains(r2.err.Error(), "batch aborted") {
+			t.Fatalf("sequential item2 res=%+v want batch aborted error", r2)
+		}
+		if got := findDocN(t, s.Server, collName, 3); got != 333 {
+			t.Fatalf("doc 3 n=%d want 333", got)
+		}
+
+		// Subsequent update through the live coalescer must succeed cleanly.
+		resp, err := s.Server.commandResponse(context.Background(), "update", buildUpdateOneCommand(t, collName, 6, 666), nil, 0)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("post-recovery update: resp=%s err=%v", resp, err)
+		}
+		if got := findDocN(t, s.Server, collName, 6); got != 666 {
+			t.Fatalf("doc 6 n=%d want 666", got)
+		}
+	})
+
 	t.Run("SoloStreakClearsStickyMode", func(t *testing.T) {
 		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
 		defer func() { _ = s.Close() }()
