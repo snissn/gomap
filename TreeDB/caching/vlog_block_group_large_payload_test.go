@@ -95,6 +95,7 @@ func TestAppendValueLogForRecords_LargePayloadBatchGroupsFrames(t *testing.T) {
 	db := &DB{
 		closeCh:                  make(chan struct{}),
 		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogAutoPolicy:       uint8(vlogAutoSize),
 		valueLogBlockCodec:       valuelog.BlockCodecLZ4,
 		valueLogBlockTargetBytes: 4096,
 		lanes: []lane{

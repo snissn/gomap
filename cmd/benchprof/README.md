@@ -125,10 +125,13 @@ make benchprof
 Example:
 
 This example uses unified-bench's `fast` preset, which resolves TreeDB to the
-production `no_wal_fast` profile with checksum verification enabled. Ordinary
-write acknowledgements are volatile; explicit sync, checkpoint, and clean close
-remain durable boundaries. Use `-profile bench_unsafe` for the explicit profiling
-ceiling.
+production `no_wal_fast` profile with checksum verification enabled and
+stateless `block/lz4` value-log compression by default (preserving the 32 KiB
+balanced ordinary-value raw-frame cap without background dictionary training or
+auto-selector overhead unless `-treedb-vlog-compression=auto|dict` is passed).
+Ordinary write acknowledgements are volatile; explicit sync, checkpoint, and
+clean close remain durable boundaries. Use `-profile bench_unsafe` for the
+explicit profiling ceiling.
 
 ```bash
 mkdir -p /tmp/scan-profiles

@@ -665,11 +665,11 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogCompression; got != "default" {
-		t.Fatalf("expected fast profile to keep treedb-vlog-compression on the default path, got %q", got)
+	if got := *treedbVlogCompression; got != "block" {
+		t.Fatalf("expected fast profile to set treedb-vlog-compression=block, got %q", got)
 	}
-	if got := *treedbVlogBlockCodec; got != "snappy" {
-		t.Fatalf("expected fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
+	if got := *treedbVlogBlockCodec; got != "lz4" {
+		t.Fatalf("expected fast profile to set treedb-vlog-block-codec=lz4, got %q", got)
 	}
 	if got := *treedbVlogAutoPolicy; got != "balanced" {
 		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=balanced, got %q", got)
@@ -700,11 +700,11 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected wal_on_fast profile to set treedb-index-optimizations")
 	}
-	if got := *treedbVlogCompression; got != "default" {
-		t.Fatalf("expected wal_on_fast profile to keep treedb-vlog-compression on the default path, got %q", got)
+	if got := *treedbVlogCompression; got != "block" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-compression=block, got %q", got)
 	}
-	if got := *treedbVlogBlockCodec; got != "snappy" {
-		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-block-codec=snappy, got %q", got)
+	if got := *treedbVlogBlockCodec; got != "lz4" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-block-codec=lz4, got %q", got)
 	}
 	if got := *treedbVlogAutoPolicy; got != "balanced" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=balanced, got %q", got)
@@ -858,8 +858,11 @@ func TestApplyProfile_FastKeepsImplicitCompressionPathForAutotuneOff(t *testing.
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions: %v", err)
 	}
-	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
-		t.Fatalf("ValueLog.Compression = %v, want auto", opts.ValueLog.Compression)
+	if opts.ValueLog.Compression != treedb.ValueLogCompressionBlock {
+		t.Fatalf("ValueLog.Compression = %v, want block", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.BlockCodec != treedb.ValueLogBlockLZ4 {
+		t.Fatalf("ValueLog.BlockCodec = %v, want lz4", opts.ValueLog.BlockCodec)
 	}
 	if opts.ValueLog.CompressionAutotune.Mode != treedb.AutotuneOff {
 		t.Fatalf("CompressionAutotune.Mode = %v, want off", opts.ValueLog.CompressionAutotune.Mode)

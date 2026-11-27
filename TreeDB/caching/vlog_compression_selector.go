@@ -1951,9 +1951,9 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records, maxPayloadBytes int, aut
 	return db.clampLiveLeafLogFrameK(l, k)
 }
 
-// Ordinary auto/balanced and block/balanced compressed ingestion bounds cold
-// point-read decode work. Retained/template streams and leaf pages keep their
-// storage policies.
+// Ordinary balanced compressed ingestion (both block and auto modes) bounds
+// cold point-read decode work to 32 KiB raw frames. Retained/template streams,
+// leaf pages, and size/throughput policies keep their uncapped storage policies.
 func (db *DB) valueLogBlockRawLimit(l *lane, writeMode vlogCompressionWriteMode, retained bool) int {
 	if db == nil || writeMode != vlogWriteBlock || retained || db.valueLogTemplateEnabled ||
 		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoBalanced || db.isLeafLogAppendLane(l) {

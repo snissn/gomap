@@ -250,7 +250,7 @@ func TestObserveVlogWriteMode_NonAutoUpdatesBlockRatioForK(t *testing.T) {
 func TestChooseValueLogBlockWriteK_RecordsBlockKStats(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:  uint8(vlogCompressionBlock),
-		valueLogAutoPolicy:       uint8(vlogAutoThroughput),
+		valueLogAutoPolicy:       uint8(vlogAutoSize),
 		valueLogBlockTargetBytes: 4096,
 	}
 	l := &lane{}
