@@ -279,7 +279,7 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 		c := s.Server.updateCoalescers["epochs.rows"]
 		queued := 0
 		if c != nil {
-			queued = len(c.requests)
+			queued = c.queuedLen()
 		}
 		s.Server.updateMu.Unlock()
 		return queued == 2 && s.Server.writeConcernStats.journalRequests.Load()-beforeACK.JournalRequests == 2

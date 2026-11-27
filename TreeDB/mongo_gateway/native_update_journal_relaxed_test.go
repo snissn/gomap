@@ -162,7 +162,7 @@ func TestStandaloneRelaxedJournalBSONSetExclusiveCheckpoint(t *testing.T) {
 	coalescer := s.Server.updateCoalescers["epochs.rows"]
 	queued := 0
 	if coalescer != nil {
-		queued = len(coalescer.requests)
+		queued = coalescer.queuedLen()
 	}
 	s.Server.updateMu.Unlock()
 	if coalescer == nil || queued != 0 || appends.Load() != 1 {

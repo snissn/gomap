@@ -2851,8 +2851,26 @@ func TestMongoUpdateCoalescerClampsConfiguredMaxBatch(t *testing.T) {
 	if coalescer.maxBatch != maxUpdateCoalescingBatch {
 		t.Fatalf("maxBatch=%d want %d", coalescer.maxBatch, maxUpdateCoalescingBatch)
 	}
-	if got, want := cap(coalescer.requests), maxUpdateCoalescingBatch*4; got != want {
-		t.Fatalf("request queue cap=%d want %d", got, want)
+	if got, want := coalescer.maxQueueCap, maxUpdateCoalescingBatch*4; got != want {
+		t.Fatalf("maxQueueCap=%d want %d", got, want)
+	}
+	if !coalescer.useLeaderFollower || coalescer.requests != nil {
+		t.Fatalf("maxDelay=0 coalescer expected leader-follower without requests channel (useLF=%v requests=%v)", coalescer.useLeaderFollower, coalescer.requests != nil)
+	}
+
+	delayedServer := NewServer()
+	delayedServer.UpdateCoalescingMaxDelay = time.Millisecond
+	delayedServer.UpdateCoalescingMaxBatch = maxUpdateCoalescingBatch + 1
+	delayed := delayedServer.mongoUpdateCoalescer("app.users")
+	if delayed == nil {
+		t.Fatal("expected delayed coalescer")
+	}
+	defer func() { _ = delayedServer.Close() }()
+	if delayed.maxBatch != maxUpdateCoalescingBatch {
+		t.Fatalf("delayed maxBatch=%d want %d", delayed.maxBatch, maxUpdateCoalescingBatch)
+	}
+	if got, want := cap(delayed.requests), maxUpdateCoalescingBatch*4; got != want {
+		t.Fatalf("delayed request queue cap=%d want %d", got, want)
 	}
 }
 

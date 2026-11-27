@@ -714,6 +714,55 @@ func TestProductionAuthorityBehaviorRegistryExactEquality(t *testing.T) {
 	}
 }
 
+func productionAuthoritySubprocessDeadline(t *testing.T) time.Time {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Minute)
+	if parentDeadline, ok := t.Deadline(); ok {
+		// Leave time to reap the child and report its original output.
+		deadline = parentDeadline.Add(-500 * time.Millisecond)
+	}
+	return deadline
+}
+
+func productionAuthoritySubprocessEnv(base []string, stripGOMAXPROCS bool) []string {
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "GOWORK=") {
+			continue
+		}
+		if stripGOMAXPROCS && strings.HasPrefix(kv, "GOMAXPROCS=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GOWORK=off")
+}
+
+func compileProductionAuthorityOmissionPackage(t *testing.T, binDir, packagePath string, index int) string {
+	t.Helper()
+	binName := fmt.Sprintf("omission-pkg-%d.test", index)
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	binPath := filepath.Join(binDir, binName)
+	ctx, cancel := context.WithDeadline(context.Background(), productionAuthoritySubprocessDeadline(t))
+	defer cancel()
+	// Compile each unique producer package once before running parallel subtests.
+	// Skipping redundant go vet (covered by CI vet steps) and avoiding concurrent
+	// builds of large packages (e.g. ./collections) prevents cold-cache memory
+	// thrashing on constrained macOS runners.
+	command := exec.CommandContext(ctx, "go", "test", "-vet=off", "-c", "-o", binPath, packagePath)
+	command.Env = productionAuthoritySubprocessEnv(os.Environ(), true)
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("compile producer-owned omission package %s: %v\n%s", packagePath, ctx.Err(), output)
+	}
+	if err != nil {
+		t.Fatalf("compile producer-owned omission package %s: %v\n%s", packagePath, err, output)
+	}
+	return binPath
+}
+
 func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 	behaviorByField := make(map[rootpublication.ReachabilityField]productionAuthorityBehaviorWitness, len(productionAuthorityBehaviorWitnesses))
 	for _, behavior := range productionAuthorityBehaviorWitnesses {
@@ -722,8 +771,9 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 
 	var gotFields []rootpublication.ReachabilityField
 	seenNames := make(map[string]struct{}, len(productionAuthorityCompositeOmissionWitnesses))
+	var uniquePackages []string
+	seenPackages := make(map[string]struct{}, len(productionAuthorityCompositeOmissionWitnesses))
 	for _, witness := range productionAuthorityCompositeOmissionWitnesses {
-		witness := witness
 		if witness.name == "" || witness.packagePath == "" || witness.testName == "" || len(witness.fields) == 0 {
 			t.Fatalf("incomplete executable composite omission row: %+v", witness)
 		}
@@ -731,6 +781,10 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 			t.Fatalf("duplicate executable composite omission row %q", witness.name)
 		}
 		seenNames[witness.name] = struct{}{}
+		if _, seenPkg := seenPackages[witness.packagePath]; !seenPkg {
+			seenPackages[witness.packagePath] = struct{}{}
+			uniquePackages = append(uniquePackages, witness.packagePath)
+		}
 		for _, field := range witness.fields {
 			behavior, ok := behaviorByField[field]
 			if !ok {
@@ -742,36 +796,6 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 			}
 			gotFields = append(gotFields, field)
 		}
-
-		t.Run(witness.name, func(t *testing.T) {
-			t.Parallel()
-			// Compilation and startup share the existing parent package budget;
-			// the child test execution keeps its separate five-minute allowance.
-			deadline := time.Now().Add(30 * time.Minute)
-			if parentDeadline, ok := t.Deadline(); ok {
-				// Leave time to reap the child and report its original output.
-				deadline = parentDeadline.Add(-500 * time.Millisecond)
-			}
-			ctx, cancel := context.WithDeadline(context.Background(), deadline)
-			defer cancel()
-			command := exec.CommandContext(ctx, "go", "test", witness.packagePath,
-				"-run", "^"+regexp.QuoteMeta(witness.testName)+"$", "-count=1", "-v", "-timeout=5m")
-			command.Env = append(os.Environ(), "GOWORK=off")
-			output, err := command.CombinedOutput()
-			if ctx.Err() != nil {
-				t.Fatalf("execute producer-owned omission test %s.%s: %v\n%s",
-					witness.packagePath, witness.testName, ctx.Err(), output)
-			}
-			if err != nil {
-				t.Fatalf("execute producer-owned omission test %s.%s: %v\n%s",
-					witness.packagePath, witness.testName, err, output)
-			}
-			text := string(output)
-			if !strings.Contains(text, "=== RUN   "+witness.testName) || strings.Contains(text, "--- SKIP: "+witness.testName) {
-				t.Fatalf("producer-owned omission test %s.%s did not execute to completion:\n%s",
-					witness.packagePath, witness.testName, output)
-			}
-		})
 	}
 
 	wantFields := []rootpublication.ReachabilityField{
@@ -789,6 +813,45 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 	slices.Sort(wantFields)
 	if !slices.Equal(gotFields, wantFields) {
 		t.Fatalf("executable composite omission fields=%q want literal transitive fields=%q", gotFields, wantFields)
+	}
+
+	binDir, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp bin dir: %v", err)
+	}
+	compiledBins := make(map[string]string, len(uniquePackages))
+	for i, pkgPath := range uniquePackages {
+		compiledBins[pkgPath] = compileProductionAuthorityOmissionPackage(t, binDir, pkgPath, i)
+	}
+
+	for _, witness := range productionAuthorityCompositeOmissionWitnesses {
+		witness := witness
+		binPath := compiledBins[witness.packagePath]
+		t.Run(witness.name, func(t *testing.T) {
+			t.Parallel()
+			// Compilation and startup share the existing parent package budget;
+			// the child test execution keeps its separate five-minute allowance.
+			ctx, cancel := context.WithDeadline(context.Background(), productionAuthoritySubprocessDeadline(t))
+			defer cancel()
+			command := exec.CommandContext(ctx, binPath,
+				"-test.run", "^"+regexp.QuoteMeta(witness.testName)+"$", "-test.count=1", "-test.v", "-test.timeout=5m")
+			command.Dir = witness.packagePath
+			command.Env = productionAuthoritySubprocessEnv(os.Environ(), false)
+			output, err := command.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("execute producer-owned omission test %s.%s: %v\n%s",
+					witness.packagePath, witness.testName, ctx.Err(), output)
+			}
+			if err != nil {
+				t.Fatalf("execute producer-owned omission test %s.%s: %v\n%s",
+					witness.packagePath, witness.testName, err, output)
+			}
+			text := string(output)
+			if !strings.Contains(text, "=== RUN   "+witness.testName) || strings.Contains(text, "--- SKIP: "+witness.testName) {
+				t.Fatalf("producer-owned omission test %s.%s did not execute to completion:\n%s",
+					witness.packagePath, witness.testName, output)
+			}
+		})
 	}
 }
 
