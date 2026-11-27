@@ -1886,7 +1886,7 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 	var predicates []findPredicate
 	var orBranches [][]findPredicate
 	var norBranches [][]findPredicate
-	err := forEachBoundedBSONDocumentElement(bson.Raw(filter), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
+	err := forEachBoundedBSONDocumentElement(bson.Raw(filter), mongoQueryMaxBooleanPredicates, errFindPredicateCap, func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return err
@@ -1941,42 +1941,54 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 	return predicates, orBranches, norBranches, nil
 }
 
-func validateFindPredicateWork(predicates []findPredicate, orBranches, norBranches [][]findPredicate) error {
-	if len(orBranches) > mongoQueryMaxBooleanBranches || len(norBranches) > mongoQueryMaxBooleanBranches {
-		return fmt.Errorf("Mongo gateway boolean query exceeds %d branches", mongoQueryMaxBooleanBranches)
-	}
-	total := len(predicates)
-	check := func(branches [][]findPredicate) error {
-		for _, branch := range branches {
-			total += len(branch)
-			for _, predicate := range branch {
-				if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
-					return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
-				}
+func validateFindPredicateBranches(branches [][]findPredicate) (int, error) {
+	total := 0
+	for _, branch := range branches {
+		total += len(branch)
+		for i := range branch {
+			predicate := &branch[i]
+			if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
+				return 0, fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(*predicate), mongoQueryMaxNegativeChoices)
 			}
 		}
-		return nil
 	}
-	for _, predicate := range predicates {
+	return total, nil
+}
+
+func validateFindPredicateWork(predicates []findPredicate, orBranches, norBranches [][]findPredicate) error {
+	if len(orBranches) > mongoQueryMaxBooleanBranches || len(norBranches) > mongoQueryMaxBooleanBranches {
+		return errFindBooleanBranchesCap
+	}
+	for i := range predicates {
+		predicate := &predicates[i]
 		if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
-			return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
+			return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(*predicate), mongoQueryMaxNegativeChoices)
 		}
 	}
-	if err := check(orBranches); err != nil {
-		return err
+	total := len(predicates)
+	if len(orBranches) > 0 {
+		n, err := validateFindPredicateBranches(orBranches)
+		if err != nil {
+			return err
+		}
+		total += n
 	}
-	if err := check(norBranches); err != nil {
-		return err
+	if len(norBranches) > 0 {
+		n, err := validateFindPredicateBranches(norBranches)
+		if err != nil {
+			return err
+		}
+		total += n
 	}
 	if total > mongoQueryMaxBooleanPredicates {
-		return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+		return errFindPredicateCap
 	}
 	return nil
 }
 
 func parseFindPredicateDocument(doc wire.Document, budget *findPredicateParseBudget) ([]findPredicate, error) {
 	var out []findPredicate
-	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
+	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), mongoQueryMaxBooleanPredicates, errFindPredicateCap, func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return err
@@ -2110,16 +2122,26 @@ type findPredicateParseBudget struct {
 	remaining int
 }
 
+var (
+	errFindPredicateCap                    = fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+	errFindBooleanBranchesCap              = fmt.Errorf("Mongo gateway boolean query exceeds %d branches", mongoQueryMaxBooleanBranches)
+	errFindNotSingleOperator               = errors.New("Mongo gateway $not requires one supported operator")
+	errFindInvalidBSONDocument             = errors.New("Mongo gateway invalid BSON document")
+	errMongoDocumentPathEmptySegment       = errors.New("path must contain non-empty segments")
+	errMongoDocumentPathMaxDepth           = fmt.Errorf("path exceeds %d components", mongoMutationMaxPathDepth)
+	errMongoDocumentPathUnsupportedSegment = errors.New("path has unsupported segment")
+)
+
 func (budget *findPredicateParseBudget) consume(count int) error {
 	if count < 0 || count > budget.remaining {
-		return findPredicateCapError()
+		return errFindPredicateCap
 	}
 	budget.remaining -= count
 	return nil
 }
 
 func findPredicateCapError() error {
-	return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+	return errFindPredicateCap
 }
 
 // forEachBoundedBSONDocumentElement walks a BSON document directly from its
@@ -2129,14 +2151,14 @@ func findPredicateCapError() error {
 func forEachBoundedBSONDocumentElement(doc bson.Raw, max int, limitError error, visit func(bson.RawElement) error) error {
 	length, remaining, ok := bsoncore.ReadLength(doc)
 	if !ok || length < 5 || int(length) != len(doc) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
-		return errors.New("Mongo gateway invalid BSON document")
+		return errFindInvalidBSONDocument
 	}
 	remaining = remaining[:len(remaining)-1]
 	count := 0
 	for len(remaining) != 0 {
 		element, next, ok := bsoncore.ReadElement(remaining)
 		if !ok {
-			return errors.New("Mongo gateway invalid BSON document")
+			return errFindInvalidBSONDocument
 		}
 		if count == max {
 			return limitError
@@ -2167,16 +2189,36 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
 		}
 		out := make([]findPredicate, 0, min(mongoQueryMaxBooleanPredicates, 4))
-		seen := make(map[string]struct{}, min(mongoQueryMaxBooleanPredicates, 4))
-		err = forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
+		var seenSmall [4]string
+		seenSmallLen := 0
+		var seen map[string]struct{}
+		err = forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, errFindPredicateCap, func(elem bson.RawElement) error {
 			op, err := elem.KeyErr()
 			if err != nil {
 				return err
 			}
-			if _, duplicate := seen[op]; duplicate {
-				return fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+			if seen == nil {
+				for i := 0; i < seenSmallLen; i++ {
+					if seenSmall[i] == op {
+						return fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+					}
+				}
+				if seenSmallLen < len(seenSmall) {
+					seenSmall[seenSmallLen] = op
+					seenSmallLen++
+				} else {
+					seen = make(map[string]struct{}, len(seenSmall)*2)
+					for i := 0; i < seenSmallLen; i++ {
+						seen[seenSmall[i]] = struct{}{}
+					}
+					seen[op] = struct{}{}
+				}
+			} else {
+				if _, duplicate := seen[op]; duplicate {
+					return fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+				}
+				seen[op] = struct{}{}
 			}
-			seen[op] = struct{}{}
 			opValue := elem.Value()
 			switch op {
 			case "$in", "$nin":
@@ -2248,7 +2290,7 @@ func validateNotOperandWork(doc bson.Raw) error {
 	var op string
 	var value bson.RawValue
 	count := 0
-	err := forEachBoundedBSONDocumentElement(doc, 1, errors.New("Mongo gateway $not requires one supported operator"), func(elem bson.RawElement) error {
+	err := forEachBoundedBSONDocumentElement(doc, 1, errFindNotSingleOperator, func(elem bson.RawElement) error {
 		var err error
 		op, err = elem.KeyErr()
 		if err != nil {
@@ -2262,7 +2304,7 @@ func validateNotOperandWork(doc bson.Raw) error {
 		return err
 	}
 	if count != 1 {
-		return errors.New("Mongo gateway $not requires one supported operator")
+		return errFindNotSingleOperator
 	}
 	if op != "$in" && op != "$nin" {
 		return nil
@@ -2289,26 +2331,38 @@ func findPredicateSupportsNot(op findPredicateOp) bool {
 // Query paths deliberately remain document-only at evaluation time; parsing
 // still permits numeric field names because BSON documents may use them.
 func validateMongoDocumentPath(path string) error {
-	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
-		return errors.New("path must contain non-empty segments")
+	if path == "" || path[0] == '.' || path[len(path)-1] == '.' {
+		return errMongoDocumentPathEmptySegment
 	}
-	segments := strings.Split(path, ".")
-	if len(segments) > mongoMutationMaxPathDepth {
-		return fmt.Errorf("path exceeds %d components", mongoMutationMaxPathDepth)
-	}
-	for _, segment := range segments {
-		if strings.HasPrefix(segment, "$") {
-			return errors.New("path has unsupported segment")
+	if strings.IndexByte(path, '.') < 0 {
+		if path[0] == '$' {
+			return errMongoDocumentPathUnsupportedSegment
 		}
+		return nil
 	}
-	return nil
+	if strings.Contains(path, "..") {
+		return errMongoDocumentPathEmptySegment
+	}
+	if strings.Count(path, ".")+1 > mongoMutationMaxPathDepth {
+		return errMongoDocumentPathMaxDepth
+	}
+	for {
+		if path[0] == '$' {
+			return errMongoDocumentPathUnsupportedSegment
+		}
+		idx := strings.IndexByte(path, '.')
+		if idx < 0 {
+			return nil
+		}
+		path = path[idx+1:]
+	}
 }
 
 func operatorDocument(doc bson.Raw) (bool, error) {
 	sawOperator := false
 	sawNonOperator := false
 	count := 0
-	err := forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
+	err := forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, errFindPredicateCap, func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return err
