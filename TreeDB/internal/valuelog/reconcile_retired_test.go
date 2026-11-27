@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestManagerReconcileRetiredSegments(t *testing.T) {
@@ -332,8 +335,13 @@ func TestManagerReconcileRetiredSegments(t *testing.T) {
 		if err := first.Release(held); err != nil {
 			t.Fatalf("first.Release(held): %v", err)
 		}
-		if err := <-reconcileErrCh; err != nil {
-			t.Fatalf("secondary ReconcileRetiredSegment: %v", err)
+		select {
+		case err := <-reconcileErrCh:
+			if err != nil {
+				t.Fatalf("secondary ReconcileRetiredSegment: %v", err)
+			}
+		default:
+			t.Fatal("expected SetOnSegmentRetired callback to fire before first.Release returned")
 		}
 		second.mu.RLock()
 		_, stillTracked := second.files[id]
@@ -395,8 +403,13 @@ func TestManagerReconcileRetiredSegments(t *testing.T) {
 		if err := first.CleanupError(); err != nil {
 			t.Fatalf("first.CleanupError() = %v, want nil", err)
 		}
-		if got := <-notified; got != id {
-			t.Fatalf("notified fileID=%d, want %d", got, id)
+		select {
+		case got := <-notified:
+			if got != id {
+				t.Fatalf("notified fileID=%d, want %d", got, id)
+			}
+		default:
+			t.Fatalf("expected SetOnSegmentRetired(%d) to fire before first.Release returned", id)
 		}
 
 		// Secondary reconcile surfaces ManagerCleanupFailure and preserves CleanupError.
@@ -770,4 +783,339 @@ func BenchmarkManagerReconcileRetiredSteadyState(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestManagerReconcileRetiredSegments_ConcurrentReadAndReconcile(t *testing.T) {
+	t.Run("borrowed_read_blocks_reconcile_and_notifies_on_release", func(t *testing.T) {
+		dir := t.TempDir()
+		id, err := EncodeFileID(0, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := SegmentPath(dir, id)
+		wantVal := bytes.Repeat([]byte("borrowed-mmap-payload-"), 64)
+		w, err := NewWriter(path, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ptr, err := w.Append(0, nil, 101, wantVal)
+		if err != nil {
+			_ = w.Close()
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		registry := rootpublication.NewIdentityPinRegistry()
+		first, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := first.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		second, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := second.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		// Warm mmap on second via normal read before borrowing.
+		got, err := second.Read(ptr)
+		if err != nil {
+			t.Fatalf("warm second.Read: %v", err)
+		}
+		if !bytes.Equal(got, wantVal) {
+			t.Fatalf("warm second.Read mismatch")
+		}
+
+		notified := make(chan uint32, 1)
+		second.SetOnRetiredBorrowReleased(func(fileID uint32) {
+			select {
+			case notified <- fileID:
+			default:
+			}
+		})
+
+		identity := retirementIdentityAtPath(t, path)
+		borrowed, err := second.borrowFileFor(id)
+		if err != nil {
+			t.Fatalf("borrowFileFor: %v", err)
+		}
+		if err := first.RemoveSegment(id); err != nil {
+			second.releaseFileBorrow(borrowed)
+			t.Fatalf("first.RemoveSegment: %v", err)
+		}
+
+		// Reconcile while borrow is held MUST NOT close or unmap borrowed.
+		if err := second.ReconcileRetiredSegments(); err != nil {
+			second.releaseFileBorrow(borrowed)
+			t.Fatalf("ReconcileRetiredSegments while borrowed: %v", err)
+		}
+		if borrowed.closed.Load() {
+			second.releaseFileBorrow(borrowed)
+			t.Fatal("borrowed file was closed while read borrow was active")
+		}
+		gotWhilePinned, err := borrowed.Read(ptr, true)
+		if err != nil || !bytes.Equal(gotWhilePinned, wantVal) {
+			second.releaseFileBorrow(borrowed)
+			t.Fatalf("borrowed.Read while retired = (%d bytes, %v), want exact payload", len(gotWhilePinned), err)
+		}
+
+		// Releasing the read borrow must immediately fire onRetiredBorrowReleased.
+		second.releaseFileBorrow(borrowed)
+		select {
+		case firedID := <-notified:
+			if firedID != id {
+				t.Fatalf("onRetiredBorrowReleased fired id=%d, want %d", firedID, id)
+			}
+		default:
+			t.Fatal("expected onRetiredBorrowReleased to fire immediately when last read borrow released")
+		}
+		if err := second.ReconcileRetiredSegment(id); err != nil {
+			t.Fatalf("ReconcileRetiredSegment after release: %v", err)
+		}
+		if !borrowed.closed.Load() {
+			t.Fatal("expected retired file to close after read borrow released and reconciled")
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("ObserverCount=%d, want 0", got)
+		}
+	})
+
+	t.Run("concurrent_reads_during_retirement_and_reconcile", func(t *testing.T) {
+		dir := t.TempDir()
+		const segCount = 24
+		type segSpec struct {
+			id       uint32
+			path     string
+			ptr      page.ValuePtr
+			rid      uint64
+			val      []byte
+			identity rootpublication.StableIdentity
+		}
+		segs := make([]segSpec, 0, segCount)
+		for i := 0; i < segCount; i++ {
+			id, err := EncodeFileID(0, uint32(i+1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := SegmentPath(dir, id)
+			val := bytes.Repeat([]byte{byte('a' + (i % 26))}, 1024+i*17)
+			rid := uint64(i + 1)
+			w, err := NewWriter(path, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ptr, err := w.Append(0, nil, rid, val)
+			if err != nil {
+				_ = w.Close()
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			segs = append(segs, segSpec{
+				id:       id,
+				path:     path,
+				ptr:      ptr,
+				rid:      rid,
+				val:      val,
+				identity: retirementIdentityAtPath(t, path),
+			})
+		}
+
+		registry := rootpublication.NewIdentityPinRegistry()
+		first, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := first.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		second, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := second.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		// Warm all segments on second so sealed lazy mmap is active before racing.
+		for _, seg := range segs {
+			got, err := second.Read(seg.ptr)
+			if err != nil || !bytes.Equal(got, seg.val) {
+				t.Fatalf("warm Read(%d): err=%v", seg.id, err)
+			}
+		}
+
+		reconcileCh := make(chan struct{}, 1)
+		triggerReconcile := func(uint32) {
+			select {
+			case reconcileCh <- struct{}{}:
+			default:
+			}
+		}
+		second.SetOnRetiredBorrowReleased(triggerReconcile)
+		first.SetOnSegmentRetired(triggerReconcile)
+
+		var stopReaders atomic.Bool
+		errCh := make(chan error, 16)
+		reportErr := func(err error) {
+			if err == nil {
+				return
+			}
+			select {
+			case errCh <- err:
+			default:
+			}
+		}
+
+		var reconcilerWG sync.WaitGroup
+		stopReconciler := make(chan struct{})
+		reconcilerWG.Add(1)
+		go func() {
+			defer reconcilerWG.Done()
+			for {
+				select {
+				case <-stopReconciler:
+					return
+				case <-reconcileCh:
+					reportErr(second.ReconcileRetiredSegments())
+				}
+			}
+		}()
+
+		const readerWorkers = 6
+		var readersWG sync.WaitGroup
+		for worker := 0; worker < readerWorkers; worker++ {
+			readersWG.Add(1)
+			go func(worker int) {
+				defer readersWG.Done()
+				var scratch []byte
+				batchDst := make([][]byte, 2)
+				for iter := 0; !stopReaders.Load(); iter++ {
+					seg := segs[(worker+iter)%len(segs)]
+					switch (worker + iter) % 5 {
+					case 0:
+						got, err := second.Read(seg.ptr)
+						if err != nil {
+							if !errors.Is(err, ErrFileNotFound) {
+								reportErr(err)
+								return
+							}
+							continue
+						}
+						if !bytes.Equal(got, seg.val) {
+							reportErr(errors.New("Read payload mismatch"))
+							return
+						}
+					case 1:
+						got, err := second.ReadAppend(seg.ptr, scratch[:0])
+						if err != nil {
+							if !errors.Is(err, ErrFileNotFound) {
+								reportErr(err)
+								return
+							}
+							continue
+						}
+						if !bytes.Equal(got, seg.val) {
+							reportErr(errors.New("ReadAppend payload mismatch"))
+							return
+						}
+						scratch = got[:0]
+					case 2:
+						got, err := second.ReadUnsafeAppend(seg.ptr, scratch[:0])
+						if err != nil {
+							if !errors.Is(err, ErrFileNotFound) {
+								reportErr(err)
+								return
+							}
+							continue
+						}
+						if !bytes.Equal(got, seg.val) {
+							reportErr(errors.New("ReadUnsafeAppend payload mismatch"))
+							return
+						}
+						scratch = got[:0]
+					case 3:
+						gotBatch, err := second.ReadUnsafeAppendBatch([]page.ValuePtr{seg.ptr, seg.ptr}, batchDst)
+						if err != nil {
+							if !errors.Is(err, ErrFileNotFound) {
+								reportErr(err)
+								return
+							}
+							continue
+						}
+						if len(gotBatch) != 2 || !bytes.Equal(gotBatch[0], seg.val) || !bytes.Equal(gotBatch[1], seg.val) {
+							reportErr(errors.New("ReadUnsafeAppendBatch payload mismatch"))
+							return
+						}
+						batchDst = gotBatch
+					case 4:
+						rid, err := second.ReadRIDUnverified(seg.ptr)
+						if err != nil {
+							if !errors.Is(err, ErrFileNotFound) {
+								reportErr(err)
+								return
+							}
+							continue
+						}
+						if rid != seg.rid {
+							reportErr(errors.New("ReadRIDUnverified mismatch"))
+							return
+						}
+					}
+				}
+			}(worker)
+		}
+
+		// Retire all segments one by one while readers hammer Read*/ReadAppend* and
+		// reconcile races concurrently.
+		for _, seg := range segs {
+			if err := first.RemoveSegment(seg.id); err != nil {
+				stopReaders.Store(true)
+				close(stopReconciler)
+				readersWG.Wait()
+				reconcilerWG.Wait()
+				t.Fatalf("first.RemoveSegment(%d): %v", seg.id, err)
+			}
+			reportErr(second.ReconcileRetiredSegment(seg.id))
+		}
+		stopReaders.Store(true)
+		readersWG.Wait()
+		close(stopReconciler)
+		reconcilerWG.Wait()
+
+		select {
+		case err := <-errCh:
+			t.Fatalf("concurrent read/reconcile error: %v", err)
+		default:
+		}
+		if err := second.ReconcileRetiredSegments(); err != nil {
+			t.Fatalf("final ReconcileRetiredSegments: %v", err)
+		}
+		second.mu.RLock()
+		remaining := len(second.files)
+		second.mu.RUnlock()
+		if remaining != 0 {
+			t.Fatalf("second manager still tracks %d retired files after concurrent drain", remaining)
+		}
+		for _, seg := range segs {
+			if got := registry.ObserverCount(seg.identity); got != 0 {
+				t.Fatalf("seg %d ObserverCount=%d, want 0", seg.id, got)
+			}
+		}
+	})
 }

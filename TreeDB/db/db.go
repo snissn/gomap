@@ -5590,11 +5590,14 @@ func (db *DB) Zipper() *zipper.Zipper {
 }
 
 // SetPostValueLogGCHook registers an optional callback invoked after every
-// non-dry-run ValueLogGC pass. The callback runs strictly outside
+// non-dry-run ValueLogGC pass and at the end of non-dry-run CompactStorage
+// after its final value-log retirement phases (such as zero-byte segment
+// pruning and deferred snapshot release). The callback runs strictly outside
 // publishPrepareMu and valueLogPublicationMu, while maintenanceMu may still be
 // held; callbacks must not invoke APIs that acquire maintenanceMu (such as
 // CaptureRecoverableRootSet or nested maintenance operations). Any non-nil
-// error is propagated outward from ValueLogGC.
+// error is propagated outward separately from primary deletion/sync
+// ErrRecoveryRequired errors.
 func (db *DB) SetPostValueLogGCHook(fn func() error) {
 	if db == nil {
 		return
@@ -5612,6 +5615,13 @@ func (db *DB) postValueLogGCHookSnapshot() func() error {
 	fn := db.postValueLogGCHook
 	db.postValueLogGCHookMu.Unlock()
 	return fn
+}
+
+func (db *DB) runPostValueLogGCHook() error {
+	if hook := db.postValueLogGCHookSnapshot(); hook != nil {
+		return hook()
+	}
+	return nil
 }
 
 // SetValueLogSegmentRetiredHook registers an optional non-blocking notification

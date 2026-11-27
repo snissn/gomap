@@ -4806,7 +4806,10 @@ func (db *DB) readValueLogUnsafe(key []byte, ptr page.ValuePtr) ([]byte, error) 
 			return nil, err
 		}
 	}
-	return db.valueLogReader.ReadUnsafe(ptr)
+	// Cached value-log reads do not hold a Set pin after returning, so return an
+	// owned copy instead of a raw mmap view that could be unmapped concurrently
+	// by retired-segment reconciliation.
+	return db.valueLogReader.Read(ptr)
 }
 
 func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -6622,14 +6625,11 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeafWithContext(ctx context.C
 		} else {
 			dst = dst[:0]
 		}
-		var usedDst bool
-		raw, usedDst, err = db.valueLogReader.ReadUnsafeTo(ptr, dst)
+		raw, err = db.valueLogReader.ReadAppend(ptr, dst)
 		if err != nil {
 			return err
 		}
-		if usedDst {
-			*readScratch = raw[:0]
-		}
+		*readScratch = raw[:0]
 	} else {
 		raw, err = db.valueLogReader.Read(ptr)
 		if err != nil {
@@ -8232,6 +8232,25 @@ func (db *DB) consumeRetiredVlogReconcileError() error {
 	return err
 }
 
+func (db *DB) reportRetiredVlogReconcileError(err error) {
+	if db == nil || err == nil {
+		return
+	}
+	// Retain original cleanup custody even if callback entry is refused or
+	// Close started concurrently. A NotifyError callback on this wg-tracked
+	// worker must never join the worker through Close.
+	db.retainOriginalCleanupError(err)
+	if db.notifyError == nil {
+		return
+	}
+	guard := db.ownedCloseGuard
+	if enterErr := guard.EnterCheckpointNotification(); enterErr != nil {
+		return
+	}
+	defer guard.LeaveCheckpointNotification()
+	db.reportError(err)
+}
+
 func (db *DB) retiredVlogReconcileLoop() {
 	defer db.wg.Done()
 	for {
@@ -8246,8 +8265,7 @@ func (db *DB) retiredVlogReconcileLoop() {
 				return
 			}
 			if err := db.runRetiredValueLogReaderReconcile(true); err != nil {
-				db.recordRetiredVlogReconcileError(err)
-				db.reportError(err)
+				db.reportRetiredVlogReconcileError(err)
 			}
 		}
 	}
@@ -8277,6 +8295,7 @@ func (db *DB) runRetiredValueLogReaderReconcile(async bool) error {
 	}
 	reconcileErr := reader.ReconcileRetiredSegments()
 	if async {
+		db.recordRetiredVlogReconcileError(reconcileErr)
 		return reconcileErr
 	}
 	cleanupErr := reader.CleanupError()
@@ -27397,6 +27416,18 @@ func (db *DB) Close() error {
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
 	}
+	if asyncReconcileErr := db.consumeRetiredVlogReconcileError(); asyncReconcileErr != nil {
+		alreadyPresent := false
+		for _, existing := range errs {
+			if errors.Is(existing, asyncReconcileErr) {
+				alreadyPresent = true
+				break
+			}
+		}
+		if !alreadyPresent {
+			errs = append(errs, asyncReconcileErr)
+		}
+	}
 	return errors.Join(errs...)
 }
 func (db *DB) Set(key, value []byte) error {
@@ -31530,6 +31561,7 @@ func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [
 
 	backendIdx := make([]int, 0, len(unique))
 	backendKeys := make([][]byte, 0, len(unique))
+	var vlogScratch []byte
 	for i, res := range results {
 		groupEnd := len(refs)
 		if i+1 < len(groupStarts) {
@@ -31548,10 +31580,11 @@ func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [
 			val := res.val
 			if val == nil {
 				var err error
-				val, err = db.readValueLogUnsafe(unique[i].key, res.ptr)
+				val, err = db.readValueLogAppend(unique[i].key, res.ptr, vlogScratch[:0])
 				if err != nil {
 					return err
 				}
+				vlogScratch = val[:0]
 			}
 			if err := visitGetManyValueRefs(groupRefs, val, true, fn); err != nil {
 				return err

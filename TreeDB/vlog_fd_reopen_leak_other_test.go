@@ -13,6 +13,6 @@ func statSegmentInode(string) (segmentInode, bool) {
 	return segmentInode{}, false
 }
 
-func countOpenDeletedSegmentFDs(*testing.T, string, map[segmentInode]string) (int, int) {
-	return 0, 0
+func countOpenDeletedSegmentFDs(*testing.T, string, map[segmentInode]string) (int, int, bool) {
+	return 0, 0, false
 }

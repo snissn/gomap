@@ -25,7 +25,7 @@ func statSegmentInode(path string) (segmentInode, bool) {
 	return segmentInode{dev: uint64(st.Dev), ino: uint64(st.Ino)}, true
 }
 
-func countOpenDeletedSegmentFDs(t *testing.T, valueLogDir string, deletedInodes map[segmentInode]string) (matchedInodeFDs int, procDeletedFDs int) {
+func countOpenDeletedSegmentFDs(t *testing.T, valueLogDir string, deletedInodes map[segmentInode]string) (matchedInodeFDs int, procDeletedFDs int, available bool) {
 	t.Helper()
 	fdDir := "/dev/fd"
 	if runtime.GOOS == "linux" {
@@ -33,8 +33,8 @@ func countOpenDeletedSegmentFDs(t *testing.T, valueLogDir string, deletedInodes 
 	}
 	f, err := os.Open(fdDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, 0
+		if runtime.GOOS != "linux" && os.IsNotExist(err) {
+			return 0, 0, false
 		}
 		t.Fatalf("Open(%s): %v", fdDir, err)
 	}
@@ -65,5 +65,5 @@ func countOpenDeletedSegmentFDs(t *testing.T, valueLogDir string, deletedInodes 
 			matchedInodeFDs++
 		}
 	}
-	return matchedInodeFDs, procDeletedFDs
+	return matchedInodeFDs, procDeletedFDs, true
 }

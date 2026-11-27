@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -98,6 +99,29 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 		}
 		if hotLanes > opts.JournalLanes {
 			t.Errorf("cycle %d reopen exploded hot lanes: got %d, want <= %d", cycle, hotLanes, opts.JournalLanes)
+		}
+
+		// Verify pointer durability across reopen BEFORE overwriting keys in the
+		// next cycle so missing/corrupt values cannot be masked by new writes.
+		if len(expected) > 0 {
+			for k, want := range expected {
+				if len(want) == 0 {
+					exists, hasErr := backend.Has([]byte(k))
+					if hasErr != nil || !exists {
+						_ = cleanup()
+						t.Fatalf("cycle %d pre-write reopen Has(%q) = (%v, %v), want true", cycle, k, exists, hasErr)
+					}
+				}
+				got, getErr := backend.Get([]byte(k))
+				if getErr != nil {
+					_ = cleanup()
+					t.Fatalf("cycle %d pre-write reopen Get(%q): %v", cycle, k, getErr)
+				}
+				if !bytes.Equal(got, want) {
+					_ = cleanup()
+					t.Fatalf("cycle %d pre-write reopen Get(%q) mismatch: got %d bytes, want %d bytes", cycle, k, len(got), len(want))
+				}
+			}
 		}
 
 		// Write and overwrite values via the backend value-log appender so
@@ -271,10 +295,17 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 			t.Fatalf("cycle %d expected at least one pre-existing value_vlog file to be unlinked", cycle)
 		}
 
-		matchedInodeFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
-		t.Logf("cycle %d metrics: hotLanes=%d preSegments=%d deleted=%d staleObservers=%d matchedInodeFDs=%d procDeletedFDs=%d",
-			cycle, hotLanes, len(preSegments), deletedCount, staleObservers, matchedInodeFDs, procDeletedFDs)
-		if matchedInodeFDs != 0 || procDeletedFDs != 0 {
+		matchedInodeFDs, procDeletedFDs, fdCheckAvailable := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+		if !fdCheckAvailable {
+			if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+				t.Errorf("cycle %d FD scan unavailable on %s", cycle, runtime.GOOS)
+			} else {
+				t.Logf("cycle %d FD scan unavailable on %s; relying on registry observer assertions", cycle, runtime.GOOS)
+			}
+		}
+		t.Logf("cycle %d metrics: hotLanes=%d preSegments=%d deleted=%d staleObservers=%d matchedInodeFDs=%d procDeletedFDs=%d fdCheckAvailable=%t",
+			cycle, hotLanes, len(preSegments), deletedCount, staleObservers, matchedInodeFDs, procDeletedFDs, fdCheckAvailable)
+		if fdCheckAvailable && (matchedInodeFDs != 0 || procDeletedFDs != 0) {
 			t.Errorf("cycle %d leaked deleted value_vlog FDs after CompactStorage: matchedInodeFDs=%d procDeletedFDs=%d staleObservers=%d",
 				cycle, matchedInodeFDs, procDeletedFDs, staleObservers)
 		}
@@ -444,6 +475,50 @@ func TestPostValueLogGCHookErrorPropagatesAndRunsOutsidePublishLocks(t *testing.
 	if hookCalls != 1 {
 		t.Fatalf("post-GC hook calls=%d, want 1", hookCalls)
 	}
+
+	// Verify CompactStorage also invokes the post-GC hook after its final
+	// retirement phases (including zero-byte value-log pruning) outside publish
+	// locks and propagates hook errors WITHOUT wrapping in ErrRecoveryRequired.
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	zeroID, err := valuelog.EncodeFileID(253, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID zero-byte segment: %v", err)
+	}
+	zeroPath := valuelog.SegmentPath(valueLogDir, zeroID)
+	if err := os.WriteFile(zeroPath, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", zeroPath, err)
+	}
+	if err := backend.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet after creating zero-byte segment: %v", err)
+	}
+	compactHookErr := errors.New("injected final compact-storage post-gc hook failure")
+	compactHookCallsAfterZeroPrune := 0
+	backend.SetPostValueLogGCHook(func() error {
+		// Succeed on intermediate GC passes; fail on the final pass after the
+		// zero-byte segment has been unlinked so we specifically exercise the
+		// post-retirement final CompactStorage reconciliation boundary.
+		if _, statErr := os.Stat(zeroPath); os.IsNotExist(statErr) {
+			compactHookCallsAfterZeroPrune++
+			if err := backend.RefreshValueLogSet(); err != nil {
+				return fmt.Errorf("RefreshValueLogSet inside final CompactStorage hook: %w", err)
+			}
+			return compactHookErr
+		}
+		return nil
+	})
+	compactStats, err := backend.CompactStorage(ctx, backenddb.CompactStorageOptions{})
+	if !errors.Is(err, compactHookErr) {
+		t.Fatalf("CompactStorage error=%v, want %v (stats=%+v)", err, compactHookErr, compactStats)
+	}
+	if errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("CompactStorage wrongly wrapped secondary post-GC hook error with ErrRecoveryRequired: %v", err)
+	}
+	if compactHookCallsAfterZeroPrune == 0 {
+		t.Fatalf("expected post-GC hook to run after zero-byte segment pruning (ZeroByteValueLogFilesDeleted=%d)", compactStats.ZeroByteValueLogFilesDeleted)
+	}
+	if _, statErr := os.Stat(zeroPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected zero-byte segment %s to be pruned, stat err=%v", zeroPath, statErr)
+	}
 }
 
 func TestOpen_CompactStorageNoDeletedFDs(t *testing.T) {
@@ -556,8 +631,15 @@ func TestOpen_CompactStorageNoDeletedFDs(t *testing.T) {
 	if deletedCount == 0 {
 		t.Fatalf("expected CompactStorage to delete at least 1 segment")
 	}
-	matchedInodeFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
-	if matchedInodeFDs != 0 || procDeletedFDs != 0 {
+	matchedInodeFDs, procDeletedFDs, fdCheckAvailable := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+	if !fdCheckAvailable {
+		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+			t.Errorf("FD scan unavailable on %s", runtime.GOOS)
+		} else {
+			t.Logf("FD scan unavailable on %s; relying on registry observer assertions", runtime.GOOS)
+		}
+	}
+	if fdCheckAvailable && (matchedInodeFDs != 0 || procDeletedFDs != 0) {
 		t.Errorf("leaked deleted FDs after treedb.Open CompactStorage: matchedInodeFDs=%d procDeletedFDs=%d", matchedInodeFDs, procDeletedFDs)
 	}
 	for k, want := range expected {
@@ -688,6 +770,33 @@ func TestOpenBackendWithCachedLeafLog_DeferredSnapshotReleaseAsyncClosesDeletedF
 		_ = snap.Close()
 		t.Fatalf("expected SegmentsPending > 0 while snapshot is held, got %+v", gcStats)
 	}
+
+	// Record the exact pending zombie segments that are still linked on disk
+	// while snap pins them (present on disk and absent from backend's current
+	// non-zombie ValueLogSet). Every single one must disappear and drain both
+	// registry observers and open FDs after snap.Close() without another GC call.
+	livePaths := make(map[string]struct{})
+	if st := backend.State(); st != nil && st.ValueLogSet != nil {
+		for _, f := range st.ValueLogSet.Files {
+			if f != nil && f.Path != "" {
+				livePaths[filepath.Clean(f.Path)] = struct{}{}
+			}
+		}
+	}
+	var pendingSegments []trackedSeg
+	for _, seg := range preSegments {
+		if _, statErr := os.Stat(seg.path); statErr != nil {
+			continue
+		}
+		if _, isLive := livePaths[filepath.Clean(seg.path)]; !isLive {
+			pendingSegments = append(pendingSegments, seg)
+		}
+	}
+	if len(pendingSegments) != gcStats.SegmentsPending {
+		_ = snap.Close()
+		t.Fatalf("identified %d linked pending segments, want gcStats.SegmentsPending=%d", len(pendingSegments), gcStats.SegmentsPending)
+	}
+
 	if err := snap.Close(); err != nil {
 		t.Fatalf("snap.Close: %v", err)
 	}
@@ -695,25 +804,31 @@ func TestOpenBackendWithCachedLeafLog_DeferredSnapshotReleaseAsyncClosesDeletedF
 	registry := backend.ValueLogIdentityPinRegistry()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		deletedInodes := make(map[segmentInode]string)
-		deletedCount := 0
+		deletedInodes := make(map[segmentInode]string, len(pendingSegments))
+		stillLinked := 0
 		var staleObservers uint64
-		for _, seg := range preSegments {
-			if _, err := os.Stat(seg.path); os.IsNotExist(err) {
-				deletedCount++
-				if seg.hasInode {
-					deletedInodes[seg.inode] = seg.path
-				}
-				staleObservers += registry.ObserverCount(seg.identity)
+		for _, seg := range pendingSegments {
+			if _, err := os.Stat(seg.path); !os.IsNotExist(err) {
+				stillLinked++
 			}
+			if seg.hasInode {
+				deletedInodes[seg.inode] = seg.path
+			}
+			staleObservers += registry.ObserverCount(seg.identity)
 		}
-		matchedFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
-		if deletedCount > 0 && staleObservers == 0 && matchedFDs == 0 && procDeletedFDs == 0 {
+		matchedFDs, procDeletedFDs, fdCheckAvailable := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+		if !fdCheckAvailable && (runtime.GOOS == "linux" || runtime.GOOS == "darwin") {
+			t.Fatalf("FD scan unavailable on %s", runtime.GOOS)
+		}
+		if stillLinked == 0 && staleObservers == 0 && (!fdCheckAvailable || (matchedFDs == 0 && procDeletedFDs == 0)) {
+			if !fdCheckAvailable {
+				t.Logf("FD scan unavailable on %s; verified all %d pending segments unlinked with 0 registry observers", runtime.GOOS, len(pendingSegments))
+			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("async retired reconciler did not close deleted FDs after deferred snapshot release: deleted=%d staleObservers=%d matchedFDs=%d procDeletedFDs=%d",
-				deletedCount, staleObservers, matchedFDs, procDeletedFDs)
+			t.Fatalf("async retired reconciler did not drain all %d pending segments after deferred snapshot release: stillLinked=%d staleObservers=%d matchedFDs=%d procDeletedFDs=%d fdCheckAvailable=%t",
+				len(pendingSegments), stillLinked, staleObservers, matchedFDs, procDeletedFDs, fdCheckAvailable)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -1190,6 +1190,13 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 		}
 	}
 	cleanupLeafLogDone = true
+	// Reconcile any retired value-log handles from final compaction phases
+	// (such as zero-byte segment pruning or deferred snapshot release) strictly
+	// outside publishPrepareMu/valueLogPublicationMu, returning hook errors
+	// separately without wrapping them as primary ErrRecoveryRequired.
+	if err := db.runPostValueLogGCHook(); err != nil {
+		return stats, err
+	}
 	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, stats.RemainingDebt)
 	return stats, nil
 }

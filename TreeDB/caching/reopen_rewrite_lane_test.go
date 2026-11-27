@@ -390,16 +390,25 @@ func TestSecondaryReconcileFailureIsolatedFromPrimarySnapshotAndRefresh(t *testi
 	if err != nil {
 		t.Fatalf("caching.Open: %v", err)
 	}
+	expectClosedReceipt := false
+	defer func() {
+		backend.SetPostValueLogGCHook(nil)
+		backend.SetValueLogSegmentRetiredHook(nil)
+		err := cached.Close()
+		if expectClosedReceipt {
+			if !errors.Is(err, os.ErrClosed) {
+				t.Errorf("cached.Close() = %v, want os.ErrClosed", err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Errorf("cached.Close() unexpected error: %v", err)
+		}
+	}()
 	backend.SetPostValueLogGCHook(func() error {
 		return cached.ReconcileRetiredValueLogReader()
 	})
 	backend.SetValueLogSegmentRetiredHook(func(fileID uint32) {
 		cached.NotifyRetiredValueLogSegment(fileID)
 	})
-	defer func() {
-		backend.SetPostValueLogGCHook(nil)
-		backend.SetValueLogSegmentRetiredHook(nil)
-	}()
 
 	// Prove NotifyRetiredValueLogSegment never blocks even while the reconciler
 	// execution mutex is held by another goroutine (zero cross-layer lock edges).
@@ -545,11 +554,195 @@ func TestSecondaryReconcileFailureIsolatedFromPrimarySnapshotAndRefresh(t *testi
 		t.Fatalf("post-failure ValueLogGC = %v, want ManagerCleanupFailure(os.ErrClosed)", err)
 	}
 
-	// Unhook before closing cached, verify cached.Close() preserves sticky receipt
-	// while primary backend.Close() (in defer) completes cleanly with zero error.
-	backend.SetPostValueLogGCHook(nil)
-	backend.SetValueLogSegmentRetiredHook(nil)
-	if err := cached.Close(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("cached.Close() = %v, want os.ErrClosed", err)
-	}
+	// Deferred teardown unhooks and asserts cached.Close() preserves the sticky
+	// os.ErrClosed receipt while primary backend.Close() completes cleanly.
+	expectClosedReceipt = true
+}
+
+func TestRetiredVlogReconcileNotifyErrorCallingCloseDoesNotDeadlock(t *testing.T) {
+	t.Run("reentrant_close_from_notify_error_rejected_without_deadlock", func(t *testing.T) {
+		dir := t.TempDir()
+		backend, err := backenddb.Open(backenddb.Options{
+			Dir:                    dir,
+			DisableBackgroundPrune: true,
+			Durability:             backenddb.DurabilityWALOffRelaxed,
+			KeepRecent:             1,
+			ValueLog: backenddb.ValueLogOptions{
+				PointerThreshold: 1,
+				ForcePointers:    true,
+				Compression:      backenddb.ValueLogCompressionOff,
+			},
+		})
+		if err != nil {
+			t.Fatalf("backenddb.Open: %v", err)
+		}
+		defer func() {
+			if err := backend.Close(); err != nil {
+				t.Errorf("backend.Close: %v", err)
+			}
+		}()
+
+		var cached *DB
+		var reentrantCloseOnce sync.Once
+		reentrantCloseErrCh := make(chan error, 1)
+		cached, err = Open(dir, backend, Options{
+			DisableWAL:                              true,
+			AllowUnsafe:                             true,
+			JournalLanes:                            2,
+			ValueLogPointerThreshold:                1,
+			ForceValueLogPointers:                   true,
+			ValueLogCompression:                     uint8(backenddb.ValueLogCompressionOff),
+			ValueLogGenerationPolicy:                uint8(backenddb.ValueLogGenerationHotWarmCold),
+			ValueLogGenerationHotSegmentTargetBytes: 8 << 10,
+			NotifyError: func(err error) {
+				if !errors.Is(err, os.ErrClosed) {
+					return
+				}
+				reentrantCloseOnce.Do(func() {
+					// Must be rejected by ownedCloseGuard.CheckClose() without
+					// waiting on db.wg (which would deadlock this worker).
+					reentrantCloseErrCh <- cached.Close()
+				})
+			},
+		})
+		if err != nil {
+			t.Fatalf("caching.Open: %v", err)
+		}
+		expectClosedReceipt := false
+		defer func() {
+			backend.SetPostValueLogGCHook(nil)
+			backend.SetValueLogSegmentRetiredHook(nil)
+			err := cached.Close()
+			if expectClosedReceipt {
+				if !errors.Is(err, os.ErrClosed) {
+					t.Errorf("cached.Close() = %v, want os.ErrClosed", err)
+				}
+			} else if err != nil && !errors.Is(err, os.ErrClosed) {
+				t.Errorf("cached.Close() unexpected error: %v", err)
+			}
+		}()
+		backend.SetValueLogSegmentRetiredHook(func(fileID uint32) {
+			cached.NotifyRetiredValueLogSegment(fileID)
+		})
+
+		for round := 0; round < 6; round++ {
+			vals := make([][]byte, 64)
+			for i := range vals {
+				buf := make([]byte, 512)
+				for j := range buf {
+					buf[j] = byte((round*31 + i*17 + j*5) & 0xff)
+				}
+				vals[i] = buf
+			}
+			ptrs, err := backend.AppendValueLogValues(vals)
+			if err != nil {
+				t.Fatalf("round %d AppendValueLogValues: %v", round, err)
+			}
+			b := backend.NewBatch()
+			pb := b.(interface {
+				SetPointer([]byte, page.ValuePtr) error
+			})
+			for i := range vals {
+				if err := pb.SetPointer([]byte("k-"+strconv.Itoa(i)), ptrs[i]); err != nil {
+					_ = b.Close()
+					t.Fatalf("SetPointer: %v", err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				t.Fatalf("WriteSync: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("Batch.Close: %v", err)
+			}
+		}
+		for i := 0; i < 2; i++ {
+			b := backend.NewBatch()
+			if err := b.Set([]byte("bump-"+strconv.Itoa(i)), nil); err != nil {
+				_ = b.Close()
+				t.Fatalf("Set bump: %v", err)
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				t.Fatalf("WriteSync bump: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("Batch.Close bump: %v", err)
+			}
+		}
+
+		snap := backend.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot returned nil")
+		}
+		gcStats, err := backend.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+		if err != nil {
+			_ = snap.Close()
+			t.Fatalf("ValueLogGC: %v", err)
+		}
+		if gcStats.SegmentsPending == 0 {
+			_ = snap.Close()
+			t.Fatalf("expected SegmentsPending > 0, got %+v", gcStats)
+		}
+
+		backendLive := backend.State()
+		readerSet := cached.valueLogReader.CurrentSetNoRefresh()
+		var poisonedID uint32
+		for id, f := range readerSet.Files {
+			laneID, _ := valuelog.DecodeFileID(id)
+			if laneID == leafLogLaneID {
+				continue
+			}
+			if backendLive == nil || backendLive.ValueLogSet == nil || backendLive.ValueLogSet.Files[id] == nil {
+				if err := f.File.Close(); err != nil {
+					_ = cached.valueLogReader.Release(readerSet)
+					_ = snap.Close()
+					t.Fatalf("pre-close secondary file %d: %v", id, err)
+				}
+				poisonedID = id
+				break
+			}
+		}
+		if err := cached.valueLogReader.Release(readerSet); err != nil {
+			_ = snap.Close()
+			t.Fatalf("release readerSet: %v", err)
+		}
+		if poisonedID == 0 {
+			_ = snap.Close()
+			t.Fatal("failed to locate zombie segment in cached.valueLogReader")
+		}
+
+		if err := snap.Close(); err != nil {
+			t.Fatalf("snap.Close: %v", err)
+		}
+
+		select {
+		case closeErr := <-reentrantCloseErrCh:
+			if closeErr == nil {
+				t.Fatal("re-entrant cached.Close() inside NotifyError returned nil, want callback-close refusal")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for NotifyError re-entrant cached.Close() (possible shutdown deadlock)")
+		}
+		expectClosedReceipt = true
+	})
+
+	t.Run("close_surfaces_unconsumed_async_reconcile_error", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(dir, NewMockBackend(), Options{
+			DisableWAL:  true,
+			AllowUnsafe: true,
+		})
+		if err != nil {
+			t.Fatalf("caching.Open: %v", err)
+		}
+		firstErr := errors.New("unrelated prior background error")
+		reconcileErr := errors.New("unconsumed async retired reconcile error")
+		db.retainOriginalCleanupError(firstErr)
+		db.recordRetiredVlogReconcileError(reconcileErr)
+		closeErr := db.Close()
+		if !errors.Is(closeErr, firstErr) || !errors.Is(closeErr, reconcileErr) {
+			t.Fatalf("Close() = %v, want both %q and %q", closeErr, firstErr, reconcileErr)
+		}
+	})
 }
