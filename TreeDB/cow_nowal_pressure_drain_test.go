@@ -34,24 +34,36 @@ func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
 		}
 	})
 
-	t.Run("nowal-cow-enables-drain-even-with-wal-auto-checkpoint-disabled", func(t *testing.T) {
-		dir := t.TempDir()
-		opts := OptionsFor(ProfileNoWALFast, dir)
+	t.Run("nowal-cow-default-options-enables-drain-and-explicit-disable-opts-out", func(t *testing.T) {
+		opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 		opts.MemtableMode = "cow_btree"
-		opts.BackgroundCheckpointInterval = -1
-		opts.BackgroundCheckpointIdleDuration = -1
-		opts.MaxWALBytes = -1
 		database, err := Open(opts)
 		if err != nil {
-			t.Fatalf("Open: %v", err)
+			t.Fatalf("Open(default ProfileNoWALFast): %v", err)
+		}
+		if !database.cached.COWPressureDrainEnabled() {
+			_ = database.Close()
+			t.Fatal("default ProfileNoWALFast COW DB did not enable COW pressure drain worker")
+		}
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close(default ProfileNoWALFast): %v", err)
+		}
+
+		disabledOpts := OptionsFor(ProfileNoWALFast, t.TempDir())
+		disabledOpts.MemtableMode = "cow_btree"
+		disabledOpts.BackgroundCheckpointInterval = -1
+		disabledOpts.BackgroundCheckpointIdleDuration = -1
+		disabledDB, err := Open(disabledOpts)
+		if err != nil {
+			t.Fatalf("Open(disabled ProfileNoWALFast): %v", err)
 		}
 		defer func() {
-			if err := database.Close(); err != nil {
-				t.Errorf("Close: %v", err)
+			if err := disabledDB.Close(); err != nil {
+				t.Errorf("Close(disabled ProfileNoWALFast): %v", err)
 			}
 		}()
-		if !database.cached.COWPressureDrainEnabled() {
-			t.Fatal("NoWAL COW DB did not enable COW pressure drain worker")
+		if disabledDB.cached.COWPressureDrainEnabled() {
+			t.Fatal("NoWAL COW DB unexpectedly enabled pressure drain when BackgroundCheckpointInterval and BackgroundCheckpointIdleDuration are disabled")
 		}
 	})
 

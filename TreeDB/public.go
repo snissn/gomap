@@ -1426,10 +1426,11 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	// COW modes there is no WAL to bound, so start the lightweight COW pressure
 	// drain worker to consume asynchronous generation and soft-reservation
 	// pressure signals without stalling foreground writers in synchronous
-	// checkpoints.
+	// checkpoints. Callers can explicitly opt out by disabling both
+	// BackgroundCheckpointInterval and BackgroundCheckpointIdleDuration (< 0).
 	if (!disableWAL || out.commandWALCached) && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
-	} else if cached.COWMode() && !out.commandWALCached && !opts.ReadOnly {
+	} else if cached.COWMode() && !out.commandWALCached && !opts.ReadOnly && (autoInterval > 0 || idleInterval > 0) {
 		cached.StartCOWPressureDrain()
 	}
 
