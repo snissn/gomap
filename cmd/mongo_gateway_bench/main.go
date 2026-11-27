@@ -132,6 +132,7 @@ type benchmarkResult struct {
 	MongoURI                       string                   `json:"mongo_uri,omitempty"`
 	MongoCompact                   bool                     `json:"mongo_compact,omitempty"`
 	MongoWriteConcern              string                   `json:"mongo_write_concern,omitempty"`
+	MongoLoadWriteConcern          string                   `json:"mongo_load_write_concern,omitempty"`
 	RouteMode                      string                   `json:"route_mode"`
 	RouteGroupCount                int                      `json:"route_group_count,omitempty"`
 	RoutePartitionCount            int                      `json:"route_partition_count,omitempty"`
@@ -505,6 +506,7 @@ const (
 	pointReadProjectionYCSB = "ycsb"
 
 	mongoWriteConcernDefault   = ""
+	mongoWriteConcernUnack     = "w0"
 	mongoWriteConcernW1        = "w1"
 	mongoWriteConcernW1J       = "w1_j"
 	mongoWriteConcernMajorityJ = "majority_j"
@@ -1903,6 +1905,17 @@ func parseMongoWriteConcern(raw string) (string, error) {
 	}
 }
 
+func resolveMongoWriteConcerns(cfg config) (clientWC, loadWC string) {
+	if cfg.Target != "mongo" {
+		return "", ""
+	}
+	clientWC = cfg.MongoWriteConcern
+	if cfg.ClientMode == clientModeDriverUnack {
+		return clientWC, mongoWriteConcernUnack
+	}
+	return clientWC, clientWC
+}
+
 func mongoWriteConcernForConfig(name string) *writeconcern.WriteConcern {
 	switch name {
 	case mongoWriteConcernW1:
@@ -2079,7 +2092,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 		result.MongoCompact = cfg.MongoCompact
-		result.MongoWriteConcern = cfg.MongoWriteConcern
+		result.MongoWriteConcern, result.MongoLoadWriteConcern = resolveMongoWriteConcerns(cfg)
 	}
 	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, cfg.Target == "treedb"); err != nil {
 		return nil, err
@@ -7918,6 +7931,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "mongo_compact=%t\n", result.MongoCompact)
 			if result.MongoWriteConcern != "" {
 				fmt.Fprintf(out, "mongo_write_concern=%s\n", result.MongoWriteConcern)
+			}
+			if result.MongoLoadWriteConcern != "" && result.MongoLoadWriteConcern != result.MongoWriteConcern {
+				fmt.Fprintf(out, "mongo_load_write_concern=%s\n", result.MongoLoadWriteConcern)
 			}
 		}
 		if result.ProfileDir != "" {

@@ -4527,3 +4527,73 @@ func TestWriteResultMongoWriteConcern(t *testing.T) {
 		t.Fatalf("durable text missing mongo_write_concern=w1_j:\n%s", textDurable.String())
 	}
 }
+
+func TestResolveAndWriteDriverUnackLoadWriteConcern(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-target", "mongo",
+		"-client-mode", clientModeDriverUnack,
+		"-mongo-write-concern", "w1_j",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig driver-unack with w1_j: %v", err)
+	}
+	clientWC, loadWC := resolveMongoWriteConcerns(cfg)
+	if clientWC != mongoWriteConcernW1J || loadWC != mongoWriteConcernUnack {
+		t.Fatalf("resolveMongoWriteConcerns=(%q, %q) want (%q, %q)", clientWC, loadWC, mongoWriteConcernW1J, mongoWriteConcernUnack)
+	}
+
+	// Default client write concern with driver-unack still reports w0 for load.
+	defaultUnackCfg, err := parseConfig([]string{
+		"-target", "mongo",
+		"-client-mode", clientModeDriverUnack,
+	})
+	if err != nil {
+		t.Fatalf("parseConfig driver-unack default: %v", err)
+	}
+	clientWC, loadWC = resolveMongoWriteConcerns(defaultUnackCfg)
+	if clientWC != "" || loadWC != mongoWriteConcernUnack {
+		t.Fatalf("resolveMongoWriteConcerns(default unack)=(%q, %q) want (\"\", %q)", clientWC, loadWC, mongoWriteConcernUnack)
+	}
+
+	// Regular driver mode with w1_j reports w1_j for both client default and load.
+	ackCfg, err := parseConfig([]string{
+		"-target", "mongo",
+		"-client-mode", clientModeDriver,
+		"-mongo-write-concern", "w1_j",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig driver w1_j: %v", err)
+	}
+	clientWC, loadWC = resolveMongoWriteConcerns(ackCfg)
+	if clientWC != mongoWriteConcernW1J || loadWC != mongoWriteConcernW1J {
+		t.Fatalf("resolveMongoWriteConcerns(driver w1_j)=(%q, %q) want (%q, %q)", clientWC, loadWC, mongoWriteConcernW1J, mongoWriteConcernW1J)
+	}
+
+	// Serialization separates client default (w1_j) from effective load write concern (w0).
+	unackRes := &benchmarkResult{
+		Target:                "mongo",
+		ClientMode:            clientModeDriverUnack,
+		MongoURI:              "mongodb://127.0.0.1:27017",
+		MongoWriteConcern:     mongoWriteConcernW1J,
+		MongoLoadWriteConcern: mongoWriteConcernUnack,
+	}
+	var jsonBuf, textBuf bytes.Buffer
+	if err := writeResult(&jsonBuf, "json", unackRes); err != nil {
+		t.Fatalf("writeResult json unack: %v", err)
+	}
+	var decoded benchmarkResult
+	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal unack json: %v", err)
+	}
+	if decoded.MongoWriteConcern != mongoWriteConcernW1J || decoded.MongoLoadWriteConcern != mongoWriteConcernUnack {
+		t.Fatalf("decoded write concerns=(%q, %q) want (%q, %q)", decoded.MongoWriteConcern, decoded.MongoLoadWriteConcern, mongoWriteConcernW1J, mongoWriteConcernUnack)
+	}
+	if err := writeResult(&textBuf, "text", unackRes); err != nil {
+		t.Fatalf("writeResult text unack: %v", err)
+	}
+	for _, want := range []string{"mongo_write_concern=w1_j", "mongo_load_write_concern=w0"} {
+		if !strings.Contains(textBuf.String(), want) {
+			t.Fatalf("unack text output missing %q:\n%s", want, textBuf.String())
+		}
+	}
+}

@@ -141,17 +141,18 @@ type matrixRow struct {
 }
 
 type benchmarkResult struct {
-	Target            string          `json:"target"`
-	Documents         int             `json:"documents"`
-	SecondaryIndexes  int             `json:"secondary_indexes"`
-	RangeIndex        bool            `json:"range_index"`
-	ClientMode        string          `json:"client_mode,omitempty"`
-	TreeDBProfile     string          `json:"treedb_profile,omitempty"`
-	TreeDBOpenMode    string          `json:"treedb_open_mode,omitempty"`
-	WriteConcern      json.RawMessage `json:"write_concern,omitempty"`
-	MongoWriteConcern json.RawMessage `json:"mongo_write_concern,omitempty"`
-	DocumentFormat    string          `json:"treedb_document_format,omitempty"`
-	Phases            []phaseResult   `json:"phases"`
+	Target                string          `json:"target"`
+	Documents             int             `json:"documents"`
+	SecondaryIndexes      int             `json:"secondary_indexes"`
+	RangeIndex            bool            `json:"range_index"`
+	ClientMode            string          `json:"client_mode,omitempty"`
+	TreeDBProfile         string          `json:"treedb_profile,omitempty"`
+	TreeDBOpenMode        string          `json:"treedb_open_mode,omitempty"`
+	WriteConcern          json.RawMessage `json:"write_concern,omitempty"`
+	MongoWriteConcern     json.RawMessage `json:"mongo_write_concern,omitempty"`
+	MongoLoadWriteConcern json.RawMessage `json:"mongo_load_write_concern,omitempty"`
+	DocumentFormat        string          `json:"treedb_document_format,omitempty"`
+	Phases                []phaseResult   `json:"phases"`
 }
 
 type phaseResult struct {
@@ -1256,6 +1257,13 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 		if phase.Name == "" {
 			continue
 		}
+		loadWC := parseWriteConcernRaw(result.MongoLoadWriteConcern)
+		if loadWC == "" && strings.EqualFold(strings.TrimSpace(result.ClientMode), "driver-unack") {
+			loadWC = "w0"
+		}
+		if loadWC == "" {
+			loadWC = firstNonEmpty(parseWriteConcernRaw(result.MongoWriteConcern), parseWriteConcernRaw(result.WriteConcern))
+		}
 		out = append(out, loadModeRow{
 			Indexes:        row.SecondaryIndexes,
 			Target:         row.Target,
@@ -1265,7 +1273,7 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 			RawJSON:        row.RawJSON,
 			TreeDBProfile:  result.TreeDBProfile,
 			TreeDBOpenMode: result.TreeDBOpenMode,
-			WriteConcern:   firstNonEmpty(parseWriteConcernRaw(result.MongoWriteConcern), parseWriteConcernRaw(result.WriteConcern)),
+			WriteConcern:   loadWC,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

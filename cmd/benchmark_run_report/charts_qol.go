@@ -772,6 +772,8 @@ func formatMongoWriteConcernContext(raw, durabilityTier string) string {
 		return ""
 	case "default":
 		return "w:1 (default)"
+	case "w0", "unacknowledged":
+		return "w:0 (unacknowledged)"
 	case "w1":
 		if strings.EqualFold(durabilityTier, "fast") {
 			return "w:1, j:false (Mongo 8 fastest ack; --nojournal removed)"
@@ -900,7 +902,7 @@ func durabilityTone(val string) string {
 	switch {
 	case strings.Contains(lower, "durable") || strings.Contains(lower, "full") || strings.Contains(lower, "j:true") || strings.Contains(lower, "journal=true") || strings.Contains(lower, "w1_j") || strings.Contains(lower, "majority_j") || lower == "journal":
 		return "durable"
-	case strings.Contains(lower, "no_wal") || strings.Contains(lower, "unsafe") || strings.Contains(lower, "off") || lower == "fast":
+	case strings.Contains(lower, "no_wal") || strings.Contains(lower, "unsafe") || strings.Contains(lower, "off") || lower == "fast" || lower == "w0" || strings.Contains(lower, "w:0") || strings.Contains(lower, "unacknowledged"):
 		return "fast"
 	case strings.Contains(lower, "relaxed") || strings.Contains(lower, "wal") || strings.Contains(lower, "normal") || strings.Contains(lower, "w:1") || strings.Contains(lower, "w=1") || lower == "w1":
 		return "relaxed"

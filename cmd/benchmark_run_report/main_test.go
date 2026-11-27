@@ -1662,6 +1662,44 @@ func TestBenchmarkContextBannerDurabilityTiers(t *testing.T) {
 			t.Fatalf("collectionEngineFamily(%q)=%q want SQLite", eng, got)
 		}
 	}
+	if got := formatMongoWriteConcernContext("w0", "durable"); got != "w:0 (unacknowledged)" {
+		t.Fatalf("formatMongoWriteConcernContext(w0)=%q want w:0 (unacknowledged)", got)
+	}
+	if got := durabilityTone("w0"); got != "fast" {
+		t.Fatalf("durabilityTone(w0)=%q want fast", got)
+	}
+}
+
+func TestLoadMongoLoadModesReportsEffectiveUnackWriteConcern(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"mongo\tmongo_driver\t100\t0\traw/mongo_driver.json\t5000\n"+
+		"mongo\tmongo_driver_unack\t100\t0\traw/mongo_unack.json\t5000\n"+
+		"mongo\tmongo_driver_unack_legacy\t100\t0\traw/mongo_unack_legacy.json\t5000\n")
+	writeFile(t, filepath.Join(dir, "raw", "mongo_driver.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"client_mode":"driver","mongo_write_concern":"w1_j","mongo_load_write_concern":"w1_j","phases":[{"name":"load_insert_many","ops_per_sec":500}]}`)
+	writeFile(t, filepath.Join(dir, "raw", "mongo_unack.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"client_mode":"driver-unack","mongo_write_concern":"w1_j","mongo_load_write_concern":"w0","phases":[{"name":"load_insert_many","ops_per_sec":900}]}`)
+	writeFile(t, filepath.Join(dir, "raw", "mongo_unack_legacy.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"client_mode":"driver-unack","mongo_write_concern":"w1_j","phases":[{"name":"load_insert_many","ops_per_sec":850}]}`)
+
+	rows, warnings, err := loadMongoLoadModes(dir)
+	if err != nil {
+		t.Fatalf("loadMongoLoadModes: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	gotByConfig := make(map[string]string, len(rows))
+	for _, r := range rows {
+		gotByConfig[r.Config] = r.WriteConcern
+	}
+	if gotByConfig["mongo_driver"] != "w1_j" {
+		t.Fatalf("mongo_driver WriteConcern=%q want w1_j", gotByConfig["mongo_driver"])
+	}
+	if gotByConfig["mongo_driver_unack"] != "w0" {
+		t.Fatalf("mongo_driver_unack WriteConcern=%q want w0", gotByConfig["mongo_driver_unack"])
+	}
+	if gotByConfig["mongo_driver_unack_legacy"] != "w0" {
+		t.Fatalf("mongo_driver_unack_legacy WriteConcern=%q want w0", gotByConfig["mongo_driver_unack_legacy"])
+	}
 }
 
 func TestFormatExactChartValueBytesPreservesExactIntegerCount(t *testing.T) {
