@@ -41,6 +41,7 @@ CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
+MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-}"
 MONGO_CLIENT_MODE="${MONGO_CLIENT_MODE:-driver}"
 MONGO_CLIENT_MODES="${MONGO_CLIENT_MODES:-$MONGO_CLIENT_MODE}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
@@ -131,6 +132,8 @@ Options:
   --mongo-mode MODE     docker or external. Default: docker.
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:8.
+  --mongo-write-concern MODE
+                        MongoDB write concern for -target mongo: default, w1, w1_j (or journal), or majority_j.
   --mongo-client-mode MODE
                         Single MongoDB client mode: driver, driver-find-raw,
                         driver-command, driver-command-raw, or driver-unack.
@@ -169,7 +172,7 @@ Environment overrides:
   CONCURRENT_RANGE_READERS, CONCURRENT_RANGE_READS, CONCURRENT_RANGE_READS_DIVISOR,
   CONCURRENT_RANGE_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITER_SWEEP, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
-  MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, DATABASE_PREFIX, COLLECTION, TIMEOUT,
+  MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, MONGO_WRITE_CONCERN, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
   TREEDB_CLIENT_MODE, TREEDB_CLIENT_MODES,
@@ -320,6 +323,11 @@ while [[ $# -gt 0 ]]; do
     --mongo-image)
       require_option_value "$1" "${2-}"
       MONGO_IMAGE="$2"
+      shift 2
+      ;;
+    --mongo-write-concern)
+      require_option_value "$1" "${2-}"
+      MONGO_WRITE_CONCERN="$2"
       shift 2
       ;;
     --mongo-compact=* )
@@ -758,6 +766,16 @@ if [[ "$MONGO_MODE" != "docker" && "$MONGO_MODE" != "external" ]]; then
   echo "unknown MONGO_MODE=$MONGO_MODE (want docker or external)" >&2
   exit 2
 fi
+if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+  case "$(lower_word "$MONGO_WRITE_CONCERN")" in
+    default|w1|w1_j|journal|majority_j)
+      ;;
+    *)
+      echo "invalid MONGO_WRITE_CONCERN=$MONGO_WRITE_CONCERN (want default, w1, w1_j, journal, or majority_j)" >&2
+      exit 2
+      ;;
+  esac
+fi
 if [[ "$TREEDB_READ_STATE" == "flushed" ]]; then
   TREEDB_READ_STATE=settled
 fi
@@ -1023,6 +1041,7 @@ fi
   echo "concurrent writer sweep: ${CONCURRENT_WRITER_SWEEP:-none}"
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}"
   echo "mongo mode: $MONGO_MODE"
+  echo "mongo write concern: ${MONGO_WRITE_CONCERN:-default}"
   echo "mongo client modes: $MONGO_CLIENT_MODES"
   echo "treedb profile: $TREEDB_PROFILE"
   echo "treedb document formats: $TREEDB_DOCUMENT_FORMATS"
@@ -1148,11 +1167,16 @@ for docs in $DOCS_LIST; do
           exit 1
         fi
       fi
-    run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+      mongo_write_concern_args=()
+      if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+        mongo_write_concern_args=(-mongo-write-concern "$MONGO_WRITE_CONCERN")
+      fi
+      run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
         "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
         -mongo-compact="$MONGO_COMPACT" \
-      -client-mode "$mongo_client_mode"
+        ${mongo_write_concern_args[@]+"${mongo_write_concern_args[@]}"} \
+        -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
         stop_mongo_container "$mongo_container"
         mongo_physical=$(docker_du_bytes "$mongo_cell_data")
@@ -1206,6 +1230,7 @@ cat >"$README" <<EOF
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}\`
 - MongoDB mode: \`$MONGO_MODE\`
 - MongoDB compact before final stats: \`$MONGO_COMPACT\`
+- MongoDB write concern: \`${MONGO_WRITE_CONCERN:-default}\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB client modes: \`$MONGO_CLIENT_MODES\`
 - benchmark timeout: \`$TIMEOUT\`

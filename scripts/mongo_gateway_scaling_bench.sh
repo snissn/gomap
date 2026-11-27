@@ -42,6 +42,7 @@ MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
 MONGO_COMPACT="${MONGO_COMPACT:-}"
+MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-60m}"
@@ -73,6 +74,8 @@ Options:
   --mongo-compact BOOL  Compact the MongoDB collection before final stats collection.
                         Set to true/false, 1/0, or yes/no.
                         Default: true for docker mode; false for external mode unless explicitly set.
+  --mongo-write-concern MODE
+                        MongoDB write concern for -target mongo: default, w1, w1_j (or journal), or majority_j.
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
@@ -90,7 +93,7 @@ Options:
 
 Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
-READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, DATABASE_PREFIX,
+READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, MONGO_WRITE_CONCERN, DATABASE_PREFIX,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
 TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1, true/false, or yes/no), RUN_READER_SWEEP (0/1, true/false, or yes/no), GOWORK, TIMEOUT, TITLE,
 and related storage/pool settings.
@@ -230,6 +233,11 @@ while [[ $# -gt 0 ]]; do
       MONGO_COMPACT="$2"
       shift 2
       ;;
+    --mongo-write-concern)
+      require_option_value "$1" "${2-}"
+      MONGO_WRITE_CONCERN="$2"
+      shift 2
+      ;;
     --database-prefix)
       require_option_value "$1" "${2-}"
       DATABASE_PREFIX="$2"
@@ -363,6 +371,16 @@ MONGO_COMPACT_TEXT=$(bool_01_text "$MONGO_COMPACT")
 if [[ "$MONGO_MODE" != "docker" && "$MONGO_MODE" != "external" ]]; then
   echo "unknown MONGO_MODE=$MONGO_MODE (want docker or external)" >&2
   exit 2
+fi
+if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+  case "$(printf '%s' "$MONGO_WRITE_CONCERN" | tr '[:upper:]' '[:lower:]')" in
+    default|w1|w1_j|journal|majority_j)
+      ;;
+    *)
+      echo "invalid MONGO_WRITE_CONCERN=$MONGO_WRITE_CONCERN (want default, w1, w1_j, journal, or majority_j)" >&2
+      exit 2
+      ;;
+  esac
 fi
 if [[ "$INCLUDE_MONGO" == "1" && "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
@@ -598,6 +616,7 @@ else
   echo "mongo uri: $MONGO_URI"
 fi
 echo "mongo compact before final stats: $MONGO_COMPACT_TEXT"
+echo "mongo write concern: ${MONGO_WRITE_CONCERN:-default}"
 
 run_cell() {
   local scenario=$1
@@ -655,9 +674,14 @@ run_cell() {
       fi
     fi
     echo "==> MongoDB $scenario readers=$readers writers=$writers"
+    local mongo_write_concern_args=()
+    if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+      mongo_write_concern_args=(-mongo-write-concern "$MONGO_WRITE_CONCERN")
+    fi
     run_bench mongo "$mongo_raw" "$database" "$readers" "$reads" "$writers" "$writes" \
       -mongo-uri "$mongo_uri" \
-      -mongo-compact="$MONGO_COMPACT_TEXT"
+      -mongo-compact="$MONGO_COMPACT_TEXT" \
+      ${mongo_write_concern_args[@]+"${mongo_write_concern_args[@]}"}
     if [[ "$MONGO_MODE" == "docker" ]]; then
       stop_mongo_container "$mongo_container"
       mongo_physical=$(docker_du_bytes "$mongo_data")
@@ -732,6 +756,7 @@ cat >"$README" <<EOF
 - MongoDB URI: \`$MONGO_URI\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB compact before final stats: \`$MONGO_COMPACT_TEXT\`
+- MongoDB write concern: \`${MONGO_WRITE_CONCERN:-default}\`
 - MongoDB database prefix: \`$DATABASE_PREFIX\`
 - GOWORK: \`$GO_WORK_MODE\`
 - timeout: \`$TIMEOUT\`

@@ -28,6 +28,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -4374,5 +4375,155 @@ func TestRecordMongoGatewayCapabilityMetadata(t *testing.T) {
 		decoded.MongoGatewayCapabilityVersion != mongogateway.MongoGatewayCapabilityVersion ||
 		decoded.MongoGatewayCapabilityIdentity != mongogateway.MongoGatewayCapabilityIdentity() {
 		t.Fatalf("serialized capability metadata=%+v", decoded)
+	}
+}
+
+func TestParseConfigMongoWriteConcern(t *testing.T) {
+	for _, tc := range []struct {
+		flagVal string
+		want    string
+	}{
+		{"", mongoWriteConcernDefault},
+		{"default", mongoWriteConcernDefault},
+		{" DEFAULT ", mongoWriteConcernDefault},
+		{"w1", mongoWriteConcernW1},
+		{"W1", mongoWriteConcernW1},
+		{"w1_j", mongoWriteConcernW1J},
+		{"journal", mongoWriteConcernW1J},
+		{"JOURNAL", mongoWriteConcernW1J},
+		{"majority_j", mongoWriteConcernMajorityJ},
+	} {
+		cfg, err := parseConfig([]string{"-target", "mongo", "-mongo-write-concern", tc.flagVal})
+		if err != nil {
+			t.Fatalf("parseConfig(-mongo-write-concern %q): %v", tc.flagVal, err)
+		}
+		if cfg.MongoWriteConcern != tc.want {
+			t.Fatalf("flag %q -> MongoWriteConcern=%q want %q", tc.flagVal, cfg.MongoWriteConcern, tc.want)
+		}
+	}
+	for _, bad := range []string{"w0", "w2", "majority", "unack", "bogus"} {
+		if _, err := parseConfig([]string{"-target", "mongo", "-mongo-write-concern", bad}); err == nil {
+			t.Fatalf("parseConfig accepted invalid -mongo-write-concern %q", bad)
+		}
+	}
+}
+
+func TestMongoClientOptionsWriteConcern(t *testing.T) {
+	// Default / unset leaves WriteConcern nil.
+	opts := mongoClientOptions("mongodb://127.0.0.1:27017", config{Target: "mongo"}, nil)
+	if opts.WriteConcern != nil {
+		t.Fatalf("default WriteConcern=%+v want nil", opts.WriteConcern)
+	}
+	// TreeDB target never sets WriteConcern even if configured.
+	opts = mongoClientOptions("mongodb://127.0.0.1:27017", config{Target: "treedb", MongoWriteConcern: mongoWriteConcernW1J}, nil)
+	if opts.WriteConcern != nil {
+		t.Fatalf("treedb target WriteConcern=%+v want nil", opts.WriteConcern)
+	}
+	// w1 -> W: 1, Journal: nil
+	opts = mongoClientOptions("mongodb://127.0.0.1:27017", config{Target: "mongo", MongoWriteConcern: mongoWriteConcernW1}, nil)
+	if opts.WriteConcern == nil || opts.WriteConcern.W != 1 || opts.WriteConcern.Journal != nil {
+		t.Fatalf("w1 WriteConcern=%+v want W=1 Journal=nil", opts.WriteConcern)
+	}
+	// w1_j -> W: 1, Journal: true
+	opts = mongoClientOptions("mongodb://127.0.0.1:27017", config{Target: "mongo", MongoWriteConcern: mongoWriteConcernW1J}, nil)
+	if opts.WriteConcern == nil || opts.WriteConcern.W != 1 || opts.WriteConcern.Journal == nil || !*opts.WriteConcern.Journal {
+		t.Fatalf("w1_j WriteConcern=%+v want W=1 Journal=true", opts.WriteConcern)
+	}
+	// majority_j -> W: "majority", Journal: true
+	opts = mongoClientOptions("mongodb://127.0.0.1:27017", config{Target: "mongo", MongoWriteConcern: mongoWriteConcernMajorityJ}, nil)
+	if opts.WriteConcern == nil || opts.WriteConcern.W != writeconcern.WCMajority || opts.WriteConcern.Journal == nil || !*opts.WriteConcern.Journal {
+		t.Fatalf("majority_j WriteConcern=%+v want W=majority Journal=true", opts.WriteConcern)
+	}
+}
+
+func TestRawInsertCommandWithWriteConcern(t *testing.T) {
+	for _, tc := range []struct {
+		wc       string
+		wantW    any
+		wantJ    *bool
+		wantNone bool
+	}{
+		{wc: "", wantNone: true},
+		{wc: mongoWriteConcernW1, wantW: int32(1)},
+		{wc: mongoWriteConcernW1J, wantW: int32(1), wantJ: boolPtr(true)},
+		{wc: mongoWriteConcernMajorityJ, wantW: writeconcern.WCMajority, wantJ: boolPtr(true)},
+	} {
+		raw, err := rawInsertCommandWithWriteConcern("docs", 0, 1, documentShapeGateway, nil, nil, tc.wc)
+		if err != nil {
+			t.Fatalf("rawInsertCommandWithWriteConcern(%q): %v", tc.wc, err)
+		}
+		var doc struct {
+			WriteConcern *struct {
+				W any   `bson:"w"`
+				J *bool `bson:"j"`
+			} `bson:"writeConcern"`
+		}
+		if err := bson.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("unmarshal command: %v", err)
+		}
+		if tc.wantNone {
+			if doc.WriteConcern != nil {
+				t.Fatalf("empty writeConcern unexpectedly emitted writeConcern=%+v", doc.WriteConcern)
+			}
+			continue
+		}
+		if doc.WriteConcern == nil {
+			t.Fatalf("wc=%q missing writeConcern field", tc.wc)
+		}
+		if doc.WriteConcern.W != tc.wantW {
+			t.Fatalf("wc=%q w=%v (%T) want %v (%T)", tc.wc, doc.WriteConcern.W, doc.WriteConcern.W, tc.wantW, tc.wantW)
+		}
+		if tc.wantJ == nil {
+			if doc.WriteConcern.J != nil {
+				t.Fatalf("wc=%q unexpectedly set j=%v", tc.wc, *doc.WriteConcern.J)
+			}
+		} else if doc.WriteConcern.J == nil || *doc.WriteConcern.J != *tc.wantJ {
+			t.Fatalf("wc=%q j=%v want %v", tc.wc, doc.WriteConcern.J, *tc.wantJ)
+		}
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestWriteResultMongoWriteConcern(t *testing.T) {
+	// Default (unset) omits mongo_write_concern in both JSON and text output.
+	defaultRes := &benchmarkResult{Target: "mongo", ClientMode: clientModeDriver, MongoURI: "mongodb://127.0.0.1:27017"}
+	var jsonDefault, textDefault bytes.Buffer
+	if err := writeResult(&jsonDefault, "json", defaultRes); err != nil {
+		t.Fatalf("writeResult json default: %v", err)
+	}
+	if strings.Contains(jsonDefault.String(), "mongo_write_concern") {
+		t.Fatalf("default JSON unexpectedly contains mongo_write_concern: %s", jsonDefault.String())
+	}
+	if err := writeResult(&textDefault, "text", defaultRes); err != nil {
+		t.Fatalf("writeResult text default: %v", err)
+	}
+	if strings.Contains(textDefault.String(), "mongo_write_concern") {
+		t.Fatalf("default text unexpectedly contains mongo_write_concern: %s", textDefault.String())
+	}
+
+	// Explicit w1_j emits mongo_write_concern in both JSON and text output.
+	durableRes := &benchmarkResult{
+		Target:            "mongo",
+		ClientMode:        clientModeDriver,
+		MongoURI:          "mongodb://127.0.0.1:27017",
+		MongoWriteConcern: mongoWriteConcernW1J,
+	}
+	var jsonDurable, textDurable bytes.Buffer
+	if err := writeResult(&jsonDurable, "json", durableRes); err != nil {
+		t.Fatalf("writeResult json durable: %v", err)
+	}
+	var decoded benchmarkResult
+	if err := json.Unmarshal(jsonDurable.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode durable json: %v", err)
+	}
+	if decoded.MongoWriteConcern != mongoWriteConcernW1J {
+		t.Fatalf("decoded MongoWriteConcern=%q want %q", decoded.MongoWriteConcern, mongoWriteConcernW1J)
+	}
+	if err := writeResult(&textDurable, "text", durableRes); err != nil {
+		t.Fatalf("writeResult text durable: %v", err)
+	}
+	if !strings.Contains(textDurable.String(), "mongo_write_concern=w1_j") {
+		t.Fatalf("durable text missing mongo_write_concern=w1_j:\n%s", textDurable.String())
 	}
 }

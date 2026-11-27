@@ -42,6 +42,8 @@ type config struct {
 	Count                     int
 	TreeEngine                string
 	Profile                   string
+	SQLiteJournalMode         string
+	SQLiteSynchronous         string
 	Formats                   string
 	StorageCells              string
 	LeafSegmentTargetBytes    int64
@@ -84,6 +86,8 @@ type canonicalConfig struct {
 	Count                     int      `json:"count"`
 	TreeEngine                string   `json:"tree_engine"`
 	Profile                   string   `json:"profile"`
+	SQLiteJournalMode         string   `json:"sqlite_journal_mode,omitempty"`
+	SQLiteSynchronous         string   `json:"sqlite_synchronous,omitempty"`
 	Formats                   []string `json:"formats"`
 	StorageCells              string   `json:"storage_cells"`
 	LeafSegmentTargetBytes    int64    `json:"leaf_segment_target_bytes"`
@@ -364,6 +368,8 @@ func run(argv []string) error {
 			Count:                     cfg.Count,
 			TreeEngine:                cfg.TreeEngine,
 			Profile:                   cfg.Profile,
+			SQLiteJournalMode:         cfg.SQLiteJournalMode,
+			SQLiteSynchronous:         cfg.SQLiteSynchronous,
 			Formats:                   formats,
 			StorageCells:              cfg.StorageCells,
 			LeafSegmentTargetBytes:    cfg.LeafSegmentTargetBytes,
@@ -499,13 +505,27 @@ func validateSafeRunDir(outDir string) error {
 }
 
 func parseConfig(args []string) (config, error) {
+	defaultProfile := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_PROFILE"))
+	if defaultProfile == "" {
+		defaultProfile = "command_wal_relaxed"
+	}
+	defaultSQLiteJournalMode := strings.TrimSpace(os.Getenv("TREEDB_SQLITE_JOURNAL_MODE"))
+	if defaultSQLiteJournalMode == "" {
+		defaultSQLiteJournalMode = "WAL"
+	}
+	defaultSQLiteSynchronous := strings.TrimSpace(os.Getenv("TREEDB_SQLITE_SYNCHRONOUS"))
+	if defaultSQLiteSynchronous == "" {
+		defaultSQLiteSynchronous = "NORMAL"
+	}
 	cfg := config{
 		Docs:                      100000,
 		BatchSize:                 16000,
 		Indexes:                   2,
 		Count:                     1,
-		TreeEngine:                "command_wal_relaxed",
-		Profile:                   "command_wal_relaxed",
+		TreeEngine:                defaultProfile,
+		Profile:                   defaultProfile,
+		SQLiteJournalMode:         defaultSQLiteJournalMode,
+		SQLiteSynchronous:         defaultSQLiteSynchronous,
 		Formats:                   "template-v1,bson,json",
 		StorageCells:              "index-vlog",
 		LeafSegmentTargetBytes:    1048576,
@@ -524,7 +544,9 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Benchtime, "benchtime", "", "go test -benchtime for timed matrix; defaults to <docs>x")
 	fs.IntVar(&cfg.Count, "count", cfg.Count, "go test -count for timed matrix")
 	fs.StringVar(&cfg.TreeEngine, "tree-engine", cfg.TreeEngine, "TreeDB collection benchmark engine")
-	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "Fixture/raw TreeDB profile")
+	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "TreeDB durability profile for timed matrix and compaction fixtures: no_wal_fast, command_wal_relaxed, command_wal_durable, or bench_unsafe")
+	fs.StringVar(&cfg.SQLiteJournalMode, "sqlite-journal-mode", cfg.SQLiteJournalMode, "SQLite journal mode for timed matrix: WAL, OFF, MEMORY, or DELETE")
+	fs.StringVar(&cfg.SQLiteSynchronous, "sqlite-synchronous", cfg.SQLiteSynchronous, "SQLite synchronous mode for timed matrix: OFF, NORMAL, FULL, or EXTRA")
 	fs.StringVar(&cfg.Formats, "formats", cfg.Formats, "Comma-separated TreeDB document formats for timed matrix and full leafgen fixture")
 	fs.StringVar(&cfg.StorageCells, "storage-cells", cfg.StorageCells, "collection_bench_matrix storage cells")
 	fs.Int64Var(&cfg.LeafSegmentTargetBytes, "leaf-segment-target-bytes", cfg.LeafSegmentTargetBytes, "Leaf vlog segment target bytes used by canonical compacted runs")
@@ -542,6 +564,30 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ProfileCount, "profile-count", cfg.ProfileCount, "go test -count for timed-matrix profile pass")
 	fs.BoolVar(&cfg.AllowIncomplete, "allow-incomplete", false, "Write report even when guardrail checks fail")
 	if err := fs.Parse(args); err != nil {
+		return config{}, err
+	}
+	seenFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) {
+		seenFlags[f.Name] = true
+	})
+	if seenFlags["profile"] && !seenFlags["tree-engine"] {
+		cfg.TreeEngine = cfg.Profile
+	}
+	var err error
+	cfg.Profile, err = parseCollectionProfile(cfg.Profile, "-profile")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.TreeEngine, err = parseCollectionProfile(cfg.TreeEngine, "-tree-engine")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.SQLiteJournalMode, err = parseSQLiteJournalMode(cfg.SQLiteJournalMode)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.SQLiteSynchronous, err = parseSQLiteSynchronous(cfg.SQLiteSynchronous)
+	if err != nil {
 		return config{}, err
 	}
 	if cfg.Docs <= 0 {
@@ -582,6 +628,42 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
+func parseCollectionProfile(raw, flagName string) (string, error) {
+	v := strings.TrimSpace(raw)
+	switch v {
+	case "no_wal_fast", "command_wal_relaxed", "command_wal_durable", "bench_unsafe":
+		return v, nil
+	default:
+		return "", fmt.Errorf("%s must be one of no_wal_fast, command_wal_relaxed, command_wal_durable, or bench_unsafe; got %q", flagName, raw)
+	}
+}
+
+func parseSQLiteJournalMode(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "WAL", nil
+	}
+	switch v {
+	case "WAL", "OFF", "MEMORY", "DELETE":
+		return v, nil
+	default:
+		return "", fmt.Errorf("-sqlite-journal-mode must be WAL, OFF, MEMORY, or DELETE; got %q", raw)
+	}
+}
+
+func parseSQLiteSynchronous(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "NORMAL", nil
+	}
+	switch v {
+	case "OFF", "NORMAL", "FULL", "EXTRA":
+		return v, nil
+	default:
+		return "", fmt.Errorf("-sqlite-synchronous must be OFF, NORMAL, FULL, or EXTRA; got %q", raw)
+	}
+}
+
 func runBuildHelpers(cfg config, canon *canonicalRun) error {
 	return runLoggedCommand(cfg, canon, "build_helpers", nil, "make", "collection-load-fixture", "treemap-bin")
 }
@@ -589,10 +671,13 @@ func runBuildHelpers(cfg config, canon *canonicalRun) error {
 func runTimedMatrix(cfg config, canon *canonicalRun) error {
 	matrixDir := filepath.Join(cfg.OutDir, "timed_matrix")
 	treePattern := fmt.Sprintf("^BenchmarkCollectionShapeInsertBatch$/^indexes_%d$", cfg.Indexes)
-	var env map[string]string
+	env := map[string]string{
+		"TREEDB_SQLITE_JOURNAL_MODE": cfg.SQLiteJournalMode,
+		"TREEDB_SQLITE_SYNCHRONOUS":  cfg.SQLiteSynchronous,
+	}
 	if cfg.NativeCOWCompanion {
 		treePattern = fmt.Sprintf("^(%s|%s)$/^indexes_%d$", legacyShapeBenchmark, nativeShapeBenchmark, cfg.Indexes)
-		env = map[string]string{"TREEDB_COLLECTION_BENCH_NATIVE_COW_COMPANION": "true"}
+		env["TREEDB_COLLECTION_BENCH_NATIVE_COW_COMPANION"] = "true"
 	}
 	sqlitePattern := fmt.Sprintf("^(BenchmarkSQLiteShapeInsertBatchJSON|BenchmarkSQLiteShapeInsertBatchNativeColumns)$/^indexes_%d$", cfg.Indexes)
 	args := []string{
@@ -600,6 +685,8 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 		"-out-dir", matrixDir,
 		"-formats", cfg.Formats,
 		"-engine", cfg.TreeEngine,
+		"-sqlite-journal-mode", cfg.SQLiteJournalMode,
+		"-sqlite-synchronous", cfg.SQLiteSynchronous,
 		"-storage-cells", cfg.StorageCells,
 		"-tree-bench-pattern", treePattern,
 		"-sqlite-bench-pattern", sqlitePattern,
@@ -920,6 +1007,19 @@ func addSQLiteTimedRows(canon *canonicalRun, report collectionReport, bench repo
 	}
 	configName := canonicalConfigName("sqlite", format, "collection", indexes)
 	total := int64(metricDefault(metrics, "disk_total_bytes", 0))
+	sqliteExtra := func() map[string]string {
+		if cfg.SQLiteJournalMode == "" && cfg.SQLiteSynchronous == "" {
+			return nil
+		}
+		extra := make(map[string]string, 2)
+		if cfg.SQLiteJournalMode != "" {
+			extra["sqlite_journal_mode"] = cfg.SQLiteJournalMode
+		}
+		if cfg.SQLiteSynchronous != "" {
+			extra["sqlite_synchronous"] = cfg.SQLiteSynchronous
+		}
+		return extra
+	}
 	canon.Results = append(canon.Results, resultRow{
 		ConfigName:      configName,
 		Engine:          report.BenchmarkEngine,
@@ -938,6 +1038,7 @@ func addSQLiteTimedRows(canon *canonicalRun, report collectionReport, bench repo
 		BenchmarkTimed:  true,
 		MeasurementKind: "go_benchmark",
 		MeasurementNote: "SQLite post-insert size before VACUUM; not compacted",
+		Extra:           sqliteExtra(),
 		SourceArtifact:  path,
 	})
 	vacuumTotal, ok := metrics["sqlite_vacuum_disk_total_bytes_after"]
@@ -962,6 +1063,7 @@ func addSQLiteTimedRows(canon *canonicalRun, report collectionReport, bench repo
 		MeasurementKind: "benchmark_post_processing",
 		MeasurementNote: "SQLite compacted baseline; use this for compacted-state comparisons",
 		CompactionFlags: map[string]string{"sqlite": "VACUUM"},
+		Extra:           sqliteExtra(),
 		SourceArtifact:  path,
 		MaintenanceStats: copyMetrics(metrics,
 			"sqlite_vacuum_ns/op",
@@ -1592,7 +1694,7 @@ func renderMarkdownReport(canon *canonicalRun) string {
 	sb.WriteString("\n\n")
 
 	sb.WriteString("## Benchmark Configuration\n\n")
-	writeKVTable(&sb, [][2]string{
+	configRows := [][2]string{
 		{"generated_at", canon.GeneratedAt},
 		{"run_dir", canon.RunDir},
 		{"worktree", canon.Worktree},
@@ -1604,6 +1706,14 @@ func renderMarkdownReport(canon *canonicalRun) string {
 		{"indexes", strconv.Itoa(canon.Config.Indexes)},
 		{"tree_engine", canon.Config.TreeEngine},
 		{"profile", canon.Config.Profile},
+	}
+	if canon.Config.SQLiteJournalMode != "" {
+		configRows = append(configRows, [2]string{"sqlite_journal_mode", canon.Config.SQLiteJournalMode})
+	}
+	if canon.Config.SQLiteSynchronous != "" {
+		configRows = append(configRows, [2]string{"sqlite_synchronous", canon.Config.SQLiteSynchronous})
+	}
+	configRows = append(configRows, [][2]string{
 		{"formats", strings.Join(canon.Config.Formats, ",")},
 		{"leaf_segment_target_bytes", strconv.FormatInt(canon.Config.LeafSegmentTargetBytes, 10)},
 		{"leafgen_pack_force", strconv.FormatBool(canon.Config.FullLeafgenForce)},
@@ -1613,7 +1723,8 @@ func renderMarkdownReport(canon *canonicalRun) string {
 		{"profile_timed_matrix", strconv.FormatBool(canon.Config.ProfileTimedMatrix)},
 		{"profile_benchtime", canon.Config.ProfileBenchtime},
 		{"profile_count", strconv.Itoa(canon.Config.ProfileCount)},
-	})
+	}...)
+	writeKVTable(&sb, configRows)
 	sb.WriteString("\n")
 
 	sb.WriteString("## Throughput Results\n\n")

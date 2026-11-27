@@ -1580,6 +1580,90 @@ func TestBenchmarkContextBannerRendersAndOmitsGracefully(t *testing.T) {
 	}
 }
 
+func TestBenchmarkContextBannerDurabilityTiers(t *testing.T) {
+	// Fast tier parses RUNBOOK keys and shows Mongo 8 --nojournal caveat + SQLite WAL/OFF.
+	fastRoot := t.TempDir()
+	writeFile(t, filepath.Join(fastRoot, "RUNBOOK.md"), `# Full TreeDB Benchmark Report Run
+
+- tier: pr
+- durability_tier: fast
+- collection_treedb_profile: no_wal_fast
+- mongo_treedb_profile: no_wal_fast
+- mongo_treedb_open_mode: standalone
+- mongo_image: mongo:8
+- mongo_mode: docker
+- mongo_write_concern: w1
+- sqlite_journal_mode: WAL
+- sqlite_synchronous: OFF
+- durability_note: fast tier: TreeDB no_wal_fast, SQLite WAL+OFF; MongoDB 8 removed --nojournal, so w:1 (j:false) is MongoDB 8's fastest acknowledged write mode
+`)
+	fastMeta := loadRunMetadata(filepath.Join(fastRoot, "RUNBOOK.md"))
+	fastHTML := renderHTML(reportData{
+		Config:      config{Title: "fast durability tier", RunRoot: fastRoot},
+		RunMetadata: fastMeta,
+		Collections: []collectionRow{
+			{ConfigName: "sqlite_native_columns_0_indexes", Engine: "sqlite_wal_off", Format: "native-columns", IndexCount: 0, Phase: "sqlite_vacuum", BytesPerDoc: 20},
+		},
+	})
+	for _, want := range []string{
+		"Durability tier:",
+		"fast",
+		"tone-fast",
+		"no_wal_fast",
+		"w:1, j:false (Mongo 8 fastest ack; --nojournal removed)",
+		"WAL / OFF",
+		"context-note",
+		"MongoDB 8 removed --nojournal",
+	} {
+		if !strings.Contains(fastHTML, want) {
+			t.Fatalf("fast durability tier banner missing %q\n%s", want, fastHTML)
+		}
+	}
+
+	// Durable tier renders tone-durable badges for TreeDB command_wal_durable, Mongo w1_j, and SQLite WAL/FULL.
+	durableHTML := renderHTML(reportData{
+		Config: config{Title: "durable tier", RunRoot: t.TempDir()},
+		RunMetadata: runMetadata{
+			"tier":                      "large",
+			"durability_tier":           "durable",
+			"collection_treedb_profile": "command_wal_durable",
+			"mongo_treedb_profile":      "command_wal_durable",
+			"mongo_write_concern":       "w1_j",
+			"sqlite_journal_mode":       "WAL",
+			"sqlite_synchronous":        "FULL",
+		},
+		Collections: []collectionRow{
+			{ConfigName: "sqlite_native_columns_0_indexes", Engine: "sqlite_wal_full", Format: "native-columns", IndexCount: 0, Phase: "sqlite_vacuum", BytesPerDoc: 20},
+		},
+	})
+	for _, want := range []string{
+		"Durability tier:",
+		"durable",
+		"tone-durable",
+		"command_wal_durable",
+		"w:1, j:true (w1_j)",
+		"WAL / FULL",
+	} {
+		if !strings.Contains(durableHTML, want) {
+			t.Fatalf("durable tier banner missing %q\n%s", want, durableHTML)
+		}
+	}
+	if got := durabilityTone("w1_j"); got != "durable" {
+		t.Fatalf("durabilityTone(w1_j)=%q want durable", got)
+	}
+	if got := durabilityTone("majority_j"); got != "durable" {
+		t.Fatalf("durabilityTone(majority_j)=%q want durable", got)
+	}
+	if got := durabilityTone("w:1, j:false (Mongo 8 fastest ack; --nojournal removed)"); got != "relaxed" {
+		t.Fatalf("durabilityTone(Mongo 8 fastest ack)=%q want relaxed", got)
+	}
+	for _, eng := range []string{"sqlite_wal_off", "sqlite_wal_normal", "sqlite_wal_full", "sqlite_delete_full"} {
+		if got := collectionEngineFamily(collectionRow{Engine: eng}); got != "SQLite" {
+			t.Fatalf("collectionEngineFamily(%q)=%q want SQLite", eng, got)
+		}
+	}
+}
+
 func TestFormatExactChartValueBytesPreservesExactIntegerCount(t *testing.T) {
 	if got, want := formatExactChartValue(512, "bytes"), "512 B"; got != want {
 		t.Fatalf("512 bytes = %q, want %q", got, want)

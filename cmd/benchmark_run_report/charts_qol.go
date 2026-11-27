@@ -698,6 +698,11 @@ func collectBenchmarkContext(data reportData) []benchmarkContextPill {
 		add("Tier", tier, "neutral")
 	}
 
+	durabilityTier := metaVal("durability_tier")
+	if durabilityTier != "" && !strings.EqualFold(durabilityTier, "default") {
+		add("Durability tier", durabilityTier, durabilityTone(durabilityTier))
+	}
+
 	openMode := metaVal("mongo_treedb_open_mode", "treedb_open_mode")
 	if openMode == "" {
 		openMode = observedLoadModeField(data.MongoLoadModes, func(r loadModeRow) string { return r.TreeDBOpenMode })
@@ -705,6 +710,10 @@ func collectBenchmarkContext(data reportData) []benchmarkContextPill {
 	add("TreeDB open mode", openMode, "neutral")
 
 	durability := metaVal("treedb_durability_profile", "mongo_treedb_profile", "treedb_profile")
+	collProfile := metaVal("collection_treedb_profile")
+	if durability == "" && collProfile != "" {
+		durability = collProfile
+	}
 	if durability == "" || strings.EqualFold(durability, "default") {
 		if obs := observedTreeDBProfile(data); obs != "" {
 			if durability == "" {
@@ -716,6 +725,9 @@ func collectBenchmarkContext(data reportData) []benchmarkContextPill {
 	}
 	if durability != "" {
 		add("TreeDB durability", durability, durabilityTone(durability))
+	}
+	if collProfile != "" && !strings.EqualFold(collProfile, "default") && !strings.EqualFold(collProfile, durability) && !strings.Contains(strings.ToLower(durability), strings.ToLower(collProfile)) {
+		add("TreeDB collections", collProfile, durabilityTone(collProfile))
 	}
 
 	if memtable := metaVal("mongo_treedb_memtable_mode", "treedb_memtable_mode"); memtable != "" {
@@ -735,11 +747,14 @@ func collectBenchmarkContext(data reportData) []benchmarkContextPill {
 	}
 
 	writeConcern := metaVal("mongo_write_concern", "write_concern")
-	if writeConcern == "" {
-		writeConcern = observedLoadModeField(data.MongoLoadModes, func(r loadModeRow) string { return r.WriteConcern })
+	if writeConcern == "" || strings.EqualFold(writeConcern, "default") {
+		if obsWC := observedLoadModeField(data.MongoLoadModes, func(r loadModeRow) string { return r.WriteConcern }); obsWC != "" {
+			writeConcern = obsWC
+		}
 	}
 	if writeConcern != "" {
-		add("MongoDB write concern", writeConcern, durabilityTone(writeConcern))
+		formattedWC := formatMongoWriteConcernContext(writeConcern, durabilityTier)
+		add("MongoDB write concern", formattedWC, durabilityTone(formattedWC))
 	}
 
 	sqliteMode := formatSQLiteDurabilityContext(meta, data.Collections)
@@ -748,6 +763,39 @@ func collectBenchmarkContext(data reportData) []benchmarkContextPill {
 	}
 
 	return pills
+}
+
+func formatMongoWriteConcernContext(raw, durabilityTier string) string {
+	trimmed := strings.TrimSpace(raw)
+	switch strings.ToLower(trimmed) {
+	case "":
+		return ""
+	case "default":
+		return "w:1 (default)"
+	case "w1":
+		if strings.EqualFold(durabilityTier, "fast") {
+			return "w:1, j:false (Mongo 8 fastest ack; --nojournal removed)"
+		}
+		return "w:1, j:false (w1)"
+	case "w1_j", "journal":
+		return "w:1, j:true (w1_j)"
+	case "majority_j":
+		return "w:majority, j:true (majority_j)"
+	default:
+		return trimmed
+	}
+}
+
+func durabilityContextNote(data reportData) string {
+	if len(data.RunMetadata) > 0 {
+		if note := strings.TrimSpace(data.RunMetadata["durability_note"]); note != "" && !strings.EqualFold(note, "none") {
+			return note
+		}
+		if strings.EqualFold(strings.TrimSpace(data.RunMetadata["durability_tier"]), "fast") {
+			return "Fast tier note: MongoDB 8 removed --nojournal, so w:1 (j:false) is MongoDB 8's fastest acknowledged write mode."
+		}
+	}
+	return ""
 }
 
 func observedLoadModeField(rows []loadModeRow, get func(loadModeRow) string) string {
@@ -848,13 +896,13 @@ func formatSQLiteDurabilityContext(meta runMetadata, rows []collectionRow) strin
 }
 
 func durabilityTone(val string) string {
-	lower := strings.ToLower(val)
+	lower := strings.ToLower(strings.TrimSpace(val))
 	switch {
-	case strings.Contains(lower, "durable") || strings.Contains(lower, "full") || strings.Contains(lower, "j:true") || strings.Contains(lower, "journal=true"):
+	case strings.Contains(lower, "durable") || strings.Contains(lower, "full") || strings.Contains(lower, "j:true") || strings.Contains(lower, "journal=true") || strings.Contains(lower, "w1_j") || strings.Contains(lower, "majority_j") || lower == "journal":
 		return "durable"
 	case strings.Contains(lower, "no_wal") || strings.Contains(lower, "unsafe") || strings.Contains(lower, "off") || lower == "fast":
 		return "fast"
-	case strings.Contains(lower, "relaxed") || strings.Contains(lower, "wal") || strings.Contains(lower, "normal") || strings.Contains(lower, "w:1") || strings.Contains(lower, "w=1"):
+	case strings.Contains(lower, "relaxed") || strings.Contains(lower, "wal") || strings.Contains(lower, "normal") || strings.Contains(lower, "w:1") || strings.Contains(lower, "w=1") || lower == "w1":
 		return "relaxed"
 	default:
 		return "neutral"
@@ -863,7 +911,8 @@ func durabilityTone(val string) string {
 
 func renderBenchmarkContextBanner(b *strings.Builder, data reportData) {
 	pills := collectBenchmarkContext(data)
-	if len(pills) == 0 {
+	note := durabilityContextNote(data)
+	if len(pills) == 0 && note == "" {
 		return
 	}
 	b.WriteString("<div class=\"context-banner\" aria-label=\"Benchmark Configuration and Durability Contract\">")
@@ -873,7 +922,11 @@ func renderBenchmarkContextBanner(b *strings.Builder, data reportData) {
 		toneClass := "tone-" + pill.Tone
 		b.WriteString("<span class=\"context-pill " + esc(toneClass) + "\"><span class=\"context-label\">" + esc(pill.Label) + ":</span> <strong>" + esc(pill.Value) + "</strong></span>")
 	}
-	b.WriteString("</div></div>")
+	b.WriteString("</div>")
+	if note != "" {
+		b.WriteString("<div class=\"context-note\" style=\"margin-top:6px;font-size:12px;color:var(--muted);\">" + esc(note) + "</div>")
+	}
+	b.WriteString("</div>")
 }
 
 func parseWriteConcernRaw(raw json.RawMessage) string {
