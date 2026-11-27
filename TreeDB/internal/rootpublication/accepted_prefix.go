@@ -218,6 +218,10 @@ type AcceptedOrdinaryRefusal struct{ state *acceptedPairRefusal }
 
 func (r AcceptedOrdinaryRefusal) Valid() bool { return r.state != nil }
 
+// HasPending reports whether at least one ordered accepted entry was pending
+// retirement when this refusal was minted under accepted.mu.
+func (r AcceptedOrdinaryRefusal) HasPending() bool { return r.state != nil && r.state.pending }
+
 // ReserveAcceptedOrdinaryWithRefusal performs bounded single-slot ordinary
 // preaccept admission, returning a one-shot refusal witness only on true
 // capacity denial. Healthy success allocates nothing.
@@ -237,7 +241,7 @@ func (c *Coordinator) ReserveAcceptedOrdinaryWithRefusal() (AcceptedTicket, Acce
 		return AcceptedTicket{}, refusal, ErrAcceptedReceipt
 	}
 	if p.freeCount == 0 {
-		refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers}
+		refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers, pending: p.count > 0}
 		return AcceptedTicket{}, refusal, ErrAcceptedCapacity
 	}
 	p.freeCount--
@@ -294,10 +298,15 @@ type AcceptedOrdinaryPairRefusal struct{ state *acceptedPairRefusal }
 
 func (r AcceptedOrdinaryPairRefusal) Valid() bool { return r.state != nil }
 
+// HasPending reports whether at least one ordered accepted entry was pending
+// retirement when this refusal was minted under accepted.mu.
+func (r AcceptedOrdinaryPairRefusal) HasPending() bool { return r.state != nil && r.state.pending }
+
 type acceptedPairRefusal struct {
-	owner  *Coordinator
-	denied LogicalFrontiers
-	used   bool // guarded by owner's accepted mutex
+	owner   *Coordinator
+	denied  LogicalFrontiers
+	pending bool
+	used    bool // guarded by owner's accepted mutex
 }
 
 // ReserveAcceptedOrdinaryPairWithRefusal is the initial raw-transaction
@@ -325,7 +334,7 @@ func (c *Coordinator) reserveAcceptedOrdinaryPair(captureRefusal bool) (Accepted
 	}
 	if p.freeCount < 2 {
 		if captureRefusal {
-			refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers}
+			refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers, pending: p.count > 0}
 		}
 		return AcceptedTicket{}, AcceptedTicket{}, refusal, ErrAcceptedCapacity
 	}

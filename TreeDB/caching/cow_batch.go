@@ -861,8 +861,9 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 }
 
 // admitCOWAccepted reserves the queue slot before any producer/publication gate.
-// A full finite prefix is sealed using the reserved maintenance lane, then the
-// original admission is retried once. Retained readers do not need to end.
+// On a full finite prefix, waiters join or run pressure retirement using the
+// reserved maintenance lane and retry while forward retirement progress occurs.
+// Retained readers do not need to end.
 func (b *Batch) admitCOWAccepted() error {
 	c := b.db.cow
 	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {

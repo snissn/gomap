@@ -56,13 +56,17 @@ func TestAcceptedOrdinaryRecheckNeedsOriginalRetirement(t *testing.T) {
 	deny := func() AcceptedOrdinaryRefusal {
 		t.Helper()
 		ticket, refusal, err := c.ReserveAcceptedOrdinaryWithRefusal()
-		if ticket.Valid() || !refusal.Valid() || err != ErrAcceptedCapacity ||
+		if ticket.Valid() || !refusal.Valid() || !refusal.HasPending() || err != ErrAcceptedCapacity ||
 			refusal.state.owner != c || refusal.state.denied.V != 1 || refusal.state.denied.C != 1 || refusal.state.denied.S != (SealedPrefix{}) {
 			t.Fatalf("wrong ordinary denied sample: %v %+v (%v)", ticket.Valid(), refusal, err)
 		}
 		return refusal
 	}
 	early, durableNoWAL, relaxedOK, rival1, rival2, terminal := deny(), deny(), deny(), deny(), deny(), deny()
+	_, _, pairDenied, pairErr := c.ReserveAcceptedOrdinaryPairWithRefusal()
+	if pairErr != ErrAcceptedCapacity || !pairDenied.Valid() || !pairDenied.HasPending() {
+		t.Fatalf("wrong pair denied sample: valid=%t pending=%t err=%v", pairDenied.Valid(), pairDenied.HasPending(), pairErr)
+	}
 
 	miss := func(refusal AcceptedOrdinaryRefusal, requireStableWAL bool) {
 		t.Helper()
@@ -95,6 +99,11 @@ func TestAcceptedOrdinaryRecheckNeedsOriginalRetirement(t *testing.T) {
 	}
 	if f := c.LogicalFrontiers(); f.V != 1 || f.C != 1 || f.W != 0 || f.S != through || c.AcceptedPendingCount() != 0 {
 		t.Fatalf("bad fixture: frontiers=%+v pending=%d", f, c.AcceptedPendingCount())
+	}
+	// Pending state is captured atomically at refusal time and stays true even
+	// after a concurrent drain empties the queue (AcceptedPendingCount() == 0).
+	if !relaxedOK.HasPending() || !pairDenied.HasPending() {
+		t.Fatalf("refusal lost atomic pending snapshot after drain: ordinary=%t pair=%t", relaxedOK.HasPending(), pairDenied.HasPending())
 	}
 
 	// Durable callers require W >= before.C; relaxed callers rely on S covering (before.V, before.C).
@@ -173,13 +182,96 @@ func TestAcceptedOrdinaryCancellationIsNotRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	ticket, denied, err := c.ReserveAcceptedOrdinaryWithRefusal()
-	if err != ErrAcceptedCapacity || ticket.Valid() || !denied.Valid() {
-		t.Fatalf("expected a real no-debt denial, got %v %v (%v)", ticket.Valid(), denied.Valid(), err)
+	if err != ErrAcceptedCapacity || ticket.Valid() || !denied.Valid() || denied.HasPending() {
+		t.Fatalf("expected a real no-debt denial, got %v %v pending=%t (%v)", ticket.Valid(), denied.Valid(), denied.HasPending(), err)
+	}
+	_, _, pairDenied, pairErr := c.ReserveAcceptedOrdinaryPairWithRefusal()
+	if pairErr != ErrAcceptedCapacity || !pairDenied.Valid() || pairDenied.HasPending() {
+		t.Fatalf("expected no-debt pair denial, got valid=%t pending=%t (%v)", pairDenied.Valid(), pairDenied.HasPending(), pairErr)
 	}
 	if err := held.CancelAccepted(); err != nil {
 		t.Fatal(err)
 	}
 	if ticket, err := c.ReserveAcceptedOrdinaryAfterRetirement(denied, false); ticket.Valid() || err != nil {
 		t.Fatalf("cancellation alone admitted an ordinary ticket: %v (%v)", ticket.Valid(), err)
+	}
+}
+
+func TestAcceptedOrdinaryDoesNotConfuseRootNeutralSuffixWithDeniedSeal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseAccepted()
+
+	install := func(lsn uint64, neutral bool) {
+		t.Helper()
+		ticket, err := c.ReserveAccepted(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ticket.RecordAssigned(lsn, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := ticket.InstallAccepted(AcceptedDescriptor{Sequence: 1, RootNeutral: neutral}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	install(1, false)
+	root := &struct{}{}
+	through := SealedPrefix{LogicalSequence: 1, CanonicalLSN: 1}
+	cut, err := c.CaptureAcceptedCut(through, LogicalRootSet{Raw: root, Semantic: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install(2, true) // Advances canonical C=2 while logical V stays 1 (C > V).
+
+	ticket, denied, err := c.ReserveAcceptedOrdinaryWithRefusal()
+	if err != ErrAcceptedCapacity || ticket.Valid() || !denied.Valid() || !denied.HasPending() ||
+		denied.state.denied.V != 1 || denied.state.denied.C != 2 {
+		t.Fatalf("capture must see exact canonical-only suffix: valid=%t %+v %v", ticket.Valid(), denied.state, err)
+	}
+	builder, err := c.AcquireBuilder(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := c.EnqueueBuiltAcceptedCut(prefixPhysicalCandidate(t, 1, 1), builder, cut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cut.CompleteHandoff(pub.SealReceipt()); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.SealReceipt().Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitAccepted(ctx, through); err != nil {
+		t.Fatal(err)
+	}
+	c.ObserveStableWAL(2)
+	f := c.LogicalFrontiers()
+	if f.V != 1 || f.C != 2 || f.W != 2 || f.S != through || c.AcceptedPendingCount() != 1 {
+		t.Fatalf("bad fixture: %+v pending=%d", f, c.AcceptedPendingCount())
+	}
+	// Even with requireStableWAL=false, S.CanonicalLSN (1) < before.C (2), so
+	// retirement of the logical version alone must not satisfy the refusal.
+	if got, err := c.ReserveAcceptedOrdinaryAfterRetirement(denied, false); got.Valid() || err != nil {
+		t.Fatalf("covered logical version was mistaken for denied canonical endpoint: valid=%t err=%v", got.Valid(), err)
+	}
+	// Confirm an ordinary slot actually freed and remains reservable directly.
+	got, err := c.ReserveAccepted(false)
+	if err != nil || !got.Valid() {
+		t.Fatalf("expected free ordinary slot after retiring first entry: valid=%t err=%v", got.Valid(), err)
+	}
+	if err := got.CancelAccepted(); err != nil {
+		t.Fatal(err)
 	}
 }
