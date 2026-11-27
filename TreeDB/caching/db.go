@@ -17963,7 +17963,8 @@ func (db *DB) prepareAppendFrameOne(
 
 func (db *DB) valueLogKeepPolicy() (ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
 	safetyMargin = db.valueLogAutotuneSafetyMargin()
-	if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+	if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff ||
+		normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionBlock {
 		return 0, 0, safetyMargin
 	}
 	snap := db.valueLogAutotuneMetrics.snapshot()
@@ -19396,7 +19397,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
-		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff ||
+			normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionBlock {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}
