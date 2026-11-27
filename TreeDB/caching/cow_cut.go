@@ -1134,6 +1134,10 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 // exact cut retention, recycling, basis, frozen-set, and semantic transfer
 // invariants of prepareNative.
 func (c *cowCache) prepareNativeOnly(native *cowNativeOwner) (*cowPreparedCut, error) {
+	return c.prepareNativeOnlyInto(native, nil)
+}
+
+func (c *cowCache) prepareNativeOnlyInto(native *cowNativeOwner, dst *cowPreparedCut) (*cowPreparedCut, error) {
 	c.prepareCalls.Add(1)
 	if native == nil {
 		return nil, fmt.Errorf("empty COW publication")
@@ -1141,11 +1145,17 @@ func (c *cowCache) prepareNativeOnly(native *cowNativeOwner) (*cowPreparedCut, e
 	old := c.cut
 	shards := len(c.writers)
 	bytes := cowWriteCutCharge(shards) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{})))
-	lease, err := c.budget.AcquireExternal(bytes)
+	leaseVal, err := c.budget.AcquireExternalValue(bytes)
 	if err != nil {
 		return nil, err
 	}
-	p := &cowPreparedCut{cache: c, lease: lease}
+	p := dst
+	if p == nil {
+		p = &cowPreparedCut{}
+	} else {
+		*p = cowPreparedCut{}
+	}
+	p.cache = c
 	old.refs.Add(1)
 	p.opening = old
 	next := c.takeRecycledCut()
@@ -1159,8 +1169,10 @@ func (c *cowCache) prepareNativeOnly(native *cowNativeOwner) (*cowPreparedCut, e
 	next.frozenSemanticRootSet = old.frozenSemanticRootSet
 	next.semanticRootSet = old.semanticRootSet
 	next.basis = old.basis
-	next.lease = lease
+	next.leaseStorage = leaseVal
+	next.lease = &next.leaseStorage
 	next.cache = c
+	p.lease = next.lease
 	next.initShards(shards)
 	next.basis.retain()
 	retainCOWSemanticState(next)
@@ -1240,6 +1252,8 @@ func (p *cowPreparedCut) drainCancelled() error {
 // custody; this completed private wrapper is not a second failure owner.
 func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLease, error) {
 	var cleanupErr error
+	var embeddedLease memtable.COWExternalLease
+	hasEmbeddedLease := false
 	next, c := p.next, p.cache
 	p.next, p.cache, p.native = nil, nil, nil
 	if next != nil {
@@ -1258,6 +1272,11 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 		clear(next.inlineShards[:])
 		c.releasePrivateSemanticState(next)
 		basis := next.basis
+		if next.lease == &next.leaseStorage {
+			embeddedLease = next.leaseStorage
+			next.leaseStorage = memtable.COWExternalLease{}
+			hasEmbeddedLease = p.lease == &next.leaseStorage
+		}
 		next.basis = nil
 		next.cache, next.lease = nil, nil
 		cleanupErr = basis.release()
@@ -1281,6 +1300,10 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 	opening, c = nil, nil
 	refund := p.lease
 	p.lease = nil
+	if hasEmbeddedLease {
+		refund = nil
+		embeddedLease.Close()
+	}
 	return refund, cleanupErr
 }
 

@@ -40,16 +40,18 @@ type nativeCollectionState struct {
 // references only on success. Ordinary replacement retains the schema once;
 // each structurally shared directory separately owns its actual root edge.
 func newNativeCollectionState(incarnation, documentGeneration uint64, schema *nativeSchemaState, domains, pending *cowbtree.OwnedMap[string, *nativeDomainState], admit cowbtree.OwnedMapAdmit) (*nativeCollectionState, error) {
-	if incarnation == 0 || schema == nil || domains == nil || pending == nil || admit == nil {
+	return newNativeCollectionStateWithValueAllocator(incarnation, documentGeneration, schema, domains, pending, nil, admit)
+}
+
+func newNativeCollectionStateWithValueAllocator(incarnation, documentGeneration uint64, schema *nativeSchemaState, domains, pending *cowbtree.OwnedMap[string, *nativeDomainState], valAlloc nativeExternalValueAllocator, admit cowbtree.OwnedMapAdmit) (*nativeCollectionState, error) {
+	if incarnation == 0 || schema == nil || domains == nil || pending == nil || (valAlloc == nil && admit == nil) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	charge := nativeCollectionStateCharge()
-	lease, err := admit(charge)
+	refund, err := admitNativeOwnedMapRefund(charge, valAlloc, admit)
 	if err != nil {
 		return nil, err
 	}
-	refund := new(cowbtree.OwnedMapRefund)
-	refund.Init(lease)
 	c := &nativeCollectionState{incarnation: incarnation, documentGeneration: documentGeneration, schema: schema, domains: domains, pending: pending, refund: refund}
 	c.refs.Store(1)
 	return c, nil
@@ -123,5 +125,5 @@ func finishNativeDomainDirectory(slot **cowbtree.OwnedMap[string, *nativeDomainS
 
 func nativeCollectionStateCharge() uint64 {
 	return memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeCollectionState{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeOwnedRefundWithLease{})))
 }

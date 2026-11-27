@@ -388,7 +388,8 @@ func prepareNativeSinglePrimaryUpdate(base *nativeEngineVersion, c *nativeCollec
 	}
 	c.schema.retain()
 	p.schema = c.schema
-	replacement, err := newNativeCollectionState(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, admit)
+	valAlloc, _ := allocator.(nativeExternalValueAllocator)
+	replacement, err := newNativeCollectionStateWithValueAllocator(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, valAlloc, admit)
 	if err != nil {
 		return next, nil, err
 	}
@@ -781,7 +782,8 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 		}
 		c.schema.retain()
 		p.schema = c.schema
-		replacement, err := newNativeCollectionState(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, admit)
+		valAlloc, _ := allocator.(nativeExternalValueAllocator)
+		replacement, err := newNativeCollectionStateWithValueAllocator(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, valAlloc, admit)
 		if err != nil {
 			return next, err
 		}

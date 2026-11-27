@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1611,14 +1612,16 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
 	var (
-		collection    string
-		db            string
-		updates       []wire.Document
-		ordered       = true
-		hasMaxTime    bool
-		fastParsed    bool
-		singleSeq     [1]wire.Document
-		updatesArrVal bson.RawValue
+		collection      string
+		db              string
+		collectionBytes []byte
+		dbBytes         []byte
+		updates         []wire.Document
+		ordered         = true
+		hasMaxTime      bool
+		fastParsed      bool
+		singleSeq       [1]wire.Document
+		updatesArrVal   bson.RawValue
 	)
 	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: command}); ok {
 		var (
@@ -1637,8 +1640,8 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 				hasTxn = true
 			case "update":
 				if !hasUpdate {
-					if v, vOK := elem.Value().StringValueOK(); vOK && v != "" {
-						collection = v
+					if v, vOK := rawBSONStringBytes(elem.Value()); vOK && len(v) != 0 {
+						collectionBytes = v
 						hasUpdate = true
 					} else {
 						scanOK = false
@@ -1646,8 +1649,8 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 				}
 			case "$db":
 				if !hasDB {
-					if v, vOK := elem.Value().StringValueOK(); vOK && v != "" {
-						db = v
+					if v, vOK := rawBSONStringBytes(elem.Value()); vOK && len(v) != 0 {
+						dbBytes = v
 						hasDB = true
 					} else {
 						scanOK = false
@@ -1726,7 +1729,15 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 		}
 		hasMaxTime = true
 	}
-	name, err := gatewayCollectionName(db, collection)
+	var (
+		name string
+		err  error
+	)
+	if fastParsed {
+		name, err = s.resolveGatewayCollectionNameBytes(dbBytes, collectionBytes)
+	} else {
+		name, err = gatewayCollectionName(db, collection)
+	}
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -2429,7 +2440,9 @@ func parseFastPureSetUpdateDocIntoWithNesting(updateDoc wire.Document, fieldsBuf
 		if validateSetFieldNameBytes(kb) != nil {
 			return nil, false, false, false, false
 		}
-		key := string(kb)
+		// Borrow key bytes from updateDoc with the same immutable lifetime as
+		// rawVal.Data (fields[i].Value.Value).
+		key := unsafe.String(unsafe.SliceData(kb), len(kb))
 		rv := bson.RawValue{Type: bson.Type(rawVal.Type), Value: rawVal.Data}
 		switch rv.Type {
 		case bson.TypeDouble, bson.TypeString, bson.TypeObjectID, bson.TypeBoolean, bson.TypeNull, bson.TypeInt32, bson.TypeInt64:
@@ -3179,6 +3192,14 @@ const (
 	defaultUpdateCoalescingStickyIdleWindow = 5 * time.Millisecond
 	defaultUpdateCoalescingStickySoloLimit  = 8
 
+	// Fast/relaxed standalone COW updates at low concurrency (w<=4) achieve
+	// higher throughput and lower latency by running BSON read/rewrite/encode
+	// concurrently across cores via optimistic MVCC rather than serializing all
+	// preparation on one hot worker before CommitNative. Higher concurrency
+	// (w>=5), hot-key row conflicts, or slow/durable waves (>=500us) escalate
+	// automatically to the coalescing hot worker.
+	fastParallelUpdateMaxInFlight = 4
+
 	// Adaptive group-commit linger bounds for slow/durable commit waves.
 	// Engaged only when recent waves run in the durable fsync regime
 	// (>= durableLingerSlowWaveThreshold) and concurrent writers > 1.
@@ -3214,24 +3235,26 @@ type mongoUpdateCoalescer struct {
 	// Single-mutex ring-buffer + hot-worker state for maxDelay == 0.
 	// Uncontended w=1 runs inline; contended updates run on one hot worker
 	// goroutine for L1/L2 cache affinity and zero inter-batch wakeup bubbles.
-	lfMu                  sync.Mutex
-	lfStopped             bool
-	lfInlineRunning       bool
-	lfWorkerBusy          bool
-	lfWorkerWaitingInline bool
-	lfSticky              bool
-	lfWorkerStarted       bool
-	lfDoneClosed          bool
-	lfQueue               []mongoUpdateCoalescerRequest
-	lfHead                int
-	lfLen                 int
-	lfLingerTarget        int
-	lfLingerDeadline      time.Time
-	lfWakeCh              chan struct{}
-	lfSpaceCh             chan struct{}
-	stickyIdleWindow      time.Duration
-	lingerMinOverride     time.Duration // test-only override; <= 0 uses durableLingerMin
-	lingerMaxOverride     time.Duration // test-only override; <= 0 uses durableLingerMax
+	lfMu                     sync.Mutex
+	lfStopped                bool
+	lfInlineRunning          bool
+	lfParallelRunning        int
+	lfParallelConflictStreak int
+	lfWorkerBusy             bool
+	lfWorkerWaitingInline    bool
+	lfSticky                 bool
+	lfWorkerStarted          bool
+	lfDoneClosed             bool
+	lfQueue                  []mongoUpdateCoalescerRequest
+	lfHead                   int
+	lfLen                    int
+	lfLingerTarget           int
+	lfLingerDeadline         time.Time
+	lfWakeCh                 chan struct{}
+	lfSpaceCh                chan struct{}
+	stickyIdleWindow         time.Duration
+	lingerMinOverride        time.Duration // test-only override; <= 0 uses durableLingerMin
+	lingerMaxOverride        time.Duration // test-only override; <= 0 uses durableLingerMax
 
 	// Lazy idle eviction timer state for maxDelay == 0 (zero goroutines while idle).
 	idleMu           sync.Mutex
@@ -3304,7 +3327,22 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	return result.matched, result.modified, result.err
 }
 
+func (c *mongoUpdateCoalescer) canParallelNativeBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
+	if col == nil || c.testWaveHook != nil || update.upsert || !update.exactID {
+		return false
+	}
+	if update.budget != nil && update.budget.journal != nil {
+		return false
+	}
+	canUseBSONSet := update.canUseBSONSetCached
+	if !update.metaCapabilitiesSet {
+		canUseBSONSet = mongoUpdateCanUseBSONSet(col, update)
+	}
+	return canUseBSONSet && col.CanParallelNativeBSONSet()
+}
+
 func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	parallelEligible := c.canParallelNativeBSONSet(col, update)
 	for {
 		c.lfMu.Lock()
 		if c.lfStopped {
@@ -3314,10 +3352,18 @@ func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, updat
 			}
 			return runMongoUpdateOne(col, update)
 		}
-		if !c.lfInlineRunning && !c.lfWorkerBusy && !c.lfSticky && c.lfLen == 0 {
-			c.lfInlineRunning = true
-			c.lfMu.Unlock()
-			return c.runInlineFastPath(col, update)
+		if !c.lfWorkerBusy && !c.lfSticky && c.lfLen == 0 {
+			if parallelEligible {
+				if !c.lfInlineRunning && c.lfParallelRunning < fastParallelUpdateMaxInFlight && c.inFlight.Load() <= fastParallelUpdateMaxInFlight {
+					c.lfParallelRunning++
+					c.lfMu.Unlock()
+					return c.runParallelInlineFastPath(col, update)
+				}
+			} else if !c.lfInlineRunning && c.lfParallelRunning == 0 {
+				c.lfInlineRunning = true
+				c.lfMu.Unlock()
+				return c.runInlineFastPath(col, update)
+			}
 		}
 		if c.maxQueueCap > 0 && c.lfLen >= c.maxQueueCap {
 			if c.lfSpaceCh == nil {
@@ -3331,13 +3377,17 @@ func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, updat
 			}
 			continue
 		}
-		if c.inFlight.Load() >= 3 {
+		stickyThreshold := int32(3)
+		if parallelEligible {
+			stickyThreshold = fastParallelUpdateMaxInFlight + 1
+		}
+		if c.inFlight.Load() >= stickyThreshold {
 			c.lfSticky = true
 		}
 		done := getMongoUpdateResultChan()
 		c.lfPushLocked(mongoUpdateCoalescerRequest{col: col, item: update, done: done})
 		wake := false
-		if !c.lfInlineRunning && !c.lfWorkerBusy {
+		if !c.lfInlineRunning && c.lfParallelRunning == 0 && !c.lfWorkerBusy {
 			c.lfWorkerBusy = true
 			wake = c.ensureHotWorkerLocked()
 		} else if c.lfLingerTarget > 0 && (c.lfLen >= c.lfLingerTarget ||
@@ -3376,6 +3426,60 @@ func waitForLFSpaceOrDeadline(spaceCh <-chan struct{}, budget *mongoWriteBudget)
 	}
 }
 
+const fastParallelUpdateConflictLatchStreak = 3
+
+func (c *mongoUpdateCoalescer) runParallelInlineFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	var contended bool
+	defer func() {
+		c.finishParallelInlineFastPath(contended)
+	}()
+	c.inlineExecs.Add(1)
+	matched, modified, hitConflict, err := col.UpdateBSONSetParallel(update.key, update.bsonSetFields)
+	contended = hitConflict
+	return matched, modified, mongoUpdateErrorWithIndex(update.index, err)
+}
+
+func (c *mongoUpdateCoalescer) finishParallelInlineFastPath(contended bool) {
+	c.lfMu.Lock()
+	c.lfParallelRunning--
+	if contended {
+		c.lfParallelConflictStreak++
+		if c.lfParallelConflictStreak >= fastParallelUpdateConflictLatchStreak {
+			c.lfSticky = true
+		}
+	} else {
+		c.lfParallelConflictStreak = 0
+	}
+	if c.lfParallelRunning > 0 || c.lfInlineRunning {
+		c.lfMu.Unlock()
+		return
+	}
+	wake := c.lfWorkerWaitingInline
+	c.lfWorkerWaitingInline = false
+	if c.lfLen > 0 {
+		c.lfWorkerBusy = true
+		if c.ensureHotWorkerLocked() {
+			wake = true
+		}
+		c.lfMu.Unlock()
+		if wake {
+			c.signalLFWake()
+		}
+		return
+	}
+	if c.lfStopped {
+		if c.lfWorkerStarted {
+			wake = true
+		} else {
+			c.closeDoneLocked()
+		}
+	}
+	c.lfMu.Unlock()
+	if wake {
+		c.signalLFWake()
+	}
+}
+
 func (c *mongoUpdateCoalescer) runInlineFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
 	defer c.finishInlineFastPath()
 	c.inlineExecs.Add(1)
@@ -3388,6 +3492,10 @@ func (c *mongoUpdateCoalescer) runInlineFastPath(col *collections.Collection, up
 func (c *mongoUpdateCoalescer) finishInlineFastPath() {
 	c.lfMu.Lock()
 	c.lfInlineRunning = false
+	if c.lfParallelRunning > 0 {
+		c.lfMu.Unlock()
+		return
+	}
 	wake := c.lfWorkerWaitingInline
 	c.lfWorkerWaitingInline = false
 	if c.lfLen > 0 {
@@ -3600,7 +3708,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 
 	for {
 		c.lfMu.Lock()
-		if c.lfInlineRunning {
+		if c.lfInlineRunning || c.lfParallelRunning > 0 {
 			c.lfWorkerBusy = false
 			c.lfWorkerWaitingInline = true
 			c.lfMu.Unlock()
@@ -3615,6 +3723,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 			}
 			if soloStreak >= defaultUpdateCoalescingStickySoloLimit {
 				c.lfSticky = false
+				c.lfParallelConflictStreak = 0
 				soloStreak = 0
 				resetLingerState()
 			}
@@ -3639,6 +3748,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 					c.lfMu.Lock()
 					if c.lfLen == 0 && !c.lfWorkerBusy {
 						c.lfSticky = false
+						c.lfParallelConflictStreak = 0
 						soloStreak = 0
 						resetLingerState()
 					}
@@ -3907,7 +4017,7 @@ func (c *mongoUpdateCoalescer) hasLeaderWork() bool {
 		return false
 	}
 	c.lfMu.Lock()
-	busy := c.lfInlineRunning || c.lfWorkerBusy || c.lfLen > 0
+	busy := c.lfInlineRunning || c.lfParallelRunning > 0 || c.lfWorkerBusy || c.lfLen > 0
 	c.lfMu.Unlock()
 	return busy
 }
@@ -4183,7 +4293,7 @@ func (c *mongoUpdateCoalescer) closeRequestsMode(requireIdle bool) bool {
 	}
 	if c.useLeaderFollower {
 		c.lfMu.Lock()
-		if requireIdle && (c.inFlight.Load() != 0 || c.lfInlineRunning || c.lfWorkerBusy || c.lfLen > 0) {
+		if requireIdle && (c.inFlight.Load() != 0 || c.lfInlineRunning || c.lfParallelRunning > 0 || c.lfWorkerBusy || c.lfLen > 0) {
 			c.lfMu.Unlock()
 			c.mu.Unlock()
 			return false
@@ -4200,7 +4310,7 @@ func (c *mongoUpdateCoalescer) closeRequestsMode(requireIdle bool) bool {
 		c.lfStopped = true
 		c.broadcastLFSpaceLocked()
 		wakeWorker := c.lfWorkerStarted
-		if !c.lfWorkerStarted && !c.lfInlineRunning && c.lfLen == 0 {
+		if !c.lfWorkerStarted && !c.lfInlineRunning && c.lfParallelRunning == 0 && c.lfLen == 0 {
 			c.closeDoneLocked()
 		}
 		c.lfMu.Unlock()
@@ -7401,6 +7511,63 @@ func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawVa
 		return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
 	}
 	return id, nil
+}
+
+const maxCachedGatewayNamespaces = 4096
+
+func rawBSONStringBytes(v bsoncore.Value) ([]byte, bool) {
+	if v.Type != bsoncore.TypeString || len(v.Data) < 5 {
+		return nil, false
+	}
+	n := binary.LittleEndian.Uint32(v.Data[:4])
+	if n == 0 || uint64(len(v.Data)) != 4+uint64(n) || v.Data[3+n] != 0 {
+		return nil, false
+	}
+	return v.Data[4 : 3+n], true
+}
+
+func (s *Server) resolveGatewayCollectionNameBytes(dbBytes, collectionBytes []byte) (string, error) {
+	if len(collectionBytes) == 0 {
+		return "", errors.New("Mongo collection name cannot be empty")
+	}
+	if len(dbBytes) == 0 {
+		return "", errors.New("Mongo database name cannot be empty")
+	}
+	if s != nil && len(dbBytes)+1+len(collectionBytes) <= 128 &&
+		bytes.IndexByte(dbBytes, 0) < 0 && bytes.IndexByte(collectionBytes, 0) < 0 {
+		var keyBuf [128]byte
+		n := copy(keyBuf[:], dbBytes)
+		keyBuf[n] = 0
+		n += 1 + copy(keyBuf[n+1:], collectionBytes)
+		if snap := s.namespaceNamesSnap.Load(); snap != nil {
+			if cached, ok := (*snap)[string(keyBuf[:n])]; ok {
+				return cached, nil
+			}
+		}
+		name, err := gatewayCollectionName(string(dbBytes), string(collectionBytes))
+		if err != nil {
+			return "", err
+		}
+		s.namespaceMu.Lock()
+		if s.namespaceNames == nil {
+			s.namespaceNames = make(map[string]string, 16)
+		}
+		if existing, ok := s.namespaceNames[string(keyBuf[:n])]; ok {
+			s.namespaceMu.Unlock()
+			return existing, nil
+		}
+		if len(s.namespaceNames) < maxCachedGatewayNamespaces {
+			s.namespaceNames[string(keyBuf[:n])] = name
+			snap := make(map[string]string, len(s.namespaceNames))
+			for k, v := range s.namespaceNames {
+				snap[k] = v
+			}
+			s.namespaceNamesSnap.Store(&snap)
+		}
+		s.namespaceMu.Unlock()
+		return name, nil
+	}
+	return gatewayCollectionName(string(dbBytes), string(collectionBytes))
 }
 
 func gatewayCollectionName(db, collection string) (string, error) {

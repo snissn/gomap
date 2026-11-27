@@ -154,10 +154,16 @@ func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
 }
 
 func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetField, requestJournal bool) (bool, bool, backenddb.NativeJournalCompletion, error) {
+	matched, modified, completion, _, err := c.nativeUpdateBSONSetWithJournalObserved(id, fields, requestJournal)
+	return matched, modified, completion, err
+}
+
+func (c *Collection) nativeUpdateBSONSetWithJournalObserved(id []byte, fields []BSONSetField, requestJournal bool) (bool, bool, backenddb.NativeJournalCompletion, bool, error) {
 	items := [...]BSONSetUpdateBatchItem{{DocumentID: id, Fields: fields}}
 	var resBuf [1]UpdateBatchResult
 	retry := nativeBSONSetRetry{id: id}
 	var lastErr error
+	contended := false
 	for attempt := range maxCollectionMutationRetries {
 		var operation nativeOperationJournal
 		var journal *nativeOperationJournal
@@ -177,6 +183,7 @@ func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetF
 		}
 		completion := operation.completion
 		if retry.rowConflict && completion.AssignedLSN() == 0 && !completion.Attempted() {
+			contended = true
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
@@ -186,15 +193,15 @@ func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetF
 			if errors.As(err, &item) && item.Index == 0 {
 				err = item.Err
 			}
-			return false, false, completion, err
+			return false, false, completion, contended, err
 		}
 		if len(results) != 1 {
 			countErr := fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
-			return false, false, completion.WithoutSuccess(), errors.Join(err, countErr)
+			return false, false, completion.WithoutSuccess(), contended, errors.Join(err, countErr)
 		}
-		return results[0].Matched, results[0].Modified, completion, err
+		return results[0].Matched, results[0].Modified, completion, contended, err
 	}
-	return false, false, backenddb.NativeJournalCompletion{}, collectionMutationRetryExhausted(lastErr)
+	return false, false, backenddb.NativeJournalCompletion{}, contended, collectionMutationRetryExhausted(lastErr)
 }
 
 func nativeBSONSetMeta(meta *CollectionMeta) bool {

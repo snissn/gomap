@@ -153,6 +153,9 @@ type Server struct {
 	mongoWriteBeforeFirstCreateHook func(*mongoWriteBudget)
 	updateMu                        sync.RWMutex
 	updateCoalescers                map[string]*mongoUpdateCoalescer
+	namespaceMu                     sync.Mutex
+	namespaceNames                  map[string]string
+	namespaceNamesSnap              atomic.Pointer[map[string]string]
 	insertMu                        sync.Mutex
 	insertCoalescers                map[string]*mongoInsertCoalescer
 	// standaloneWriteBoundaryMu lets visible writes and authenticated original-

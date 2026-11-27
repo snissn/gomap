@@ -438,17 +438,17 @@ func benchmarkReportDiskUsage(b *testing.B, docs int, totalBytes uint64) {
 	b.ReportMetric(float64(totalBytes)/float64(docs), "disk_bytes/doc")
 }
 
-func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs int) {
+func benchmarkReportTreeDBPostInsertDiskUsage(b *testing.B, backend *backenddb.DB, docs int) (uint64, bool) {
 	b.Helper()
 
 	if backend == nil {
-		return
+		return 0, false
 	}
 	if docs <= 0 {
-		return
+		return 0, false
 	}
 	if !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
-		return
+		return 0, false
 	}
 	checkpointStart := time.Now()
 	if err := backend.Checkpoint(); err != nil {
@@ -460,8 +460,24 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 		b.Fatalf("TreeDB disk usage stats: %v", err)
 	}
 	benchmarkReportDiskUsage(b, docs, totalBytes)
+	return totalBytes, true
+}
+
+func benchmarkReportTreeDBPostInsertMaintenance(b *testing.B, backend *backenddb.DB, docs int, totalBytes uint64) {
+	b.Helper()
+
 	currentBytes := benchmarkReportTreeDBValueLogRewrite(b, backend, docs, totalBytes)
 	benchmarkReportTreeDBLeafGenerationPackGC(b, backend, docs, currentBytes)
+}
+
+func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs int) {
+	b.Helper()
+
+	totalBytes, ok := benchmarkReportTreeDBPostInsertDiskUsage(b, backend, docs)
+	if !ok {
+		return
+	}
+	benchmarkReportTreeDBPostInsertMaintenance(b, backend, docs, totalBytes)
 }
 
 func benchmarkReportTreeDBValueLogRewrite(b *testing.B, backend *backenddb.DB, docs int, beforeTotalBytes uint64) uint64 {
