@@ -888,10 +888,14 @@ func (b *Batch) admitCOWAccepted() error {
 			return b.admitCOWAcceptedAfterNativeRefusal(nativeSpare, denied)
 		}
 	} else {
+		var denied rootpublication.AcceptedOrdinaryRefusal
 		var err error
-		ticket, err = c.prefix.ReserveAccepted(false)
+		ticket, denied, err = c.prefix.ReserveAcceptedOrdinaryWithRefusal()
 		if err != nil {
-			return b.admitCOWAcceptedAfterOrdinaryError(c, err)
+			if !denied.Valid() {
+				return acceptedAdmissionError(err)
+			}
+			return b.admitCOWAcceptedAfterOrdinaryRefusal(c, denied, err)
 		}
 	}
 	b.cowState.accepted = ticket
@@ -904,8 +908,8 @@ func (b *Batch) admitCOWAccepted() error {
 }
 
 //go:noinline
-func (b *Batch) admitCOWAcceptedAfterOrdinaryError(c *cowCache, cause error) error {
-	ticket, err := b.db.reserveCOWAcceptedOrdinaryAfterPressure(c, cause)
+func (b *Batch) admitCOWAcceptedAfterOrdinaryRefusal(c *cowCache, denied rootpublication.AcceptedOrdinaryRefusal, cause error) error {
+	ticket, err := b.db.reserveCOWAcceptedOrdinaryAfterPressure(c, denied, cause)
 	if err != nil {
 		return err
 	}
