@@ -17,60 +17,122 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 MODULE_PREFIX = "github.com/snissn/gomap"
 
-# Measured Linux normal-test weights (seconds, from CI run 45891315836 + Root 45893061725)
+# Measured Linux normal-test weights (seconds, from CI runs 45891315836, 45913782156, 45914534147)
 NORMAL_WEIGHTS: dict[str, float] = {
     "github.com/snissn/gomap/TreeDB/nativewire": 525.0,
     "github.com/snissn/gomap/cmd/treedb_vector_partition_bench": 401.0,
-    "github.com/snissn/gomap/TreeDB": 358.0,
-    "github.com/snissn/gomap/TreeDB/collections": 239.0,
-    "github.com/snissn/gomap/TreeDB/db": 129.0,
-    "github.com/snissn/gomap/TreeDB/caching": 87.0,
+    "github.com/snissn/gomap/TreeDB": 310.0,
+    "github.com/snissn/gomap/TreeDB/collections": 180.0,
+    "github.com/snissn/gomap/TreeDB/db": 125.0,
     "github.com/snissn/gomap/TreeDB/internal/raftplacement": 83.0,
+    "github.com/snissn/gomap/TreeDB/caching": 80.0,
     "github.com/snissn/gomap/TreeDB/internal/raftcluster": 80.0,
     "github.com/snissn/gomap/cmd/unified_bench": 73.0,
-    "github.com/snissn/gomap/TreeDB/mongo_gateway": 58.0,
-    "github.com/snissn/gomap/TreeDB/mvcc": 43.0,
-    "github.com/snissn/gomap/TreeDB/internal/commitlog": 29.0,
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": 47.0,
+    "github.com/snissn/gomap/TreeDB/mvcc": 34.0,
+    "github.com/snissn/gomap/TreeDB/internal/commitlog": 25.0,
     "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark": 20.0,
-    "github.com/snissn/gomap/TreeDB/documentservice": 16.0,
     "github.com/snissn/gomap/cmd/treedb_text_hybrid_scale": 15.0,
-    "github.com/snissn/gomap/cmd/treedb-document-service": 15.0,
-    "github.com/snissn/gomap/internal/redisserver": 13.0,
+    "github.com/snissn/gomap/cmd/treedb-document-service": 14.0,
     "github.com/snissn/gomap/internal/ycsbevidence": 13.0,
+    "github.com/snissn/gomap/TreeDB/documentservice": 10.0,
+    "github.com/snissn/gomap/TreeDB/internal/rootpublication": 10.0,
+    "github.com/snissn/gomap/internal/redisserver": 10.0,
 }
 
-# Measured Linux -race weights (seconds, from CI run 45891315836)
+# Measured Linux -race weights (seconds, post-#5866 measured on runs 45913798272 & 45914534147)
 RACE_WEIGHTS: dict[str, float] = {
-    "github.com/snissn/gomap/TreeDB/nativewire": 989.0,
-    "github.com/snissn/gomap/TreeDB": 956.0,
-    "github.com/snissn/gomap/TreeDB/collections": 835.0,
-    "github.com/snissn/gomap/TreeDB/db": 387.0,
-    "github.com/snissn/gomap/TreeDB/mongo_gateway": 236.0,
+    "github.com/snissn/gomap/TreeDB/nativewire": 980.0,
+    "github.com/snissn/gomap/TreeDB": 900.0,
+    "github.com/snissn/gomap/TreeDB/collections": 750.0,
+    "github.com/snissn/gomap/TreeDB/db": 210.0,
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": 185.0,
     "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark": 160.0,
-    "github.com/snissn/gomap/TreeDB/caching": 154.0,
+    "github.com/snissn/gomap/TreeDB/caching": 160.0,
+    "github.com/snissn/gomap/cmd/unified_bench": 150.0,
     "github.com/snissn/gomap/TreeDB/internal/raftplacement": 119.0,
     "github.com/snissn/gomap/TreeDB/internal/rootpublication": 97.0,
     "github.com/snissn/gomap/TreeDB/documentservice": 86.0,
     "github.com/snissn/gomap/TreeDB/internal/raftcluster": 84.0,
     "github.com/snissn/gomap/TreeDB/mvcc": 81.0,
-    "github.com/snissn/gomap/cmd/unified_bench": 150.0,
 }
 
-# Packages whose -race test suite exceeds ~10m on a single runner; split by test name.
-HEAVY_RACE_SPLIT_PACKAGES: frozenset[str] = frozenset({
-    "github.com/snissn/gomap/TreeDB",
-    "github.com/snissn/gomap/TreeDB/collections",
-    "github.com/snissn/gomap/TreeDB/nativewire",
-})
+# Known slow tests pinned across distinct slices via LPT during package test splitting.
+KNOWN_SLOW_TEST_WEIGHTS: dict[str, dict[str, float]] = {
+    "github.com/snissn/gomap/TreeDB": {
+        "TestCompactStorageExhaustiveCommandWALRandom4KOffline": 168.0,
+        "TestProductionAuthorityExecutableCompositeOmissionMatrix": 82.0,
+        "TestPowerLossCertificationAuthoritativeResourcesPublicReopen": 51.0,
+        "TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix": 25.0,
+        "TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters": 18.0,
+        "TestReopenVerify_SplitMergeDeleteRange_IteratorParity": 18.0,
+        "TestCOWAutoCheckpointIdleActualActivity": 16.0,
+        "TestProfileFast_SetSyncRemainsVisibleAndPersistsAfterCheckpoint": 15.0,
+        "TestIndexVacuumM4CertificationMatrix": 15.0,
+    },
+    "github.com/snissn/gomap/TreeDB/collections": {
+        "TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankRunEquivalence": 79.0,
+        "TestTypedGraphPreparedFilterDispersedQuality": 41.0,
+        "TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers": 38.0,
+        "TestNativeTextPublicCrashReplay": 31.0,
+        "TestVectorPartitionSourceImportDependencyEncodingCoalescedV2": 24.0,
+        "TestR1MutationCrashCuts5059": 22.0,
+        "TestVectorPartitionSourceImportDependencyEncodingReopenV2": 18.0,
+        "TestNativeOrdinaryProjectedGenerationPressure": 18.0,
+        "TestVectorPartitionSourceImportDependencyEncodingContinuousV2": 18.0,
+        "TestTypedGraphFilterNavigationReducesDispersedTraversal": 15.0,
+        "TestTypedGraphLifecyclePublicMutationAndReopen": 13.0,
+        "TestVectorPartitionLocalAuxiliaryNavigationKeepsNativeLayer0AndEntryReachable": 13.0,
+        "TestTypedStorageLegacyNameAllowlistIsComplete": 11.0,
+        "TestPreparedInsertCrashRecoveryCuts": 11.0,
+    },
+    "github.com/snissn/gomap/TreeDB/db": {
+        "TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication": 65.0,
+        "TestVacuumRaceMissingKey": 60.0,
+        "TestCompactIndex_AllocatesNewPagesByAppending": 29.0,
+        "TestIndexVacuumTriggerReportMatchesFragmentationSpan": 20.0,
+        "TestLeafFillTarget_IsEnforced": 15.0,
+        "TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs": 15.0,
+        "TestPublicationSourceGuardNotificationRejectsExposedState": 14.0,
+    },
+    "github.com/snissn/gomap/TreeDB/mongo_gateway": {
+        "TestStandaloneNativeDictionaryCachePolicy": 60.0,
+        "TestStandaloneServerGoRunHelp": 47.0,
+        "TestMongoVectorCreateIndexesValidatesWholeRequest": 6.0,
+        "TestStandaloneLargeIndexedBSON": 6.0,
+    },
+    "github.com/snissn/gomap/TreeDB/nativewire": {
+        "TestVectorPartitionLiveSelectedLifecycleV1": 265.0,
+        "TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1": 228.0,
+    },
+}
+
+# Dynamic sharding targets tuned for ~4-5 minute Linux wall-clock on wide PRs.
+COMPILE_SHARD_MIN_PACKAGES = 45
+TARGET_NORMAL_SHARD_SECONDS = 135.0
+TARGET_MAIN_NORMAL_SHARD_SECONDS = 165.0
+NORMAL_SPLIT_THRESHOLD_SECONDS = 155.0
+MAX_SURGICAL_TEST_SHARDS = 8
+MAX_MAIN_TEST_SHARDS = 12
+MAX_NORMAL_SLICES_PER_PACKAGE = 4
+
+TARGET_RACE_SHARD_SECONDS = 145.0
+RACE_SPLIT_THRESHOLD_SECONDS = 175.0
+MAX_RACE_SHARDS = 12
+MAX_RACE_SLICES_PER_PACKAGE = 6
+
+SPLIT_TEST_CHUNK_MAX_BYTES = 28000
 
 # Heavy indirect downstream suites skipped in Tier 1 surgical normal tests unless
 # directly touched or one of their subsystem prefixes was touched.
@@ -405,6 +467,129 @@ def pack_lpt(packages: list[str], weights: dict[str, float], shard_count: int) -
     return [sorted(b) for b in bins if b]
 
 
+def build_compile_shards(packages: list[str], *, include_empty_zero: bool = False) -> list[dict[str, Any]]:
+    """Split large vet/cross-compile cones into 2 parallel shards when >= 45 packages."""
+    if not packages:
+        return [{"id": 0, "packages": []}] if include_empty_zero else []
+    n_shards = 2 if len(packages) >= COMPILE_SHARD_MIN_PACKAGES else 1
+    if n_shards == 1:
+        return [{"id": 0, "packages": sorted(packages)}]
+    bins = pack_lpt(packages, NORMAL_WEIGHTS, n_shards)
+    return [{"id": i, "packages": b} for i, b in enumerate(bins)]
+
+
+def build_weighted_shards(
+    packages: list[str],
+    weights: dict[str, float],
+    *,
+    target_shard_seconds: float,
+    split_threshold: float,
+    max_shards: int,
+    max_slices_per_pkg: int,
+    default_weight: float,
+    slice_compile_overhead: float = 0.0,
+    initial_shard0_load: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Pack whole packages and split-package test slices via LPT toward target wall-clock."""
+    if not packages:
+        return []
+    work_items: list[dict[str, Any]] = []
+    max_single_slices = 1
+    for pkg in sorted(packages):
+        w = weights.get(pkg, default_weight)
+        if w > split_threshold and max_shards > 1 and max_slices_per_pkg > 1:
+            slices = min(
+                max_slices_per_pkg,
+                max_shards,
+                max(2, math.ceil(w / target_shard_seconds)),
+            )
+            max_single_slices = max(max_single_slices, slices)
+            slice_w = w / slices
+            for idx in range(slices):
+                work_items.append({
+                    "kind": "slice",
+                    "package": pkg,
+                    "index": idx,
+                    "count": slices,
+                    "weight": slice_w,
+                    "pack_weight": slice_w + slice_compile_overhead,
+                })
+        else:
+            work_items.append({
+                "kind": "package",
+                "package": pkg,
+                "index": 0,
+                "count": 1,
+                "weight": w,
+                "pack_weight": w + (slice_compile_overhead * 0.5 if w >= 60.0 else 0.0),
+            })
+
+    total_pack_work = sum(item["pack_weight"] for item in work_items) + initial_shard0_load
+    budget_per_shard = target_shard_seconds + slice_compile_overhead
+    heavy_item_count = sum(
+        1 for item in work_items if item["kind"] == "slice" or item["weight"] >= target_shard_seconds * 0.75
+    )
+    n_shards = max(max_single_slices, heavy_item_count, math.ceil(total_pack_work / budget_per_shard))
+    n_shards = min(max_shards, max(len(work_items), 1 if initial_shard0_load > 0 else 0), max(1, n_shards))
+
+    pkg_bins: list[list[str]] = [[] for _ in range(n_shards)]
+    slice_bins: list[list[dict[str, Any]]] = [[] for _ in range(n_shards)]
+    slice_pkgs_in_bin: list[set[str]] = [set() for _ in range(n_shards)]
+    pack_loads: list[float] = [initial_shard0_load] + [0.0] * (n_shards - 1)
+    run_loads: list[float] = [initial_shard0_load] + [0.0] * (n_shards - 1)
+
+    ordered = sorted(
+        work_items,
+        key=lambda it: (-it["pack_weight"], 0 if it["kind"] == "slice" else 1, it["package"], it["index"]),
+    )
+    for item in ordered:
+        if item["kind"] == "slice":
+            # Prefer bins not already holding another slice of the same package.
+            idx = min(
+                range(n_shards),
+                key=lambda i: (1 if item["package"] in slice_pkgs_in_bin[i] else 0, pack_loads[i], i),
+            )
+            slice_bins[idx].append({
+                "package": item["package"],
+                "index": item["index"],
+                "count": item["count"],
+            })
+            slice_pkgs_in_bin[idx].add(item["package"])
+        else:
+            idx = min(range(n_shards), key=lambda i: (pack_loads[i], i))
+            pkg_bins[idx].append(item["package"])
+        pack_loads[idx] += item["pack_weight"]
+        run_loads[idx] += item["weight"]
+
+    shards: list[dict[str, Any]] = []
+    for i in range(n_shards):
+        if not pkg_bins[i] and not slice_bins[i] and not (i == 0 and initial_shard0_load > 0):
+            continue
+        shards.append({
+            "id": len(shards),
+            "packages": sorted(pkg_bins[i]),
+            "slices": sorted(slice_bins[i], key=lambda s: (s["package"], s["index"])),
+            "estimated_seconds": round(run_loads[i], 1),
+        })
+    return shards
+
+
+def partition_split_tests(pkg: str, tests: list[str], split_index: int, split_count: int) -> list[str]:
+    """Deterministically partition a package's tests across split_count slices via LPT."""
+    if split_count <= 1:
+        return sorted(set(tests))
+    unique_tests = sorted(set(tests))
+    slow_weights = KNOWN_SLOW_TEST_WEIGHTS.get(pkg, {})
+    bins: list[list[str]] = [[] for _ in range(split_count)]
+    loads: list[float] = [0.0 for _ in range(split_count)]
+    ordered = sorted(unique_tests, key=lambda name: (-slow_weights.get(name, 1.0), name))
+    for name in ordered:
+        idx = min(range(split_count), key=lambda i: (loads[i], i))
+        bins[idx].append(name)
+        loads[idx] += slow_weights.get(name, 1.0)
+    return sorted(bins[split_index])
+
+
 def discover_local_replace_dirs(repo: Path) -> tuple[str, ...]:
     """Parse root go.mod for local filesystem replace directives (e.g. third_party/...)."""
     go_mod = repo / "go.mod"
@@ -596,56 +781,63 @@ def build_plan(
     darwin_cross_packages = list(vet_packages)
     windows_cross_packages = [p for p in vet_packages if is_windows_supported_package(p)]
 
-    # Build normal test shards (LPT weighted).
-    total_normal_weight = sum(NORMAL_WEIGHTS.get(p, 2.0) for p in test_packages)
+    if tier in ("surgical", "main_fast"):
+        vet_shards = build_compile_shards(vet_packages, include_empty_zero=run_ci_script_tests)
+        cross_darwin_shards = build_compile_shards(darwin_cross_packages)
+        cross_windows_shards = build_compile_shards(windows_cross_packages)
+    else:
+        vet_shards = []
+        cross_darwin_shards = []
+        cross_windows_shards = []
+
+    # Build normal test shards (split-aware LPT weighted toward ~4m wall-clock).
+    total_normal_weight = sum(NORMAL_WEIGHTS.get(p, 1.5) for p in test_packages)
+    initial_test_shard0_load = 120.0 if run_python_client else 0.0
     if not test_packages:
         test_shards: list[dict[str, Any]] = []
     elif tier == "main_fast":
-        bins = pack_lpt(test_packages, NORMAL_WEIGHTS, 4)
-        test_shards = [{"id": i, "packages": b} for i, b in enumerate(bins)]
+        test_shards = build_weighted_shards(
+            test_packages,
+            NORMAL_WEIGHTS,
+            target_shard_seconds=TARGET_MAIN_NORMAL_SHARD_SECONDS,
+            split_threshold=NORMAL_SPLIT_THRESHOLD_SECONDS,
+            max_shards=MAX_MAIN_TEST_SHARDS,
+            max_slices_per_pkg=MAX_NORMAL_SLICES_PER_PACKAGE,
+            default_weight=1.5,
+            slice_compile_overhead=25.0,
+            initial_shard0_load=initial_test_shard0_load,
+        )
     else:
-        if total_normal_weight <= 180.0:
-            n_shards = 1
-        elif total_normal_weight <= 420.0:
-            n_shards = 2
-        else:
-            n_shards = 3
-        bins = pack_lpt(test_packages, NORMAL_WEIGHTS, n_shards)
-        test_shards = [{"id": i, "packages": b} for i, b in enumerate(bins)]
+        test_shards = build_weighted_shards(
+            test_packages,
+            NORMAL_WEIGHTS,
+            target_shard_seconds=TARGET_NORMAL_SHARD_SECONDS,
+            split_threshold=NORMAL_SPLIT_THRESHOLD_SECONDS,
+            max_shards=MAX_SURGICAL_TEST_SHARDS,
+            max_slices_per_pkg=MAX_NORMAL_SLICES_PER_PACKAGE,
+            default_weight=1.5,
+            slice_compile_overhead=25.0,
+            initial_shard0_load=initial_test_shard0_load,
+        )
 
-    # Build race shards (touched packages only; split giant packages across 3 shards).
-    race_shards: list[dict[str, Any]] = []
-    if race_packages:
-        heavy_touched = [p for p in race_packages if p in HEAVY_RACE_SPLIT_PACKAGES]
-        light_touched = [p for p in race_packages if p not in HEAVY_RACE_SPLIT_PACKAGES]
-        if heavy_touched:
-            n_race = 3
-            light_bins = pack_lpt(light_touched, RACE_WEIGHTS, n_race) if light_touched else [[] for _ in range(n_race)]
-            while len(light_bins) < n_race:
-                light_bins.append([])
-            for i in range(n_race):
-                race_shards.append({
-                    "id": i,
-                    "packages": light_bins[i],
-                    "split_packages": heavy_touched,
-                    "split_index": i,
-                    "split_count": n_race,
-                })
-        else:
-            total_race_weight = sum(RACE_WEIGHTS.get(p, 5.0) for p in light_touched)
-            n_race = 1 if total_race_weight <= 240.0 else 2
-            bins = pack_lpt(light_touched, RACE_WEIGHTS, n_race)
-            for i, b in enumerate(bins):
-                race_shards.append({
-                    "id": i,
-                    "packages": b,
-                    "split_packages": [],
-                    "split_index": 0,
-                    "split_count": 1,
-                })
+    # Build race shards (touched packages only; split-aware LPT toward ~4-5m wall-clock).
+    total_race_weight = sum(RACE_WEIGHTS.get(p, 5.0) for p in race_packages)
+    race_shards = build_weighted_shards(
+        race_packages,
+        RACE_WEIGHTS,
+        target_shard_seconds=TARGET_RACE_SHARD_SECONDS,
+        split_threshold=RACE_SPLIT_THRESHOLD_SECONDS,
+        max_shards=MAX_RACE_SHARDS,
+        max_slices_per_pkg=MAX_RACE_SLICES_PER_PACKAGE,
+        default_weight=5.0,
+        slice_compile_overhead=45.0,
+    )
+
+    referenced_pkgs = set(test_packages) | set(race_packages)
+    pkg_dirs = {p: pkg_to_dir[p] for p in sorted(referenced_pkgs) if p in pkg_to_dir}
 
     return {
-        "schema": 1,
+        "schema": 2,
         "event_name": event_name,
         "base_sha": base_sha,
         "head_sha": head_sha,
@@ -657,12 +849,16 @@ def build_plan(
         "changed_files_sample": files[:50],
         "touched_packages": touched_packages,
         "vet_packages": vet_packages,
+        "vet_shards": vet_shards,
         "darwin_cross_packages": darwin_cross_packages,
+        "cross_darwin_shards": cross_darwin_shards,
         "windows_cross_packages": windows_cross_packages,
+        "cross_windows_shards": cross_windows_shards,
         "test_packages": test_packages,
         "test_shards": test_shards,
         "race_packages": race_packages,
         "race_shards": race_shards,
+        "pkg_dirs": pkg_dirs,
         "escalate_os": escalate_os,
         "os_macos_packages": os_macos_packages,
         "os_windows_packages": os_windows_packages,
@@ -670,10 +866,14 @@ def build_plan(
         "run_ci_script_tests": run_ci_script_tests,
         "run_python_client": run_python_client,
         "estimated_normal_seconds": round(total_normal_weight, 1),
+        "estimated_race_seconds": round(total_race_weight, 1),
     }
 
 
 def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
+    vet_ids = [s["id"] for s in plan["vet_shards"]]
+    cross_darwin_ids = [s["id"] for s in plan["cross_darwin_shards"]]
+    cross_windows_ids = [s["id"] for s in plan["cross_windows_shards"]]
     test_ids = [s["id"] for s in plan["test_shards"]]
     race_ids = [s["id"] for s in plan["race_shards"]]
     os_runners: list[str] = []
@@ -683,11 +883,17 @@ def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
         if plan["os_windows_packages"]:
             os_runners.append("windows-latest")
 
+    run_vet = bool(vet_ids)
+    run_cross_darwin = bool(cross_darwin_ids)
+    run_cross_windows = bool(cross_windows_ids)
     run_test = bool(test_ids) or plan["run_python_client"]
     run_race = bool(race_ids)
     escalate_os = bool(os_runners)
     # GitHub Actions rejects empty matrix vectors even on skipped jobs; always
     # emit a safe non-empty fallback vector gated by the boolean run_* flag.
+    effective_vet_ids = vet_ids if vet_ids else [0]
+    effective_cross_darwin_ids = cross_darwin_ids if cross_darwin_ids else [0]
+    effective_cross_windows_ids = cross_windows_ids if cross_windows_ids else [0]
     effective_test_ids = test_ids if test_ids else [0]
     effective_race_ids = race_ids if race_ids else [0]
     effective_os_runners = os_runners if os_runners else ["ubuntu-latest"]
@@ -699,7 +905,12 @@ def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
         f"run_docs_check={'true' if plan['run_docs_check'] else 'false'}",
         f"run_ci_script_tests={'true' if plan['run_ci_script_tests'] else 'false'}",
         f"run_python_client={'true' if plan['run_python_client'] else 'false'}",
-        f"run_vet={'true' if (plan['tier'] in ('surgical', 'main_fast') and (plan['vet_packages'] or plan['run_ci_script_tests'])) else 'false'}",
+        f"run_vet={'true' if run_vet else 'false'}",
+        f"vet_shards_json={json.dumps(effective_vet_ids)}",
+        f"run_cross_darwin={'true' if run_cross_darwin else 'false'}",
+        f"cross_darwin_shards_json={json.dumps(effective_cross_darwin_ids)}",
+        f"run_cross_windows={'true' if run_cross_windows else 'false'}",
+        f"cross_windows_shards_json={json.dumps(effective_cross_windows_ids)}",
         f"run_test={'true' if run_test else 'false'}",
         f"test_shards_json={json.dumps(effective_test_ids)}",
         f"run_race={'true' if run_race else 'false'}",
@@ -712,15 +923,17 @@ def write_github_outputs(plan: dict[str, Any], path: Path) -> None:
 
 
 def write_step_summary(plan: dict[str, Any], path: Path) -> None:
+    max_test_est = max((s.get("estimated_seconds", 0.0) for s in plan["test_shards"]), default=0.0)
+    max_race_est = max((s.get("estimated_seconds", 0.0) for s in plan["race_shards"]), default=0.0)
     lines = [
         "### CI Scope Plan",
         "",
         f"- **Tier:** `{plan['tier']}` (`docs_only={plan['docs_only']}`, `draft={plan['is_draft']}`, `ci_full={plan['ci_full']}`)",
         f"- **Changed files:** {plan['changed_file_count']}",
         f"- **Directly touched Go packages:** {len(plan['touched_packages'])}",
-        f"- **Vet / cross-compile cone:** {len(plan['vet_packages'])} packages (Windows subset: {len(plan['windows_cross_packages'])})",
-        f"- **Normal Linux test packages:** {len(plan['test_packages'])} across {len(plan['test_shards'])} shard(s) (est. {plan['estimated_normal_seconds']}s CPU)",
-        f"- **Touched `-race` packages:** {len(plan['race_packages'])} across {len(plan['race_shards'])} shard(s)",
+        f"- **Vet / cross-compile cones:** vet={len(plan['vet_packages'])} ({len(plan['vet_shards'])} shard), darwin={len(plan['darwin_cross_packages'])} ({len(plan['cross_darwin_shards'])} shard), windows={len(plan['windows_cross_packages'])} ({len(plan['cross_windows_shards'])} shard)",
+        f"- **Normal Linux test packages:** {len(plan['test_packages'])} across {len(plan['test_shards'])} shard(s) (total est. {plan['estimated_normal_seconds']}s, max shard est. {max_test_est}s)",
+        f"- **Touched `-race` packages:** {len(plan['race_packages'])} across {len(plan['race_shards'])} shard(s) (total est. {plan.get('estimated_race_seconds', 0.0)}s, max shard est. {max_race_est}s)",
         f"- **OS escalation:** `{plan['escalate_os']}` (macOS: {len(plan['os_macos_packages'])} pkg, Windows: {len(plan['os_windows_packages'])} pkg)",
         f"- **Extra gates:** `docs_check={plan['run_docs_check']}`, `ci_script_tests={plan['run_ci_script_tests']}`, `python_client={plan['run_python_client']}`",
     ]
@@ -746,59 +959,103 @@ def _run_cmd(cmd: list[str], *, cwd: Path, env: dict[str, str], jsonl_path: Path
         return proc.wait()
 
 
-def _run_split_race_package(
+def _resolve_package_dir(repo: Path, plan: dict[str, Any], pkg: str) -> Path:
+    rel = (plan.get("pkg_dirs") or {}).get(pkg)
+    if rel is not None:
+        return repo / rel if rel else repo
+    if pkg == MODULE_PREFIX:
+        return repo
+    if pkg.startswith(MODULE_PREFIX + "/"):
+        return repo / pkg[len(MODULE_PREFIX) + 1:]
+    return repo
+
+
+def _run_package_slice(
     pkg: str,
     split_index: int,
     split_count: int,
     *,
+    race: bool,
+    timeout: str,
     repo: Path,
-    env: dict[str, str],
-    jsonl_path: Path,
+    plan: dict[str, Any],
+    compile_env: dict[str, str],
+    run_env: dict[str, str],
+    jsonl_path: Path | None,
 ) -> int:
-    list_cmd = ["go", "test", "-race", "-p", "1", pkg, "-list", "^(Test|Example|Fuzz).*"]
-    print("+", " ".join(list_cmd), flush=True)
-    listed = subprocess.run(list_cmd, cwd=repo, env=env, capture_output=True, text=True)
-    if listed.returncode != 0:
-        sys.stdout.write(listed.stdout)
-        sys.stderr.write(listed.stderr)
-        return listed.returncode
-    tests = [
-        line.strip()
-        for line in listed.stdout.splitlines()
-        if line.strip().startswith(("Test", "Example", "Fuzz"))
-    ]
-    selected = [t for idx, t in enumerate(tests) if (idx % split_count) == split_index]
-    if not selected:
-        print(f"No race tests assigned to {pkg} shard {split_index}/{split_count}", flush=True)
-        return 0
-    # Chunk regex to avoid OS argv/regex length limits.
-    chunk: list[str] = []
-    chunk_len = 0
-    for name in selected:
-        if chunk and chunk_len + len(name) + 1 > 6000:
-            regex = "^(" + "|".join(re.escape(x) for x in chunk) + ")$"
-            rc = _run_cmd(
-                ["go", "test", "-json", "-race", "-p", "1", "-timeout", "12m", pkg, "-run", regex],
-                cwd=repo,
-                env=env,
-                jsonl_path=jsonl_path,
+    """Compile a test binary once with full runner vCPUs and execute one weighted slice via test2json."""
+    pkg_dir = _resolve_package_dir(repo, plan, pkg)
+    with tempfile.TemporaryDirectory(prefix="ci-slice-") as td:
+        bin_path = Path(td) / "pkg.test"
+        compile_cmd = ["go", "test", "-vet=off", "-c", "-o", str(bin_path), pkg]
+        if race:
+            compile_cmd.insert(2, "-race")
+        rc = _run_cmd(compile_cmd, cwd=repo, env=compile_env)
+        if rc != 0:
+            return rc
+        if not bin_path.is_file():
+            print(f"No test binary produced for {pkg}; skipping slice {split_index}/{split_count}.", flush=True)
+            return 0
+
+        list_cmd = [str(bin_path), "-test.list", "^(Test|Example|Fuzz).*"]
+        print("+", " ".join(list_cmd), flush=True)
+        listed = subprocess.run(list_cmd, cwd=pkg_dir, env=run_env, capture_output=True, text=True)
+        if listed.returncode != 0:
+            sys.stdout.write(listed.stdout)
+            sys.stderr.write(listed.stderr)
+            return listed.returncode
+        tests = [
+            line.strip()
+            for line in listed.stdout.splitlines()
+            if line.strip().startswith(("Test", "Example", "Fuzz"))
+        ]
+        selected = partition_split_tests(pkg, tests, split_index, split_count)
+        if not selected:
+            print(f"No tests assigned to {pkg} slice {split_index}/{split_count}", flush=True)
+            return 0
+
+        chunks: list[list[str]] = []
+        chunk: list[str] = []
+        chunk_len = 0
+        for name in selected:
+            escaped = re.escape(name)
+            if chunk and chunk_len + len(escaped) + 1 > SPLIT_TEST_CHUNK_MAX_BYTES:
+                chunks.append(chunk)
+                chunk = [escaped]
+                chunk_len = len(escaped)
+            else:
+                chunk.append(escaped)
+                chunk_len += len(escaped) + 1
+        if chunk:
+            chunks.append(chunk)
+
+        for idx, part in enumerate(chunks):
+            regex = "^(" + "|".join(part) + ")$"
+            print(
+                f"+ go tool test2json -t -p {pkg} {bin_path.name} -test.v -test.timeout {timeout} "
+                f"-test.run <{len(part)} tests chunk {idx + 1}/{len(chunks)}>",
+                flush=True,
             )
+            cmd = [
+                "go", "tool", "test2json", "-t", "-p", pkg,
+                str(bin_path), "-test.v", "-test.timeout", timeout, "-test.run", regex,
+            ]
+            if jsonl_path is None:
+                rc = subprocess.run(cmd, cwd=pkg_dir, env=run_env).returncode
+            else:
+                with jsonl_path.open("a", encoding="utf-8") as logf:
+                    proc = subprocess.Popen(
+                        cmd, cwd=pkg_dir, env=run_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                    )
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                        logf.write(line)
+                    rc = proc.wait()
             if rc != 0:
                 return rc
-            chunk = [name]
-            chunk_len = len(name)
-        else:
-            chunk.append(name)
-            chunk_len += len(name) + 1
-    if chunk:
-        regex = "^(" + "|".join(re.escape(x) for x in chunk) + ")$"
-        return _run_cmd(
-            ["go", "test", "-json", "-race", "-p", "1", "-timeout", "12m", pkg, "-run", regex],
-            cwd=repo,
-            env=env,
-            jsonl_path=jsonl_path,
-        )
-    return 0
+        return 0
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -859,70 +1116,122 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
         if rc != 0:
             return rc
-        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=compile_env)
+        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "vet":
-        pkgs = plan.get("vet_packages", [])
+        shards = plan.get("vet_shards")
+        if shards is not None:
+            shard = next((s for s in shards if s["id"] == args.shard_index), None)
+            pkgs = shard.get("packages", []) if shard else []
+        else:
+            pkgs = plan.get("vet_packages", [])
         if not pkgs:
-            print("No Go packages in vet cone.")
+            print(f"No Go packages assigned to vet shard {args.shard_index}.")
             return 0
         return _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "cross-darwin":
-        pkgs = plan.get("darwin_cross_packages", [])
+        shards = plan.get("cross_darwin_shards")
+        if shards is not None:
+            shard = next((s for s in shards if s["id"] == args.shard_index), None)
+            pkgs = shard.get("packages", []) if shard else []
+        else:
+            pkgs = plan.get("darwin_cross_packages", [])
         if not pkgs:
-            print("No Go packages for darwin cross-compile.")
+            print(f"No Go packages assigned to darwin cross-compile shard {args.shard_index}.")
             return 0
+        # Compile-only cross-OS check (-vet=off); Linux vet runs in the parallel vet job
+        # and native darwin/windows vet runs in os-escalated and Tier 2 sweeps.
         xenv = dict(compile_env, CGO_ENABLED="0", GOOS="darwin", GOARCH="arm64")
-        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "cross-windows":
-        pkgs = plan.get("windows_cross_packages", [])
+        shards = plan.get("cross_windows_shards")
+        if shards is not None:
+            shard = next((s for s in shards if s["id"] == args.shard_index), None)
+            pkgs = shard.get("packages", []) if shard else []
+        else:
+            pkgs = plan.get("windows_cross_packages", [])
         if not pkgs:
-            print("No Windows-supported Go packages in affected cone.")
+            print(f"No Windows-supported Go packages assigned to shard {args.shard_index}.")
             return 0
         xenv = dict(compile_env, CGO_ENABLED="0", GOOS="windows", GOARCH="amd64")
-        return _run_cmd(["go", "test", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "test":
         shards = plan.get("test_shards", [])
         shard = next((s for s in shards if s["id"] == args.shard_index), None)
-        if shard is None or not shard.get("packages"):
+        if shard is None or (not shard.get("packages") and not shard.get("slices")):
             print(f"No Go test packages assigned to shard {args.shard_index}.")
             return 0
-        # Ensure fresh test execution while reusing compiled build cache.
-        _run_cmd(["go", "clean", "-testcache"], cwd=repo, env=env)
-        return _run_cmd(
-            ["go", "test", "-json", "-timeout", "25m", "-p", "1", *shard["packages"]],
-            cwd=repo,
-            env=env,
-            jsonl_path=jsonl_path,
-        )
-
-    if args.kind == "race":
-        shards = plan.get("race_shards", [])
-        shard = next((s for s in shards if s["id"] == args.shard_index), None)
-        if shard is None:
-            print(f"No race shard {args.shard_index}.")
-            return 0
-        _run_cmd(["go", "clean", "-testcache"], cwd=repo, env=env)
-        assert jsonl_path is not None
         if shard.get("packages"):
+            # Pre-compile all packages in parallel using full runner vCPUs (skips redundant vet),
+            # then execute sequentially (-p 1) under bounded GOMAXPROCS/GOMEMLIMIT.
             rc = _run_cmd(
-                ["go", "test", "-json", "-race", "-p", "1", "-timeout", "15m", *shard["packages"]],
+                ["go", "test", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
+                cwd=repo,
+                env=compile_env,
+            )
+            if rc != 0:
+                return rc
+            rc = _run_cmd(
+                ["go", "test", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *shard["packages"]],
                 cwd=repo,
                 env=env,
                 jsonl_path=jsonl_path,
             )
             if rc != 0:
                 return rc
-        for pkg in shard.get("split_packages", []):
-            rc = _run_split_race_package(
-                pkg,
-                shard["split_index"],
-                shard["split_count"],
+        for sl in shard.get("slices", []):
+            rc = _run_package_slice(
+                sl["package"],
+                sl["index"],
+                sl["count"],
+                race=False,
+                timeout="20m",
                 repo=repo,
+                plan=plan,
+                compile_env=compile_env,
+                run_env=env,
+                jsonl_path=jsonl_path,
+            )
+            if rc != 0:
+                return rc
+        return 0
+
+    if args.kind == "race":
+        shards = plan.get("race_shards", [])
+        shard = next((s for s in shards if s["id"] == args.shard_index), None)
+        if shard is None or (not shard.get("packages") and not shard.get("slices")):
+            print(f"No race shard {args.shard_index}.")
+            return 0
+        if shard.get("packages"):
+            rc = _run_cmd(
+                ["go", "test", "-race", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
+                cwd=repo,
+                env=compile_env,
+            )
+            if rc != 0:
+                return rc
+            rc = _run_cmd(
+                ["go", "test", "-race", "-vet=off", "-json", "-count=1", "-p", "1", "-timeout", "15m", *shard["packages"]],
+                cwd=repo,
                 env=env,
+                jsonl_path=jsonl_path,
+            )
+            if rc != 0:
+                return rc
+        for sl in shard.get("slices", []):
+            rc = _run_package_slice(
+                sl["package"],
+                sl["index"],
+                sl["count"],
+                race=True,
+                timeout="12m",
+                repo=repo,
+                plan=plan,
+                compile_env=compile_env,
+                run_env=env,
                 jsonl_path=jsonl_path,
             )
             if rc != 0:

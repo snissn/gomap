@@ -115,12 +115,14 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertIn("TestTypedStorage", docs_script)
         # No setup-go cache: false anywhere in ci.yml
         self.assertNotIn("cache: false", raw)
-        # Single fail-closed aggregator includes opted-in full-sweep
+        # Single fail-closed aggregator includes parallel vet/cross-compile and opted-in full-sweep
         self.assertIn("full-sweep", doc["jobs"])
         self.assertEqual(doc["jobs"]["full-sweep"]["uses"], "./.github/workflows/ci-full-sweep.yml")
         self.assertIn("ci-gate", doc["jobs"])
         self.assertEqual(doc["jobs"]["ci-gate"]["name"], "CI Gate")
-        self.assertIn("full-sweep", doc["jobs"]["ci-gate"]["needs"])
+        gate_needs = set(doc["jobs"]["ci-gate"]["needs"])
+        for req_job in ("vet", "cross-compile-darwin", "cross-compile-windows", "test-linux", "race-linux", "test-os-escalated", "full-sweep"):
+            self.assertIn(req_job, gate_needs)
         # Producer artifact identity is exported by preflight so selective reruns succeed
         self.assertIn("plan_artifact", doc["jobs"]["preflight"]["outputs"])
         download_steps = [
@@ -130,14 +132,19 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
             for step in job.get("steps", [])
             if str(step.get("uses", "")).startswith("actions/download-artifact@")
         ]
-        self.assertEqual(len(download_steps), 5)
+        self.assertEqual(len(download_steps), 7)
         for step in download_steps:
             self.assertEqual(step["with"]["name"], "${{ needs.preflight.outputs.plan_artifact }}")
-        # Cross-compile steps and retained script suites exist
-        self.assertGreaterEqual(doc["jobs"]["vet-and-cross-compile"]["timeout-minutes"], 25)
-        vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet-and-cross-compile"]["steps"])
-        self.assertIn("--kind cross-darwin", vet_script)
-        self.assertIn("--kind cross-windows", vet_script)
+        # Parallel vet + cross-compile jobs and retained script suites exist
+        self.assertGreaterEqual(doc["jobs"]["vet"]["timeout-minutes"], 15)
+        self.assertGreaterEqual(doc["jobs"]["cross-compile-darwin"]["timeout-minutes"], 15)
+        self.assertGreaterEqual(doc["jobs"]["cross-compile-windows"]["timeout-minutes"], 15)
+        vet_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["vet"]["steps"])
+        darwin_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["cross-compile-darwin"]["steps"])
+        windows_script = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["cross-compile-windows"]["steps"])
+        self.assertIn("--kind vet", vet_script)
+        self.assertIn("--kind cross-darwin", darwin_script)
+        self.assertIn("--kind cross-windows", windows_script)
         self.assertIn("treedb_peer_*test.py", vet_script)
         self.assertIn("treedb_vacuum_m0_summarize_test.py", vet_script)
 
@@ -244,13 +251,78 @@ class TestCIScopeRouter(unittest.TestCase):
         # Race runs ONLY on directly touched package
         self.assertEqual(plan["race_packages"], ["github.com/snissn/gomap/TreeDB/db"])
 
-    def test_heavy_touched_package_splits_race_across_3_shards(self) -> None:
+    def _assert_shards_cover_packages(self, shards: list[dict], expected_pkgs: list[str]) -> None:
+        whole_pkgs: list[str] = []
+        slices_by_pkg: dict[str, list[tuple[int, int]]] = {}
+        for idx, shard in enumerate(shards):
+            self.assertEqual(shard["id"], idx)
+            whole_pkgs.extend(shard.get("packages", []))
+            for sl in shard.get("slices", []):
+                slices_by_pkg.setdefault(sl["package"], []).append((sl["index"], sl["count"]))
+        self.assertEqual(len(whole_pkgs), len(set(whole_pkgs)), "duplicate whole package across shards")
+        self.assertEqual(set(whole_pkgs) & set(slices_by_pkg.keys()), set(), "package both whole and sliced")
+        for pkg, pairs in slices_by_pkg.items():
+            counts = {c for _, c in pairs}
+            self.assertEqual(len(counts), 1, f"inconsistent slice count for {pkg}: {pairs}")
+            count = next(iter(counts))
+            self.assertEqual(sorted(i for i, _ in pairs), list(range(count)), f"incomplete slices for {pkg}: {pairs}")
+        covered = set(whole_pkgs) | set(slices_by_pkg.keys())
+        self.assertEqual(covered, set(expected_pkgs))
+
+    def test_heavy_touched_package_splits_race_for_fast_wallclock(self) -> None:
         plan = self._plan(changed_files=["TreeDB/collections/store.go"])
-        self.assertEqual(len(plan["race_shards"]), 3)
-        for idx, shard in enumerate(plan["race_shards"]):
-            self.assertEqual(shard["split_packages"], ["github.com/snissn/gomap/TreeDB/collections"])
-            self.assertEqual(shard["split_index"], idx)
-            self.assertEqual(shard["split_count"], 3)
+        self._assert_shards_cover_packages(plan["race_shards"], plan["race_packages"])
+        self.assertGreaterEqual(len(plan["race_shards"]), 5)
+        for shard in plan["race_shards"]:
+            self.assertLessEqual(shard["estimated_seconds"], 160.0)
+
+        # Wide multi-package PR (collections + db + caching + mongo_gateway) spreads
+        # slices across parallel shards instead of stacking heavy packages sequentially.
+        wide = self._plan(
+            changed_files=[
+                "TreeDB/collections/store.go",
+                "TreeDB/db/db.go",
+                "TreeDB/caching/db.go",
+                "TreeDB/mongo_gateway/server.go",
+            ]
+        )
+        self._assert_shards_cover_packages(wide["test_shards"], wide["test_packages"])
+        self._assert_shards_cover_packages(wide["race_shards"], wide["race_packages"])
+        self.assertGreaterEqual(len(wide["race_shards"]), 8)
+        self.assertLessEqual(max(s["estimated_seconds"] for s in wide["race_shards"]), 180.0)
+        self.assertLessEqual(max(s["estimated_seconds"] for s in wide["test_shards"]), 175.0)
+
+    def test_compile_sharding_splits_large_cones_and_skips_empty_cross(self) -> None:
+        # Script-only PR runs vet-0 for Python script tests and skips both cross-compile jobs.
+        script_plan = self._plan(changed_files=["scripts/treedb_peer_ec2.py"])
+        self.assertEqual(len(script_plan["vet_shards"]), 1)
+        self.assertEqual(script_plan["vet_shards"][0]["packages"], [])
+        self.assertEqual(script_plan["cross_darwin_shards"], [])
+        self.assertEqual(script_plan["cross_windows_shards"], [])
+
+        # Large >=45 package cone splits into 2 disjoint complete compile shards.
+        many = [f"github.com/snissn/gomap/pkg{i:03d}" for i in range(60)]
+        shards = ci_scope.build_compile_shards(many)
+        self.assertEqual(len(shards), 2)
+        combined = [p for s in shards for p in s["packages"]]
+        self.assertEqual(sorted(combined), sorted(many))
+
+    def test_partition_split_tests_complete_disjoint_and_spreads_slow_tests(self) -> None:
+        pkg = "github.com/snissn/gomap/TreeDB/collections"
+        slow = [
+            "TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankRunEquivalence",
+            "TestTypedGraphPreparedFilterDispersedQuality",
+            "TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers",
+            "TestNativeTextPublicCrashReplay",
+        ]
+        all_tests = slow + [f"TestFast{i:03d}" for i in range(40)] + ["FuzzBSONIndexKeyCodecV2Decode"]
+        parts = [ci_scope.partition_split_tests(pkg, all_tests, i, 4) for i in range(4)]
+        flattened = [t for p in parts for t in p]
+        self.assertEqual(sorted(flattened), sorted(all_tests))
+        self.assertEqual(len(flattened), len(set(flattened)))
+        # All 4 top slow tests must land on 4 distinct slices.
+        owners = [next(i for i, p in enumerate(parts) if t in p) for t in slow]
+        self.assertEqual(len(set(owners)), 4, f"slow tests collided across slices: {owners}")
 
     def test_os_escalation_for_platform_and_durability_paths(self) -> None:
         for path, want_win in (
@@ -302,7 +374,8 @@ class TestCIScopeRouter(unittest.TestCase):
     def test_main_push_is_main_fast_and_fail_closed_on_unknown_diff(self) -> None:
         p_main = self._plan(event_name="push", changed_files=[])
         self.assertEqual(p_main["tier"], "main_fast")
-        self.assertEqual(len(p_main["test_shards"]), 4)
+        self._assert_shards_cover_packages(p_main["test_shards"], p_main["test_packages"])
+        self.assertGreaterEqual(len(p_main["test_shards"]), 4)
         self.assertEqual(p_main["race_shards"], [])
 
         p_err = self._plan(event_name="pull_request", changed_files=None)
@@ -342,9 +415,15 @@ class TestCIScopeRouter(unittest.TestCase):
             out = Path(td) / "out.txt"
             ci_scope.write_github_outputs(plan, out)
             kv = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+            self.assertEqual(kv["run_vet"], "false")
+            self.assertEqual(kv["run_cross_darwin"], "false")
+            self.assertEqual(kv["run_cross_windows"], "false")
             self.assertEqual(kv["run_test"], "false")
             self.assertEqual(kv["run_race"], "false")
             self.assertEqual(kv["escalate_os"], "false")
+            self.assertTrue(json.loads(kv["vet_shards_json"]))
+            self.assertTrue(json.loads(kv["cross_darwin_shards_json"]))
+            self.assertTrue(json.loads(kv["cross_windows_shards_json"]))
             self.assertTrue(json.loads(kv["test_shards_json"]))
             self.assertTrue(json.loads(kv["race_shards_json"]))
             self.assertTrue(json.loads(kv["os_runners_json"]))

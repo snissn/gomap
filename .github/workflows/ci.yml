@@ -46,6 +46,11 @@ jobs:
       run_ci_script_tests: ${{ steps.scope.outputs.run_ci_script_tests }}
       run_python_client: ${{ steps.scope.outputs.run_python_client }}
       run_vet: ${{ steps.scope.outputs.run_vet }}
+      vet_shards_json: ${{ steps.scope.outputs.vet_shards_json }}
+      run_cross_darwin: ${{ steps.scope.outputs.run_cross_darwin }}
+      cross_darwin_shards_json: ${{ steps.scope.outputs.cross_darwin_shards_json }}
+      run_cross_windows: ${{ steps.scope.outputs.run_cross_windows }}
+      cross_windows_shards_json: ${{ steps.scope.outputs.cross_windows_shards_json }}
       run_test: ${{ steps.scope.outputs.run_test }}
       test_shards_json: ${{ steps.scope.outputs.test_shards_json }}
       run_race: ${{ steps.scope.outputs.run_race }}
@@ -191,12 +196,16 @@ jobs:
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
             --kind draft
 
-  vet-and-cross-compile:
-    name: vet + cross-OS compile (linux)
+  vet:
+    name: vet (linux)-${{ matrix.shard }}
     needs: preflight
     if: ${{ needs.preflight.outputs.run_vet == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.vet_shards_json) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -218,7 +227,7 @@ jobs:
             go.sum
 
       - name: CI workflow & script contract tests
-        if: ${{ needs.preflight.outputs.run_ci_script_tests == 'true' }}
+        if: ${{ matrix.shard == 0 && needs.preflight.outputs.run_ci_script_tests == 'true' }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -240,7 +249,38 @@ jobs:
           python3 .github/scripts/ci_scope.py run-shard \
             --repo . \
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
-            --kind vet
+            --kind vet \
+            --shard-index "${{ matrix.shard }}"
+
+  cross-compile-darwin:
+    name: cross-compile (darwin/arm64)-${{ matrix.shard }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_cross_darwin == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.cross_darwin_shards_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.preflight.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
 
       - name: Cross-compile darwin/arm64 (CGO_ENABLED=0)
         env:
@@ -249,7 +289,38 @@ jobs:
           python3 .github/scripts/ci_scope.py run-shard \
             --repo . \
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
-            --kind cross-darwin
+            --kind cross-darwin \
+            --shard-index "${{ matrix.shard }}"
+
+  cross-compile-windows:
+    name: cross-compile (windows/amd64)-${{ matrix.shard }}
+    needs: preflight
+    if: ${{ needs.preflight.outputs.run_cross_windows == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.preflight.outputs.cross_windows_shards_json) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download CI scope plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.preflight.outputs.plan_artifact }}
+          path: ${{ runner.temp }}/ci-scope
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
 
       - name: Cross-compile windows/amd64 (CGO_ENABLED=0)
         env:
@@ -258,7 +329,8 @@ jobs:
           python3 .github/scripts/ci_scope.py run-shard \
             --repo . \
             --plan "$RUNNER_TEMP/ci-scope/ci-scope-plan.json" \
-            --kind cross-windows
+            --kind cross-windows \
+            --shard-index "${{ matrix.shard }}"
 
   test-linux:
     name: test (linux)-${{ matrix.shard }}
@@ -448,7 +520,9 @@ jobs:
       - preflight
       - docs-checks
       - draft-vet-compile
-      - vet-and-cross-compile
+      - vet
+      - cross-compile-darwin
+      - cross-compile-windows
       - test-linux
       - race-linux
       - test-os-escalated
@@ -464,12 +538,16 @@ jobs:
           CI_FULL: ${{ needs.preflight.outputs.ci_full }}
           RUN_DOCS: ${{ needs.preflight.outputs.run_docs_check }}
           RUN_VET: ${{ needs.preflight.outputs.run_vet }}
+          RUN_CROSS_DARWIN: ${{ needs.preflight.outputs.run_cross_darwin }}
+          RUN_CROSS_WINDOWS: ${{ needs.preflight.outputs.run_cross_windows }}
           RUN_TEST: ${{ needs.preflight.outputs.run_test }}
           RUN_RACE: ${{ needs.preflight.outputs.run_race }}
           ESCALATE_OS: ${{ needs.preflight.outputs.escalate_os }}
           DOCS_RESULT: ${{ needs.docs-checks.result }}
           DRAFT_RESULT: ${{ needs.draft-vet-compile.result }}
-          VET_RESULT: ${{ needs.vet-and-cross-compile.result }}
+          VET_RESULT: ${{ needs.vet.result }}
+          CROSS_DARWIN_RESULT: ${{ needs.cross-compile-darwin.result }}
+          CROSS_WINDOWS_RESULT: ${{ needs.cross-compile-windows.result }}
           TEST_RESULT: ${{ needs.test-linux.result }}
           RACE_RESULT: ${{ needs.race-linux.result }}
           OS_RESULT: ${{ needs.test-os-escalated.result }}
@@ -514,7 +592,9 @@ jobs:
           failed=0
           check_result "docs-checks" "$RUN_DOCS" "$DOCS_RESULT" || failed=1
           check_result "draft-vet-compile" "$need_draft" "$DRAFT_RESULT" || failed=1
-          check_result "vet-and-cross-compile" "$RUN_VET" "$VET_RESULT" || failed=1
+          check_result "vet" "$RUN_VET" "$VET_RESULT" || failed=1
+          check_result "cross-compile-darwin" "$RUN_CROSS_DARWIN" "$CROSS_DARWIN_RESULT" || failed=1
+          check_result "cross-compile-windows" "$RUN_CROSS_WINDOWS" "$CROSS_WINDOWS_RESULT" || failed=1
           check_result "test-linux" "$RUN_TEST" "$TEST_RESULT" || failed=1
           check_result "race-linux" "$RUN_RACE" "$RACE_RESULT" || failed=1
           check_result "test-os-escalated" "$ESCALATE_OS" "$OS_RESULT" || failed=1
