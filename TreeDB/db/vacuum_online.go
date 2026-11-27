@@ -862,18 +862,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
 		return &rebuilt, nil
 	}
-	materializePendingOlderReplacement := func() error {
-		if !olderReplacementSharedPending || olderReplacement != nil || recoverableRoots == nil {
-			return nil
-		}
-		rebuilt, err := buildOlderReplacement(olderReplacementSource)
-		if err != nil {
-			return err
-		}
-		olderReplacement = rebuilt
-		olderReplacementSharedPending = false
-		return nil
-	}
 	if recoverableRoots != nil {
 		olderSlot := recoverableRoots.durable.slot ^ 1
 		olderRecord := recoverableRoots.durable.slotRecord[olderSlot]
@@ -931,12 +919,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	if baseState == nil || basePager == nil {
 		cleanupNewPager()
 		return errors.New("vacuum: missing base snapshot state")
-	}
-	if olderReplacementSharedPending && !vacuumOlderRecordMatchesVisible(olderReplacementSource, baseState) {
-		if err := materializePendingOlderReplacement(); err != nil {
-			cleanupNewPager()
-			return err
-		}
 	}
 	reserveStarted := time.Now()
 	systemTreePages, err := vacuumCountPagerTreePages(basePager, baseState.SystemRootPageID)
@@ -1098,12 +1080,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			break
 		}
 	}
-	if userDeltaApplied && olderReplacementSharedPending {
-		if err := materializePendingOlderReplacement(); err != nil {
-			cleanupNewPager()
-			return err
-		}
-	}
 
 	applyTail := func(ops map[string]batch.Entry, ranges []batch.DeleteRange) error {
 		if len(ops) == 0 && len(ranges) == 0 {
@@ -1225,12 +1201,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return lateErr
 		}
-		if userDeltaApplied && olderReplacementSharedPending {
-			if err := materializePendingOlderReplacement(); err != nil {
-				cleanupNewPager()
-				return err
-			}
-		}
 		// Publication debt must be durable before its coordinator can be retired.
 		// Drain outside writeMu so stable I/O is not charged to the writer pause;
 		// the capability check below forces a recapture when the drain advances a
@@ -1328,7 +1298,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			capabilityDirty = errors.Is(recoverableRoots.revalidateWithDurablePublishLockHeld(), ErrRecoverableRootSetStale)
 		}
 		olderSharedInvalid := olderReplacementSharedPending &&
-			(userDeltaApplied || tailMutations > 0 || basis.snapshot == nil || !vacuumOlderRecordMatchesVisible(olderReplacementSource, basis.snapshot.state))
+			(userDeltaApplied || tailMutations > 0 || basis.snapshot == nil ||
+				!vacuumOlderRecordMatchesVisible(olderReplacementSource, basis.snapshot.state) ||
+				!vacuumOlderRecordMatchesVisible(olderReplacementSource, db.state.Load()))
 		needsDeferredCutover := coherentDirty || epochDirty || capabilityDirty || olderSharedInvalid || tailMutations > vacuumCutoverMaxKeys
 		if needsDeferredCutover {
 			if defers >= vacuumCutoverMaxDefers {
@@ -1393,7 +1365,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				canShareOlder := replacementGen.primary == nil &&
 					recoverableRoots.durable.primaryReadRoots[olderSlot] == 0 &&
 					!userDeltaApplied && len(finalOps) == 0 && len(finalRanges) == 0 &&
-					vacuumOlderRecordMatchesVisible(olderRecord, successor.state)
+					vacuumOlderRecordMatchesVisible(olderRecord, successor.state) &&
+					vacuumOlderRecordMatchesStateToken(olderRecord, recoverableRoots.visible)
 				if canShareOlder {
 					if olderReplacement != nil {
 						if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {

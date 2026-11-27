@@ -466,6 +466,9 @@ func makeFootprintDoc(docIdx, cycle int) []byte {
 }
 
 func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	ctx := context.Background()
 	dir := t.TempDir()
 
@@ -855,4 +858,163 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if len(phraseAfter.Results) != len(phraseBefore.Results) {
 		t.Fatalf("PhraseSearch result count mismatch across reopen: before=%d after=%d", len(phraseBefore.Results), len(phraseAfter.Results))
 	}
+}
+
+func TestBufferedIndexedOverlayRoots_VacuumPreservesTombstones(t *testing.T) {
+	run := func(t *testing.T, mode string) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		openDB := func() (*backenddb.DB, *CollectionManager, *Collection) {
+			d, err := backenddb.Open(backenddb.Options{
+				Dir:                        dir,
+				IndexOuterLeavesInValueLog: false,
+				DisableBackgroundPrune:     true,
+			})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			mgr := NewCollectionManager(d)
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				_ = mgr.Close()
+				_ = d.Close()
+				t.Fatalf("open collection: %v", err)
+			}
+			return d, mgr, col
+		}
+
+		d, err := backenddb.Open(backenddb.Options{
+			Dir:                        dir,
+			IndexOuterLeavesInValueLog: false,
+			DisableBackgroundPrune:     true,
+		})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{
+			Name: "users",
+			Options: CollectionOptions{
+				BufferedIndexedOverlayRoots:      true,
+				BufferedIndexedWriteMaxDocuments: 1024,
+				BufferedIndexedWriteMaxRootRuns:  1024,
+				DisableBufferedIndexedAsyncFlush: true,
+			},
+			Indexes: []IndexDefinition{
+				{Name: "city", Field: "city", ValueType: IndexValueString},
+			},
+		}); err != nil {
+			_ = mgr.Close()
+			_ = d.Close()
+			t.Fatalf("create collection: %v", err)
+		}
+		col, err := mgr.OpenCollection("users")
+		if err != nil {
+			_ = mgr.Close()
+			_ = d.Close()
+			t.Fatalf("open collection: %v", err)
+		}
+
+		if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+			t.Fatalf("insert u1: %v", err)
+		}
+		if _, err := col.Insert([]byte("u2"), []byte(`{"city":"sea"}`)); err != nil {
+			t.Fatalf("insert u2: %v", err)
+		}
+		if err := col.Flush(); err != nil {
+			t.Fatalf("flush base docs: %v", err)
+		}
+		if _, err := col.CompactRootOverlays(ctx); err != nil {
+			t.Fatalf("compact base overlay: %v", err)
+		}
+
+		// Delete u1 and flush into a delta overlay root whose tombstones mask
+		// u1 (primary) and city=hnl (secondary index) in the base root.
+		deleted, err := col.DeleteDocument([]byte("u1"))
+		if err != nil {
+			t.Fatalf("delete u1: %v", err)
+		}
+		if !deleted {
+			t.Fatal("delete u1: deleted=false want true")
+		}
+		if err := col.Flush(); err != nil {
+			t.Fatalf("flush delete overlay: %v", err)
+		}
+
+		assertDeleted := func(stage string, c *Collection) {
+			t.Helper()
+			if got, err := c.Get([]byte("u1")); err != nil {
+				t.Fatalf("%s: Get(u1): %v", stage, err)
+			} else if got != nil {
+				t.Fatalf("%s: Get(u1)=%q resurrected deleted doc, want nil", stage, got)
+			}
+			hnlIDs, err := c.FindByIndex("city", "hnl")
+			if err != nil {
+				t.Fatalf("%s: FindByIndex(city, hnl): %v", stage, err)
+			}
+			if len(hnlIDs) != 0 {
+				t.Fatalf("%s: FindByIndex(city, hnl)=%q resurrected deleted index entry, want empty", stage, hnlIDs)
+			}
+			if got, err := c.Get([]byte("u2")); err != nil || !bytes.Contains(got, []byte(`"sea"`)) {
+				t.Fatalf("%s: Get(u2)=%q err=%v want sea doc", stage, got, err)
+			}
+			seaIDs, err := c.FindByIndex("city", "sea")
+			if err != nil {
+				t.Fatalf("%s: FindByIndex(city, sea): %v", stage, err)
+			}
+			if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u2")) {
+				t.Fatalf("%s: FindByIndex(city, sea)=%q want [u2]", stage, seaIDs)
+			}
+		}
+
+		assertDeleted("before-vacuum", col)
+
+		switch mode {
+		case "online":
+			if runtime.GOOS == "windows" {
+				_ = mgr.Close()
+				_ = d.Close()
+				t.Skip("online vacuum unsupported on windows")
+			}
+			if err := d.VacuumIndexOnline(ctx); err != nil {
+				_ = mgr.Close()
+				_ = d.Close()
+				t.Fatalf("VacuumIndexOnline: %v", err)
+			}
+			assertDeleted("after-online-vacuum", col)
+			if err := mgr.Close(); err != nil {
+				t.Fatalf("mgr.Close: %v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("d.Close: %v", err)
+			}
+		case "offline":
+			if err := mgr.Close(); err != nil {
+				t.Fatalf("mgr.Close: %v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("d.Close: %v", err)
+			}
+			if err := backenddb.VacuumIndexOffline(backenddb.Options{
+				Dir:                        dir,
+				IndexOuterLeavesInValueLog: false,
+			}); err != nil {
+				t.Fatalf("VacuumIndexOffline: %v", err)
+			}
+		}
+
+		d2, mgr2, col2 := openDB()
+		defer func() {
+			if err := mgr2.Close(); err != nil {
+				t.Errorf("reopened mgr.Close: %v", err)
+			}
+			if err := d2.Close(); err != nil {
+				t.Errorf("reopened d.Close: %v", err)
+			}
+		}()
+		assertDeleted("after-"+mode+"-reopen", col2)
+	}
+
+	t.Run("online", func(t *testing.T) { run(t, "online") })
+	t.Run("offline", func(t *testing.T) { run(t, "offline") })
 }

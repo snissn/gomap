@@ -662,16 +662,22 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 				}
 			case page.PageTypeInternal:
 				out.internalPages++
-				if !rootHasNonPurePager && n.Count() > 0 {
-					_, ref0, err := n.GetInternalEntryRefView(0)
-					if err != nil {
-						return err
-					}
-					if ref0.Kind == page.ChildRefLeafLog {
-						rootHasNonPurePager = true
+				if !rootHasNonPurePager {
+					count := n.Count()
+					for i := uint16(0); i < count; i++ {
+						_, ref, err := n.GetInternalEntryRefView(i)
+						if err != nil {
+							return err
+						}
+						if ref.Kind == page.ChildRefLeafLog {
+							rootHasNonPurePager = true
+							break
+						}
 					}
 				}
 			case page.PageTypePrimaryDirectory:
+				rootHasNonPurePager = true
+			default:
 				rootHasNonPurePager = true
 			}
 			return nil
@@ -680,6 +686,14 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 		}
 		if !rootHasNonPurePager {
 			out.emptyLeafPages += rootEmptyLeaves
+			// Every multi-leaf bulk-built root can legitimately retain up to one
+			// non-empty trailing leaf below 25% fill; exclude that single
+			// irreducible trailing leaf per root so many small multi-leaf
+			// collections converge cleanly after vacuum while keeping empty
+			// leaves fully counted.
+			if rootUnderfullLeaves > rootEmptyLeaves {
+				rootUnderfullLeaves--
+			}
 			out.underfullLeafPages += rootUnderfullLeaves
 		}
 	}

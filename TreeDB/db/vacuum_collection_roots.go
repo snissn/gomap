@@ -846,9 +846,6 @@ func vacuumInspectCollectionRootWithObserver(p *pager.Pager, rootID uint64, visi
 				if err := walk(childRef.Page); err != nil {
 					return err
 				}
-				if hasPrimaryDirectory {
-					return nil
-				}
 			}
 			return nil
 		case page.PageTypePrimaryDirectory:
@@ -907,13 +904,19 @@ func vacuumCopyCollectionRootWithOptionsAndObserver(oldPager *pager.Pager, rootI
 	}
 	switch inspected.kind {
 	case vacuumCollectionRootAllLeafRefs:
-		return vacuumBuildInternalTreeFromLeafRefsWithObserver(oldPager, rootID, newPager, alloc, false, visitSourcePage)
+		// vacuumInspectCollectionRootWithObserver already invoked visitSourcePage
+		// once per source page; pass nil here to avoid double observer calls.
+		return vacuumBuildInternalTreeFromLeafRefsWithObserver(oldPager, rootID, newPager, alloc, false, nil)
 	case vacuumCollectionRootPurePager:
 		opts := buildOpts
 		opts.LeafPageLog = nil
 		opts.EntryRevisions = inspected.entryRevisions
+		// Preserve tombstones verbatim so overlay/delta collection roots (e.g.
+		// BufferedIndexedOverlayRoots) continue masking deleted entries in older
+		// base roots after repacking.
 		iter := tree.New(oldPager, nil, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
-			Mode: tree.IteratorModePointerProjection,
+			Mode:              tree.IteratorModePointerProjection,
+			IncludeTombstones: true,
 		})
 		destRootID, buildErr := bulk.BuildWithOptions(iter, alloc, newPager, opts)
 		err := errors.Join(buildErr, iter.Error(), iter.Close())
@@ -922,7 +925,8 @@ func vacuumCopyCollectionRootWithOptionsAndObserver(oldPager *pager.Pager, rootI
 		}
 		return destRootID, nil
 	default:
-		return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, false, visitSourcePage)
+		// Source pages were already observed during inspection above.
+		return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, false, nil)
 	}
 }
 

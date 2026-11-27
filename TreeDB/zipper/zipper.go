@@ -3706,7 +3706,17 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if err != nil {
 			return nil, nil, err
 		}
-		if ok && n.Count() == 0 {
+		if !ok {
+			// All children of a B+Tree internal node share the same level; a
+			// non-leaf child means this node is at internal height >= 2, so exit
+			// immediately instead of loading O(fanout) internal children.
+			if len(retired) == 0 {
+				return entries, nil, nil
+			}
+			out = append(out, entries[i:]...)
+			return out, retired, nil
+		}
+		if n.Count() == 0 {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
 			}

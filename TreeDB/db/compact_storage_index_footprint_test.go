@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -524,4 +525,222 @@ func TestCompactStorageTriggersVacuumOnLeadingHoleAndSparseCollectionLeaves(t *t
 			}
 		})
 	}
+}
+
+func TestCompactStorageConvergesOnManySmallTwoLeafCollections(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	// 256 small 2-leaf pure-pager collection roots: each root has 5 x ~900B
+	// inline entries so bulk-build produces 2 leaves per root (leaf 0 full,
+	// leaf 1 trailing <25% fill). That yields 512 total leaves with 256
+	// irreducible trailing <25% leaves (50% >= 40%). Both Full and Exhaustive
+	// MUST converge cleanly after vacuum without re-triggering collection_leaf_fill.
+	for _, mode := range []CompactStorageMode{CompactStorageFull, CompactStorageExhaustive} {
+		t.Run(string(mode), func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{
+				Dir:                        dir,
+				DisableBackgroundPrune:     true,
+				IndexOuterLeavesInValueLog: false,
+				LeafPrefixCompression:      true,
+			}
+			d, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer closeNoErr(t, d)
+
+			const numCollections = 256
+			const entriesPerCollection = 5
+			val := bytes.Repeat([]byte("v"), 900)
+			sysEntries := make([]struct {
+				key string
+				val []byte
+			}, 0, numCollections)
+
+			gen := d.idx.Load()
+			alloc := gen.allocator
+			p := gen.pager
+			for c := 0; c < numCollections; c++ {
+				mt, err := memtable.NewWithCapacityMode(8*1024, memtable.ModeHashSorted)
+				if err != nil {
+					t.Fatalf("memtable: %v", err)
+				}
+				for e := 0; e < entriesPerCollection; e++ {
+					k := []byte(fmt.Sprintf("k-%03d-%02d", c, e))
+					mt.Set(k, val)
+				}
+				mt.Freeze()
+				it := mt.NewIterator(nil, nil)
+				rootID, err := bulk.BuildWithOptions(it, alloc, p, bulk.BuildOptions{
+					LeafPrefixCompression: true,
+				})
+				_ = it.Close()
+				if err != nil {
+					t.Fatalf("bulk.Build col %d: %v", c, err)
+				}
+				sysEntries = append(sysEntries, struct {
+					key string
+					val []byte
+				}{
+					key: fmt.Sprintf("collections/root/small_%03d/primary", c),
+					val: encodeCollectionRootDescriptorRootID(rootID),
+				})
+			}
+
+			if _, _, err := d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+				mt, err := memtable.NewWithCapacityMode(64*1024, memtable.ModeHashSorted)
+				if err != nil {
+					return nil, err
+				}
+				for _, e := range sysEntries {
+					mt.Set([]byte(e.key), e.val)
+				}
+				mt.Freeze()
+				return mt.NewIterator(nil, nil), nil
+			}); err != nil {
+				t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+
+			beforeRep, err := d.IndexVacuumTriggerReport()
+			if err != nil {
+				t.Fatalf("before IndexVacuumTriggerReport: %v", err)
+			}
+			if beforeRep.CollectionRootLeafPages < numCollections*2 {
+				t.Fatalf("expected >= %d leaves across %d 2-leaf roots, got %d", numCollections*2, numCollections, beforeRep.CollectionRootLeafPages)
+			}
+
+			stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: mode})
+			if err != nil {
+				t.Fatalf("CompactStorage(%s): %v", mode, err)
+			}
+			for _, ph := range stats.Phases {
+				if ph.Name == "index-vacuum-settle" {
+					t.Fatalf("unexpected index-vacuum-settle on %d small 2-leaf collections (%s): phases=%+v", numCollections, mode, stats.Phases)
+				}
+			}
+			if stats.RemainingDebt.IndexVacuumRequired {
+				t.Fatalf("CompactStorage(%s) failed to converge on %d small 2-leaf collections: RemainingDebt=%+v", mode, numCollections, stats.RemainingDebt)
+			}
+			if !stats.FullyCompacted || !stats.PolicyFullyCompacted {
+				t.Fatalf("CompactStorage(%s) flags fully=%v policy=%v byte=%v debt=%+v",
+					mode, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+			}
+			if mode == CompactStorageExhaustive && !stats.ByteMinimized {
+				t.Fatalf("CompactStorage(Exhaustive) ByteMinimized=false debt=%+v", stats.RemainingDebt)
+			}
+			afterRep, err := d.IndexVacuumTriggerReport()
+			if err != nil {
+				t.Fatalf("after IndexVacuumTriggerReport: %v", err)
+			}
+			if afterRep.CollectionRootUnderfullLeafPages != 0 || afterRep.CollectionRootEmptyLeafPages != 0 {
+				t.Fatalf("expected 0 reducible underfull/empty leaves after vacuum, got underfull=%d empty=%d (totalLeaves=%d)",
+					afterRep.CollectionRootUnderfullLeafPages, afterRep.CollectionRootEmptyLeafPages, afterRep.CollectionRootLeafPages)
+			}
+		})
+	}
+
+	t.Run("mixed_internal_leafref_at_nonzero_index_excluded_from_leaf_fill", func(t *testing.T) {
+		p, err := pager.Open(filepath.Join(t.TempDir(), "mixed.db"), 64*1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = p.Close() }()
+		if _, err := p.Alloc(2); err != nil {
+			t.Fatal(err)
+		}
+		// Build a height-2 mixed root whose branch 0 is a pager internal node
+		// holding an empty pager leaf and branch 1 is a leaf-log internal node
+		// holding a ChildRefLeafLog. Because the tree mixes pager and leaf-log
+		// leaves, vacuum cannot bulk-repack it, so fragmentation must exclude it
+		// from empty/underfull leaf-fill debt.
+		emptyLeafID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf, err := p.GetForWrite(emptyLeafID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lb := node.NewBuilder(buf, page.PageTypeLeaf)
+		lb.SetPageID(emptyLeafID)
+		lb.Finish()
+
+		pagerBranchID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pbBuf, err := p.GetForWrite(pagerBranchID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pb := node.NewBuilder(pbBuf, page.PageTypeInternal)
+		pb.SetPageID(pagerBranchID)
+		if err := pb.AddInternalChildRef([]byte{}, page.PageChildRef(emptyLeafID)); err != nil {
+			t.Fatal(err)
+		}
+		pb.Finish()
+
+		leafRefBranchID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lrbBuf, err := p.GetForWrite(leafRefBranchID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lrb := node.NewBuilder(lrbBuf, page.PageTypeInternal)
+		lrb.SetPageID(leafRefBranchID)
+		if err := lrb.AddInternalChildRef([]byte("z"), page.LeafLogChildRef(page.LeafLogPtr{FileID: 9, Offset: 4096})); err != nil {
+			t.Fatal(err)
+		}
+		lrb.Finish()
+
+		rootID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rbuf, err := p.GetForWrite(rootID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ib := node.NewBuilder(rbuf, page.PageTypeInternal)
+		ib.SetPageID(rootID)
+		if err := ib.AddInternalChildRef([]byte{}, page.PageChildRef(pagerBranchID)); err != nil {
+			t.Fatal(err)
+		}
+		if err := ib.AddInternalChildRef([]byte("z"), page.PageChildRef(leafRefBranchID)); err != nil {
+			t.Fatal(err)
+		}
+		ib.Finish()
+
+		// Build a system root pointing to rootID as a collection root descriptor.
+		sysRootID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sbuf, err := p.GetForWrite(sysRootID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sb := node.NewBuilder(sbuf, page.PageTypeLeaf)
+		sb.SetPageID(sysRootID)
+		if err := sb.AddLeafEntry([]byte("collections/root/mixed/primary"), encodeCollectionRootDescriptorRootID(rootID), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatal(err)
+		}
+		sb.Finish()
+
+		got, err := collectionRootFragmentationStatsWithContext(context.Background(), &indexGen{pager: p}, &DBState{SystemRootPageID: sysRootID})
+		if err != nil {
+			t.Fatalf("collectionRootFragmentationStatsWithContext: %v", err)
+		}
+		if got.emptyLeafPages != 0 || got.underfullLeafPages != 0 {
+			t.Fatalf("mixed height-2 root with ChildRefLeafLog branch misclassified as pure-pager: empty=%d underfull=%d",
+				got.emptyLeafPages, got.underfullLeafPages)
+		}
+	})
 }

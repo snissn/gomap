@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -565,9 +566,9 @@ func TestVacuumIndexOnlineRepacksSparseCollectionRootsAndReclaimsSpace(t *testin
 			_ = d.Close()
 			t.Fatalf("mixed root copy failed: %v", err)
 		}
-		if visitedPages == 0 {
+		if visitedPages != 4 {
 			_ = d.Close()
-			t.Fatal("expected visitSourcePage callbacks on mixed root fallback")
+			t.Fatalf("mixed root fallback visitSourcePage calls=%d want 4 (1x per source page)", visitedPages)
 		}
 		dstRootImg, err := dstPager.Get(clonedMixed)
 		if err != nil {
@@ -790,4 +791,114 @@ func countUnaccountedIndexPagesForTest(t *testing.T, indexPath string) uint64 {
 		leaked++
 	}
 	return leaked
+}
+
+func TestVacuumIndexOnlineMatchedSlotsConcurrentWrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	for _, hookKind := range []string{"after_base_snapshot", "during_preflush"} {
+		t.Run(hookKind, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{
+				Dir:                        dir,
+				DisableBackgroundPrune:     true,
+				IndexOuterLeavesInValueLog: false,
+			}
+			d, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			closed := false
+			defer func() {
+				if !closed {
+					_ = d.Close()
+				}
+			}()
+
+			for i := 0; i < 64; i++ {
+				k := []byte(fmt.Sprintf("init-%04d", i))
+				v := bytes.Repeat([]byte{byte('a' + i%26)}, 128)
+				if err := d.Set(k, v); err != nil {
+					t.Fatalf("Set %d: %v", i, err)
+				}
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			// Converge both durable slots onto identical roots so VacuumIndexOnline
+			// enters with olderReplacementSharedPending = true.
+			if err := d.refreshDurableRootFallback(); err != nil {
+				t.Fatalf("refreshDurableRootFallback: %v", err)
+			}
+
+			concurrentKey := []byte("concurrent-" + hookKind)
+			concurrentVal := bytes.Repeat([]byte("Z"), 128)
+			var injected atomic.Bool
+			injectWrite := func() {
+				if !injected.CompareAndSwap(false, true) {
+					return
+				}
+				if err := d.SetSync(concurrentKey, concurrentVal); err != nil {
+					t.Errorf("concurrent SetSync (%s): %v", hookKind, err)
+				}
+			}
+
+			switch hookKind {
+			case "after_base_snapshot":
+				prev := testHookVacuumAfterBaseSnapshot
+				testHookVacuumAfterBaseSnapshot = injectWrite
+				defer func() { testHookVacuumAfterBaseSnapshot = prev }()
+			case "during_preflush":
+				d.vacuumPreflushHook = func() error {
+					injectWrite()
+					return nil
+				}
+				defer func() { d.vacuumPreflushHook = nil }()
+			}
+
+			if err := d.VacuumIndexOnline(context.Background()); err != nil {
+				t.Fatalf("VacuumIndexOnline with concurrent write on matched slots (%s) failed: %v", hookKind, err)
+			}
+			if !injected.Load() {
+				t.Fatalf("concurrent write hook %s never fired", hookKind)
+			}
+			stats := d.vacuumOnlineStatsSnapshot()
+			if stats.DeferredCutovers == 0 {
+				t.Fatalf("expected DeferredCutovers > 0 after concurrent write (%s), got %+v", hookKind, stats)
+			}
+			if stats.OlderRootRebuilds == 0 {
+				t.Fatalf("expected OlderRootRebuilds > 0 when concurrent write diverges matched slots (%s), got %+v", hookKind, stats)
+			}
+
+			verify := func(stage string, cur *DB) {
+				t.Helper()
+				got, err := cur.Get(concurrentKey)
+				if err != nil || !bytes.Equal(got, concurrentVal) {
+					t.Fatalf("%s: Get(%q) len=%d err=%v want len=%d", stage, concurrentKey, len(got), err, len(concurrentVal))
+				}
+				for i := 0; i < 64; i++ {
+					k := []byte(fmt.Sprintf("init-%04d", i))
+					want := bytes.Repeat([]byte{byte('a' + i%26)}, 128)
+					got, err := cur.Get(k)
+					if err != nil || !bytes.Equal(got, want) {
+						t.Fatalf("%s: Get(%q) mismatch err=%v", stage, k, err)
+					}
+				}
+			}
+			verify("after-vacuum", d)
+
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			closed = true
+
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Reopen: %v", err)
+			}
+			defer func() { _ = reopened.Close() }()
+			verify("after-reopen", reopened)
+		})
+	}
 }

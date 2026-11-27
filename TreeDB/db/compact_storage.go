@@ -1312,13 +1312,20 @@ func (db *DB) compactStorageVacuumIndexOnlineWithOwner(ctx context.Context, lock
 	if db != nil && db.compactStorageVacuumIndexOnlineHook != nil {
 		return db.compactStorageVacuumIndexOnlineHook(ctx, lockMaintenance)
 	}
-	// Converge both durable meta slots onto the already-durable current root
-	// before online vacuum on DATA indexes so vacuum emits a single compact
-	// copy (1x live pages) instead of duplicating the entire B-tree for slot^1.
+	// Best-effort convergence of both durable meta slots onto the already-durable
+	// current root before online vacuum on DATA indexes so quiet DBs emit a single
+	// compact copy (1x live pages) instead of duplicating the B-tree for slot^1.
+	// On non-command-WAL profiles with concurrent writers, non-convergence is
+	// non-fatal and falls through safely to standard 2-slot online vacuum.
 	if db != nil && runtime.GOOS != "windows" && !db.readOnly {
 		if idx := db.idx.Load(); idx != nil && idx.primary == nil {
 			if err := db.refreshDurableRootFallback(); err != nil {
-				return err
+				if errors.Is(err, ErrClosed) || errors.Is(err, ErrRecoveryRequired) ||
+					errors.Is(err, ErrReadOnly) || errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					!strings.Contains(err.Error(), "did not converge") {
+					return err
+				}
 			}
 		}
 	}

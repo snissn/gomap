@@ -2813,7 +2813,17 @@ func writeRebuiltDurableRootsV1WithFree(dir, indexPath string, p *pager.Pager, r
 	if len(roots) != 2 || roots[0].meta.CommitSeq == 0 || roots[1].meta.CommitSeq <= roots[0].meta.CommitSeq {
 		return errors.New("invalid rebuilt durable-root pair")
 	}
-	if err := writeRebuiltDurableRootV1WithFree(dir, indexPath, p, roots[0].meta, roots[0].resources, initialFree); err != nil {
+	var filteredFree []uint64
+	if len(initialFree) > 0 {
+		filteredFree = make([]uint64, 0, len(initialFree))
+		for _, id := range initialFree {
+			if id == roots[1].meta.UserRootPageID || id == roots[1].meta.SystemRootPageID {
+				continue
+			}
+			filteredFree = append(filteredFree, id)
+		}
+	}
+	if err := writeRebuiltDurableRootV1WithFree(dir, indexPath, p, roots[0].meta, roots[0].resources, filteredFree); err != nil {
 		return err
 	}
 	selected, err := selectDurableRootV1(p, p.PageCount(), nil, dependencyDirectoryStructureValidatorV2(p))
