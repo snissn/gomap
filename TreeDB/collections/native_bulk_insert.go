@@ -14,7 +14,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -711,60 +710,47 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 				i = lo
 			}
 		} else {
-			var physical backenddb.NativePhysicalReader
-			if hasBase {
-				physical, _ = g.probe.capture.(backenddb.NativePhysicalReader)
+			// Gap-jumping sorted live seek across pending, captured, and base:
+			// disjoint contiguous batches (common under multi-producer bulk
+			// insert after background checkpoints) complete in O(log N) seeks
+			// instead of N root-to-leaf lookups inside coord.nativeBulkInsertMu.
+			var cursor [page.PageSize + 1]byte
+			var endBuf [page.PageSize + 1]byte
+			lastKey := pre.primary[n-1].Key
+			var lastEnd []byte
+			if len(lastKey) < len(endBuf) {
+				m := copy(endBuf[:], lastKey)
+				endBuf[m] = 0
+				lastEnd = endBuf[:m+1]
 			}
-			for i := 0; i < n; i++ {
-				id := pre.primary[i].Key
-				if pending != nil && pending.Len() > 0 &&
-					(!hasPendingMax || bytes.Compare(id, nativeBorrowedStringBytes(pendingMax)) <= 0) &&
-					(!hasPendingMin || bytes.Compare(id, nativeBorrowedStringBytes(pendingMin)) >= 0) {
-					if row, ok := pending.Get(id); ok {
-						if row.Flags&node.FlagTombstone == 0 {
-							return true, ErrDocumentExists
-						}
-						continue
-					}
-				}
-				if captured != nil {
-					if row, ok := captured.get(id); ok {
-						if row.Flags&node.FlagTombstone == 0 {
-							return true, ErrDocumentExists
-						}
-						continue
-					}
-				}
-				if !hasBase {
-					continue
-				}
-				if physical != nil {
-					entry, err := physical.NativeEntryAtRoot(g.probe.domain.domain.baseRoot, id, false)
-					if errors.Is(err, tree.ErrKeyNotFound) {
-						continue
-					}
-					if err != nil {
-						return true, err
-					}
-					if entry.Flags&node.FlagTombstone == 0 {
-						return true, ErrDocumentExists
-					}
-					continue
-				}
-				scratch, scratchErr := g.probe.physicalScratch()
-				if scratchErr != nil {
-					return true, scratchErr
-				}
-				entry, err := g.probe.domain.baseEntry(id, scratch, g.probe.readLeaf)
-				if errors.Is(err, tree.ErrKeyNotFound) {
-					continue
-				}
+			for i := 0; i < n; {
+				entry, found, err := nativeJSONSeekLive(&g.probe.domain, &g.probe, pre.primary[i].Key, lastEnd, cursor[:])
 				if err != nil {
 					return true, err
 				}
-				if entry.Flags&node.FlagTombstone == 0 {
+				if !found {
+					break
+				}
+				if bytes.Equal(entry.Key, pre.primary[i].Key) {
 					return true, ErrDocumentExists
 				}
+				if lastEnd == nil && bytes.Compare(entry.Key, lastKey) > 0 {
+					break
+				}
+				// Advance i to the first batch key >= entry.Key.
+				lo, hi := i+1, n
+				for lo < hi {
+					mid := lo + (hi-lo)/2
+					if bytes.Compare(pre.primary[mid].Key, entry.Key) < 0 {
+						lo = mid + 1
+					} else {
+						hi = mid
+					}
+				}
+				if lo < n && bytes.Equal(pre.primary[lo].Key, entry.Key) {
+					return true, ErrDocumentExists
+				}
+				i = lo
 			}
 		}
 	}
@@ -918,25 +904,44 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 		if err != nil {
 			return err
 		}
-		for i := 0; i < u.depCount; i++ {
+		lastDep := deps[u.startDep+u.depCount-1]
+		for i := 0; i < u.depCount; {
 			dep := deps[u.startDep+i]
-			start := dep.Key
-			end := dep.End
-			var docID []byte
-			for {
-				entry, found, err := nativeJSONSeekLive(&read, &g.probe, start, end, cursor[:])
-				if err != nil {
-					return err
-				}
-				if !found {
+			entry, found, err := nativeJSONSeekLive(&read, &g.probe, dep.Key, lastDep.End, cursor[:])
+			if err != nil {
+				return err
+			}
+			if !found {
+				break
+			}
+			if dep.End != nil && bytes.Compare(entry.Key, dep.End) >= 0 {
+				if lastDep.End != nil && bytes.Compare(entry.Key, lastDep.End) >= 0 {
 					break
 				}
-				if docID == nil {
-					docID, err = indexKeyDocumentID(u.valueType, u.entries[i].key)
-					if err != nil {
-						return err
+				lo, hi := i+1, u.depCount
+				for lo < hi {
+					mid := lo + (hi-lo)/2
+					midEnd := deps[u.startDep+mid].End
+					if midEnd != nil && bytes.Compare(midEnd, entry.Key) <= 0 {
+						lo = mid + 1
+					} else {
+						hi = mid
 					}
 				}
+				if lo >= u.depCount {
+					break
+				}
+				i = lo
+				dep = deps[u.startDep+i]
+				if bytes.Compare(entry.Key, dep.Key) < 0 {
+					continue
+				}
+			}
+			docID, err := indexKeyDocumentID(u.valueType, u.entries[i].key)
+			if err != nil {
+				return err
+			}
+			for {
 				owner, err := indexKeyDocumentID(u.valueType, entry.Key)
 				if err != nil {
 					return err
@@ -947,10 +952,17 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 				if len(entry.Key) >= len(cursor) {
 					return memtable.ErrCOWCapacity
 				}
-				n := copy(cursor[:], entry.Key)
-				cursor[n] = 0
-				start = cursor[:n+1]
+				m := copy(cursor[:], entry.Key)
+				cursor[m] = 0
+				entry, found, err = nativeJSONSeekLive(&read, &g.probe, cursor[:m+1], dep.End, cursor[:])
+				if err != nil {
+					return err
+				}
+				if !found {
+					break
+				}
 			}
+			i++
 		}
 	}
 	return nil
@@ -979,7 +991,7 @@ func (m *NativeJSONManager) insertBulkBatch(name string, ids, documents [][]byte
 }
 
 func (m *NativeJSONManager) insertBulkBatchOnce(coord *collectionSchemaCoordinator, name string, ids, documents [][]byte, allowBulkPreimage bool) (retry, capacityRetry bool, err error) {
-	releaseSlot := coord.acquireBulkPreimageSlot()
+	releaseSlot := coord.acquireBulkPreimageSlotForCount(len(ids))
 	defer releaseSlot()
 	if err := m.db.PrepareNativeProducer(); err != nil {
 		return false, false, err

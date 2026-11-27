@@ -1,8 +1,10 @@
 package commitlog
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -144,5 +146,79 @@ func TestFixedWALPressureCapPreservesAtomicFrame(t *testing.T) {
 		if err != nil || plan.capacity != fixedWALDefaultPhysicalBudget {
 			t.Fatalf("reason=%d inherited oversized reserve: plan=%+v err=%v", reason, plan, err)
 		}
+	}
+}
+
+func TestFixedWALBulkPressureSteppingAndAheadAdoption(t *testing.T) {
+	current := &fixedWAL{capacity: fixedWALDefaultCapacity}
+	// Small and sub-threshold frames preserve 2x doubling.
+	for _, incoming := range []int64{256 << 10, 1800 << 10} {
+		plan, err := fixedSuccessorSizePlan(current, fixedWALDefaultPhysicalBudget, fixedWALPressureRotation, incoming)
+		if err != nil || plan.capacity != 2*fixedWALDefaultCapacity {
+			t.Fatalf("sub-threshold incoming=%d plan=%+v want capacity=%d err=%v", incoming, plan, 2*fixedWALDefaultCapacity, err)
+		}
+	}
+	// Multi-MiB bulk frames quantize to the same power-of-two multiple (~32 MiB)
+	// across slightly varying sizes so ahead-reserve adoption matches exactly.
+	wantBulk := int64(8 * fixedWALDefaultCapacity)
+	for _, incoming := range []int64{3_200_000, 3_250_000} {
+		plan, err := fixedSuccessorSizePlan(current, fixedWALDefaultPhysicalBudget, fixedWALPressureRotation, incoming)
+		if err != nil || plan.capacity != wantBulk {
+			t.Fatalf("bulk incoming=%d plan=%+v want capacity=%d err=%v", incoming, plan, wantBulk, err)
+		}
+	}
+
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed creation unsupported")
+	}
+	dir := t.TempDir()
+	j, err := openFixedTestCommandJournal(dir, CommandJournalOptions{
+		SegmentTargetBytes:     64 << 20,
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+
+	frame1 := fixedWALLifecycleFrame(t, 3_200_000)
+	if _, err := j.AppendCommand(frame1); err != nil {
+		t.Fatalf("append frame1: %v", err)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatalf("flush frame1: %v", err)
+	}
+	aheadWait(t, j, func(s *fixedWALAheadSlot) bool { return s != nil && s.ready })
+	j.mu.Lock()
+	planned := j.fixedAhead.plannedCapacity
+	j.mu.Unlock()
+	if planned != wantBulk {
+		t.Fatalf("ahead plannedCapacity=%d want %d", planned, wantBulk)
+	}
+
+	oldWrite := fixedWALInitializeWrite
+	var syncWrites atomic.Int64
+	fixedWALInitializeWrite = func(f io.WriterAt, p []byte, off int64) error {
+		syncWrites.Add(1)
+		return oldWrite(f, p, off)
+	}
+	defer func() { fixedWALInitializeWrite = oldWrite }()
+
+	// Slightly different second bulk frame size must still adopt the exact
+	// quantized 32 MiB ahead reserve with zero synchronous init writes.
+	frame2 := fixedWALLifecycleFrame(t, 3_250_000)
+	if _, err := j.AppendCommand(frame2); err != nil {
+		t.Fatalf("append frame2: %v", err)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatalf("flush frame2: %v", err)
+	}
+	fixedWALInitializeWrite = oldWrite
+
+	if got := syncWrites.Load(); got != 0 {
+		t.Fatalf("bulk rotation performed %d synchronous init writes; want 0 (adopted ahead reserve)", got)
+	}
+	if got := j.writer.fixed.capacity; got != wantBulk {
+		t.Fatalf("rotated fixed WAL capacity=%d want %d", got, wantBulk)
 	}
 }

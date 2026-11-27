@@ -1505,14 +1505,14 @@ func (j *CommandJournal) AppendedLSN() uint64 {
 // journal mutex. This intentionally optimizes for deterministic frame order and
 // tail-only rollback, not parallel appends within one lane.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
-	return j.appendCommand(env, false, nil, nil)
+	return j.appendCommand(env, false, nil, nil, false)
 }
 
 // AppendCommandObserved appends a complete command frame and emits its
 // durability boundaries while the journal lock still identifies the exact
 // active segment that owns the frame.
 func (j *CommandJournal) AppendCommandObserved(env CommandEnvelope) (uint64, error) {
-	return j.appendCommand(env, durabilitycut.Enabled(), nil, nil)
+	return j.appendCommand(env, durabilitycut.Enabled(), nil, nil, false)
 }
 
 // AppendCommandObservedWithHooks runs beforeAppend after validation but before
@@ -1526,7 +1526,21 @@ func (j *CommandJournal) AppendCommandObservedWithHooks(
 	beforeAppend func() error,
 	afterAppend func(uint64, []*CommandJournalStableRotation) error,
 ) (uint64, error) {
-	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend)
+	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, false)
+}
+
+// AppendCommandObservedWithImmutableHooks behaves like
+// AppendCommandObservedWithHooks for internal callers whose CommandEnvelope and
+// backing slices are private to the call and never mutated by beforeAppend or
+// OnSegmentRotated hooks. It validates and prepares V2 frames once before
+// acquiring the journal mutex, avoiding redundant multi-MiB payload re-scans
+// under j.mu.
+func (j *CommandJournal) AppendCommandObservedWithImmutableHooks(
+	env CommandEnvelope,
+	beforeAppend func() error,
+	afterAppend func(uint64, []*CommandJournalStableRotation) error,
+) (uint64, error) {
+	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, true)
 }
 
 func (j *CommandJournal) appendCommand(
@@ -1534,9 +1548,30 @@ func (j *CommandJournal) appendCommand(
 	observe bool,
 	beforeAppend func() error,
 	afterAppend func(uint64, []*CommandJournalStableRotation) error,
+	immutableHooks bool,
 ) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	var prePlan commandFrameV2Encoding
+	var preSize int
+	var hasPrePlan bool
+	if immutableHooks && env.LSN == 0 && (env.Version == CommandFrameVersionV2 || env.DurabilityClass != 0) {
+		probe := env
+		probe.LSN = 1
+		if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
+			payload, err := EncodeRawKVBatchPayload(nil)
+			if err != nil {
+				return 0, err
+			}
+			probe.Payload = payload
+			env.Payload = payload
+		}
+		if prepared, err := prepareCommandFrameV2Encoding(probe); err == nil {
+			prePlan = prepared
+			preSize = prepared.total
+			hasPrePlan = true
+		}
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -1550,7 +1585,9 @@ func (j *CommandJournal) appendCommand(
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
 	}
 	// Validate shape/capacity before any rotation or reservation. A V2 plan
-	// can be reused only while its borrowed input has crossed no callback.
+	// can be reused only while its borrowed input has crossed no callback
+	// (or when the caller guarantees its private envelope is immutable across
+	// hooks).
 	probe := env
 	probe.LSN = 1
 	if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
@@ -1585,17 +1622,25 @@ func (j *CommandJournal) appendCommand(
 		}
 		return j.writer.commandFrameSizeError(size)
 	}
-	if err := prepareFrame(); err != nil {
+	if hasPrePlan {
+		plan = prePlan
+		size = preSize
+		if err := j.writer.commandFrameSizeError(size); err != nil {
+			return 0, err
+		}
+	} else if err := prepareFrame(); err != nil {
 		return 0, err
 	}
 	if beforeAppend != nil {
 		if err := beforeAppend(); err != nil {
 			return 0, err
 		}
-		// Both codecs borrow nested extension headers. Refresh their shape and
-		// size after the hook, before selecting a successor or reserving an LSN.
-		if err := prepareFrame(); err != nil {
-			return 0, err
+		if !immutableHooks {
+			// Both codecs borrow nested extension headers. Refresh their shape and
+			// size after the hook, before selecting a successor or reserving an LSN.
+			if err := prepareFrame(); err != nil {
+				return 0, err
+			}
 		}
 	}
 	syncRotation := v2 && probe.DurabilityClass == CommandDurabilityDurable
@@ -1605,10 +1650,12 @@ func (j *CommandJournal) appendCommand(
 		return 0, err
 	}
 	if j.segmentSeq != previousSegment {
-		// Rotation can invoke mutable observers/onSegmentRotated. Refresh both
-		// codecs and verify the installed actual capacity before assignment.
-		if err := prepareFrame(); err != nil {
-			return 0, err
+		if !immutableHooks {
+			// Rotation can invoke mutable observers/onSegmentRotated. Refresh both
+			// codecs and verify the installed actual capacity before assignment.
+			if err := prepareFrame(); err != nil {
+				return 0, err
+			}
 		}
 		if int64(size) > int64(1<<63-1)-segmentHeaderSize || !j.writer.fixedFitsAppend(int64(segmentHeaderSize)+int64(size)) {
 			// Keep already-created rotation tokens in their existing pending

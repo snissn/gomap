@@ -242,7 +242,7 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	if !halfReached && !nextFrameOverflows {
 		return nil
 	}
-	plan, err := fixedSuccessorSizePlan(current, w.fixedBudget, fixedWALPressureRotation, 0)
+	plan, err := fixedSuccessorSizePlan(current, w.fixedBudget, fixedWALPressureRotation, incoming)
 	if err != nil {
 		return err
 	}

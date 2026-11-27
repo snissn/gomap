@@ -911,3 +911,120 @@ func TestNativeBulkInsertDurableGroupCommitOverlapAndCrashRecovery(t *testing.T)
 		t.Fatalf("crash-recovered email_1 lookup=%q ids=%v err=%v", sampleEmail, gotIDs, err)
 	}
 }
+
+func TestNativeBulkInsertPostCheckpointGapJumpExistenceAndUniqueChecks(t *testing.T) {
+	owner, _, _, col := openNativeBulkInsertTestDB(t, treedb.StandaloneCOWMemtableLimits())
+
+	// Seed producer 0 and producer 2, then checkpoint so baseRoot is populated.
+	ids0, docs0 := buildNativeBulkBSONBatch(t, 0, 32, 32)
+	ids2, docs2 := buildNativeBulkBSONBatch(t, 2, 32, 32)
+	if _, err := col.InsertBatchValidatedBSON(ids0, docs0); err != nil {
+		t.Fatalf("seed p0: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(ids2, docs2); err != nil {
+		t.Fatalf("seed p2: %v", err)
+	}
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	// Delete one seeded document so pending holds a tombstone shadowing baseRoot.
+	deletedID := ids0[10]
+	deletedDoc := docs0[10]
+	if err := col.Delete(deletedID); err != nil {
+		t.Fatalf("delete seeded doc: %v", err)
+	}
+
+	// 1. Disjoint batch strictly between p0 and p2 must succeed cleanly.
+	ids1, docs1 := buildNativeBulkBSONBatch(t, 1, 32, 32)
+	if _, err := col.InsertBatchValidatedBSON(ids1, docs1); err != nil {
+		t.Fatalf("disjoint post-checkpoint bulk insert: %v", err)
+	}
+
+	// 2. Re-inserting the tombstoned primary ID alongside a fresh doc must succeed.
+	freshID := []byte("p03-doc-0000000")
+	freshDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: string(freshID)},
+		{Key: "age", Value: int64(30)},
+		{Key: "email", Value: "fresh-p03-0@example.com"},
+		{Key: "city", Value: "austin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{deletedID, freshID}, [][]byte{deletedDoc, freshDoc}); err != nil {
+		t.Fatalf("re-insert tombstoned base doc: %v", err)
+	}
+
+	// 3. Colliding with a live base primary ID must fail with ErrDocumentExists.
+	dupPrimaryDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: string(ids2[5])},
+		{Key: "age", Value: int64(31)},
+		{Key: "email", Value: "brand-new-email@example.com"},
+		{Key: "city", Value: "boston"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID := []byte("p04-doc-0000000")
+	otherDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: string(otherID)},
+		{Key: "age", Value: int64(32)},
+		{Key: "email", Value: "other-p04-0@example.com"},
+		{Key: "city", Value: "chicago"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{ids2[5], otherID}, [][]byte{dupPrimaryDoc, otherDoc}); !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("duplicate base primary ID err=%v want ErrDocumentExists", err)
+	}
+
+	// 4. Colliding with a live base unique email must fail with ErrUniqueIndexConflict.
+	dupEmailID := []byte("p05-doc-0000000")
+	dupEmailDoc, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: string(dupEmailID)},
+		{Key: "age", Value: int64(33)},
+		{Key: "email", Value: fmt.Sprintf("user-%02d-%07d@example.com", 2, 7)},
+		{Key: "city", Value: "denver"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{otherID, dupEmailID}, [][]byte{otherDoc, dupEmailDoc}); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate base unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+}
+
+func TestNativeBulkInsertLargeBatchSlotBoundUnderDurableCap(t *testing.T) {
+	coord := &collectionSchemaCoordinator{
+		nativeBulkPreimageCap: nativeBulkPreimageMaxConcurrentDurable,
+	}
+	// Large batches (>= 4000 docs) are bounded to nativeBulkPreimageMaxConcurrent.
+	releases := make([]func(), 0, nativeBulkPreimageMaxConcurrent)
+	for i := 0; i < nativeBulkPreimageMaxConcurrent; i++ {
+		releases = append(releases, coord.acquireBulkPreimageSlotForCount(nativeLargeBulkPreimageMinDocs))
+	}
+	extraLarge := make(chan func(), 1)
+	go func() {
+		extraLarge <- coord.acquireBulkPreimageSlotForCount(nativeLargeBulkPreimageMinDocs)
+	}()
+	select {
+	case rel := <-extraLarge:
+		rel()
+		t.Fatalf("large batch exceeded nativeBulkPreimageMaxConcurrent=%d", nativeBulkPreimageMaxConcurrent)
+	case <-time.After(15 * time.Millisecond):
+	}
+	// Small batches (< 4000 docs) can still use remaining durable slots.
+	smallRel := coord.acquireBulkPreimageSlotForCount(1000)
+	smallRel()
+
+	// Double-release must remain idempotent and unblock exactly one waiter.
+	releases[0]()
+	releases[0]()
+	rel := <-extraLarge
+	rel()
+	for _, r := range releases[1:] {
+		r()
+	}
+}
