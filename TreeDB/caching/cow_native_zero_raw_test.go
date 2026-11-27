@@ -1,12 +1,15 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 )
 
@@ -151,5 +154,61 @@ func TestCOWSemanticCleanupWakeAndJoinDrain(t *testing.T) {
 	stats := cache.COWMemoryStats()
 	if stats.TotalBytes != 0 || stats.ReservedBytes != 0 || stats.ExternalLeases != 0 {
 		t.Fatalf("non-zero COW memory stats after close: %+v", stats)
+	}
+}
+
+func TestCOWNativeActivationDrainsPreActivationIdleBatchScratch(t *testing.T) {
+	cache, backend := nativeBridgeFixture(t, true)
+	budget := cache.cow.budget
+
+	// Simulate pre-activation large raw writes (as in TestCOWNativePackedDictionaryLeaf)
+	// that park idle raw-batch scratch inside budget.idleBatch on Close.
+	b := cache.NewBatchWithSize(4096)
+	val := bytes.Repeat([]byte("v"), 64)
+	for i := 0; i < 4096; i++ {
+		if err := b.Set([]byte(fmt.Sprintf("pre-%05d", i)), val); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &cowPressureRolloverFixture{db: cache, backend: backend}
+	if err := f.write(b, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activating native semantic ownership must drain disposable pre-activation
+	// idle raw-batch scratch so deferred native batches do not leave reclaimable
+	// reservations sitting in COWBudget.
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatalf("ActivateNativeSemanticOwner: %v", err)
+	}
+	tx, err := backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatalf("BeginNativeConditionalTxn: %v", err)
+	}
+	defer func() {
+		if err := tx.Close(); err != nil {
+			t.Errorf("tx.Close: %v", err)
+		}
+	}()
+
+	before := budget.Stats()
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead)
+	if err != nil {
+		t.Fatalf("AcquireExternal(pressure): %v", err)
+	}
+	probe, probeErr := budget.AcquireExternal(128)
+	pressure.Close()
+	if probe != nil {
+		probe.Close()
+	}
+	if !errors.Is(probeErr, memtable.ErrCOWCapacity) {
+		t.Fatalf("expected ErrCOWCapacity with budget exhausted after activation, got lease=%v err=%v", probe, probeErr)
 	}
 }

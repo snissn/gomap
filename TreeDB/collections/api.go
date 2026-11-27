@@ -4538,6 +4538,17 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 	return *meta
 }
 
+func (c *Collection) withBorrowedNativeMetaView(cut backenddb.NativeSemanticBorrowedCut, fn func(meta *CollectionMeta)) bool {
+	defer cut.Release()
+	if engine, ok := cut.State().(*nativeEngineVersion); ok && engine != nil && engine.inventory == nil {
+		if colState, found := engine.names.Get(c.meta.Name); found && colState != nil && colState.schema != nil && colState.schema.meta != nil {
+			fn(colState.schema.meta)
+			return true
+		}
+	}
+	return false
+}
+
 // WithMetaView synchronously passes a read-only view of the collection's
 // current metadata to fn without allocating a deep copy on the native COW hot
 // path. Callers must not mutate meta or retain slices derived from it after fn
@@ -4549,15 +4560,7 @@ func (c *Collection) WithMetaView(fn func(meta *CollectionMeta)) {
 	if c.nativeJSON != nil {
 		if c.nativeJSON.db != nil {
 			if cut, err := c.nativeJSON.db.BorrowNativeSemanticCut(); err == nil {
-				handled := false
-				if engine, ok := cut.State().(*nativeEngineVersion); ok && engine != nil && engine.inventory == nil {
-					if colState, found := engine.names.Get(c.meta.Name); found && colState != nil && colState.schema != nil && colState.schema.meta != nil {
-						fn(colState.schema.meta)
-						handled = true
-					}
-				}
-				_ = cut.Release()
-				if handled {
+				if c.withBorrowedNativeMetaView(cut, fn) {
 					return
 				}
 			} else {

@@ -308,3 +308,173 @@ func TestNativeSchemaPlannerCacheParity(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectionWithMetaViewBorrowedCutPanicSafetyAndZeroAlloc(t *testing.T) {
+	_, _, col := openNativePrepareChangesFixture(t)
+	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "k1"}, {Key: "n", Value: int64(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.Insert([]byte("k1"), doc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify panic inside fn still releases the borrowed cut pin cleanly.
+	recovered := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				recovered = true
+			}
+		}()
+		col.WithMetaView(func(*CollectionMeta) {
+			panic("synthetic WithMetaView callback panic")
+		})
+	}()
+	if !recovered {
+		t.Fatal("expected callback panic to propagate")
+	}
+
+	// Verify steady-state borrowed-cut WithMetaView performs 0 heap allocations.
+	var seenFormat DocumentFormat
+	metaFn := func(meta *CollectionMeta) {
+		seenFormat = meta.Options.DocumentFormat
+	}
+	col.WithMetaView(metaFn)
+	if seenFormat != DocumentFormatBSON {
+		t.Fatalf("seenFormat=%v want BSON", seenFormat)
+	}
+	allocs := testing.AllocsPerRun(200, func() {
+		col.WithMetaView(metaFn)
+	})
+	if allocs != 0 {
+		t.Fatalf("WithMetaView allocated %.2f objects/op, want 0", allocs)
+	}
+}
+
+func TestBSONSetAppendSameShapeNoSpeculativeAllocOnRejectAndOverflow(t *testing.T) {
+	marshalVal := func(v any) bson.RawValue {
+		t.Helper()
+		raw, err := bson.Marshal(bson.D{{Key: "v", Value: v}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		elems, err := bson.Raw(raw).Elements()
+		if err != nil || len(elems) != 1 {
+			t.Fatalf("elements: %v", err)
+		}
+		return elems[0].Value()
+	}
+
+	current, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "doc-1"},
+		{Key: "a", Value: int64(1)},
+		{Key: "b", Value: "short"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rejectCases := []struct {
+		name   string
+		doc    []byte
+		fields []BSONSetField
+	}{
+		{
+			name: "equal_then_grow",
+			doc:  current,
+			fields: []BSONSetField{
+				{Key: "a", Value: marshalVal(int64(2))},
+				{Key: "b", Value: marshalVal("much-longer-value")},
+			},
+		},
+		{
+			name: "equal_then_missing",
+			doc:  current,
+			fields: []BSONSetField{
+				{Key: "a", Value: marshalVal(int64(2))},
+				{Key: "absent", Value: marshalVal(int64(9))},
+			},
+		},
+		{
+			name: "equal_then_type_change",
+			doc:  current,
+			fields: []BSONSetField{
+				{Key: "a", Value: marshalVal(int64(2))},
+				{Key: "b", Value: marshalVal(int64(5))},
+			},
+		},
+	}
+
+	for _, tc := range rejectCases {
+		t.Run(tc.name, func(t *testing.T) {
+			upd, err := newBSONSetUpdate(tc.fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, repl, changed, ok, err := upd.appendSameShapeReplacement(nil, tc.doc)
+			if err != nil || ok || changed || repl != nil {
+				t.Fatalf("expected reject (ok=false), got repl=%v changed=%v ok=%v err=%v", repl, changed, ok, err)
+			}
+			allocs := testing.AllocsPerRun(100, func() {
+				_, _, _, ok, _ := upd.appendSameShapeReplacement(nil, tc.doc)
+				if ok {
+					t.Fatal("unexpected ok=true")
+				}
+			})
+			if allocs != 0 {
+				t.Fatalf("rejected appendSameShapeReplacement(%s) allocated %.2f allocs/op, want 0", tc.name, allocs)
+			}
+		})
+	}
+
+	// Verify unchanged document performs 0 allocations.
+	t.Run("unchanged_zero_alloc", func(t *testing.T) {
+		upd, err := newBSONSetUpdate([]BSONSetField{
+			{Key: "a", Value: marshalVal(int64(1))},
+			{Key: "b", Value: marshalVal("short")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			_, repl, changed, ok, err := upd.appendSameShapeReplacement(nil, current)
+			if err != nil || !ok || changed || !bytes.Equal(repl, current) {
+				t.Fatalf("unchanged: ok=%v changed=%v err=%v", ok, changed, err)
+			}
+		})
+		if allocs != 0 {
+			t.Fatalf("unchanged appendSameShapeReplacement allocated %.2f allocs/op, want 0", allocs)
+		}
+	})
+
+	// Verify >8 changed same-shape fields (patchesOverflow fallback) matches appendReplacement byte-for-byte.
+	t.Run("overflow_10_fields", func(t *testing.T) {
+		var initDoc bson.D
+		fields := make([]BSONSetField, 0, 10)
+		for i := 0; i < 10; i++ {
+			k := fmt.Sprintf("f%02d", i)
+			initDoc = append(initDoc, bson.E{Key: k, Value: int64(i)})
+			fields = append(fields, BSONSetField{Key: k, Value: marshalVal(int64(100 + i))})
+		}
+		raw, err := bson.Marshal(initDoc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upd, err := newBSONSetUpdate(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, got, changed, ok, err := upd.appendSameShapeReplacement(nil, raw)
+		if err != nil || !ok || !changed {
+			t.Fatalf("overflow same-shape: ok=%v changed=%v err=%v", ok, changed, err)
+		}
+		_, want, wantChanged, err := upd.appendReplacement(nil, raw)
+		if err != nil || !wantChanged {
+			t.Fatalf("appendReplacement: changed=%v err=%v", wantChanged, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("overflow mismatch:\n got=%x\nwant=%x", got, want)
+		}
+	})
+}
