@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -350,16 +351,217 @@ func buildNativeCRUDFinalPlanWithRootNames(name, primaryRootName, indexStateRoot
 		plan.rootNames = append(plan.rootNames, run.rootName)
 		plan.policies = append(plan.policies, runtimes[run.runtimeIdx].def.storagePolicy)
 	}
-	slices.SortFunc(plan.primaryEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
-	slices.SortFunc(plan.indexStateEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
+	if !directBufferedRootEntriesSorted(plan.primaryEntries) {
+		slices.SortFunc(plan.primaryEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
+	}
+	if !directBufferedRootEntriesSorted(plan.indexStateEntries) {
+		slices.SortFunc(plan.indexStateEntries, func(a, b directBufferedRootEntry) int { return bytes.Compare(a.key, b.key) })
+	}
 	for i := range plan.secondaryRootPlans {
 		rows := plan.secondaryRootPlans[i].entries
+		if plan.secondaryRootPlans[i].deletes == 0 {
+			// Pure insert runs contain zero tombstones; every (encodedValue || docID)
+			// entry has tombstone=false so unstable in-place sorting preserves exact
+			// semantics while avoiding symMerge overhead.
+			if !directBufferedSecondaryRootEntriesSorted(rows) {
+				sortDirectBufferedSecondaryRootEntriesPureInsert(rows)
+			}
+			continue
+		}
 		// The maintained builder emits deletes before sets. Overlapping old/new
 		// multikey memberships therefore have equal keys whose final set must
 		// remain last when the native writer applies the sorted mutations.
-		slices.SortStableFunc(rows, func(a, b directBufferedSecondaryRootEntry) int { return bytes.Compare(a.key, b.key) })
+		slices.SortStableFunc(rows, compareDirectBufferedSecondaryRootEntries)
 	}
 	return plan, nil
+}
+
+func directBufferedRootEntriesSorted(rows []directBufferedRootEntry) bool {
+	for i := 1; i < len(rows); i++ {
+		if bytes.Compare(rows[i-1].key, rows[i].key) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func directBufferedSecondaryRootEntriesSorted(rows []directBufferedSecondaryRootEntry) bool {
+	for i := 1; i < len(rows); i++ {
+		if compareDirectBufferedSecondaryRootEntries(rows[i-1], rows[i]) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func compareDirectBufferedSecondaryRootEntries(a, b directBufferedSecondaryRootEntry) int {
+	return compareBytesFrom(a.key, b.key, 0)
+}
+
+func compareBytesFrom(ak, bk []byte, depth int) int {
+	if depth < len(ak) && depth < len(bk) {
+		aRem := ak[depth:]
+		bRem := bk[depth:]
+		if len(aRem) >= 8 && len(bRem) >= 8 {
+			av := binary.BigEndian.Uint64(aRem[:8])
+			bv := binary.BigEndian.Uint64(bRem[:8])
+			if av != bv {
+				if av < bv {
+					return -1
+				}
+				return 1
+			}
+			return bytes.Compare(aRem[8:], bRem[8:])
+		}
+		if aRem[0] != bRem[0] {
+			if aRem[0] < bRem[0] {
+				return -1
+			}
+			return 1
+		}
+		return bytes.Compare(aRem, bRem)
+	}
+	if len(ak) < len(bk) {
+		return -1
+	}
+	if len(ak) > len(bk) {
+		return 1
+	}
+	return 0
+}
+
+func sortDirectBufferedSecondaryRootEntriesPureInsert(rows []directBufferedSecondaryRootEntry) {
+	if len(rows) <= 1 {
+		return
+	}
+	if len(rows) < 64 {
+		insertionSortSecondaryRootEntries(rows, 0)
+		return
+	}
+	msdRadixSortSecondaryRootEntries(rows, 0)
+}
+
+func insertionSortSecondaryRootEntries(rows []directBufferedSecondaryRootEntry, depth int) {
+	for i := 1; i < len(rows); i++ {
+		cur := rows[i]
+		j := i - 1
+		for j >= 0 && compareBytesFrom(rows[j].key, cur.key, depth) > 0 {
+			rows[j+1] = rows[j]
+			j--
+		}
+		rows[j+1] = cur
+	}
+}
+
+func secondaryEntryRadixBucket(key []byte, depth int) int {
+	if depth >= len(key) {
+		return 0
+	}
+	return int(key[depth]) + 1
+}
+
+// msdRadixSortSecondaryRootEntries performs an in-place, zero-allocation
+// 256-way MSD radix sort (American Flag Sort) with common-prefix skipping.
+// Only used for pure-insert secondary runs (deletes == 0).
+func msdRadixSortSecondaryRootEntries(rows []directBufferedSecondaryRootEntry, depth int) {
+	const (
+		smallThreshold = 32
+		maxRadixDepth  = 32
+	)
+	for {
+		n := len(rows)
+		if n <= smallThreshold {
+			insertionSortSecondaryRootEntries(rows, depth)
+			return
+		}
+		if depth >= maxRadixDepth {
+			slices.SortFunc(rows, func(a, b directBufferedSecondaryRootEntry) int {
+				return compareBytesFrom(a.key, b.key, depth)
+			})
+			return
+		}
+
+		var counts [257]int
+		for i := 0; i < n; i++ {
+			counts[secondaryEntryRadixBucket(rows[i].key, depth)]++
+		}
+
+		// Skip shared prefix bytes in O(N) without moving elements.
+		nonEmpty := 0
+		sole := -1
+		for b := 0; b < 257; b++ {
+			if counts[b] != 0 {
+				nonEmpty++
+				sole = b
+				if nonEmpty > 1 {
+					break
+				}
+			}
+		}
+		if nonEmpty <= 1 {
+			if sole <= 0 {
+				return
+			}
+			depth++
+			continue
+		}
+
+		var starts, ends, next [257]int
+		pos := 0
+		for b := 0; b < 257; b++ {
+			starts[b] = pos
+			next[b] = pos
+			pos += counts[b]
+			ends[b] = pos
+		}
+
+		// In-place American Flag permutation.
+		for b := 0; b < 257; b++ {
+			for next[b] < ends[b] {
+				idx := next[b]
+				elem := rows[idx]
+				dst := secondaryEntryRadixBucket(elem.key, depth)
+				if dst == b {
+					next[b]++
+					continue
+				}
+				for dst != b {
+					target := next[dst]
+					next[dst] = target + 1
+					elem, rows[target] = rows[target], elem
+					dst = secondaryEntryRadixBucket(elem.key, depth)
+				}
+				rows[idx] = elem
+				next[b]++
+			}
+		}
+
+		// Bucket 0 holds keys of length == depth (already equal at this prefix).
+		// Recurse on non-trivial buckets 1..256; tail-recurse on the largest to
+		// bound stack depth to O(log N).
+		largestBucket := -1
+		largestSize := 0
+		for b := 1; b < 257; b++ {
+			sz := ends[b] - starts[b]
+			if sz > largestSize {
+				largestSize = sz
+				largestBucket = b
+			}
+		}
+		for b := 1; b < 257; b++ {
+			if b == largestBucket {
+				continue
+			}
+			if ends[b]-starts[b] > 1 {
+				msdRadixSortSecondaryRootEntries(rows[starts[b]:ends[b]], depth+1)
+			}
+		}
+		if largestSize <= 1 {
+			return
+		}
+		rows = rows[starts[largestBucket]:ends[largestBucket]]
+		depth++
+	}
 }
 
 // Each unique prefix is read from the original captured index domain and is

@@ -12245,7 +12245,7 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
 	if c != nil && c.nativeJSON != nil {
-		return c.nativeInsertBatch(ids, documents, false)
+		return c.nativeInsertBatchWithJournalTrusted(ids, documents, nil, nil, true, false, true, nil)
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -12273,7 +12273,7 @@ func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [
 		return
 	}
 	journal := nativeOperationJournal{requested: true}
-	resultIDs, err = c.nativeInsertBatchWithJournal(ids, documents, nil, nil, true, false, &journal)
+	resultIDs, err = c.nativeInsertBatchWithJournalTrusted(ids, documents, nil, nil, true, false, true, &journal)
 	// The original transaction Close and outer producer unlock have both ended.
 	completion = journal.completion
 	if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
@@ -18595,6 +18595,34 @@ func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate, scratc
 		return nil
 	}
 	entries := make([]directBufferedRootEntry, len(changed))
+	if scratch == nil {
+		totalKeyBytes := 0
+		for i := range changed {
+			totalKeyBytes += len(changed[i].documentID)
+		}
+		var keyArena []byte
+		if totalKeyBytes > 0 {
+			keyArena = make([]byte, totalKeyBytes)
+		}
+		off := 0
+		for i := range changed {
+			id := changed[i].documentID
+			var keyCopy []byte
+			if len(id) > 0 {
+				keyCopy = keyArena[off : off+len(id) : off+len(id)]
+				copy(keyCopy, id)
+				off += len(id)
+			} else if id != nil {
+				keyCopy = []byte{}
+			}
+			entries[i] = directBufferedRootEntry{
+				key:   keyCopy,
+				value: preparedBatchUpdatePrimaryDocument(changed[i]),
+				flags: node.FlagInline,
+			}
+		}
+		return entries
+	}
 	for i := range changed {
 		entries[i] = directBufferedRootEntry{
 			key:   appendUpdateBatchPlanScratchKey(scratch, changed[i].documentID),

@@ -9548,15 +9548,16 @@ type DB struct {
 	valueLogDictMetricsMinRecords  int
 	valueLogDictMetricsPauseBytes  int
 
-	valueLogDictTrainerMu      sync.RWMutex
-	valueLogDictApplyMu        sync.Mutex
-	valueLogDictQuiesceMu      sync.Mutex
-	valueLogDictQuiesced       atomic.Bool
-	valueLogDictTrainer        *compression.Trainer
-	valueLogDictTrainerByClass [vlogDictClassCount]*compression.Trainer
-	valueLogDictKickCh         chan struct{}
-	valueLogDictMetrics        compression.Metrics
-	valueLogDictFrames         struct {
+	valueLogDictTrainerMu       sync.RWMutex
+	valueLogDictApplyMu         sync.Mutex
+	valueLogDictQuiesceMu       sync.Mutex
+	valueLogDictQuiesced        atomic.Bool
+	valueLogDictPublishDeferred atomic.Bool
+	valueLogDictTrainer         *compression.Trainer
+	valueLogDictTrainerByClass  [vlogDictClassCount]*compression.Trainer
+	valueLogDictKickCh          chan struct{}
+	valueLogDictMetrics         compression.Metrics
+	valueLogDictFrames          struct {
 		total     atomic.Uint64
 		attempted atomic.Uint64
 		kept      atomic.Uint64
@@ -26050,6 +26051,23 @@ func (db *DB) Checkpoint() error {
 	return db.checkpointContext(context.Background(), false)
 }
 
+// CheckpointDeferringCommandWALCleanup runs the same durable checkpoint boundary
+// as Checkpoint, but skips the premature pre-fallback command-WAL cleanup pass
+// when the public owner is about to run fallback convergence and authoritative
+// command-WAL cleanup immediately afterwards.
+func (db *DB) CheckpointDeferringCommandWALCleanup() error {
+	if db == nil {
+		return nil
+	}
+	if db.closing.Load() {
+		return errDBClosing
+	}
+	if db.cow != nil {
+		return db.checkpointCOWContextDeferringCommandWALCleanup(context.Background())
+	}
+	return db.checkpointContext(context.Background(), false)
+}
+
 // CheckpointContext is Checkpoint with cooperative cancellation while waiting
 // for checkpoint ownership and between durability stages. An in-flight storage
 // syscall is allowed to complete before cancellation is observed.
@@ -26313,6 +26331,9 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
+		if db.valueLogDictPublishDeferred.Swap(false) {
+			db.valueLogDictKick()
+		}
 	}()
 	endWriteCutover := func() {
 		db.checkpointMu.Lock()

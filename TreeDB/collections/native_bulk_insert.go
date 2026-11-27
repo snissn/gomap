@@ -116,7 +116,7 @@ func isSimpleScalarBSONMeta(meta CollectionMeta) bool {
 // bulk insert plan outside coord.nativeBulkInsertMu. Returns (nil, nil) when
 // the collection is ineligible or requires fallback to the standard transaction
 // path inside the gate.
-func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, documents [][]byte, wantStats bool) (pre *nativeBulkInsertPreimage, resultErr error) {
+func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, documents [][]byte, wantStats, trustedBSON bool) (pre *nativeBulkInsertPreimage, resultErr error) {
 	if m == nil || m.db == nil || len(ids) <= 1 || len(ids) != len(documents) {
 		return nil, nil
 	}
@@ -130,10 +130,15 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		_ = read.Close()
 		return nil, nil
 	}
-	meta := *read.collection.schema.meta
+	schema := read.collection.schema
+	meta := *schema.meta
 	incarnation := read.collection.incarnation
-	schemaWeak := weak.Make(read.collection.schema)
+	schemaWeak := weak.Make(schema)
 	allocator := read.capture.NativeAllocator()
+	schema.retain()
+	defer func() {
+		schema.release().Complete()
+	}()
 	if closeErr := read.Close(); closeErr != nil {
 		return nil, closeErr
 	}
@@ -211,8 +216,15 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		return nil, err
 	}
 	tempCharge := tempRowCharge
+	admitTemp := func(bytes uint64) error {
+		if err := p.admit(bytes); err != nil {
+			return err
+		}
+		tempCharge += bytes
+		return nil
+	}
 
-	planner, err := nativeJSONInsertPlanner(meta)
+	planner, err := nativeJSONInsertPlannerForSchema(schema, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +232,11 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	if err != nil {
 		return nil, err
 	}
-	normalized, _, _, _, err := prepareInsertDocuments(documents, planner.options)
+	plannerOpts := planner.options
+	if trustedBSON && isBSON {
+		plannerOpts.trustedBSONDocuments = true
+	}
+	normalized, _, _, _, err := prepareInsertDocuments(documents, plannerOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -345,13 +361,6 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			return nil, err
 		}
 		tempCharge += parserScratchCharge
-		admitTemp := func(bytes uint64) error {
-			if err := p.admit(bytes); err != nil {
-				return err
-			}
-			tempCharge += bytes
-			return nil
-		}
 		for _, alloc := range []struct {
 			count int
 			size  uint64
@@ -410,40 +419,81 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 
 	// Validate intra-batch unique conflicts directly over the already-sorted
 	// secondary runs (zero map allocations) and compute the off-gate unique
-	// range dependency backing.
+	// range dependency backing, caching per-row prefix/end lengths so the
+	// dependency-building loop avoids a second indexKeyValuePrefixAndDocumentID pass.
 	var (
 		uniqueDepCount int
 		uniqueEndBytes uint64
 		uniqueRuns     int
+		totalUniqueCap int
 	)
 	for _, run := range direct.secondaryRootPlans {
 		rt := runtimes[run.runtimeIdx]
-		if !rt.def.unique || len(run.entries) == 0 {
-			continue
+		if rt.def.unique && len(run.entries) > 0 {
+			uniqueRuns++
+			if len(run.entries) > int(^uint(0)>>1)-totalUniqueCap {
+				return nil, memtable.ErrCOWCapacity
+			}
+			totalUniqueCap += len(run.entries)
 		}
-		uniqueRuns++
-		var prevPrefix, prevDocID []byte
-		for i, row := range run.entries {
-			prefix, docID, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
-			if keyErr != nil {
-				return nil, keyErr
+	}
+	var uniquePrefixLens, uniqueEndLens []uint16
+	if totalUniqueCap > 0 {
+		if err = admitNativeInsertArray(totalUniqueCap, 2*uint64(unsafe.Sizeof(uint16(0))), admitTemp); err != nil {
+			return nil, err
+		}
+		uniquePrefixLens = make([]uint16, 0, totalUniqueCap)
+		uniqueEndLens = make([]uint16, 0, totalUniqueCap)
+		for _, run := range direct.secondaryRootPlans {
+			rt := runtimes[run.runtimeIdx]
+			if !rt.def.unique || len(run.entries) == 0 {
+				continue
 			}
-			if len(prefix) > 65535 {
-				return nil, errors.New("collections: index key too large")
+			var prevPrefix, prevRowKey []byte
+			for i, row := range run.entries {
+				var pLen int
+				var keyErr error
+				if rt.def.valueType == IndexValueBSONOrderedV2 {
+					pLen, keyErr = bsonIndexKeyValuePrefixLengthV2(row.key)
+				} else {
+					pLen, keyErr = indexComponentLength(rt.def.valueType, row.key)
+				}
+				if keyErr != nil {
+					return nil, keyErr
+				}
+				if len(row.key) == pLen {
+					return nil, errors.New("collections: malformed secondary index key: missing document id")
+				}
+				if pLen > 65535 {
+					return nil, errors.New("collections: index key too large")
+				}
+				prefix := row.key[:pLen:pLen]
+				if i > 0 && bytes.Equal(prefix, prevPrefix) && !bytes.Equal(row.key[pLen:], prevRowKey[len(prevPrefix):]) {
+					prevDocID, err := indexKeyDocumentID(rt.def.valueType, prevRowKey)
+					if err != nil {
+						return nil, err
+					}
+					docID, err := indexKeyDocumentID(rt.def.valueType, row.key)
+					if err != nil {
+						return nil, err
+					}
+					if !bytes.Equal(docID, prevDocID) {
+						return nil, fmt.Errorf("%w %q: document ids %q and %q", ErrUniqueIndexConflict, rt.def.name, prevDocID, docID)
+					}
+				}
+				prevPrefix, prevRowKey = prefix, row.key
+				if uniqueDepCount == int(^uint(0)>>1) {
+					return nil, memtable.ErrCOWCapacity
+				}
+				uniqueDepCount++
+				endLen := uniquePrefixEndLen(prefix)
+				if uint64(endLen) > ^uint64(0)-uniqueEndBytes {
+					return nil, memtable.ErrCOWCapacity
+				}
+				uniqueEndBytes += uint64(endLen)
+				uniquePrefixLens = append(uniquePrefixLens, uint16(pLen))
+				uniqueEndLens = append(uniqueEndLens, uint16(endLen))
 			}
-			if i > 0 && bytes.Equal(prefix, prevPrefix) && !bytes.Equal(docID, prevDocID) {
-				return nil, fmt.Errorf("%w %q: document ids %q and %q", ErrUniqueIndexConflict, rt.def.name, prevDocID, docID)
-			}
-			prevPrefix, prevDocID = prefix, docID
-			if uniqueDepCount == int(^uint(0)>>1) {
-				return nil, memtable.ErrCOWCapacity
-			}
-			uniqueDepCount++
-			endLen := uint64(uniquePrefixEndLen(prefix))
-			if endLen > ^uint64(0)-uniqueEndBytes {
-				return nil, memtable.ErrCOWCapacity
-			}
-			uniqueEndBytes += endLen
 		}
 	}
 
@@ -491,6 +541,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 		uniqueChecks = make([]nativeBulkUniqueCheck, 0, uniqueRuns)
 		uniqueEndArena := make([]byte, 0, uniqueEndBytes)
 		depOff := 1 + len(primary)
+		uIdx := 0
 		for _, run := range direct.secondaryRootPlans {
 			rt := runtimes[run.runtimeIdx]
 			if !rt.def.unique || len(run.entries) == 0 {
@@ -504,12 +555,12 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 			}
 			startDep := depOff
 			for _, row := range run.entries {
-				prefix, _, keyErr := indexKeyValuePrefixAndDocumentID(rt.def.valueType, row.key)
-				if keyErr != nil {
-					return nil, keyErr
-				}
+				pLen := int(uniquePrefixLens[uIdx])
+				endLen := int(uniqueEndLens[uIdx])
+				uIdx++
+				prefix := row.key[:pLen:pLen]
 				var end []byte
-				if endLen := uniquePrefixEndLen(prefix); endLen > 0 {
+				if endLen > 0 {
 					eStart := len(uniqueEndArena)
 					uniqueEndArena = append(uniqueEndArena, prefix[:endLen]...)
 					uniqueEndArena[len(uniqueEndArena)-1]++
@@ -532,6 +583,8 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 				entries:    run.entries,
 			})
 		}
+		uniquePrefixLens = nil
+		uniqueEndLens = nil
 	}
 
 	// Admit and encode the canonical Command WAL payload.
@@ -611,16 +664,52 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 		pending := g.probe.domain.domain.pending
 		captured := g.probe.domain.domain.captured
 		hasBase := g.probe.domain.hasBase
-		var pendingMax string
-		var hasPendingMax bool
+		var pendingMin, pendingMax string
+		var hasPendingMin, hasPendingMax bool
 		if pending != nil && pending.Len() > 0 {
 			pendingMax, hasPendingMax = pending.MaxKey()
+			pendingMin, hasPendingMin = pending.MinKey()
 		}
-		allAbovePending := pending == nil || pending.Len() == 0 ||
-			(hasPendingMax && bytes.Compare(pre.primary[0].Key, nativeBorrowedStringBytes(pendingMax)) > 0)
-		if !hasBase && captured == nil && allAbovePending {
-			// Fast path: all sorted batch IDs lie strictly above pending max key
+		allDisjointPending := pending == nil || pending.Len() == 0 ||
+			(hasPendingMax && bytes.Compare(pre.primary[0].Key, nativeBorrowedStringBytes(pendingMax)) > 0) ||
+			(hasPendingMin && bytes.Compare(pre.primary[n-1].Key, nativeBorrowedStringBytes(pendingMin)) < 0)
+		if !hasBase && captured == nil && allDisjointPending {
+			// Fast path: all sorted batch IDs lie strictly outside [pendingMin, pendingMax]
 			// and there are no captured or base physical layers.
+		} else if !hasBase && captured == nil && pending != nil && pending.Len() > 0 {
+			// Gap-jumping sorted SeekGE over pending: disjoint contiguous ranges
+			// (common under multi-producer bulk insert) complete in O(log N) seeks
+			// instead of N root-to-leaf Get calls.
+			lastKey := pre.primary[n-1].Key
+			for i := 0; i < n; {
+				row, ok := pending.SeekGE(pre.primary[i].Key, nil)
+				if !ok {
+					break
+				}
+				rowKey := nativeBorrowedStringBytes(row.Key)
+				cmp := bytes.Compare(rowKey, pre.primary[i].Key)
+				if cmp == 0 {
+					if row.Flags&node.FlagTombstone == 0 {
+						return true, ErrDocumentExists
+					}
+					i++
+					continue
+				}
+				if bytes.Compare(rowKey, lastKey) > 0 {
+					break
+				}
+				// Advance i to the first batch key >= rowKey.
+				lo, hi := i+1, n
+				for lo < hi {
+					mid := lo + (hi-lo)/2
+					if bytes.Compare(pre.primary[mid].Key, rowKey) < 0 {
+						lo = mid + 1
+					} else {
+						hi = mid
+					}
+				}
+				i = lo
+			}
 		} else {
 			var physical backenddb.NativePhysicalReader
 			if hasBase {
@@ -628,7 +717,9 @@ func (t *NativeJSONTxn) attachNativeBulkInsertPreimage(pre *nativeBulkInsertPrei
 			}
 			for i := 0; i < n; i++ {
 				id := pre.primary[i].Key
-				if pending != nil && pending.Len() > 0 && (!hasPendingMax || bytes.Compare(id, nativeBorrowedStringBytes(pendingMax)) <= 0) {
+				if pending != nil && pending.Len() > 0 &&
+					(!hasPendingMax || bytes.Compare(id, nativeBorrowedStringBytes(pendingMax)) <= 0) &&
+					(!hasPendingMin || bytes.Compare(id, nativeBorrowedStringBytes(pendingMin)) >= 0) {
 					if row, ok := pending.Get(id); ok {
 						if row.Flags&node.FlagTombstone == 0 {
 							return true, ErrDocumentExists
@@ -746,18 +837,82 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 			continue
 		}
 		onlyPending := domain.baseRoot == 0 && domain.captured == nil && domain.pending != nil
-		var pendingMax []byte
-		var hasPendingMax bool
 		if onlyPending {
-			var maxStr string
-			maxStr, hasPendingMax = domain.pending.MaxKey()
-			if hasPendingMax {
-				pendingMax = nativeBorrowedStringBytes(maxStr)
-				// deps[u.startDep] holds the minimum sorted unique key prefix in this batch.
-				if bytes.Compare(deps[u.startDep].Key, pendingMax) > 0 {
+			pending := domain.pending
+			if maxStr, hasPendingMax := pending.MaxKey(); hasPendingMax {
+				if bytes.Compare(deps[u.startDep].Key, nativeBorrowedStringBytes(maxStr)) > 0 {
 					continue
 				}
 			}
+			lastDep := deps[u.startDep+u.depCount-1]
+			if minStr, hasPendingMin := pending.MinKey(); hasPendingMin && lastDep.End != nil {
+				if bytes.Compare(lastDep.End, nativeBorrowedStringBytes(minStr)) <= 0 {
+					continue
+				}
+			}
+			// Gap-jumping sorted SeekGE over pending: because unique prefixes
+			// are self-delimiting and strictly increasing, [dep.Key, dep.End)
+			// intervals are strictly disjoint and ordered. When pending.SeekGE
+			// lands at rowKey >= dep.End, every batch dep with End <= rowKey is
+			// provably empty in O(log N) seeks instead of N seeks.
+			for i := 0; i < u.depCount; {
+				dep := deps[u.startDep+i]
+				row, ok := pending.SeekGE(dep.Key, nil)
+				if !ok {
+					break
+				}
+				rowKey := nativeBorrowedStringBytes(row.Key)
+				if dep.End == nil || bytes.Compare(rowKey, dep.End) < 0 {
+					var docID []byte
+					start := dep.Key
+					for {
+						if row.Flags&node.FlagTombstone == 0 {
+							if docID == nil {
+								var err error
+								docID, err = indexKeyDocumentID(u.valueType, u.entries[i].key)
+								if err != nil {
+									return err
+								}
+							}
+							owner, err := indexKeyDocumentID(u.valueType, rowKey)
+							if err != nil {
+								return err
+							}
+							if !bytes.Equal(owner, docID) {
+								return fmt.Errorf("%w %q", ErrUniqueIndexConflict, u.indexName)
+							}
+						}
+						if len(rowKey) >= len(cursor) {
+							return memtable.ErrCOWCapacity
+						}
+						n := copy(cursor[:], rowKey)
+						cursor[n] = 0
+						start = cursor[:n+1]
+						row, ok = pending.SeekGE(start, dep.End)
+						if !ok {
+							break
+						}
+						rowKey = nativeBorrowedStringBytes(row.Key)
+					}
+					i++
+					continue
+				}
+				if lastDep.End != nil && bytes.Compare(rowKey, lastDep.End) >= 0 {
+					break
+				}
+				lo, hi := i+1, u.depCount
+				for lo < hi {
+					mid := lo + (hi-lo)/2
+					midEnd := deps[u.startDep+mid].End
+					if midEnd != nil && bytes.Compare(midEnd, rowKey) <= 0 {
+						lo = mid + 1
+					} else {
+						hi = mid
+					}
+				}
+				i = lo
+			}
+			continue
 		}
 		read, err := newNativeDomainRead(domain, t.core.Snapshot())
 		if err != nil {
@@ -765,15 +920,9 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 		}
 		for i := 0; i < u.depCount; i++ {
 			dep := deps[u.startDep+i]
-			if onlyPending && hasPendingMax && bytes.Compare(dep.Key, pendingMax) > 0 {
-				break
-			}
-			docID, err := indexKeyDocumentID(u.valueType, u.entries[i].key)
-			if err != nil {
-				return err
-			}
 			start := dep.Key
 			end := dep.End
+			var docID []byte
 			for {
 				entry, found, err := nativeJSONSeekLive(&read, &g.probe, start, end, cursor[:])
 				if err != nil {
@@ -781,6 +930,12 @@ func (t *NativeJSONTxn) checkNativeBulkUniquePrechecks(g *nativeJSONTxnBinding, 
 				}
 				if !found {
 					break
+				}
+				if docID == nil {
+					docID, err = indexKeyDocumentID(u.valueType, u.entries[i].key)
+					if err != nil {
+						return err
+					}
 				}
 				owner, err := indexKeyDocumentID(u.valueType, entry.Key)
 				if err != nil {
@@ -832,13 +987,13 @@ func (m *NativeJSONManager) insertBulkBatchOnce(coord *collectionSchemaCoordinat
 	var pre *nativeBulkInsertPreimage
 	if allowBulkPreimage {
 		var preErr error
-		pre, preErr = prepareNativeBulkInsertPreimage(m, name, ids, documents, false)
+		pre, preErr = prepareNativeBulkInsertPreimage(m, name, ids, documents, false, false)
 		if preErr != nil {
 			preErr = mutationNotAcceptedError(preErr)
 			return false, isRetryableBulkCapacityRefusal(preErr, nil), preErr
 		}
 	}
-	_, retry, err = m.commitBulkInsertAttempt(coord, name, ids, documents, pre, 0, nil, false, nil, nil, nil)
+	_, retry, err = m.commitBulkInsertAttempt(coord, name, ids, documents, pre, 0, nil, false, nil, nil, nil, false)
 	if err != nil && !retry && isRetryableBulkCapacityRefusal(err, nil) {
 		capacityRetry = true
 	}
@@ -856,6 +1011,7 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 	projection *trustedFloat32Projection,
 	projected **nativeInsertProjectedRefusal,
 	journal *nativeOperationJournal,
+	trustedBSON bool,
 ) (bool, bool, error) {
 	// Register pre.Close BEFORE acquiring coord.nativeBulkInsertMu so LIFO
 	// defer order releases nativeBulkInsertMu first, then releases pre's
@@ -873,5 +1029,5 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 		defer coord.nativeBulkInsertMu.Unlock()
 	}
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
+	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 }

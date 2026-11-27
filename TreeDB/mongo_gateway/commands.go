@@ -419,6 +419,50 @@ func mongoCommitAmbiguousCommandError(err error) (wire.Document, error) {
 func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
 	ids := make([][]byte, len(documents))
 	stored := make([][]byte, len(documents))
+	if format == collections.DocumentFormatBSON && len(documents) > 1 {
+		// Pack all primary keys into a single contiguous arena (1 allocation
+		// instead of N) and fast-path first-element _id lookup.
+		var keyArena []byte
+		for i, doc := range documents {
+			raw := bson.Raw(doc)
+			id := lookupDocumentIDFast(raw)
+			if id.IsZero() {
+				var decoded bson.D
+				if err := bson.Unmarshal(raw, &decoded); err != nil {
+					return nil, nil, err
+				}
+				decoded = append(bson.D{{Key: "_id", Value: bson.NewObjectID()}}, decoded...)
+				encoded, err := bson.Marshal(decoded)
+				if err != nil {
+					return nil, nil, err
+				}
+				raw = bson.Raw(encoded)
+				id = lookupDocumentIDFast(raw)
+			}
+			if id.IsZero() {
+				return nil, nil, errors.New("Mongo document _id is required")
+			}
+			if id.Type == bson.TypeArray {
+				return nil, nil, errors.New("Mongo document _id cannot be an array")
+			}
+			if err := id.Validate(); err != nil {
+				return nil, nil, err
+			}
+			if keyArena == nil {
+				estPerKey := len(id.Value) + 2
+				if estPerKey < 16 {
+					estPerKey = 16
+				}
+				keyArena = make([]byte, 0, len(documents)*estPerKey)
+			}
+			start := len(keyArena)
+			keyArena = append(keyArena, primaryKeyPrefixBSONValue, byte(id.Type))
+			keyArena = append(keyArena, id.Value...)
+			ids[i] = keyArena[start:len(keyArena):len(keyArena)]
+			stored[i] = raw
+		}
+		return ids, stored, nil
+	}
 	for i, doc := range documents {
 		key, encoded, err := prepareInsertDocument(doc, format)
 		if err != nil {
@@ -428,6 +472,22 @@ func prepareInsertDocuments(documents []wire.Document, format collections.Docume
 		stored[i] = encoded
 	}
 	return ids, stored, nil
+}
+
+// lookupDocumentIDFast checks whether the first element of raw is "_id" in O(1)
+// before falling back to bson.Raw.Lookup("_id").
+func lookupDocumentIDFast(raw bson.Raw) bson.RawValue {
+	if len(raw) >= 10 && raw[len(raw)-1] == 0 {
+		body := raw[4 : len(raw)-1]
+		// Element layout: [type(1)][key("_id\x00")(4)][value...]
+		if len(body) >= 5 && body[1] == '_' && body[2] == 'i' && body[3] == 'd' && body[4] == 0 {
+			elem, _, ok := bsoncore.ReadElement(body)
+			if ok && len(elem) >= 5 {
+				return bson.RawValue{Type: bson.Type(elem[0]), Value: elem[5:]}
+			}
+		}
+	}
+	return raw.Lookup("_id")
 }
 
 type mongoInsertCoalescer struct {
@@ -6847,17 +6907,36 @@ func commandDocumentArray(doc wire.Document, key string) ([]wire.Document, error
 	if !ok {
 		return nil, fmt.Errorf("Mongo command field %q must be an array", key)
 	}
-	values, err := array.Values()
-	if err != nil {
-		return nil, err
+	if len(array) < 5 || array[len(array)-1] != 0 {
+		return nil, fmt.Errorf("Mongo command field %q is malformed", key)
 	}
-	out := make([]wire.Document, 0, len(values))
-	for i, value := range values {
-		doc, ok := value.DocumentOK()
+	rem := array[4 : len(array)-1]
+	capHint := len(rem) / 128
+	if capHint < 4 {
+		capHint = 4
+	} else if capHint > 16384 {
+		capHint = 16384
+	}
+	out := make([]wire.Document, 0, capHint)
+	for i := 0; len(rem) > 0; i++ {
+		elem, next, ok := bsoncore.ReadElement(rem)
+		if !ok {
+			// Fall back to standard array.Values() for exact error reporting.
+			if _, err := array.Values(); err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("Mongo command field %q[%d] is malformed", key, i)
+		}
+		val := elem.Value()
+		if bson.Type(val.Type) != bson.TypeEmbeddedDocument {
+			return nil, fmt.Errorf("Mongo command field %q[%d] must be a document", key, i)
+		}
+		docBytes, ok := val.DocumentOK()
 		if !ok {
 			return nil, fmt.Errorf("Mongo command field %q[%d] must be a document", key, i)
 		}
-		out = append(out, wire.Document(doc))
+		out = append(out, wire.Document(docBytes))
+		rem = next
 	}
 	return out, nil
 }

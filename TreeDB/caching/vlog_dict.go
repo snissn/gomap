@@ -935,6 +935,12 @@ func (db *DB) ensureValueLogDictTrainer() {
 			return nil
 		}
 		tr.SetOnAccept(func(_ *compression.ActiveProfile) {
+			// Avoid contending on ext4 JBD2 with an active Checkpoint() flush;
+			// Checkpoint clears checkpointing and kicks valueLogDictLoop on exit
+			// so the trained dictionary publishes immediately after the barrier.
+			if db.deferValueLogDictPublishDuringCheckpoint() {
+				return
+			}
 			// Publish accepted profiles immediately so short ingest benchmarks can
 			// start writing dict frames before teardown.
 			db.applyValueLogDictProfileForClass(class)
@@ -1092,8 +1098,25 @@ func (db *DB) applyValueLogDictProfile() {
 	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
 }
 
+func (db *DB) deferValueLogDictPublishDuringCheckpoint() bool {
+	if db == nil || !db.checkpointing.Load() {
+		return false
+	}
+	db.valueLogDictPublishDeferred.Store(true)
+	if !db.checkpointing.Load() {
+		if db.valueLogDictPublishDeferred.Swap(false) {
+			db.valueLogDictKick()
+		}
+		return false
+	}
+	return true
+}
+
 func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
+		return
+	}
+	if db.deferValueLogDictPublishDuringCheckpoint() {
 		return
 	}
 	// Profile application is a check-then-publish transaction: the applied hash

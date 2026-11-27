@@ -18,6 +18,11 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 	return db.checkpointCOWColumnCompaction(ctx, automatic, nil)
 }
 
+func (db *DB) checkpointCOWContextDeferringCommandWALCleanup(ctx context.Context) error {
+	defer db.observeCOWCheckpointRun(time.Now())
+	return db.materializeCOWPrefixProjected(ctx, false, nil, cowCheckpointDeferCommandWALCleanup, nil, true)
+}
+
 func (db *DB) CompactNativeColumnStore(ctx context.Context, operation backenddb.NativeColumnStoreCompaction) error {
 	if operation == nil {
 		return backenddb.ErrNativeSemanticUnsupported
@@ -197,6 +202,7 @@ type cowPrefixMaterialization uint8
 
 const (
 	cowCheckpointMaterialization cowPrefixMaterialization = iota
+	cowCheckpointDeferCommandWALCleanup
 	cowSynchronousPressureMaterialization
 	cowGenerationPressureMaterialization
 	cowReservationPressureMaterialization
@@ -332,7 +338,8 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 // materializeCOWPrefixProjectedLocked is the original durable materialization;
 // its caller owns flushMu through the final unwind and cleanup.
 func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure, reclaimLeafDebt bool) (retErr error) {
-	pressureOnly := mode != cowCheckpointMaterialization
+	deferCommandWALCleanup := mode == cowCheckpointDeferCommandWALCleanup
+	pressureOnly := mode != cowCheckpointMaterialization && !deferCommandWALCleanup
 	generationPressure := mode == cowGenerationPressureMaterialization
 	if generationPressure {
 		if db.closing.Load() {
@@ -362,6 +369,9 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
+		if db.valueLogDictPublishDeferred.Swap(false) {
+			db.valueLogDictKick()
+		}
 	}()
 	// A prior accepted physical publication must complete its handoff first.
 	// Refusal keeps the covered prefix and never replays backend work.
@@ -485,8 +495,9 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		backendDeferredCoveredPrefixMaintainer
 		CheckpointWithoutCommandWALCleanup() error
 	})
-	cleanupAfterAccept := canDeferCleanup && !automatic && operation == nil && db.externalCommandWAL && cleanupNeeded && cleanupHook != nil
-	if cleanupAfterAccept {
+	deferCleanupToCaller := canDeferCleanup && deferCommandWALCleanup && !automatic && operation == nil && db.externalCommandWAL
+	cleanupAfterAccept := !deferCleanupToCaller && canDeferCleanup && !automatic && operation == nil && db.externalCommandWAL && cleanupNeeded && cleanupHook != nil
+	if deferCleanupToCaller || cleanupAfterAccept {
 		err = checkpoint.CheckpointWithoutCommandWALCleanup()
 	} else {
 		err = db.backendCheckpointBoundary(automatic)
@@ -506,7 +517,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		// direct Close cannot detach/refund prefix during this wait; accepted
 		// custody only queues cleanup and needs none of the cache writer gates.
 		if err = db.cow.prefix.WaitAccepted(ctx, through); err != nil {
-			if cleanupAfterAccept {
+			if cleanupAfterAccept || deferCleanupToCaller {
 				db.requestCommandWALCleanup()
 			}
 			return err
@@ -519,7 +530,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		if err != nil {
 			return err
 		}
-	} else if cleanupNeeded {
+	} else if cleanupNeeded && !deferCleanupToCaller {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
 			return err
 		}

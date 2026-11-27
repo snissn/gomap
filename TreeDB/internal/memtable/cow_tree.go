@@ -621,14 +621,19 @@ func (w *COWWriter) estimateSingleDelta(e COWMutation, opts COWPrepareOptions, d
 }
 
 func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COWCharge, error) {
+	c, _, err := w.estimateWithProbePolicy(entries, opts, false)
+	return c, err
+}
+
+func (w *COWWriter) estimateWithProbePolicy(entries []COWMutation, opts COWPrepareOptions, preferSkipProbes bool) (COWCharge, bool, error) {
 	var c COWCharge
 	routing := w.ordered.routing(entries)
 	if opts.ResourceSlots < 0 || opts.ResourceSlots > w.generation.budget.limits.MaxResources {
-		return c, ErrCOWCapacity
+		return c, false, ErrCOWCapacity
 	}
 	bufLen := w.l1Count() + len(w.delta)
 	if bufLen > int(^uint(0)>>1)-w.private.Len() || len(entries) > int(^uint(0)>>1)-w.private.Len()-bufLen {
-		return c, ErrCOWCapacity
+		return c, false, ErrCOWCapacity
 	}
 	logicalAfter := w.private.Len() + w.deltaAdded + len(entries)
 	c.Height = cowMaximumHeight(logicalAfter)
@@ -669,31 +674,35 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			reserve := cowNodeReserveFor(c.Height, false, false, maxEntries)
 			for range bufLen {
 				if !add(&c.Nodes, reserve) || !add(&growth, reserve-copies) {
-					return c, ErrCOWCapacity
+					return c, false, ErrCOWCapacity
 				}
 			}
 		} else {
 			bufReplaces := bufLen - w.deltaAdded
 			for range bufReplaces {
 				if !add(&c.Nodes, copies) {
-					return c, ErrCOWCapacity
+					return c, false, ErrCOWCapacity
 				}
 			}
 			if w.deltaAdded > 0 {
 				reserve := cowNodeReserveFor(c.Height, false, false, maxEntries)
 				for range w.deltaAdded {
 					if !add(&c.Nodes, reserve) || !add(&growth, reserve-copies) {
-						return c, ErrCOWCapacity
+						return c, false, ErrCOWCapacity
 					}
 				}
 			}
 		}
 	}
 	skipRawBatchProbes := false
+	skippedNonEmptyProbes := false
 	if w.ordered == nil && len(entries) > 1 && !deletes {
 		totalOpsEstimate := bufLen + len(entries)
 		if w.private.Len() == 0 && len(w.delta) == 0 && w.l1 == nil {
 			skipRawBatchProbes = true
+		} else if preferSkipProbes && len(entries) >= 32 {
+			skipRawBatchProbes = true
+			skippedNonEmptyProbes = true
 		} else if len(entries) >= 32 && w.generation != nil && w.generation.budget != nil {
 			limits := w.generation.budget.limits
 			budgetCap := min(limits.MaxInFlightBytes, limits.MaxGenerationBytes) / 4
@@ -704,17 +713,17 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	}
 	for index, e := range entries {
 		if !e.Remove && e.Flags&node.FlagPointer != 0 && e.Flags&node.FlagTombstone != 0 {
-			return c, fmt.Errorf("COW entry has pointer and tombstone flags")
+			return c, false, fmt.Errorf("COW entry has pointer and tombstone flags")
 		}
 		if routing.routes(index) {
 			if cowHasKey(w.private, e.Key) {
 				reserve := cowNodeReserveFor(c.Height, false, true, maxEntries)
 				if !add(&c.Nodes, reserve) {
-					return c, ErrCOWCapacity
+					return c, false, ErrCOWCapacity
 				}
 				copies := 2 * cowNodeReserveFor(c.Height, true, false, maxEntries)
 				if !add(&growth, reserve-copies) {
-					return c, ErrCOWCapacity
+					return c, false, ErrCOWCapacity
 				}
 			}
 			continue
@@ -733,7 +742,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 		replacement := exists && !deletes && !e.Remove
 		reserve := cowNodeReserveFor(c.Height, replacement, e.Remove, maxEntries)
 		if !add(&c.Nodes, reserve) {
-			return c, ErrCOWCapacity
+			return c, false, ErrCOWCapacity
 		}
 		if !replacement {
 			copies := cowNodeReserveFor(c.Height, true, false, maxEntries)
@@ -741,20 +750,20 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 				copies *= 2
 			}
 			if !add(&growth, reserve-copies) {
-				return c, ErrCOWCapacity
+				return c, false, ErrCOWCapacity
 			}
 		}
 		if !e.Remove {
 			valueSize, ok := cowValueSize(len(e.Value))
 			if !ok {
-				return c, ErrCOWCapacity
+				return c, false, ErrCOWCapacity
 			}
 			keyCharge := uint64(0)
 			if !replacement {
 				keyCharge = cowAllocation(uint64(len(e.Key)))
 			}
 			if !add(&c.Payload, keyCharge) || !add(&c.Payload, cowAllocation(uint64(valueSize))) {
-				return c, ErrCOWCapacity
+				return c, false, ErrCOWCapacity
 			}
 		}
 	}
@@ -792,7 +801,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	if w.ordered != nil {
 		ordered, err := w.ordered.estimate(entries)
 		if err != nil {
-			return c, err
+			return c, false, err
 		}
 		for _, pair := range []struct {
 			dst *uint64
@@ -802,7 +811,7 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 			{&c.Wrappers, ordered.Wrappers}, {&c.Temporary, ordered.Temporary},
 		} {
 			if !add(pair.dst, pair.n) {
-				return c, ErrCOWCapacity
+				return c, false, ErrCOWCapacity
 			}
 		}
 		if ordered.Height > c.Height {
@@ -812,10 +821,10 @@ func (w *COWWriter) estimate(entries []COWMutation, opts COWPrepareOptions) (COW
 	total := uint64(0)
 	for _, n := range []uint64{c.Nodes, c.Payload, c.Wrappers, c.Temporary, c.Resources, c.Extra} {
 		if !add(&total, n) {
-			return c, ErrCOWCapacity
+			return c, false, ErrCOWCapacity
 		}
 	}
-	return c, nil
+	return c, skippedNonEmptyProbes, nil
 }
 
 // Estimate performs no node walk, payload copy or mutation. Caller input must
@@ -944,13 +953,14 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	var mergePlan cowL1MergePlan
 	deltaIdx, inL0, useL0 := w.canUseL0(entries, opts)
 	mergeToL1 := false
+	skippedNonEmptyProbes := false
 	if useL0 {
 		c, singleOwnedKey, singlePrevVal, singleKeyExists, singleBrandNew, err = w.estimateSingleDelta(entries[0], opts, deltaIdx, inL0, false, cowL1MergePlan{}, dst != nil)
 	} else if idx, plan, ok := w.canMergeToL1(entries, opts); ok {
 		deltaIdx, mergePlan, mergeToL1 = idx, plan, true
 		c, singleOwnedKey, singlePrevVal, singleKeyExists, singleBrandNew, err = w.estimateSingleDelta(entries[0], opts, deltaIdx, false, true, mergePlan, dst != nil)
 	} else {
-		c, err = w.estimate(entries, opts)
+		c, skippedNonEmptyProbes, err = w.estimateWithProbePolicy(entries, opts, true)
 		if err == nil && dst != nil && opts.ResourceSlots == 0 {
 			temp := cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
 			if c.Temporary >= temp {
@@ -963,62 +973,89 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	}
 	g := w.generation
 	b := g.budget
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return nil, ErrCOWClosed
-	}
-	// Distinct private forks may prepare ordinary rows concurrently. New
-	// resource identities still use the original single-writer reservation
-	// protocol; do not race two private resource ledgers in this generation.
-	if opts.ResourceSlots != 0 && g.activeWriters != 1 {
-		b.mu.Unlock()
-		return nil, ErrCOWPending
-	}
-	total := c.Total()
-	if g.frozen || !b.inFlightFitsLocked(total) {
-		b.mu.Unlock()
-		return nil, ErrCOWCapacity
-	}
-	if !cowGenerationFits(g, c.History()) {
-		// Preserve the original short circuit. This diagnostic proof reads
-		// other dimensions without reclaiming scratch or reserving bytes.
-		historyAndReserved, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
-		retirement, ok2 := cowAdd(historyAndReserved, b.stats.DeferredBytes)
-		if !observeProjected || g.nativeSource == nil || w.private.Len()+w.deltaAdded == 0 ||
-			!ok || !ok2 || !cowFits(b.limits.MaxRetiredBytes, retirement, total) ||
-			!cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total) {
+	var total uint64
+	for {
+		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			return nil, ErrCOWClosed
+		}
+		// Distinct private forks may prepare ordinary rows concurrently. New
+		// resource identities still use the original single-writer reservation
+		// protocol; do not race two private resource ledgers in this generation.
+		if opts.ResourceSlots != 0 && g.activeWriters != 1 {
+			b.mu.Unlock()
+			return nil, ErrCOWPending
+		}
+		total = c.Total()
+		fitsInFlight := !g.frozen && b.inFlightFitsLocked(total)
+		fitsGen := fitsInFlight && cowGenerationFits(g, c.History())
+		fitsRest := fitsGen && b.retirementFitsLocked(total) &&
+			opts.ResourceSlots <= b.limits.MaxResources-len(g.ids) &&
+			cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total)
+		if !fitsRest && skippedNonEmptyProbes && !g.frozen {
+			// Conservative probe-free estimate exceeded available headroom; retry
+			// once with exact key existence probes before refusing so replacement-heavy
+			// batches retain their exact tighter admission bound.
+			b.mu.Unlock()
+			skippedNonEmptyProbes = false
+			c, _, err = w.estimateWithProbePolicy(entries, opts, false)
+			if err != nil {
+				return nil, err
+			}
+			if dst != nil && opts.ResourceSlots == 0 {
+				temp := cowAllocation(uint64(unsafe.Sizeof(COWPrepared{})))
+				if c.Temporary >= temp {
+					c.Temporary -= temp
+				}
+			}
+			continue
+		}
+		if !fitsInFlight {
 			b.mu.Unlock()
 			return nil, ErrCOWCapacity
 		}
-		history, pending := g.generationHistoryLocked(), g.pending
-		freshBase := cowWriterConstructionCharge(b.limits.MaxResources)
-		sourceCharge, limit := g.nativeSource.lease.charge, b.limits.MaxGenerationBytes
-		b.mu.Unlock()
+		if !fitsGen {
+			// Preserve the original short circuit. This diagnostic proof reads
+			// other dimensions without reclaiming scratch or reserving bytes.
+			historyAndReserved, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
+			retirement, ok2 := cowAdd(historyAndReserved, b.stats.DeferredBytes)
+			if !observeProjected || g.nativeSource == nil || w.private.Len()+w.deltaAdded == 0 ||
+				!ok || !ok2 || !cowFits(b.limits.MaxRetiredBytes, retirement, total) ||
+				!cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total) {
+				b.mu.Unlock()
+				return nil, ErrCOWCapacity
+			}
+			history, pending := g.generationHistoryLocked(), g.pending
+			freshBase := cowWriterConstructionCharge(b.limits.MaxResources)
+			sourceCharge, limit := g.nativeSource.lease.charge, b.limits.MaxGenerationBytes
+			b.mu.Unlock()
 
-		// Rollover moves the active tail to its original captured source.
-		// The next writer is the same ordinary, empty native constructor.
-		// Reuse the unchanged reservation estimator over that shape.
-		empty := COWWriter{private: new(btree.Map[string, cowValue]), generation: g}
-		fresh, err := empty.estimate(entries, opts)
-		if err != nil || !cowFits(limit, freshBase, sourceCharge) ||
-			!cowFits(limit, freshBase+sourceCharge, fresh.History()) {
+			// Rollover moves the active tail to its original captured source.
+			// The next writer is the same ordinary, empty native constructor.
+			// Reuse the unchanged reservation estimator over that shape.
+			empty := COWWriter{private: new(btree.Map[string, cowValue]), generation: g}
+			fresh, err := empty.estimate(entries, opts)
+			if err != nil || !cowFits(limit, freshBase, sourceCharge) ||
+				!cowFits(limit, freshBase+sourceCharge, fresh.History()) {
+				return nil, ErrCOWCapacity
+			}
+			return nil, &COWProjectedGenerationRefusal{
+				generation: weak.Make(g), HistoryBytes: history, PendingBytes: pending,
+				DemandBytes: c.History(), FreshHistoryBytes: freshBase + sourceCharge + fresh.History(),
+			}
+		}
+		if !b.retirementFitsLocked(total) ||
+			opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
+			b.mu.Unlock()
 			return nil, ErrCOWCapacity
 		}
-		return nil, &COWProjectedGenerationRefusal{
-			generation: weak.Make(g), HistoryBytes: history, PendingBytes: pending,
-			DemandBytes: c.History(), FreshHistoryBytes: freshBase + sourceCharge + fresh.History(),
-		}
-	}
-	if !b.retirementFitsLocked(total) ||
-		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
+		g.pending += total
+		b.stats.ReservedBytes += total
+		b.updateFastHeadroomLocked()
 		b.mu.Unlock()
-		return nil, ErrCOWCapacity
+		break
 	}
-	g.pending += total
-	b.stats.ReservedBytes += total
-	b.updateFastHeadroomLocked()
-	b.mu.Unlock()
 	var p *COWPrepared
 	var logicalDelta cowLogicalDelta
 	var actualNodes uint64
@@ -1728,6 +1765,31 @@ func (r *COWRoot) Len() int {
 		n += r.ordered.len()
 	}
 	return n
+}
+
+// MinKey returns the minimum key currently in this immutable root when it uses
+// the standard non-ordered representation. Callers must hold the enclosing cut.
+func (r *COWRoot) MinKey() (string, bool) {
+	if r == nil || r.ordered != nil {
+		return "", false
+	}
+	minKey, _, ok := r.tree.Min()
+	if r.l1 != nil && len(r.l1.chunks) > 0 {
+		firstChunk := r.l1.chunks[0]
+		if len(firstChunk.entries) > 0 {
+			k := firstChunk.entries[0].key
+			if !ok || k < minKey {
+				minKey, ok = k, true
+			}
+		}
+	}
+	if len(r.delta) > 0 {
+		k := r.delta[0].key
+		if !ok || k < minKey {
+			minKey, ok = k, true
+		}
+	}
+	return minKey, ok
 }
 
 // MaxKey returns the maximum key currently in this immutable root when it uses

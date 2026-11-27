@@ -2881,15 +2881,19 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 	if db == nil || db.cached == nil {
 		return ErrClosed
 	}
-	if err := db.cached.Checkpoint(); err != nil {
-		return err
-	}
 	if db.commandWALCached && db.backend != nil {
+		if err := db.cached.CheckpointDeferringCommandWALCleanup(); err != nil {
+			return err
+		}
 		refreshErr := db.refreshPublicCommandWALCheckpointFallback()
 		if refreshErr != nil {
 			return refreshErr
 		}
 		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
+			return err
+		}
+	} else {
+		if err := db.cached.Checkpoint(); err != nil {
 			return err
 		}
 	}

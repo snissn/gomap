@@ -40,7 +40,7 @@ const (
 	defaultInsertCoalescingBatch   = 256
 	maxInsertCoalescingBatch       = 4096
 	defaultInsertCoalescingIdleTTL = 30 * time.Second
-	maxRetainedWireReadBuffer      = 1 << 20
+	maxRetainedWireReadBuffer      = 4 << 20
 	maxRetainedWireWriteBuffer     = 1 << 20
 	defaultWireReadBufferSize      = 32 * 1024
 	maxCoalescedWireResponses      = 64
