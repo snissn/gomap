@@ -26,15 +26,19 @@ func TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint(t *testing.
 			if result.checkpoints != 0 {
 				t.Fatalf("explicit journal ACK constructed cache-owner checkpoints: delta=%d, want 0", result.checkpoints)
 			}
-			if result.forcedGroups != result.acknowledged {
-				t.Fatalf("original forced groups=%d want one per explicit journal ACK=%d", result.forcedGroups, result.acknowledged)
+			if result.forcedGroups != 0 {
+				t.Fatalf("covered multi-doc BSON InsertMany forced groups=%d want 0 (completed via own operation receipt)", result.forcedGroups)
+			}
+			if result.uncoveredForcedGroups != result.uncoveredAcknowledged {
+				t.Fatalf("uncovered forced groups=%d want one per explicit journal ACK=%d", result.uncoveredForcedGroups, result.uncoveredAcknowledged)
 			}
 		})
 	}
 }
 
 type standaloneNativeJournalCharacterization struct {
-	acknowledged, checkpoints, forcedGroups uint64
+	acknowledged, checkpoints, forcedGroups      uint64
+	uncoveredAcknowledged, uncoveredForcedGroups uint64
 }
 
 func requireStandaloneNativeJournalOwner(tb testing.TB, standalone *StandaloneServer) {
@@ -115,10 +119,15 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 	}()
 	ctx, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelContext()
-	// Precreate before the observed request interval. Multi-document wire
-	// batches exercise the standalone prefix fence and its real driver ACK.
+	// Precreate before the observed request interval. Multi-document BSON wire
+	// batches complete through their own operation receipt; an uncovered delete
+	// separately exercises the standalone prefix fence and its real driver ACK.
 	if err := client.Database("app").CreateCollection(ctx, "journal_fence"); err != nil {
 		t.Fatalf("precreate BSON collection: %v", err)
+	}
+	const uncoveredSentinelID = "journal-uncovered-delete-target"
+	if _, err := client.Database("app").Collection("journal_fence").InsertOne(ctx, standaloneNativeJournalDocument(uncoveredSentinelID, 999)); err != nil {
+		t.Fatalf("seed uncovered delete target: %v", err)
 	}
 	journal := true
 	collection := client.Database("app").Collection("journal_fence", options.Collection().SetWriteConcern(&writeconcern.WriteConcern{W: 1, Journal: &journal}))
@@ -147,16 +156,32 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 		afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
 		t.Fatalf("journal ACK/boundary mismatch acknowledged=%d before=%+v after=%+v", acknowledged, beforeACK, afterACK)
 	}
-	delta := func(key string) uint64 {
+	deltaBetween := func(firstStats, lastStats map[string]string, key string) uint64 {
 		t.Helper()
-		first, last := writeConcernBenchmarkStat(t, before, key), writeConcernBenchmarkStat(t, after, key)
+		first, last := writeConcernBenchmarkStat(t, firstStats, key), writeConcernBenchmarkStat(t, lastStats, key)
 		if last < first {
 			t.Fatalf("counter %s decreased %d -> %d", key, first, last)
 		}
 		return last - first
 	}
-	if operations, files := delta("treedb.command_wal.sync.count_total"), delta("treedb.command_wal.file_sync.calls_total"); operations < acknowledged || files < acknowledged {
+	if operations, files := deltaBetween(before, after, "treedb.command_wal.sync.count_total"), deltaBetween(before, after, "treedb.command_wal.file_sync.calls_total"); operations < acknowledged || files < acknowledged {
 		t.Fatalf("ACKs=%d command-WAL sync operations=%d physical file-sync calls=%d; want complete physical boundaries", acknowledged, operations, files)
+	}
+	delResult, err := collection.DeleteOne(ctx, bson.D{{Key: "_id", Value: uncoveredSentinelID}})
+	if err != nil || delResult == nil || !delResult.Acknowledged || delResult.DeletedCount != 1 {
+		t.Fatalf("uncovered journal delete result=%+v err=%v", delResult, err)
+	}
+	afterUncovered := standalone.Stats()
+	afterUncoveredACK := standalone.Server.StandaloneWriteConcernStats()
+	const uncoveredCommands = uint64(1)
+	if afterUncoveredACK.JournalAcknowledgements-afterACK.JournalAcknowledgements != uncoveredCommands ||
+		afterUncoveredACK.SyncAttempts-afterACK.SyncAttempts != uncoveredCommands ||
+		afterUncoveredACK.PhysicalSyncBoundaries-afterACK.PhysicalSyncBoundaries != uncoveredCommands ||
+		afterUncoveredACK.SyncFailures != afterACK.SyncFailures || afterUncoveredACK.UncertainOutcomes != afterACK.UncertainOutcomes {
+		t.Fatalf("uncovered journal ACK/boundary mismatch before=%+v after=%+v", afterACK, afterUncoveredACK)
+	}
+	if operations, files := deltaBetween(after, afterUncovered, "treedb.command_wal.sync.count_total"), deltaBetween(after, afterUncovered, "treedb.command_wal.file_sync.calls_total"); operations < uncoveredCommands || files < uncoveredCommands {
+		t.Fatalf("uncovered ACKs=%d command-WAL sync operations=%d physical file-sync calls=%d; want complete physical boundaries", uncoveredCommands, operations, files)
 	}
 	check := func(c *mongo.Client) {
 		t.Helper()
@@ -197,5 +222,11 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 	active = false
 	stopStandaloneMongoClientForTest(t, client, cancel, listener, served, standalone)
 	t.Log("fresh native owner typed reopen census and checked close: PASS (graceful reopen, not crash proof)")
-	return standaloneNativeJournalCharacterization{acknowledged: acknowledged, checkpoints: delta("treedb.cache.checkpoint.runs"), forcedGroups: delta("treedb.command_wal.group_commit.forced_total")}
+	return standaloneNativeJournalCharacterization{
+		acknowledged:          acknowledged,
+		checkpoints:           deltaBetween(before, afterUncovered, "treedb.cache.checkpoint.runs"),
+		forcedGroups:          deltaBetween(before, after, "treedb.command_wal.group_commit.forced_total"),
+		uncoveredAcknowledged: uncoveredCommands,
+		uncoveredForcedGroups: deltaBetween(after, afterUncovered, "treedb.command_wal.group_commit.forced_total"),
+	}
 }
