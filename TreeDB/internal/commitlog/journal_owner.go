@@ -216,37 +216,38 @@ type CommandJournalOptions struct {
 }
 
 type CommandJournal struct {
-	mu                     sync.Mutex
-	fileSync               journalFileSync
-	closing                bool
-	closed                 bool
-	closeErr               error
-	fixedAhead             *fixedWALAheadSlot
-	fixedAheadWorkers      int
-	fixedAheadGeneration   uint64
-	fixedAheadErr          error
-	syncPins               int
-	syncCond               *sync.Cond
-	capturedFile           *capturedJournalFile
-	owner                  *JournalOwner
-	writer                 *Writer
-	walDir                 string
-	root                   string // Immutable lexical witness root; retained handles own resource identity.
-	path                   string
-	lane                   int
-	segmentSeq             uint64
-	activeSegmentMaxLSN    uint64
-	cleanupEpoch           uint64
-	namespaceGeneration    uint64
-	segmentTargetBytes     int64
-	onSegmentRotated       func(closedBytes int64)
-	stableParent           *os.File
-	stableParentErr        error
-	captureStableResources bool
-	rotationDebt           rotationDebtRegistration
-	pendingStableRotations []*CommandJournalStableRotation
-	pendingStableSuccessor *pendingCommandWALSuccessor
-	stableResourcePins     *rootpublication.IdentityPinRegistry
+	mu                          sync.Mutex
+	fileSync                    journalFileSync
+	closing                     bool
+	closed                      bool
+	closeErr                    error
+	fixedAhead                  *fixedWALAheadSlot
+	fixedAheadWorkers           int
+	fixedAheadGeneration        uint64
+	fixedAheadErr               error
+	pendingCheckpointReserveSeq uint64
+	syncPins                    int
+	syncCond                    *sync.Cond
+	capturedFile                *capturedJournalFile
+	owner                       *JournalOwner
+	writer                      *Writer
+	walDir                      string
+	root                        string // Immutable lexical witness root; retained handles own resource identity.
+	path                        string
+	lane                        int
+	segmentSeq                  uint64
+	activeSegmentMaxLSN         uint64
+	cleanupEpoch                uint64
+	namespaceGeneration         uint64
+	segmentTargetBytes          int64
+	onSegmentRotated            func(closedBytes int64)
+	stableParent                *os.File
+	stableParentErr             error
+	captureStableResources      bool
+	rotationDebt                rotationDebtRegistration
+	pendingStableRotations      []*CommandJournalStableRotation
+	pendingStableSuccessor      *pendingCommandWALSuccessor
+	stableResourcePins          *rootpublication.IdentityPinRegistry
 }
 
 // CommandJournalCleanupSnapshot captures the monotonic append/rotation
@@ -371,6 +372,7 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 	if FixedWALCreationSupported() {
 		writer.fixedBudget = budget
 	}
+	writer.segmentSeq = opts.SegmentSeq
 	stableParent, stableParentErr := captureStableCommandWALParent(walDir, writer.f)
 	if opts.CaptureStableResources && stableParentErr != nil {
 		_ = writer.Close()
@@ -726,6 +728,7 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	if j.segmentSeq == ^uint64(0) {
 		return ErrCommandWALSegmentSeqExhausted
 	}
+	j.pendingCheckpointReserveSeq = 0
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
 	plan, err := j.writer.fixedSuccessorSizePlan()
@@ -755,6 +758,7 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 		j.onSegmentRotated(closedBytes)
 	}
 	j.segmentSeq = nextSeq
+	j.writer.segmentSeq = nextSeq
 	j.path = nextPath
 	if j.capturedFile != nil {
 		j.releaseCapturedFileLocked(j.capturedFile)
@@ -1029,6 +1033,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			retErr = errors.Join(retErr, cleanupErr)
 		}
 	}()
+	j.pendingCheckpointReserveSeq = 0
 	closedPath, closedSeq := j.path, j.segmentSeq
 	nextSeq := closedSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
@@ -1055,6 +1060,12 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		}
 	} else if err := j.writer.Flush(); err != nil {
 		return nil, err
+	}
+	if j.writer.dirSyncPending && j.writer.ActiveBytes() > 0 {
+		if err := syncNewLogFileDirectory(j.writer, j.writer.f, closedPath); err != nil {
+			return nil, err
+		}
+		j.writer.dirSyncPending = false
 	}
 	_, err = j.writer.f.Stat()
 	if err != nil {
@@ -1195,6 +1206,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	}
 	j.writer.scratch = j.writer.scratch[:0]
 	j.segmentSeq = nextSeq
+	j.writer.segmentSeq = nextSeq
 	j.path = nextPath
 	if j.capturedFile != nil {
 		j.releaseCapturedFileLocked(j.capturedFile)
@@ -2462,6 +2474,7 @@ func (j *CommandJournal) Close() error {
 		return j.closeErr
 	}
 	j.closing = true
+	j.pendingCheckpointReserveSeq = 0
 	j.rotationDebt = rotationDebtRegistration{}
 	j.cancelFixedWALAheadLocked()
 	for (j.fixedAhead != nil && !j.fixedAhead.done) || j.fixedAheadWorkers > 0 {

@@ -3969,6 +3969,39 @@ func (r *Reader) ReadCommandFrame() (CommandEnvelope, error) {
 // returns only its LSN. The reader reuses payload storage between calls, so
 // this is reserved for scans that do not retain decoded frame data.
 func (r *Reader) ReadValidatedCommandFrameLSN() (uint64, error) {
+	if r != nil && r.fixed != nil && len(r.fixed.incomplete) == 0 {
+		offset, err := r.Offset()
+		if err != nil {
+			return 0, err
+		}
+		if offset == r.fixed.logical {
+			return 0, io.EOF
+		}
+		frames := r.fixed.validatedFrames
+		idx := r.validatedFrameIdx
+		if idx < len(frames) && frames[idx].logicalStart == offset {
+			frame := frames[idx]
+			if r.maxSegmentSize > 0 && frame.payloadLen > r.maxSegmentSize {
+				return 0, ErrCorrupt
+			}
+			if _, err := r.input.Seek(frame.logicalEnd, io.SeekStart); err != nil {
+				return 0, err
+			}
+			r.validatedFrameIdx = idx + 1
+			return frame.lsn, nil
+		}
+		if pos := sort.Search(len(frames), func(i int) bool { return frames[i].logicalStart >= offset }); pos < len(frames) && frames[pos].logicalStart == offset {
+			frame := frames[pos]
+			if r.maxSegmentSize > 0 && frame.payloadLen > r.maxSegmentSize {
+				return 0, ErrCorrupt
+			}
+			if _, err := r.input.Seek(frame.logicalEnd, io.SeekStart); err != nil {
+				return 0, err
+			}
+			r.validatedFrameIdx = pos + 1
+			return frame.lsn, nil
+		}
+	}
 	payload, err := r.readSegmentPayloadForCommandScan()
 	if err != nil {
 		return 0, err

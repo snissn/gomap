@@ -5429,7 +5429,7 @@ func (db *DB) closeCommandWALCheckpointPrefixWithDurableApplied(sealed commitlog
 	// establish that recovery baseline; an explicit durable append/barrier may
 	// independently advance commandWALDurableLSN through its own contract.
 	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
-	coveredByDurableRoot := db.durability == DurabilityWALOnRelaxed &&
+	coveredByDurableRoot := (db.durability == DurabilityWALOnRelaxed || db.durability == DurabilityDurable) &&
 		!durabilitycut.Enabled() &&
 		!db.testFailCommandWALFlush.Load() &&
 		durableAppliedLSN >= frontier

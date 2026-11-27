@@ -10,15 +10,16 @@ import (
 )
 
 type Reader struct {
-	f              *os.File
-	input          io.ReadSeeker
-	fixed          *fixedWAL
-	ownsFile       bool
-	maxSegmentSize int64
-	dec            *zstd.Decoder
-	scanHeader     [segmentHeaderSize]byte
-	scanRaw        []byte
-	scanDecoded    []byte
+	f                 *os.File
+	input             io.ReadSeeker
+	fixed             *fixedWAL
+	validatedFrameIdx int
+	ownsFile          bool
+	maxSegmentSize    int64
+	dec               *zstd.Decoder
+	scanHeader        [segmentHeaderSize]byte
+	scanRaw           []byte
+	scanDecoded       []byte
 }
 
 func NewReader(path string) (*Reader, error) {

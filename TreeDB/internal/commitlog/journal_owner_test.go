@@ -599,11 +599,10 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 		durabilitycut.AfterDependencyFileSync,
 	}
 	if j.writer.fixed != nil {
-		// Private successor initialization persists its bytes, then publishes and
-		// syncs the exact parent before the existing new-log namespace barrier.
+		// Private successor initialization persists its bytes, then publishes the
+		// replacement so the single new-log namespace barrier below syncs the parent once.
 		want = append(want,
-			durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync,
-			durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync)
+			durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync)
 	}
 	want = append(want,
 		durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync,

@@ -246,6 +246,12 @@ var fixedWALExtentMagic = [8]byte{'T', 'D', 'B', 'E', 'X', 'T', 3, 0}
 var fixedWALEndMagic = [8]byte{'T', 'D', 'B', 'E', 'N', 'D', 3, 0}
 
 type fixedWALExtent struct{ physical, logical, length, end int64 }
+type fixedWALValidatedFrame struct {
+	logicalStart int64
+	logicalEnd   int64
+	payloadLen   int64
+	lsn          uint64
+}
 type fixedWAL struct {
 	identity                    [16]byte
 	capacity, physical, logical int64
@@ -255,7 +261,8 @@ type fixedWAL struct {
 	lastLSN                     uint64
 	reconstructedFooters        uint64
 	incomplete                  map[int64]*CommandWALIncompleteFrame
-	extents                     []fixedWALExtent // Read/repair index populated by loadFixedWAL.
+	extents                     []fixedWALExtent         // Read/repair index populated by loadFixedWAL.
+	validatedFrames             []fixedWALValidatedFrame // Validated frame summaries populated by loadFixedWAL.
 }
 
 func fixedWALAlign(n int64) int64 { return (n + fixedWALAlignment - 1) &^ (fixedWALAlignment - 1) }
@@ -608,7 +615,9 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 	// scan owns its cursor and payload scratch; no bytes escape into the extent
 	// index or incomplete-frame identities. Buffering removes per-witness reads
 	// without treating initialized reserve as an implicit end marker.
-	input := acquireFixedWALReadBuf(io.NewSectionReader(file, fixedWALHeaderSize, capacity-fixedWALHeaderSize))
+	// readFixedWALFull preserves the exact-read error identity of file.ReadAt.
+	section := io.NewSectionReader(file, fixedWALHeaderSize, capacity-fixedWALHeaderSize)
+	input := acquireFixedWALReadBuf(section)
 	defer releaseFixedWALReadBuf(input)
 	var (
 		payload      []byte
@@ -679,51 +688,40 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 		} else {
 			payload = payload[:int(length)]
 		}
-		if _, err = readFixedWALFull(input, payload); err != nil {
-			return nil, nil, err
-		}
 		paddingBytes := int(footerOffset - pos - fixedWALWitnessSize - length)
-		if _, err = readFixedWALFull(input, padding[:paddingBytes]); err != nil {
-			return nil, nil, err
-		}
-		if _, err = readFixedWALFull(input, footer[:]); err != nil {
-			return nil, nil, err
+		if length >= fixedWALReadBufferSize {
+			if _, err = file.ReadAt(payload, pos+fixedWALWitnessSize); err != nil {
+				return nil, nil, err
+			}
+			var tailBuf [fixedWALAlignment - 1 + fixedWALWitnessSize]byte
+			tailLen := paddingBytes + fixedWALWitnessSize
+			if _, err = file.ReadAt(tailBuf[:tailLen], pos+fixedWALWitnessSize+length); err != nil {
+				return nil, nil, err
+			}
+			copy(padding[:paddingBytes], tailBuf[:paddingBytes])
+			copy(footer[:], tailBuf[paddingBytes:tailLen])
+			if _, err = section.Seek(end-fixedWALHeaderSize, io.SeekStart); err != nil {
+				return nil, nil, err
+			}
+			input.Reset(section)
+		} else {
+			if _, err = readFixedWALFull(input, payload); err != nil {
+				return nil, nil, err
+			}
+			if _, err = readFixedWALFull(input, padding[:paddingBytes]); err != nil {
+				return nil, nil, err
+			}
+			if _, err = readFixedWALFull(input, footer[:]); err != nil {
+				return nil, nil, err
+			}
 		}
 		expected = probe
 		copy(expected[:], fixedWALEndMagic[:])
 		binary.LittleEndian.PutUint32(expected[92:96], crc.Checksum(expected[:92]))
-		var first, last uint64
-		dataComplete := crc.Checksum(payload) == binary.LittleEndian.Uint32(probe[72:76])
-		if !dataComplete {
-			// Only a positively bounded new extent whose end is still exactly
-			// initialized reserve can represent an interrupted relaxed frame.
-			// An intact or partly written end plus damaged data stays corrupt.
-			if !allZeroBytes(footer[:]) {
-				return nil, nil, ErrCorrupt
-			}
-			if len(payload) < segmentHeaderSize+56 || int(binary.LittleEndian.Uint32(payload[:4])) != len(payload)-segmentHeaderSize {
-				return nil, nil, ErrCorrupt
-			}
-			env, e := decodeCommandFrameV2TailIdentity(payload[segmentHeaderSize:])
-			if e != nil {
-				return nil, nil, e
-			}
-			if env.DurabilityClass != CommandDurabilityRelaxed {
-				return nil, nil, ErrCorrupt
-			}
-			if e = validateCommandEnvelopeV2Identity(env); e != nil {
-				return nil, nil, e
-			}
-			first, last = env.LSN, env.LSN
-			if state.incomplete == nil {
-				state.incomplete = make(map[int64]*CommandWALIncompleteFrame)
-			}
-			state.incomplete[start] = &CommandWALIncompleteFrame{Envelope: env, EndOffset: start + length}
-		} else {
-			first, last, err = validateFixedWALFrames(payload)
-			if err != nil {
-				return nil, nil, err
-			}
+		wantExtentCRC := binary.LittleEndian.Uint32(probe[72:76])
+		first, last, extentCRC, frames, frameErr := validateFixedWALFramesWithSummary(payload, start, state.validatedFrames)
+		if frameErr == nil && extentCRC == wantExtentCRC {
+			state.validatedFrames = frames
 			// Narrow C reconstructs redundant framing only after the entire
 			// unchanged V2 frame, CRC, identity, and order have validated.
 			if !bytes.Equal(footer[:], expected[:]) {
@@ -734,6 +732,38 @@ func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
 					return nil, nil, ErrCorrupt
 				}
 				state.reconstructedFooters++
+			}
+		} else {
+			dataComplete := crc.Checksum(payload) == wantExtentCRC
+			if !dataComplete {
+				// Only a positively bounded new extent whose end is still exactly
+				// initialized reserve can represent an interrupted relaxed frame.
+				// An intact or partly written end plus damaged data stays corrupt.
+				if !allZeroBytes(footer[:]) {
+					return nil, nil, ErrCorrupt
+				}
+				if len(payload) < segmentHeaderSize+56 || int(binary.LittleEndian.Uint32(payload[:4])) != len(payload)-segmentHeaderSize {
+					return nil, nil, ErrCorrupt
+				}
+				env, e := decodeCommandFrameV2TailIdentity(payload[segmentHeaderSize:])
+				if e != nil {
+					return nil, nil, e
+				}
+				if env.DurabilityClass != CommandDurabilityRelaxed {
+					return nil, nil, ErrCorrupt
+				}
+				if e = validateCommandEnvelopeV2Identity(env); e != nil {
+					return nil, nil, e
+				}
+				first, last = env.LSN, env.LSN
+				if state.incomplete == nil {
+					state.incomplete = make(map[int64]*CommandWALIncompleteFrame)
+				}
+				state.incomplete[start] = &CommandWALIncompleteFrame{Envelope: env, EndOffset: start + length}
+			} else if frameErr != nil {
+				return nil, nil, frameErr
+			} else {
+				return nil, nil, ErrCorrupt
 			}
 		}
 		if first != binary.LittleEndian.Uint64(probe[56:64]) || last != binary.LittleEndian.Uint64(probe[64:72]) {
@@ -757,34 +787,60 @@ func validFixedWALWitness(p []byte, magic [8]byte, identity [16]byte, physical i
 	return len(p) == fixedWALWitnessSize && bytes.Equal(p[:8], magic[:]) && bytes.Equal(p[8:24], identity[:]) && binary.LittleEndian.Uint64(p[24:32]) == uint64(physical) && binary.LittleEndian.Uint32(p[92:96]) == crc.Checksum(p[:92]) && allZeroBytes(p[76:92])
 }
 func validateFixedWALFrames(data []byte) (first, last uint64, err error) {
+	first, last, _, _, err = validateFixedWALFramesWithSummary(data, -1, nil)
+	return first, last, err
+}
+
+func validateFixedWALFramesWithSummary(data []byte, logicalBase int64, dst []fixedWALValidatedFrame) (first, last uint64, extentCRC uint32, frames []fixedWALValidatedFrame, err error) {
+	frames = dst
+	logicalOff := logicalBase
+	haveCRC := false
 	for len(data) > 0 {
 		if len(data) < segmentHeaderSize {
-			return 0, 0, ErrCommandWALTerminalTail
+			return 0, 0, 0, dst, ErrCommandWALTerminalTail
 		}
 		length := int(binary.LittleEndian.Uint32(data[:4]))
 		if length <= 0 || length > len(data)-segmentHeaderSize {
-			return 0, 0, ErrCommandWALTerminalTail
+			return 0, 0, 0, dst, ErrCommandWALTerminalTail
 		}
 		payload := data[segmentHeaderSize : segmentHeaderSize+length]
-		if crc.Checksum(payload) != binary.LittleEndian.Uint32(data[4:8]) {
-			return 0, 0, ErrCorrupt
+		payloadCRC := crc.Checksum(payload)
+		if payloadCRC != binary.LittleEndian.Uint32(data[4:8]) {
+			return 0, 0, 0, dst, ErrCorrupt
 		}
 		// Only the LSN escapes this validation pass. Keep the full decoder's
 		// integrity checks while borrowing bytes owned by this call's input.
 		env, e := decodeCommandFrame(payload, true)
 		if e != nil {
-			return 0, 0, e
+			return 0, 0, 0, dst, e
 		}
 		if first == 0 {
 			first = env.LSN
 		}
 		if last != 0 && env.LSN <= last {
-			return 0, 0, ErrCommandWALDuplicateLSN
+			return 0, 0, 0, dst, ErrCommandWALDuplicateLSN
 		}
 		last = env.LSN
-		data = data[segmentHeaderSize+length:]
+		frameLen := segmentHeaderSize + length
+		frameCRC := crc32IEEECombine(crc.Checksum(data[:segmentHeaderSize]), payloadCRC, length)
+		if !haveCRC {
+			extentCRC = frameCRC
+			haveCRC = true
+		} else {
+			extentCRC = crc32IEEECombine(extentCRC, frameCRC, frameLen)
+		}
+		if dst != nil || logicalBase >= 0 {
+			frames = append(frames, fixedWALValidatedFrame{
+				logicalStart: logicalOff,
+				logicalEnd:   logicalOff + int64(frameLen),
+				payloadLen:   int64(length),
+				lsn:          env.LSN,
+			})
+		}
+		logicalOff += int64(frameLen)
+		data = data[frameLen:]
 	}
-	return first, last, nil
+	return first, last, extentCRC, frames, nil
 }
 
 // flushExtent emits exactly one frame from flush's fully validated, exclusively
@@ -1035,6 +1091,7 @@ func (state *fixedWAL) flush(w *Writer) error {
 	// Only the append owner calls flush. Readers and repair load their own
 	// immutable extent indexes; the writer needs only the physical/logical cut.
 	state.extents = nil
+	state.validatedFrames = nil
 	if len(state.pending) == 0 {
 		return nil
 	}
