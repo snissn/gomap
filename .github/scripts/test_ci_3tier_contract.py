@@ -107,14 +107,47 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
     def test_ci_yml_guardrails_and_caching(self) -> None:
         raw = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
         doc = load_yaml(WORKFLOWS / "ci.yml")
-        # Tier 0 runs docs-check, TreeDB/docs, and TestTypedStorage*
+        # Tier 0 runs docs-check, TreeDB/docs, and TestTypedStorage* with -trimpath
         docs_job = doc["jobs"]["docs-checks"]
         docs_script = "\n".join(str(s.get("run", "")) for s in docs_job["steps"])
         self.assertIn("make docs-check", docs_script)
-        self.assertIn("go test -count=1 ./TreeDB/docs", docs_script)
+        self.assertIn("go test -trimpath -count=1 ./TreeDB/docs", docs_script)
         self.assertIn("TestTypedStorage", docs_script)
-        # No setup-go cache: false anywhere in ci.yml
-        self.assertNotIn("cache: false", raw)
+        # preflight runs gofmt + pure-Python scope planning only, so it skips cache restore/save
+        preflight_go = next(
+            s for s in doc["jobs"]["preflight"]["steps"]
+            if str(s.get("uses", "")).startswith("actions/setup-go@")
+        )
+        self.assertIs(preflight_go["with"]["cache"], False)
+        # Every Go build/vet/test job uses the shared setup-go-cached composite action
+        for job_name in (
+            "docs-checks",
+            "draft-vet-compile",
+            "vet",
+            "cross-compile-darwin",
+            "cross-compile-windows",
+            "test-linux",
+            "race-linux",
+            "test-os-macos",
+            "test-os-windows",
+        ):
+            steps = doc["jobs"][job_name]["steps"]
+            cached_steps = [s for s in steps if s.get("uses") == "./.github/actions/setup-go-cached"]
+            self.assertEqual(len(cached_steps), 1, f"{job_name} must use setup-go-cached")
+            self.assertTrue(cached_steps[0].get("with", {}).get("profile"), f"{job_name} missing cache profile")
+        # Composite action exists, is valid YAML, separates GOMODCACHE from rolling GOCACHE,
+        # and only saves GOCACHE when save-gocache == 'true'.
+        cache_action_path = REPO_ROOT / ".github" / "actions" / "setup-go-cached" / "action.yml"
+        self.assertTrue(cache_action_path.is_file())
+        cache_action = load_yaml(cache_action_path)
+        action_steps = cache_action["runs"]["steps"]
+        self.assertTrue(any(s.get("uses") == "actions/cache/restore@v4" for s in action_steps))
+        self.assertTrue(any("gomod-v1-" in str(s.get("with", {}).get("key", "")) for s in action_steps))
+        self.assertTrue(any("gocache-v1-" in str(s.get("with", {}).get("key", "")) for s in action_steps))
+        # No non-matrix job in ci.yml may reference matrix.*
+        for job_name, job in doc["jobs"].items():
+            if isinstance(job, dict) and "strategy" not in job:
+                self.assertNotIn("matrix.", json.dumps(job), f"non-matrix job {job_name} references matrix.")
         # Single fail-closed aggregator includes parallel vet/cross-compile and opted-in full-sweep
         self.assertIn("full-sweep", doc["jobs"])
         self.assertEqual(doc["jobs"]["full-sweep"]["uses"], "./.github/workflows/ci-full-sweep.yml")
@@ -147,6 +180,10 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertIn("--kind cross-windows", windows_script)
         self.assertIn("treedb_peer_*test.py", vet_script)
         self.assertIn("treedb_vacuum_m0_summarize_test.py", vet_script)
+        # ci_scope.py passes -trimpath on vet, test, and slice compile invocations
+        scope_src = (REPO_ROOT / ".github" / "scripts" / "ci_scope.py").read_text(encoding="utf-8")
+        self.assertIn('["go", "vet", "-trimpath"', scope_src)
+        self.assertIn('["go", "test", "-trimpath"', scope_src)
 
     def test_ci_full_sweep_guardrails_and_7_windows_shards(self) -> None:
         raw = (WORKFLOWS / "ci-full-sweep.yml").read_text(encoding="utf-8")
@@ -154,6 +191,12 @@ class TestWorkflowYAMLContracts(unittest.TestCase):
         self.assertNotIn("cache: false", raw)
         self.assertNotIn("go vet -p=1 -x", raw)
         self.assertNotIn("windows-caching-heavy-1", raw)
+        self.assertIn("go vet -trimpath", raw)
+        self.assertIn("go test -trimpath", raw)
+        # No non-matrix job in ci-full-sweep.yml may reference matrix.*
+        for job_name, job in doc["jobs"].items():
+            if isinstance(job, dict) and "strategy" not in job:
+                self.assertNotIn("matrix.", json.dumps(job), f"non-matrix job {job_name} references matrix.")
         self.assertEqual(doc["jobs"]["treedb-windows"]["strategy"]["matrix"]["shard"], [1, 2, 3, 4, 5, 6, 7])
         # Schedule guard checks last passing scheduled SHA
         guard_run = "\n".join(str(s.get("run", "")) for s in doc["jobs"]["guard"]["steps"])

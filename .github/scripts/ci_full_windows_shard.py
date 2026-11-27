@@ -48,7 +48,7 @@ def list_treedb_packages(repo: Path, env: dict[str, str]) -> list[str]:
 
 def list_package_tests(repo: Path, env: dict[str, str], rel_pkg: str) -> list[str]:
     proc = subprocess.run(
-        ["go", "test", rel_pkg, "-list", "^(Test|Example|Fuzz).*"],
+        ["go", "test", "-trimpath", rel_pkg, "-list", "^(Test|Example|Fuzz).*"],
         cwd=repo / "TreeDB",
         env=env,
         capture_output=True,
@@ -99,7 +99,7 @@ def _run_named_tests(rel_pkg: str, tests: list[str], *, cwd: Path, env: dict[str
         if chunk and chunk_len + len(name) + 1 > 6000:
             regex = "^(" + "|".join(re.escape(x) for x in chunk) + ")$"
             rc = _run_cmd(
-                ["go", "test", "-json", "-timeout", "30m", "-p", "1", rel_pkg, "-run", regex],
+                ["go", "test", "-trimpath", "-json", "-timeout", "30m", "-p", "1", rel_pkg, "-run", regex],
                 cwd=cwd,
                 env=env,
                 jsonl_path=jsonl_path,
@@ -114,7 +114,7 @@ def _run_named_tests(rel_pkg: str, tests: list[str], *, cwd: Path, env: dict[str
     if chunk:
         regex = "^(" + "|".join(re.escape(x) for x in chunk) + ")$"
         return _run_cmd(
-            ["go", "test", "-json", "-timeout", "30m", "-p", "1", rel_pkg, "-run", regex],
+            ["go", "test", "-trimpath", "-json", "-timeout", "30m", "-p", "1", rel_pkg, "-run", regex],
             cwd=cwd,
             env=env,
             jsonl_path=jsonl_path,
@@ -132,7 +132,7 @@ def run_shard(repo: Path, shard: int, jsonl_path: Path) -> int:
 
     if shard == 1:
         return _run_cmd(
-            ["go", "test", "-json", "-timeout", "30m", "-p", "1", "./nativewire"],
+            ["go", "test", "-trimpath", "-json", "-timeout", "30m", "-p", "1", "./nativewire"],
             cwd=treedb_dir,
             env=env,
             jsonl_path=jsonl_path,
@@ -152,13 +152,13 @@ def run_shard(repo: Path, shard: int, jsonl_path: Path) -> int:
         return _run_named_tests("./caching", caching_tests, cwd=treedb_dir, env=env, jsonl_path=jsonl_path)
     if shard == 6:
         return _run_cmd(
-            ["go", "test", "-json", "-timeout", "30m", "-p", "1", "./db", "./mongo_gateway"],
+            ["go", "test", "-trimpath", "-json", "-timeout", "30m", "-p", "1", "./db", "./mongo_gateway"],
             cwd=treedb_dir,
             env=env,
             jsonl_path=jsonl_path,
         )
     # shard == 7: go vet ./... + all remaining TreeDB packages
-    rc = _run_cmd(["go", "vet", "./..."], cwd=treedb_dir, env=env)
+    rc = _run_cmd(["go", "vet", "-trimpath", "./..."], cwd=treedb_dir, env=env)
     if rc != 0:
         return rc
     all_pkgs = list_treedb_packages(repo, env)
@@ -166,7 +166,7 @@ def run_shard(repo: Path, shard: int, jsonl_path: Path) -> int:
     if not rest:
         return 0
     return _run_cmd(
-        ["go", "test", "-json", "-timeout", "30m", "-p", "1", *rest],
+        ["go", "test", "-trimpath", "-json", "-timeout", "30m", "-p", "1", *rest],
         cwd=treedb_dir,
         env=env,
         jsonl_path=jsonl_path,

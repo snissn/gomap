@@ -4,19 +4,29 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 )
 
 func TestDurablePagerCandidateWriteLockContract(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate contract test source")
+	var pkgDir string
+	if _, filename, _, ok := runtime.Caller(0); ok && filepath.IsAbs(filename) {
+		if _, err := os.Stat(filename); err == nil {
+			pkgDir = filepath.Dir(filename)
+		}
 	}
-	treeDBDir := filepath.Dir(filepath.Dir(filename))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	treeDBDir := filepath.Dir(pkgDir)
 
-	sink := parseGoFunctionForContract(t, filepath.Join(filepath.Dir(filename), "durable_root_runtime.go"), "WriteCandidatePageV1")
+	sink := parseGoFunctionForContract(t, filepath.Join(pkgDir, "durable_root_runtime.go"), "WriteCandidatePageV1")
 	if !contractCallsSelector(sink, "freelist", "WriteCandidatePageToPagerV1") {
 		t.Fatal("durable candidate sink no longer uses the opaque pager bridge")
 	}

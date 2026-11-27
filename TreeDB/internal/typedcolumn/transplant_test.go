@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -593,11 +594,20 @@ func TestTypedColumnTransplantRequestedSectionAlignment4234(t *testing.T) {
 }
 
 func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			pkgDir = filepath.Dir(file)
+		}
 	}
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	repoRoot := filepath.Clean(filepath.Join(pkgDir, "..", "..", ".."))
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},

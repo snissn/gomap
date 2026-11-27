@@ -67,13 +67,11 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Setup Go
+      - name: Setup Go (gofmt only; skip cache restore/save)
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          cache: false
 
       - name: Check gofmt
         shell: bash
@@ -134,13 +132,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: Docs lint (fast git-grep)
         run: make docs-check
@@ -152,8 +147,8 @@ jobs:
           GOMAXPROCS: 2
         run: |
           set -euo pipefail
-          go test -count=1 ./TreeDB/docs
-          go test -count=1 ./TreeDB/collections -run '^TestTypedStorage'
+          go test -trimpath -count=1 ./TreeDB/docs
+          go test -trimpath -count=1 ./TreeDB/collections -run '^TestTypedStorage'
 
   draft-vet-compile:
     name: draft preflight (vet + compile)
@@ -173,13 +168,10 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: CI workflow & script contract tests
         if: ${{ needs.preflight.outputs.run_ci_script_tests == 'true' }}
@@ -221,13 +213,10 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: CI workflow & script contract tests
         if: ${{ matrix.shard == 0 && needs.preflight.outputs.run_ci_script_tests == 'true' }}
@@ -277,13 +266,11 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: cross-darwin
+          save-gocache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 0 }}
 
       - name: Cross-compile darwin/arm64 (CGO_ENABLED=0)
         env:
@@ -317,13 +304,11 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: cross-windows
+          save-gocache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 0 }}
 
       - name: Cross-compile windows/amd64 (CGO_ENABLED=0)
         env:
@@ -357,13 +342,11 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
+          save-gocache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.shard == 0 }}
 
       - name: Run affected Linux tests
         env:
@@ -420,13 +403,10 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux-race
 
       - name: Run touched-package -race tests
         env:
@@ -474,13 +454,10 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: macos
 
       - name: Run targeted macOS tests
         shell: bash
@@ -529,13 +506,10 @@ jobs:
           name: ${{ needs.preflight.outputs.plan_artifact }}
           path: ${{ runner.temp }}/ci-scope
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: windows
 
       - name: Run targeted Windows tests
         shell: bash

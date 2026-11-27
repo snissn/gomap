@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -31,9 +32,18 @@ func TestRunRejectsMissingManifestFlag(t *testing.T) {
 
 func smokeFixturePath(t *testing.T, name string) string {
 	t.Helper()
-	_, current, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, current, _, ok := runtime.Caller(0); ok && filepath.IsAbs(current) {
+		if _, err := os.Stat(current); err == nil {
+			pkgDir = filepath.Dir(current)
+		}
 	}
-	return filepath.Join(filepath.Dir(current), "..", "..", "internal", "jsonbenchcontract", "testdata", name)
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	return filepath.Join(pkgDir, "..", "..", "internal", "jsonbenchcontract", "testdata", name)
 }

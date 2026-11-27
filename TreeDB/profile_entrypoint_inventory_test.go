@@ -268,11 +268,16 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 
 func profileInventoryTreeDBDir(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			return filepath.Dir(file)
+		}
 	}
-	return filepath.Dir(file)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	return wd
 }
 
 func profileInventoryMethods(t *testing.T, dir, packageName, receiverName string) []string {

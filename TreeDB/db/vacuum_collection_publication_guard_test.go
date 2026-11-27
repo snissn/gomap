@@ -2635,11 +2635,20 @@ func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *pub
 	if dbTestRaceEnabled {
 		t.Skip("skipping static AST publication source guard under -race; verified in normal test runs")
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, currentFile, _, ok := runtime.Caller(0); ok && filepath.IsAbs(currentFile) {
+		if _, err := os.Stat(currentFile); err == nil {
+			pkgDir = filepath.Dir(currentFile)
+		}
 	}
-	meta, err := loadPublicationGuardImmutableMetadata(filepath.Dir(currentFile))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	meta, err := loadPublicationGuardImmutableMetadata(pkgDir)
 	if err != nil {
 		t.Fatal(err)
 	}
