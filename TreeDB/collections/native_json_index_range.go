@@ -65,6 +65,8 @@ type warmRangeCollector struct {
 type warmRangeScratch struct {
 	collector          warmRangeCollector
 	batch              warmRangeDocBatch
+	startBuf           [128]byte
+	endBuf             [128]byte
 	idArena            [512]byte
 	lastRawKeyBuf      [256]byte
 	lookaheadRawKeyBuf [256]byte
@@ -78,6 +80,20 @@ var warmRangeScratchPool = sync.Pool{
 		sc := new(warmRangeScratch)
 		sc.collectFn = sc.collector.collect
 		return sc
+	},
+}
+
+type indexRangeCursorScratch struct {
+	physical nativeDomainCursor
+	cursor   [page.PageSize + 1]byte
+	startBuf [128]byte
+	endBuf   [128]byte
+	idBuf    [128]byte
+}
+
+var indexRangeCursorScratchPool = sync.Pool{
+	New: func() any {
+		return new(indexRangeCursorScratch)
 	},
 }
 
@@ -343,7 +359,16 @@ func (c *Collection) scanNativeIndexRangeBorrowedCut(
 	if documents && nativeTypedMeta(*meta) {
 		return false, false, false, nil
 	}
-	idxDomain, hasIdxDomain := col.domains.Get("index/" + name)
+	var idxKeyBuf [128]byte
+	var idxDomainKey string
+	if len("index/")+len(name) <= len(idxKeyBuf) {
+		n := copy(idxKeyBuf[:], "index/")
+		n += copy(idxKeyBuf[n:], name)
+		idxDomainKey = unsafe.String(&idxKeyBuf[0], n)
+	} else {
+		idxDomainKey = "index/" + name
+	}
+	idxDomain, hasIdxDomain := col.domains.Get(idxDomainKey)
 	if !hasIdxDomain || idxDomain == nil || idxDomain.refs.Load() <= 0 ||
 		idxDomain.baseRoot == 0 || idxDomain.pending != nil || idxDomain.captured != nil {
 		return false, false, false, nil
@@ -389,16 +414,16 @@ func (c *Collection) scanNativeIndexRangeBorrowedCut(
 	}
 	defer leaseVal.Close()
 
-	start, end, empty, err := indexRangeScanBounds(index.ValueType, opts)
-	if err != nil || empty {
-		return false, true, true, err
-	}
-
 	sc := warmRangeScratchPool.Get().(*warmRangeScratch)
 	defer func() {
 		sc.reset()
 		warmRangeScratchPool.Put(sc)
 	}()
+
+	start, end, _, _, empty, err := indexRangeScanBoundsInto(index.ValueType, opts, sc.startBuf[:0], sc.endBuf[:0])
+	if err != nil || empty {
+		return false, true, true, err
+	}
 
 	var seen map[string]struct{}
 	if dedupe {
@@ -686,24 +711,29 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 	if dedupe {
 		seen = make(map[string]struct{})
 	}
-	start, end, empty, err := indexRangeScanBounds(valueType, opts)
-	if err != nil || empty || !hasDomain {
+	if !hasDomain {
 		seen = nil
 		domain = nil
-		start, end = nil, nil
-		return false, err
+		return false, nil
 	}
-	defer func() {
-		seen = nil
-		domain = nil
-		start, end = nil, nil
-	}()
 
 	if canWarmScan {
 		sc := warmRangeScratchPool.Get().(*warmRangeScratch)
 		defer func() {
 			sc.reset()
 			warmRangeScratchPool.Put(sc)
+		}()
+		start, end, _, _, empty, err := indexRangeScanBoundsInto(valueType, opts, sc.startBuf[:0], sc.endBuf[:0])
+		if err != nil || empty {
+			seen = nil
+			domain = nil
+			start, end = nil, nil
+			return false, err
+		}
+		defer func() {
+			seen = nil
+			domain = nil
+			start, end = nil, nil
 		}()
 		collector := &sc.collector
 		collector.lease = lease
@@ -886,7 +916,7 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 			if err := collector.admit(fallbackCharge); err != nil {
 				return false, err
 			}
-			return r.scanIndexRangeCursor(valueType, opts, documents, dedupe, domain, start, end, fallbackRawKey, emitted, seen, collector.admit, visit)
+			return r.scanIndexRangeCursor(valueType, opts, documents, borrow, dedupe, domain, start, end, fallbackRawKey, emitted, seen, nil, collector.admit, visit)
 		}
 
 		for i, id := range collector.collectedIDs {
@@ -953,8 +983,23 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 		if err := collector.admit(fallbackCharge); err != nil {
 			return false, err
 		}
-		return r.scanIndexRangeCursor(valueType, opts, documents, dedupe, domain, start, end, fallbackRawKey, emitted, seen, collector.admit, visit)
+		return r.scanIndexRangeCursor(valueType, opts, documents, borrow, dedupe, domain, start, end, fallbackRawKey, emitted, seen, nil, collector.admit, visit)
 	}
+
+	csc := indexRangeCursorScratchPool.Get().(*indexRangeCursorScratch)
+	defer indexRangeCursorScratchPool.Put(csc)
+	start, end, _, _, empty, err := indexRangeScanBoundsInto(valueType, opts, csc.startBuf[:0], csc.endBuf[:0])
+	if err != nil || empty {
+		seen = nil
+		domain = nil
+		start, end = nil, nil
+		return false, err
+	}
+	defer func() {
+		seen = nil
+		domain = nil
+		start, end = nil, nil
+	}()
 
 	admit := func(n uint64) error {
 		if n <= preAdmitted {
@@ -972,19 +1017,21 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 		charge += extra
 		return nil
 	}
-	return r.scanIndexRangeCursor(valueType, opts, documents, dedupe, domain, start, end, nil, 0, seen, admit, visit)
+	return r.scanIndexRangeCursor(valueType, opts, documents, borrow, dedupe, domain, start, end, nil, 0, seen, csc, admit, visit)
 }
 
 func (r *NativeJSONRead) scanIndexRangeCursor(
 	valueType IndexValueType,
 	opts IndexRangeOptions,
 	documents bool,
+	borrow bool,
 	dedupe bool,
 	domain *nativeDomainState,
 	start, end []byte,
 	fallbackRawKey []byte,
 	emitted int,
 	seen map[string]struct{},
+	csc *indexRangeCursorScratch,
 	admit func(uint64) error,
 	visit func([]byte, []byte) (bool, error),
 ) (truncated bool, operationErr error) {
@@ -993,9 +1040,14 @@ func (r *NativeJSONRead) scanIndexRangeCursor(
 	if err != nil {
 		return false, err
 	}
-	physical := nativeDomainCursor{read: read, start: start, end: end}
+	ownedScratch := false
+	if csc == nil {
+		csc = indexRangeCursorScratchPool.Get().(*indexRangeCursorScratch)
+		ownedScratch = true
+	}
+	csc.physical = nativeDomainCursor{read: read, start: start, end: end}
 	read = nativeDomainRead{}
-	cursor := make([]byte, page.PageSize+1)
+	cursor := csc.cursor[:]
 	curStart := start
 	if fallbackRawKey != nil {
 		n := copy(cursor, fallbackRawKey)
@@ -1004,8 +1056,11 @@ func (r *NativeJSONRead) scanIndexRangeCursor(
 		fallbackRawKey = nil
 	}
 	defer func() {
-		operationErr = errors.Join(operationErr, physical.close())
+		operationErr = errors.Join(operationErr, csc.physical.close())
 		cursor, curStart, start, end = nil, nil, nil, nil
+		if ownedScratch {
+			indexRangeCursorScratchPool.Put(csc)
+		}
 	}()
 	readLeaf := r.cursorReadLeaf()
 	forward := false
@@ -1013,7 +1068,7 @@ func (r *NativeJSONRead) scanIndexRangeCursor(
 		if r.capture == nil || r.failure != nil || r.closing {
 			return false, backenddb.ErrClosed
 		}
-		entry, found, err := physical.read.seekWithCursor(curStart, end, nil, readLeaf, false, nil, &physical, forward, admit)
+		entry, found, err := csc.physical.read.seekWithCursor(curStart, end, nil, readLeaf, false, nil, &csc.physical, forward, admit)
 		if err != nil || !found {
 			return false, err
 		}
@@ -1051,7 +1106,11 @@ func (r *NativeJSONRead) scanIndexRangeCursor(
 		}
 		// End every borrowed secondary alias before primary lookup or user
 		// code can reuse physical scratch. The visitor pins this SAME cut.
-		id = bytes.Clone(id)
+		if borrow && len(id) <= len(csc.idBuf) {
+			id = append(csc.idBuf[:0], id...)
+		} else {
+			id = bytes.Clone(id)
+		}
 		entry = node.LeafEntry{}
 		var document []byte
 		if documents {

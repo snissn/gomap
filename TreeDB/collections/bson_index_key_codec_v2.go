@@ -87,6 +87,14 @@ func EncodeBSONIndexKeyComponentV2(value bson.RawValue) ([]byte, error) {
 	return encodeBSONIndexKeyComponentV2(value)
 }
 
+// ValidateBSONIndexKeyComponentV2 checks whether value can be encoded as a v2
+// scalar index key component without heap allocation for typical scalar sizes.
+func ValidateBSONIndexKeyComponentV2(value bson.RawValue) error {
+	var scratch [256]byte
+	_, _, err := appendBSONIndexKeyComponentV2(scratch[:0], value)
+	return err
+}
+
 // appendBSONIndexKeyComponentV2 appends one ascending, self-delimiting scalar
 // component. Concatenating returned components is safe for compound indexes.
 // The document ID is deliberately appended by bsonIndexEntryKeyV2 afterwards.
