@@ -328,30 +328,33 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 	}
 
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerCollectionRootWalk)
-	if collection, err := collectionRootFragmentationStatsWithContext(ctx, snap.idx, snap.state); err == nil {
-		out.SystemPages = collection.systemPages
-		out.CollectionRootCount = collection.roots
-		out.CollectionRootPagerRoots = collection.pagerRoots
-		out.CollectionRootPages = collection.pages
-		out.CollectionRootDuplicatePageRefs = collection.duplicatePages
-		out.CollectionRootLeafPages = collection.leafPages
-		out.CollectionRootInternalPages = collection.internalPages
-		out.CollectionRootEmptyLeafPages = collection.emptyLeafPages
-		out.CollectionRootUnderfullLeafPages = collection.underfullLeafPages
-		if collection.hasPagerBackedID {
-			out.CollectionRootMinPageID = collection.minPageID
-			out.CollectionRootMaxPageID = collection.maxPageID
-			out.CollectionRootSpan = (collection.maxPageID - collection.minPageID) + 1
-			if collection.pages > 0 {
-				out.CollectionRootSpanRatioPPM, err = fragmentationSpanRatio(out.CollectionRootSpan, collection.pages)
-				if err != nil {
-					return out, err
-				}
-				out.CollectionRootSpanRatioValid = true
-			}
+	collection, err := collectionRootFragmentationStatsWithContext(ctx, snap.idx, snap.state)
+	if err != nil {
+		if ctx.Err() != nil {
+			return out, ctx.Err()
 		}
-	} else if ctx.Err() != nil {
-		return out, ctx.Err()
+		return out, err
+	}
+	out.SystemPages = collection.systemPages
+	out.CollectionRootCount = collection.roots
+	out.CollectionRootPagerRoots = collection.pagerRoots
+	out.CollectionRootPages = collection.pages
+	out.CollectionRootDuplicatePageRefs = collection.duplicatePages
+	out.CollectionRootLeafPages = collection.leafPages
+	out.CollectionRootInternalPages = collection.internalPages
+	out.CollectionRootEmptyLeafPages = collection.emptyLeafPages
+	out.CollectionRootUnderfullLeafPages = collection.underfullLeafPages
+	if collection.hasPagerBackedID {
+		out.CollectionRootMinPageID = collection.minPageID
+		out.CollectionRootMaxPageID = collection.maxPageID
+		out.CollectionRootSpan = (collection.maxPageID - collection.minPageID) + 1
+		if collection.pages > 0 {
+			out.CollectionRootSpanRatioPPM, err = fragmentationSpanRatio(out.CollectionRootSpan, collection.pages)
+			if err != nil {
+				return out, err
+			}
+			out.CollectionRootSpanRatioValid = true
+		}
 	}
 	return out, nil
 }

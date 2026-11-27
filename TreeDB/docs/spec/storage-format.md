@@ -1275,6 +1275,34 @@ proves that the successor cannot reference it. Scan failures and missing
 coverage for reachable packs fail publication. Each older slot retains its own
 immutable manifest and dependency tokens for recovery.
 
+When an online index rebuild publishes both durable slots (`MetaPage0ID` for
+the older recoverable slot and `MetaPage1ID` for the newest successor via
+`appendRebuiltDurableRootV1`), pages owned exclusively by the rebuilt older
+slot (`older.pages` and any replaced dependency directory pages) are retired in
+the successor's COW freelist with `LastReachableCommitSeq == older.CommitSeq`.
+Before recording any retirement, the publisher MUST collect every pager page
+reachable from the successor (`next.UserRootPageID`, `next.SystemRootPageID`,
+all pager-backed collection roots referenced by `next.SystemRootPageID`, and
+the successor's dependency directory) and MUST exclude every
+successor-reachable page from the retirement set. While `MetaPage0ID` remains a
+recoverable slot, `LastReachableCommitSeq == older.CommitSeq` keeps those
+retired older-only pages protected in `FreelistRetired` so they cannot be
+reused; once a subsequent durable commit or fallback refresh supersedes
+`MetaPage0ID`, freelist capability pruning promotes them to `FreelistFree` for
+normal allocation reuse.
+
+During DATA-only online vacuum (`primary == nil`, `primaryReadRoots[olderSlot] == 0`),
+when the captured older durable slot already matches the visible root
+(`vacuumOlderRecordMatchesVisible` and `vacuumOlderRecordMatchesStateToken`) and
+no user delta, tail mutation, or concurrent root divergence occurs before
+cutover (`canShareOlder` and `!olderSharedInvalid` in `vacuum_online.go`),
+`MetaPage0ID` and `MetaPage1ID` MAY share the single rebuilt
+`(UserRootPageID, SystemRootPageID)` trees with `older.pages == nil` so none of
+the shared tree pages are retired. Even when sharing rebuilt root pages, each
+slot MUST still retain its own distinct `CommitSeq`, `DurableRootRecordV1`,
+cloned `StableResourceSet`, and immutable dependency manifest or dependency
+directory so fallback recovery to `MetaPage0ID` remains independently valid.
+
 Pack publication acquires the same sequencer before registering promoted files
 in the value-log set. It binds one immutable manifest covering the promoted
 files and any late SYSTEM leaf appends before accepting the root. The pack

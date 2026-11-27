@@ -2806,10 +2806,14 @@ type rebuiltDurableRootV1 struct {
 }
 
 func writeRebuiltDurableRootsV1(dir, indexPath string, p *pager.Pager, roots []rebuiltDurableRootV1) error {
-	return writeRebuiltDurableRootsV1WithFree(dir, indexPath, p, roots, nil)
+	return writeRebuiltDurableRootsV1WithFreeAndReader(dir, indexPath, p, nil, roots, nil)
 }
 
 func writeRebuiltDurableRootsV1WithFree(dir, indexPath string, p *pager.Pager, roots []rebuiltDurableRootV1, initialFree []uint64) error {
+	return writeRebuiltDurableRootsV1WithFreeAndReader(dir, indexPath, p, nil, roots, initialFree)
+}
+
+func writeRebuiltDurableRootsV1WithFreeAndReader(dir, indexPath string, p *pager.Pager, reader tree.SlabReader, roots []rebuiltDurableRootV1, initialFree []uint64) error {
 	if len(roots) != 2 || roots[0].meta.CommitSeq == 0 || roots[1].meta.CommitSeq <= roots[0].meta.CommitSeq {
 		return errors.New("invalid rebuilt durable-root pair")
 	}
@@ -2830,10 +2834,61 @@ func writeRebuiltDurableRootsV1WithFree(dir, indexPath string, p *pager.Pager, r
 	if err != nil {
 		return err
 	}
-	return appendRebuiltDurableRootV1(dir, indexPath, p, selected, roots[0], roots[1])
+	return appendRebuiltDurableRootV1(dir, indexPath, p, reader, selected, roots[0], roots[1])
 }
 
-func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current durableRootSelectionV1, older rebuiltDurableRootV1, next rebuiltDurableRootV1) error {
+// collectRebuiltSuccessorReachablePagesV1 collects every pager-backed page ID
+// reachable from the rebuilt successor slot: its user root, its system root,
+// all pager-backed collection roots referenced by its system root, and its
+// dependency directory (if present). Leaf-log child refs are skipped by
+// tree.WalkPages.
+func collectRebuiltSuccessorReachablePagesV1(
+	p *pager.Pager,
+	reader tree.SlabReader,
+	meta page.MetaPageBody,
+	directory rootpublication.DependencyDirectoryRefV2,
+) (map[uint64]struct{}, error) {
+	reachable := make(map[uint64]struct{})
+	walkedRoots := make(map[uint64]struct{}, 4)
+	walkRoot := func(rootID uint64) error {
+		if rootID == 0 {
+			return nil
+		}
+		if _, done := walkedRoots[rootID]; done {
+			return nil
+		}
+		walkedRoots[rootID] = struct{}{}
+		return tree.New(p, nil, rootID).WalkPages(func(id uint64, _ node.Node) error {
+			reachable[id] = struct{}{}
+			return nil
+		})
+	}
+	if err := walkRoot(meta.UserRootPageID); err != nil {
+		return nil, fmt.Errorf("collect rebuilt successor user root pages: %w", err)
+	}
+	if err := walkRoot(meta.SystemRootPageID); err != nil {
+		return nil, fmt.Errorf("collect rebuilt successor system root pages: %w", err)
+	}
+	entries, err := vacuumCollectCollectionEntriesFromRoot(context.Background(), p, reader, meta.SystemRootPageID)
+	if err != nil {
+		return nil, fmt.Errorf("collect rebuilt successor collection root descriptors: %w", err)
+	}
+	for _, entry := range entries {
+		for _, rootID := range entry.sourceRootIDs {
+			if err := walkRoot(rootID); err != nil {
+				return nil, fmt.Errorf("collect rebuilt successor collection root %d pages: %w", rootID, err)
+			}
+		}
+	}
+	if directory.RootPageID != 0 {
+		if err := walkRoot(directory.RootPageID); err != nil {
+			return nil, fmt.Errorf("collect rebuilt successor dependency directory pages: %w", err)
+		}
+	}
+	return reachable, nil
+}
+
+func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, reader tree.SlabReader, current durableRootSelectionV1, older rebuiltDurableRootV1, next rebuiltDurableRootV1) error {
 	meta := next.meta
 	if p == nil || current.Record.CommitSeq == 0 || meta.CommitSeq <= current.Record.CommitSeq ||
 		meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
@@ -2860,7 +2915,10 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 	}
 	// Retire every page owned exclusively by the older replacement slot
 	// (roots[0]) with LastReachableCommitSeq == current.Record.CommitSeq.
-	// While MetaPage0ID remains a recoverable slot, oldestCommit ==
+	// Structurally exclude EVERY page reachable from the successor (user root,
+	// system root, all collection roots under system root, and the successor's
+	// dependency directory) so shared subtrees can never be retired. While
+	// MetaPage0ID remains a recoverable slot, oldestCommit ==
 	// current.Record.CommitSeq keeps all retired pages protected from reuse;
 	// as soon as a subsequent commit or fallback refresh supersedes MetaPage0ID,
 	// PruneWithCapability automatically promotes them to FreelistFree instead
@@ -2868,8 +2926,29 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 	var retirements []freelist.COWRetirementV1
 	retiredSeen := make(map[uint64]struct{}, len(older.pages))
 	var olderRetirePages []uint64
+	retireOlderPages := len(older.pages) > 0 && (older.meta.UserRootPageID != meta.UserRootPageID || older.meta.SystemRootPageID != meta.SystemRootPageID)
+	retireReplacedDir := current.Record.Directory.RootPageID != 0 && current.Record.Directory.RootPageID != directory.RootPageID
+	var successorReachable map[uint64]struct{}
+	if retireOlderPages {
+		successorReachable, err = collectRebuiltSuccessorReachablePagesV1(p, reader, meta, directory)
+		if err != nil {
+			return err
+		}
+	} else if retireReplacedDir && directory.RootPageID != 0 {
+		successorDirPages, err := tree.New(p, nil, directory.RootPageID).CollectPageIDs()
+		if err != nil {
+			return fmt.Errorf("collect rebuilt successor dependency directory pages: %w", err)
+		}
+		successorReachable = make(map[uint64]struct{}, len(successorDirPages))
+		for _, id := range successorDirPages {
+			successorReachable[id] = struct{}{}
+		}
+	}
 	addOlderRetire := func(id uint64) {
 		if id < 2 || id >= current.Freelist.HighWater() || id == meta.UserRootPageID || id == meta.SystemRootPageID {
+			return
+		}
+		if _, reachable := successorReachable[id]; reachable {
 			return
 		}
 		if current.Freelist.Allocatable(id) {
@@ -2881,12 +2960,12 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 		retiredSeen[id] = struct{}{}
 		olderRetirePages = append(olderRetirePages, id)
 	}
-	if len(older.pages) > 0 && (older.meta.UserRootPageID != meta.UserRootPageID || older.meta.SystemRootPageID != meta.SystemRootPageID) {
+	if retireOlderPages {
 		for _, id := range older.pages {
 			addOlderRetire(id)
 		}
 	}
-	if current.Record.Directory.RootPageID != 0 && current.Record.Directory.RootPageID != directory.RootPageID {
+	if retireReplacedDir {
 		dirPages, err := tree.New(p, nil, current.Record.Directory.RootPageID).CollectPageIDs()
 		if err != nil {
 			return fmt.Errorf("collect replaced dependency directory pages: %w", err)
