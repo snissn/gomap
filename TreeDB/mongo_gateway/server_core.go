@@ -124,6 +124,8 @@ type Server struct {
 	lastCursorReap            time.Time
 	collectionCacheMu         sync.RWMutex
 	collectionCache           map[string]*collections.Collection
+	collectionCacheEpoch      uint64
+	collectionCacheSnap       atomic.Pointer[map[string]*collections.Collection]
 	collectionCreateMu        sync.Mutex
 	collectionFirstWrites     atomic.Pointer[collectionFirstWriteRegistry]
 	firstWriteAfterCreateHook func(string)
@@ -237,29 +239,53 @@ func newClusterIdempotencyNonce() string {
 	return fmt.Sprintf("fallback-%d-%d", time.Now().UnixNano(), clusterIdempotencyNonceFallback.Add(1))
 }
 
+func (s *Server) publishCollectionCacheSnapLocked() {
+	if len(s.collectionCache) == 0 {
+		s.collectionCacheSnap.Store(nil)
+		return
+	}
+	snap := make(map[string]*collections.Collection, len(s.collectionCache))
+	for k, v := range s.collectionCache {
+		snap[k] = v
+	}
+	s.collectionCacheSnap.Store(&snap)
+}
+
 func (s *Server) openCollectionCached(name string) (*collections.Collection, error) {
 	if s == nil || s.Collections == nil {
 		return nil, collections.ErrCollectionNotFound
+	}
+	if snap := s.collectionCacheSnap.Load(); snap != nil {
+		if col := (*snap)[name]; col != nil {
+			return col, nil
+		}
 	}
 	s.collectionCacheMu.RLock()
 	if col := s.collectionCache[name]; col != nil {
 		s.collectionCacheMu.RUnlock()
 		return col, nil
 	}
+	epoch := s.collectionCacheEpoch
 	s.collectionCacheMu.RUnlock()
 
 	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		return nil, err
 	}
-	s.collectionCacheMu.Lock()
-	if s.collectionCache == nil {
-		s.collectionCache = make(map[string]*collections.Collection)
+	if s.closed.Load() {
+		return col, nil
 	}
-	if cached := s.collectionCache[name]; cached != nil {
-		col = cached
-	} else {
-		s.collectionCache[name] = col
+	s.collectionCacheMu.Lock()
+	if !s.closed.Load() {
+		if cached := s.collectionCache[name]; cached != nil {
+			col = cached
+		} else if s.collectionCacheEpoch == epoch {
+			if s.collectionCache == nil {
+				s.collectionCache = make(map[string]*collections.Collection)
+			}
+			s.collectionCache[name] = col
+			s.publishCollectionCacheSnapLocked()
+		}
 	}
 	s.collectionCacheMu.Unlock()
 	return col, nil
@@ -270,7 +296,9 @@ func (s *Server) invalidateCollectionCache(name string) {
 		return
 	}
 	s.collectionCacheMu.Lock()
+	s.collectionCacheEpoch++
 	delete(s.collectionCache, name)
+	s.publishCollectionCacheSnapLocked()
 	s.collectionCacheMu.Unlock()
 }
 
@@ -280,7 +308,9 @@ func (s *Server) Close() error {
 	}
 	s.closed.Store(true)
 	s.collectionCacheMu.Lock()
+	s.collectionCacheEpoch++
 	clear(s.collectionCache)
+	s.collectionCacheSnap.Store(nil)
 	s.collectionCacheMu.Unlock()
 	s.closeActiveListeners()
 	s.closeActiveConns()

@@ -157,6 +157,17 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		}()
 	}
 	n := len(b.entries)
+	if n == 0 && b.cowState.native != nil {
+		p := &b.cowState.inlinePrep
+		*p = cowBatchPreparation{mutation: mutation}
+		mutation = txnMutationOwner{}
+		b.cowState.prepared = p // caller drains all cancellation, including partial stage
+		p.cut, err = c.prepareNativeOnly(b.cowState.native)
+		if err == nil {
+			err = durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
+		}
+		return err
+	}
 	shards := len(c.writers)
 	pointerCount := 0
 	for _, entry := range b.entries {

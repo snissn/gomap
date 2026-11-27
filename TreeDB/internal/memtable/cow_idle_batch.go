@@ -197,6 +197,18 @@ func (b *COWBudget) reclaimIdleBatchLocked() bool {
 	return true
 }
 
+// DrainIdleBatchScratch refunds and clears all currently parked idle batch
+// scratch buffers without allocating a temporary lease.
+func (b *COWBudget) DrainIdleBatchScratch() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	for b.reclaimIdleBatchLocked() {
+	}
+	b.mu.Unlock()
+}
+
 func (b *COWBudget) hasIdleBatchScratchLocked() bool { return b.idleBatchCount != 0 }
 
 func (b *COWBudget) reclaimIdleScratchLocked() bool {

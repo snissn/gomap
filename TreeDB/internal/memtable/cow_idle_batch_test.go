@@ -468,4 +468,45 @@ func TestCOWIdleBatchScratchPutTakePressureAndClose(t *testing.T) {
 			t.Fatalf("take_into_existing_lease leaked: %+v", got)
 		}
 	})
+
+	t.Run("drain_idle_batch_scratch", func(t *testing.T) {
+		var nilBudget *COWBudget
+		nilBudget.DrainIdleBatchScratch()
+
+		b, err := NewCOWBudget(DefaultCOWLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		const baseBytes = uint64(512)
+		const payload1 = uint64(4096)
+		const payload2 = uint64(8192)
+		l1, err := b.AcquireExternal(baseBytes + payload1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.PutIdleBatchScratch(new([32]byte), l1, payload1) {
+			t.Fatal("PutIdleBatchScratch #1 refused")
+		}
+		l2, err := b.AcquireExternal(baseBytes + payload2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.PutIdleBatchScratch(new([32]byte), l2, payload2) {
+			t.Fatal("PutIdleBatchScratch #2 refused")
+		}
+		if got := b.Stats(); got.ReservedBytes != payload1+payload2 {
+			t.Fatalf("parked stats=%+v want reserved=%d", got, payload1+payload2)
+		}
+		b.DrainIdleBatchScratch()
+		if got := b.Stats(); got.ReservedBytes != 0 || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
+			t.Fatalf("after DrainIdleBatchScratch stats=%+v", got)
+		}
+		if v, l, p := b.TakeIdleBatchScratch(baseBytes); v != nil || l != nil || p != 0 {
+			t.Fatalf("expected empty stack after drain, got (%v, %v, %d)", v, l, p)
+		}
+		b.Close()
+		if got := b.Stats(); got.TotalBytes != 0 || got.ControlBytes != 0 {
+			t.Fatalf("after Close stats=%+v", got)
+		}
+	})
 }

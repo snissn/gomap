@@ -47,6 +47,11 @@ type nativeJSONTxnBinding struct {
 	singlePlan         nativeJSONLogicalInsert
 	singleMutation     [1]memtable.COWMutation
 	singleEffect       [1]txnhistory.Effect
+	inlineValStates    [4][][]byte
+	inlineValRefs      [4][]byte
+	inlineScalarBuf    [64]byte
+	inlineScalarStates [4][][]byte
+	inlineScalarRefs   [4][]byte
 }
 type NativeJSONTxn struct {
 	mu                   sync.Mutex
@@ -173,7 +178,7 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 		if !ok {
 			return nil, tree.ErrKeyNotFound
 		}
-		if err = nativeTypedProfile(m.db, *c.schema.meta); err != nil {
+		if err = nativeTypedProfilePtr(m.db, c.schema.meta); err != nil {
 			return nil, err
 		}
 		if !c.schema.canonicalBSON {
@@ -427,6 +432,29 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 	if base == nil || base.inventory != nil {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 	}
+	if p.count == 1 {
+		g := &p.bindings[0]
+		if g.plan != nil && len(g.plan.additional) == 0 && g.plan.typed == nil {
+			c, ok := base.collections.Get(g.incarnation)
+			named, nok := base.names.Get(g.name)
+			if !ok || !nok || named.incarnation != g.incarnation {
+				return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
+			}
+			next, replacement, err := prepareNativeSinglePrimaryUpdate(base, c, g.plan.mutations, g.plan.primaryPolicy, true, p.reportProjectedGeneration)
+			if err != nil {
+				return backenddb.NativeFinalizedPublication{State: next}, err
+			}
+			if !next.noPendingTyped {
+				if err = nativeTypedEnsureConstructible(next, exact); err != nil {
+					return backenddb.NativeFinalizedPublication{State: next}, err
+				}
+			}
+			(nativeCollectionLifetime{}).Retain(replacement)
+			custody.adoptCollection(replacement)
+			p.prepared = next
+			return backenddb.NativeFinalizedPublication{State: next}, nil
+		}
+	}
 	changes := p.changes
 	count := 0
 	for i := 0; i < p.count; i++ {
@@ -455,13 +483,23 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 	if err != nil {
 		return backenddb.NativeFinalizedPublication{State: next}, err
 	}
-	if err = nativeTypedEnsureConstructible(next, exact); err != nil {
-		return backenddb.NativeFinalizedPublication{State: next}, err
+	if !next.noPendingTyped {
+		if err = nativeTypedEnsureConstructible(next, exact); err != nil {
+			return backenddb.NativeFinalizedPublication{State: next}, err
+		}
 	}
-	for i := 0; i < count; i++ {
-		replacement, _ := next.collections.Get(changes[i].collection.incarnation)
-		(nativeCollectionLifetime{}).Retain(replacement)
-		custody.adoptCollection(replacement)
+	if next.preparation != nil && len(next.preparation.ownedCollections) == count {
+		for i := 0; i < count; i++ {
+			replacement := next.preparation.ownedCollections[i]
+			(nativeCollectionLifetime{}).Retain(replacement)
+			custody.adoptCollection(replacement)
+		}
+	} else {
+		for i := 0; i < count; i++ {
+			replacement, _ := next.collections.Get(changes[i].collection.incarnation)
+			(nativeCollectionLifetime{}).Retain(replacement)
+			custody.adoptCollection(replacement)
+		}
 	}
 	p.prepared = next
 	return backenddb.NativeFinalizedPublication{State: next}, nil

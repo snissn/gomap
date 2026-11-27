@@ -750,14 +750,13 @@ func (u bsonSetUpdate) appendSameShapeReplacement(dst, current []byte) (returned
 	} else {
 		used = used[:len(u.fields)]
 	}
-	var out []byte
-	ensureOut := func() []byte {
-		if out != nil {
-			return out
-		}
-		out = append(dst, current[:docEnd]...)
-		return out
+	type sameShapePatch struct {
+		offset   int
+		fieldIdx int
 	}
+	var patchesInline [8]sameShapePatch
+	patchCount := 0
+	patchesOverflow := false
 	remaining := current[4:docEnd]
 	for len(remaining) > 1 {
 		elemStart := docEnd - len(remaining)
@@ -780,7 +779,12 @@ func (u bsonSetUpdate) appendSameShapeReplacement(dst, current []byte) (returned
 			return dst[:start], nil, false, false, nil
 		}
 		valueOffset := elemStart + len(elem) - len(currentValue.Data)
-		copy(ensureOut()[start+valueOffset:start+valueOffset+len(field.Value.Value)], field.Value.Value)
+		if patchCount < len(patchesInline) {
+			patchesInline[patchCount] = sameShapePatch{offset: valueOffset, fieldIdx: fieldIdx}
+			patchCount++
+		} else {
+			patchesOverflow = true
+		}
 		changed = true
 	}
 	if len(remaining) != 1 || remaining[0] != 0x00 {
@@ -793,6 +797,32 @@ func (u bsonSetUpdate) appendSameShapeReplacement(dst, current []byte) (returned
 	}
 	if !changed {
 		return dst[:start], current, false, true, nil
+	}
+	out := append(dst, current[:docEnd]...)
+	if !patchesOverflow {
+		for i := 0; i < patchCount; i++ {
+			p := patchesInline[i]
+			val := u.fields[p.fieldIdx].Value.Value
+			copy(out[start+p.offset:start+p.offset+len(val)], val)
+		}
+	} else {
+		remaining = current[4:docEnd]
+		for len(remaining) > 1 {
+			elemStart := docEnd - len(remaining)
+			elem, next, _ := bsoncore.ReadElement(remaining)
+			remaining = next
+			fieldIdx := u.fieldIndexBytes(elem.KeyBytes())
+			if fieldIdx < 0 {
+				continue
+			}
+			currentValue := elem.Value()
+			field := u.fields[fieldIdx]
+			if bsonCoreValueEqualRawValue(currentValue, field.Value) {
+				continue
+			}
+			valueOffset := elemStart + len(elem) - len(currentValue.Data)
+			copy(out[start+valueOffset:start+valueOffset+len(field.Value.Value)], field.Value.Value)
+		}
 	}
 	return out, out[start:len(out):len(out)], true, true, nil
 }
@@ -810,6 +840,32 @@ func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement [
 
 func callBSONSetUpdateAppendReplacement(update bsonSetUpdate, dst, current []byte) (out []byte, replacement []byte, changed bool, err error) {
 	return update.appendReplacement(dst, current)
+}
+
+// callBSONSetUpdateAppendReplacementWithCapHint applies update without
+// pre-allocating a full growCapHint buffer when the document is unchanged or
+// modified in place (same-shape). On the growing path, it allocates at most
+// growCapHint (already admitted by the caller) only once a change is observed.
+func callBSONSetUpdateAppendReplacementWithCapHint(update bsonSetUpdate, current []byte, growCapHint int) (replacement []byte, changed bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
+	if len(update.fields) == 0 {
+		return current, false, nil
+	}
+	if _, repl, mod, ok, fastErr := update.appendSameShapeReplacement(nil, current); ok || fastErr != nil {
+		return repl, mod, fastErr
+	}
+	var dst []byte
+	if growCapHint > 0 {
+		dst = make([]byte, 0, growCapHint)
+	}
+	_, repl, mod, applyErr := update.appendReplacement(dst, current)
+	return repl, mod, applyErr
 }
 
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {

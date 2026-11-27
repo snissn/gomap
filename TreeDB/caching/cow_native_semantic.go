@@ -5,6 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -177,11 +178,15 @@ func (o *cowNativeOwner) ReleaseAcceptedCompletion() (rootpublication.AcceptedCl
 func (o *cowNativeOwner) returnAcceptedAfterUnlock(unlock func()) (rootpublication.AcceptedCleanupCompletion, error) {
 	cache := o.cache
 	cache.semanticMu.Lock()
-	defer cache.semanticMu.Unlock()
 	unlock()
 	_, record, completion, err := o.detachAcceptedCleanup()
-	cache.enqueueSemanticLocked(record)
-	cache.wakeSemanticCleanup()
+	if record != nil {
+		cache.enqueueSemanticLocked(record)
+	}
+	cache.semanticMu.Unlock()
+	if record != nil {
+		cache.wakeSemanticCleanup()
+	}
 	return completion, err
 }
 
@@ -531,7 +536,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	if bridge != nil {
 		charge += memtable.COWAllocationCharge(bridge.NativeCommandWALCompletionBytes())
 	}
-	completionLease, completionErr := db.cow.budget.AcquireExternal(charge)
+	completionLease, completionErr := db.cow.budget.AcquireExternalValue(charge)
 	if completionErr != nil {
 		return result, completionErr
 	}
@@ -635,6 +640,10 @@ func (r *cowNativeCommandWALRequest) register() error {
 	}
 	return r.completion.RegisterNativeCommandWAL(r.append)
 }
+func emptyCOWBatchReplay(func(batch.Entry) error) error {
+	return nil
+}
+
 func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 	b, backend, native, intent, owner := r.batch, r.backend, r.native, r.intent, r.owner
 
@@ -642,7 +651,13 @@ func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 		return intent.AssignedLSN(), err
 	}
 	guard := b.COWAppendGuard()
-	if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)); err != nil {
+	var replay func(func(batch.Entry) error) error
+	if len(b.entries) == 0 {
+		replay = emptyCOWBatchReplay
+	} else {
+		replay = b.Replay
+	}
+	if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, replay, len(b.entries)); err != nil {
 		return intent.AssignedLSN(), err
 	}
 	if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {

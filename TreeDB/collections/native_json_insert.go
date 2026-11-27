@@ -183,8 +183,28 @@ func (t *NativeJSONTxn) collectNativeInsertStats(g *nativeJSONTxnBinding, direct
 	return nil
 }
 
-func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error) {
+var nativeJSONInsertChargeBaseFixed = func() uint64 {
 	var total uint64
+	for _, n := range [...]uint64{
+		uint64(unsafe.Sizeof(insertBatchPlan{})),
+		uint64(unsafe.Sizeof(directBufferedInsertPlan{})),
+		uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})),
+		uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})),
+		uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})),
+		uint64(unsafe.Sizeof(NativeJSONRead{})),
+		uint64(unsafe.Sizeof(string(""))),
+		uint64(unsafe.Sizeof(backenddb.OrderedRootStoragePolicy(0))),
+	} {
+		total += memtable.COWAllocationCharge(n)
+	}
+	for _, bytes := range valuelog.COWInspectionMetadataAllocationSizes() {
+		total += memtable.COWAllocationCharge(bytes)
+	}
+	return total
+}()
+
+func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error) {
+	total := nativeJSONInsertChargeBaseFixed
 	add := func(bytes uint64) bool {
 		n := memtable.COWAllocationCharge(bytes)
 		if n > ^uint64(0)-total {
@@ -193,14 +213,15 @@ func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error
 		total += n
 		return true
 	}
-	for _, n := range []uint64{uint64(unsafe.Sizeof(insertBatchPlan{})), uint64(unsafe.Sizeof(directBufferedInsertPlan{})), uint64(unsafe.Sizeof(backenddb.NativePreparedPublication{})), uint64(unsafe.Sizeof(backenddb.CommandWALIntent{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), uint64(unsafe.Sizeof(NativeJSONRead{})), uint64(unsafe.Sizeof(string(""))), uint64(unsafe.Sizeof(backenddb.OrderedRootStoragePolicy(0)))} {
-		if !add(n) {
+	if len(ids) == 0 {
+		if !add(uint64(10 + len(name))) {
 			return 0, memtable.ErrCOWCapacity
 		}
+		return total, nil
 	}
 	// Two ID-header arrays cover resultIDs and the single-row primaryKeys
 	// specialization; sorted multi-row plans reuse resultIDs for primaryKeys.
-	for _, n := range []uint64{2 * uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof(insertBatchItem{})), uint64(unsafe.Sizeof(directBufferedRootEntry{})), uint64(unsafe.Sizeof(memtable.COWMutation{})), uint64(unsafe.Sizeof(txnhistory.Effect{})), uint64(unsafe.Sizeof(commitlog.CollectionDocument{}))} {
+	for _, n := range [...]uint64{2 * uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof(insertBatchItem{})), uint64(unsafe.Sizeof(directBufferedRootEntry{})), uint64(unsafe.Sizeof(memtable.COWMutation{})), uint64(unsafe.Sizeof(txnhistory.Effect{})), uint64(unsafe.Sizeof(commitlog.CollectionDocument{}))} {
 		if uint64(len(ids)) > ^uint64(0)/n || !add(uint64(len(ids))*n) {
 			return 0, memtable.ErrCOWCapacity
 		}
@@ -220,11 +241,6 @@ func nativeJSONInsertCharge(name string, ids, documents [][]byte) (uint64, error
 	}
 	if !add(idBytes) || !add(payloadBytes) {
 		return 0, memtable.ErrCOWCapacity
-	}
-	for _, bytes := range valuelog.COWInspectionMetadataAllocationSizes() {
-		if !add(bytes) {
-			return 0, memtable.ErrCOWCapacity
-		}
 	}
 	return total, nil
 }
@@ -277,10 +293,129 @@ func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONP
 	return prepareNativeCollectionChanges(base, changes, nil, false)
 }
 
+// prepareNativeSinglePrimaryUpdate is the streamlined single-collection
+// primary-only path of prepareNativeCollectionChanges (count == 1, no
+// additional domains, no typed delta). It allocates no OwnedMapBuilders,
+// avoids deferred builder sealing, skips redundant base.collections lookups
+// when verifiedInBase is true, and returns the replacement directly.
+func prepareNativeSinglePrimaryUpdate(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation, primaryPolicy backenddb.OrderedRootStoragePolicy, verifiedInBase, reportProjection bool) (*nativeEngineVersion, *nativeCollectionState, error) {
+	if base == nil || base.inventory != nil {
+		return nil, nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	next, err := newNativeEnginePreparation(base, 1, 1, base.allocator)
+	if err != nil {
+		return nil, nil, err
+	}
+	p := next.preparation
+	allocator := base.allocator
+	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return allocator.AdmitNativeBytes(n) }
+	if base.catalog != nil {
+		(nativeDomainLifetime{}).Retain(base.catalog)
+		next.catalog = base.catalog
+	}
+	if c == nil {
+		return next, nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if !verifiedInBase {
+		current, exists := base.collections.Get(c.incarnation)
+		if !exists || current != c {
+			return next, nil, backenddb.ErrConcurrentModification
+		}
+	}
+	sharePending := base.pending == base.collections
+	if !sharePending && base.collections.Len() == 1 {
+		if base.pending.Len() == 0 {
+			sharePending = true
+		} else if base.pending.Len() == 1 {
+			_, sharePending = base.pending.Get(c.incarnation)
+		}
+	}
+	generation := c.documentGeneration
+	if len(entries) != 0 {
+		if generation == ^uint64(0) {
+			return next, nil, memtable.ErrCOWCapacity
+		}
+		generation++
+	}
+	old, ok := c.domains.Get("primary")
+	shareDomains := c.pending == c.domains || (c.domains.Len() == 0 && c.pending.Len() == 0)
+	if !shareDomains && ok && c.domains.Len() == 1 {
+		if c.pending.Len() == 0 {
+			shareDomains = true
+		} else if c.pending.Len() == 1 {
+			_, shareDomains = c.pending.Get("primary")
+		}
+	}
+	root := uint64(0)
+	policy := primaryPolicy
+	interpretation := uint64(1)
+	if old != nil {
+		root = old.baseRoot
+		policy = old.storagePolicy
+		interpretation = old.interpretation
+	}
+	domain, err := prepareNativeDomainUpdateObservedWithAdmit(old, "primary", root, interpretation, policy, entries, allocator, admit, reportProjection)
+	if domain != nil {
+		p.ownedDomains = append(p.ownedDomains, domain)
+	}
+	if err != nil {
+		if refusal, ok := err.(*memtable.COWProjectedGenerationRefusal); ok {
+			err = &nativeInsertProjectedRefusal{
+				pressure: backenddb.NativeProjectedGenerationPressure{Collection: c.incarnation, Domain: "primary", Refusal: refusal},
+				schema:   weak.Make(c.schema),
+			}
+		}
+		return next, nil, err
+	}
+	p.domains, err = c.domains.SetSingle("primary", domain, nativeDomainLifetime{}, admit)
+	if err != nil {
+		return next, nil, err
+	}
+	if shareDomains {
+		p.domains.Retain()
+		p.pendingDomains = p.domains
+	} else {
+		p.pendingDomains, err = c.pending.SetSingle("primary", domain, nativeDomainLifetime{}, admit)
+		if err != nil {
+			return next, nil, err
+		}
+	}
+	c.schema.retain()
+	p.schema = c.schema
+	replacement, err := newNativeCollectionState(c.incarnation, generation, p.schema, p.domains, p.pendingDomains, admit)
+	if err != nil {
+		return next, nil, err
+	}
+	p.schema, p.domains, p.pendingDomains = nil, nil, nil
+	p.ownedCollections = append(p.ownedCollections, replacement)
+	next.names, err = base.names.SetSingle(c.schema.meta.Name, replacement, nativeCollectionLifetime{}, admit)
+	if err != nil {
+		return next, nil, err
+	}
+	next.collections, err = base.collections.SetSingle(c.incarnation, replacement, nativeCollectionLifetime{}, admit)
+	if err != nil {
+		return next, nil, err
+	}
+	if sharePending {
+		next.collections.Retain()
+		next.pending = next.collections
+	} else {
+		next.pending, err = base.pending.SetSingle(c.incarnation, replacement, nativeCollectionLifetime{}, admit)
+		if err != nil {
+			return next, nil, err
+		}
+	}
+	return next, replacement, nil
+}
+
 func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJSONPrimaryChange, named []nativeNamedCollectionChange, reportProjection bool) (*nativeEngineVersion, error) {
 	count := len(changes) + len(named)
 	if base == nil || base.inventory != nil || count == 0 || (len(changes) != 0 && len(named) != 0) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if len(changes) == 1 && len(changes[0].additional) == 0 && changes[0].typed == nil {
+		next, _, err := prepareNativeSinglePrimaryUpdate(base, changes[0].collection, changes[0].entries, changes[0].primaryPolicy, false, reportProjection)
+		return next, err
 	}
 	domainCount := len(changes)
 	for _, change := range changes {
@@ -486,6 +621,7 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				domain.sourceGeneration = namedChange.sourceGeneration
 			}
 			if primary && i == 0 && change.typed != nil {
+				next.noPendingTyped = false
 				// Clone only private headers: their original vector receipts remain
 				// shared, while reprepare never grafts into the staged chain itself.
 				typed, cloneErr := cloneNativeTypedSuffix(change.typed, nil, admit)

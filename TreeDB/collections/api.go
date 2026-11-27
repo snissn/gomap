@@ -4538,6 +4538,17 @@ func (c *Collection) nativeMetaCopy() CollectionMeta {
 	return *meta
 }
 
+func (c *Collection) withBorrowedNativeMetaView(cut backenddb.NativeSemanticBorrowedCut, fn func(meta *CollectionMeta)) bool {
+	defer cut.Release()
+	if engine, ok := cut.State().(*nativeEngineVersion); ok && engine != nil && engine.inventory == nil {
+		if colState, found := engine.names.Get(c.meta.Name); found && colState != nil && colState.schema != nil && colState.schema.meta != nil {
+			fn(colState.schema.meta)
+			return true
+		}
+	}
+	return false
+}
+
 // WithMetaView synchronously passes a read-only view of the collection's
 // current metadata to fn without allocating a deep copy on the native COW hot
 // path. Callers must not mutate meta or retain slices derived from it after fn
@@ -4548,20 +4559,26 @@ func (c *Collection) WithMetaView(fn func(meta *CollectionMeta)) {
 	}
 	if c.nativeJSON != nil {
 		if c.nativeJSON.db != nil {
-			handled := c.nativeJSON.db.WithNativeSemanticStateReadOnly(func(state backenddb.NativeSemanticState) bool {
-				engine, ok := state.(*nativeEngineVersion)
-				if !ok || engine == nil || engine.inventory != nil {
-					return false
+			if cut, err := c.nativeJSON.db.BorrowNativeSemanticCut(); err == nil {
+				if c.withBorrowedNativeMetaView(cut, fn) {
+					return
 				}
-				colState, ok := engine.names.Get(c.meta.Name)
-				if !ok || colState == nil || colState.schema == nil || colState.schema.meta == nil {
-					return false
+			} else {
+				handled := c.nativeJSON.db.WithNativeSemanticStateReadOnly(func(state backenddb.NativeSemanticState) bool {
+					engine, ok := state.(*nativeEngineVersion)
+					if !ok || engine == nil || engine.inventory != nil {
+						return false
+					}
+					colState, ok := engine.names.Get(c.meta.Name)
+					if !ok || colState == nil || colState.schema == nil || colState.schema.meta == nil {
+						return false
+					}
+					fn(colState.schema.meta)
+					return true
+				})
+				if handled {
+					return
 				}
-				fn(colState.schema.meta)
-				return true
-			})
-			if handled {
-				return
 			}
 		}
 		if read, err := c.nativeJSON.captureCatalog(c.meta.Name); err == nil {

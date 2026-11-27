@@ -3,11 +3,9 @@ package collections
 import (
 	"encoding/binary"
 	"fmt"
-	"reflect"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -31,6 +29,9 @@ type nativeTypedBuildInventory struct {
 }
 
 func nativeTypedBuildInventoryForCompaction(e *nativeEngineVersion, basis *backenddb.Snapshot, target uint64) (inventory nativeTypedBuildInventory, err error) {
+	if target == 0 && e.noPendingTyped {
+		return inventory, nil
+	}
 	scanNativeBuildCollections(e, target, func(id uint64, c *nativeCollectionState) bool {
 		primary, ok := c.domains.Get("primary")
 		if !ok || (primary.typed == nil && id != target) {
@@ -338,11 +339,10 @@ func nativeTypedHandoffChargeForCompaction(c *nativeCollectionState, maxSources 
 	if !ok || (primary.typed == nil && !physicalOnly) {
 		return 0, nil
 	}
-	schema, err := nativeSchemaBackingCharge(reflect.ValueOf(c.schema.meta), 0)
+	schema, err := nativeSchemaTotalCharge(c.schema.meta)
 	if err != nil {
 		return 0, err
 	}
-	schema += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeSchemaState{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
 	header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	node := nativeTypedDeltaHeaderCharge() + header
 	if maxSources < 0 || uint64(maxSources) > (^uint64(0)-schema-header)/node {

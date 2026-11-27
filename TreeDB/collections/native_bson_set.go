@@ -80,6 +80,7 @@ func (c *Collection) nativeUpdateBSONSet(id []byte, fields []BSONSetField) (bool
 func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
 	var batchBuf [nativeBSONSetCoalescerMaxBatch]*nativeBSONSetCoalescerItem
 	var itemsBuf [nativeBSONSetCoalescerMaxBatch]BSONSetUpdateBatchItem
+	var resultsBuf [nativeBSONSetCoalescerMaxBatch]UpdateBatchResult
 	for {
 		coord.nativeBSONSetMu.Lock()
 		if len(coord.nativeBSONSetPending) == 0 {
@@ -128,7 +129,7 @@ func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
 		for i, it := range batch {
 			bsonItems[i] = BSONSetUpdateBatchItem{DocumentID: it.id, Fields: it.fields}
 		}
-		results, batched, err := firstCol.nativeUpdateBatchModeWithJournal(nil, updateBatchModeNoSecondaryUniqueIndexChanges, bsonItems, nil, nil)
+		results, batched, err := firstCol.nativeUpdateBatchModeWithJournalDst(nil, updateBatchModeNoSecondaryUniqueIndexChanges, bsonItems, nil, nil, resultsBuf[:n])
 		if err == nil && batched && len(results) == n {
 			for i, it := range batch {
 				it.matched = results[i].Matched
@@ -154,6 +155,7 @@ func (coord *collectionSchemaCoordinator) drainNativeBSONSetPending() {
 
 func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetField, requestJournal bool) (bool, bool, backenddb.NativeJournalCompletion, error) {
 	items := [...]BSONSetUpdateBatchItem{{DocumentID: id, Fields: fields}}
+	var resBuf [1]UpdateBatchResult
 	retry := nativeBSONSetRetry{id: id}
 	var lastErr error
 	for attempt := range maxCollectionMutationRetries {
@@ -165,13 +167,13 @@ func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetF
 			journal = &operation
 			mode = updateBatchModeNoSecondaryUniqueIndexChanges
 		}
-		results, batched, err := c.nativeUpdateBatchModeWithJournal(nil, mode, items[:], &retry, journal)
+		results, batched, err := c.nativeUpdateBatchModeWithJournalDst(nil, mode, items[:], &retry, journal, resBuf[:])
 		if requestJournal && !batched && err == nil {
 			// The conditional path declined before publication. Give the
 			// original unrestricted singleton its own current catalog basis.
 			requestJournal = false
 			retry = nativeBSONSetRetry{id: id}
-			results, _, err = c.nativeUpdateBatchModeObserved(nil, updateBatchModeAny, items[:], &retry)
+			results, _, err = c.nativeUpdateBatchModeWithJournalDst(nil, updateBatchModeAny, items[:], &retry, nil, resBuf[:])
 		}
 		completion := operation.completion
 		if retry.rowConflict && completion.AssignedLSN() == 0 && !completion.Attempted() {

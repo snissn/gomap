@@ -403,6 +403,10 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 			// Shared physical scratch must own its definition independently. Never
 			// install a borrowed cut's bytes into a decoder that outlives that cut.
 			owner, err = independent.provider.PrepareDictionaryReadDefinition(shape.DictID, w.limits, w.budget.Limits().MaxResources, independent.cache.admitDictionaryRead)
+			if errors.Is(err, memtable.ErrCOWCapacity) && independent.cache != nil && independent.cache.tryReleaseIdleGenericReadScratch() {
+				owner.Close()
+				owner, err = independent.provider.PrepareDictionaryReadDefinition(shape.DictID, w.limits, w.budget.Limits().MaxResources, independent.cache.admitDictionaryRead)
+			}
 			if owner != nil {
 				owner.ReleaseCapture()
 				definition = owner.Bytes

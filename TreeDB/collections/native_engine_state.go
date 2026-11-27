@@ -31,6 +31,7 @@ type nativeEngineVersion struct {
 	build           *nativeEngineBuild
 	cleanup         rootpublication.SemanticCleanup
 	refund          *nativeEngineRefund
+	noPendingTyped  bool
 }
 
 // This independently preborn original accounting receipt owns no engine,

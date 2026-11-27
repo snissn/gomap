@@ -46,5 +46,12 @@ func (db *DB) ActivateNativeSemanticOwner() error {
 	if !ok {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
-	return backend.ActivatePrivateCOWSemanticOwner(c.txnOwner, basis)
+	if err := backend.ActivatePrivateCOWSemanticOwner(c.txnOwner, basis); err != nil {
+		return err
+	}
+	// Release any disposable pre-activation raw-batch scratch parked in the
+	// COW budget so native-only deferred batches do not leave unreferenced
+	// raw-batch reservations behind after transitioning to native ownership.
+	c.budget.DrainIdleBatchScratch()
+	return nil
 }

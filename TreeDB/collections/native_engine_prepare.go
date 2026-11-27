@@ -80,6 +80,7 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	e.nextIncarnation = base.nextIncarnation
 	e.allocator = base.allocator
 	e.maintenance = base.maintenance
+	e.noPendingTyped = base.noPendingTyped
 	e.refund = &nativeEngineRefund{lease: lease}
 	e.preparation = p
 	if domainCount <= len(p.inlineDomains) {

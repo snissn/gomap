@@ -209,7 +209,11 @@ func nativeTypedMeta(meta CollectionMeta) bool {
 }
 
 func nativeTypedProfile(database *backenddb.DB, meta CollectionMeta) error {
-	if meta.Options.ColumnStore != nil && (database == nil || database.ResolvedProfile() != backenddb.ProfileCommandWALDurable) {
+	return nativeTypedProfilePtr(database, &meta)
+}
+
+func nativeTypedProfilePtr(database *backenddb.DB, meta *CollectionMeta) error {
+	if meta != nil && meta.Options.ColumnStore != nil && (database == nil || database.ResolvedProfile() != backenddb.ProfileCommandWALDurable) {
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	return nil

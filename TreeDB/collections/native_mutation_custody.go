@@ -20,6 +20,8 @@ type nativeMutationCustody struct {
 	cleanup           rootpublication.SemanticCleanup
 	domains           []*nativeDomainState
 	collections       []*nativeCollectionState
+	inlineDomains     [1]*nativeDomainState
+	inlineCollections [1]*nativeCollectionState
 	refund            *nativeEngineRefund
 	assignedFailure   error
 	typedResources    backenddb.NativePublicationResources
@@ -38,8 +40,13 @@ func newNativeMutationCustody(domainCount, collectionCount int, allocator backen
 	// Assigned typed descriptors use the original empty resource builder/set;
 	// their independent backing stays charged until this exact custody retires.
 	charge += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSetBuilder{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSet{}))) + preparedSemanticStreamMapEntryReserveBytes
-	domainBytes := memtable.COWAllocationCharge(uint64(domainCount) * uint64(unsafe.Sizeof(uintptr(0))))
-	collectionBytes := memtable.COWAllocationCharge(uint64(collectionCount) * uint64(unsafe.Sizeof(uintptr(0))))
+	var domainBytes, collectionBytes uint64
+	if domainCount > len(nativeMutationCustody{}.inlineDomains) {
+		domainBytes = memtable.COWAllocationCharge(uint64(domainCount) * uint64(unsafe.Sizeof(uintptr(0))))
+	}
+	if collectionCount > len(nativeMutationCustody{}.inlineCollections) {
+		collectionBytes = memtable.COWAllocationCharge(uint64(collectionCount) * uint64(unsafe.Sizeof(uintptr(0))))
+	}
 	if domainBytes > ^uint64(0)-charge || collectionBytes > ^uint64(0)-charge-domainBytes {
 		return nil, memtable.ErrCOWCapacity
 	}
@@ -47,7 +54,17 @@ func newNativeMutationCustody(domainCount, collectionCount int, allocator backen
 	if err != nil {
 		return nil, err
 	}
-	w := &nativeMutationCustody{domains: make([]*nativeDomainState, 0, domainCount), collections: make([]*nativeCollectionState, 0, collectionCount), refund: &nativeEngineRefund{lease: lease}}
+	w := &nativeMutationCustody{refund: &nativeEngineRefund{lease: lease}}
+	if domainCount <= len(w.inlineDomains) {
+		w.domains = w.inlineDomains[:0:domainCount]
+	} else {
+		w.domains = make([]*nativeDomainState, 0, domainCount)
+	}
+	if collectionCount <= len(w.inlineCollections) {
+		w.collections = w.inlineCollections[:0:collectionCount]
+	} else {
+		w.collections = make([]*nativeCollectionState, 0, collectionCount)
+	}
 	w.cleanup.Work = w
 	return w, nil
 }
@@ -122,6 +139,8 @@ func (w *nativeMutationCustody) FinishSemanticCleanup() (rootpublication.Semanti
 		completion.Complete()
 		return rootpublication.SemanticCleanupCompletion{}, failure
 	}
+	clear(w.inlineCollections[:])
+	clear(w.inlineDomains[:])
 	w.collections, w.domains = nil, nil
 	refund := w.refund
 	w.refund = nil

@@ -508,6 +508,7 @@ type cowCache struct {
 	semanticMu                                                                                     sync.Mutex
 	semanticCond                                                                                   sync.Cond
 	semanticEnqueued, semanticCompleted                                                            uint64
+	semanticWaiters                                                                                int
 	nativePressureMu                                                                               sync.Mutex // only before a native producer captures its opening
 	nativePressureState                                                                            cowNativePressureState
 	nativeProjectedRefusals                                                                        atomic.Uint64
@@ -1108,6 +1109,74 @@ func (c *cowCache) prepareNative(groups [][]memtable.COWMutation, opts []memtabl
 		native.plan.State = nil
 		p.native = native
 	}
+	p.next = next
+	return p, nil
+}
+
+// prepareNativeOnly is the zero-raw-entry fast path of prepareNative for
+// native-only publications (len(b.entries) == 0). It avoids allocating or
+// scanning per-shard prepared/retired/successor vectors while preserving the
+// exact cut retention, recycling, basis, frozen-set, and semantic transfer
+// invariants of prepareNative.
+func (c *cowCache) prepareNativeOnly(native *cowNativeOwner) (*cowPreparedCut, error) {
+	c.prepareCalls.Add(1)
+	if native == nil {
+		return nil, fmt.Errorf("empty COW publication")
+	}
+	old := c.cut
+	shards := len(c.writers)
+	bytes := cowWriteCutCharge(shards) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{})))
+	lease, err := c.budget.AcquireExternal(bytes)
+	if err != nil {
+		return nil, err
+	}
+	p := &cowPreparedCut{cache: c, lease: lease}
+	old.refs.Add(1)
+	p.opening = old
+	next := c.takeRecycledCut()
+	if next == nil {
+		next = &cowReadCut{}
+	}
+	next.visibleCommandLSN = old.visibleCommandLSN
+	next.logicalSeq = old.logicalSeq
+	next.frozenLogicalSeq = old.frozenLogicalSeq
+	next.frozenCommandLSN = old.frozenCommandLSN
+	next.frozenSemanticRootSet = old.frozenSemanticRootSet
+	next.semanticRootSet = old.semanticRootSet
+	next.basis = old.basis
+	next.lease = lease
+	next.cache = c
+	next.initShards(shards)
+	next.basis.retain()
+	retainCOWSemanticState(next)
+	if old.frozenSet != nil {
+		next.frozenSet = old.frozenSet
+		next.frozenSet.retain()
+		next.frozen = old.frozen
+	} else if len(old.frozen) > 0 {
+		next.frozen = make([]cowTable, len(old.frozen))
+		copy(next.frozen, old.frozen)
+		for i := range next.frozen {
+			if !next.frozen[i].root.RetainOwned() {
+				panic("lost owned COW frozen root")
+			}
+		}
+	}
+	for i := 0; i < shards; i++ {
+		next.shards[i] = old.shards[i]
+		if !next.shards[i].root.RetainOwned() {
+			panic("lost owned COW root")
+		}
+	}
+	// Opening cut still retains the old edge, so this cannot run cleanup.
+	if next.semanticRootSet != nil {
+		if record := next.semanticRootSet.Release(); record != nil {
+			panic("lost opening semantic edge")
+		}
+	}
+	next.semanticRootSet = native.plan.State
+	native.plan.State = nil
+	p.native = native
 	p.next = next
 	return p, nil
 }

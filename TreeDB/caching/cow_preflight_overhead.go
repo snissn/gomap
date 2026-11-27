@@ -35,9 +35,17 @@ func (b *Batch) cowKnownControlCharge(groups [][]memtable.COWMutation) (uint64, 
 	}
 	lease := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	addLease := func(charge uint64) bool { return add(charge) && add(lease) }
-	reuse := len(b.shardCnts) == len(groups) && len(b.cowState.predictionGroups) == len(groups) && len(b.cowState.predictionStorage) == n
-	if !addLease(cowPreparationScratchCharge(len(groups), n, pointers, reuse)) || !addLease(cowPreparedCutCharge(len(groups), len(c.cut.frozen), needsSuccessors)) {
-		return 0, memtable.ErrCOWCapacity
+	if n == 0 && len(b.entries) == 0 && b.cowState.native != nil {
+		shards := len(c.writers)
+		cutBytes := cowWriteCutCharge(shards) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPreparedCut{})))
+		if !addLease(cutBytes) {
+			return 0, memtable.ErrCOWCapacity
+		}
+	} else {
+		reuse := len(b.shardCnts) == len(groups) && len(b.cowState.predictionGroups) == len(groups) && len(b.cowState.predictionStorage) == n
+		if !addLease(cowPreparationScratchCharge(len(groups), n, pointers, reuse)) || !addLease(cowPreparedCutCharge(len(groups), len(c.cut.frozen), needsSuccessors)) {
+			return 0, memtable.ErrCOWCapacity
+		}
 	}
 	if pointers > 0 && !addLease(cowFrameCaptureCharge(pointers)) {
 		return 0, memtable.ErrCOWCapacity

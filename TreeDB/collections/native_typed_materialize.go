@@ -401,18 +401,15 @@ func nativeTypedCollectionRetainedCapacity(meta CollectionMeta, sourceBytes uint
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	total := sourceBytes
-	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(&meta), 0)
+	schema, err := nativeSchemaTotalCharge(&meta)
 	if err != nil {
 		return 0, err
 	}
 	// BOTH original handoffs construct the updated schema. Active/recovery
 	// identities may be absent from the opening metadata; charge their exact
 	// fixed structures and default format strings before either construction.
-	schema := backing
-	for _, n := range []uint64{memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeSchemaState{}))), memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{}))), 4 * memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ColumnManifestIdentity{}))+64)} {
-		if err = nativeTypedCheckedAdd(&schema, n); err != nil {
-			return 0, err
-		}
+	if err = nativeTypedCheckedAdd(&schema, 4*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(ColumnManifestIdentity{}))+64)); err != nil {
+		return 0, err
 	}
 	schema, err = nativeTypedCheckedMul(schema, 2)
 	if err != nil {
