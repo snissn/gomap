@@ -386,10 +386,10 @@ func applyIndexOptimizationsProfile(opts *Options) {
 
 func applyRunCelestiaVLogCompressionProfile(opts *Options) {
 	if opts.ValueLog.Compression == 0 {
-		opts.ValueLog.Compression = ValueLogCompressionAuto
+		opts.ValueLog.Compression = ValueLogCompressionBlock
 	}
 	if opts.ValueLog.BlockCodec == 0 {
-		opts.ValueLog.BlockCodec = ValueLogBlockSnappy
+		opts.ValueLog.BlockCodec = ValueLogBlockLZ4
 	}
 	if opts.ValueLog.AutoPolicy == 0 {
 		opts.ValueLog.AutoPolicy = ValueLogAutoBalanced

@@ -66,16 +66,16 @@ func NormalizeAutotuneOptions(opts AutotuneOptions, valueLogEnabled bool) Autotu
 	}
 	if len(opts.CandidateHistoryBytes) == 0 {
 		if opts.Mode == AutotuneAggressive {
-			opts.CandidateHistoryBytes = []int{64 << 10, 96 << 10, 128 << 10, 192 << 10, 256 << 10, 512 << 10}
+			opts.CandidateHistoryBytes = []int{16 << 10, 32 << 10, 64 << 10, 128 << 10}
 		} else {
-			opts.CandidateHistoryBytes = []int{64 << 10, 96 << 10, 128 << 10, 192 << 10}
+			opts.CandidateHistoryBytes = []int{16 << 10, 32 << 10}
 		}
 	}
 	if len(opts.CandidateDictBytes) == 0 {
 		if opts.Mode == AutotuneAggressive {
-			opts.CandidateDictBytes = []int{40 << 10, 64 << 10, 96 << 10, 128 << 10, 192 << 10, 256 << 10}
+			opts.CandidateDictBytes = []int{16 << 10, 32 << 10, 64 << 10, 128 << 10}
 		} else {
-			opts.CandidateDictBytes = []int{40 << 10, 64 << 10, 96 << 10, 128 << 10}
+			opts.CandidateDictBytes = []int{16 << 10, 32 << 10}
 		}
 	}
 	if opts.MinGainToSwitch <= 0 {

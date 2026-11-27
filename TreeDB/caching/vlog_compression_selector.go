@@ -1713,10 +1713,9 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 			unitPayloadBytes = rawPayloadBytes
 		}
 		if dictID == 0 {
-			if db.vlogSelectorEnabled(mode) {
-				return vlogWriteBlock, db.valueLogBlockCodec, false
-			}
-			return vlogWriteOff, db.valueLogBlockCodec, false
+			// Fall back to stateless block compression while dictionary training
+			// warms up so early writes do not land uncompressed.
+			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
 		if db.vlogSelectorEnabled(mode) &&
 			outerLeafPayload &&
@@ -1952,12 +1951,16 @@ func (db *DB) chooseValueLogRawWriteK(l *lane, records, maxPayloadBytes int, aut
 	return db.clampLiveLeafLogFrameK(l, k)
 }
 
-// Ordinary auto/balanced compressed ingestion bounds cold point-read decode
-// work. Retained/template streams and leaf pages keep their storage policies.
+// Ordinary balanced compressed ingestion (both block and auto modes) bounds
+// cold point-read decode work to 32 KiB raw frames. Retained/template streams,
+// leaf pages, and size/throughput policies keep their uncapped storage policies.
 func (db *DB) valueLogBlockRawLimit(l *lane, writeMode vlogCompressionWriteMode, retained bool) int {
 	if db == nil || writeMode != vlogWriteBlock || retained || db.valueLogTemplateEnabled ||
-		normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto ||
 		normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoBalanced || db.isLeafLogAppendLane(l) {
+		return 0
+	}
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	if mode != vlogCompressionAuto && mode != vlogCompressionBlock {
 		return 0
 	}
 	return 32 << 10

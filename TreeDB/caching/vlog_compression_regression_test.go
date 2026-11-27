@@ -118,16 +118,28 @@ func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 	}
 }
 
-func TestResolveVlogWriteMode_DictAggressiveFallsBackToBlockWithoutDict(t *testing.T) {
-	db := &DB{
-		valueLogCompressionMode: uint8(vlogCompressionDict),
-		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
-		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneAggressive},
-	}
+func TestResolveVlogWriteMode_DictFallsBackToBlockWithoutDict(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		autotune valuelog.AutotuneMode
+		codec    valuelog.BlockCodec
+	}{
+		{name: "medium_lz4", autotune: valuelog.AutotuneMedium, codec: valuelog.BlockCodecLZ4},
+		{name: "off_lz4", autotune: valuelog.AutotuneOff, codec: valuelog.BlockCodecLZ4},
+		{name: "aggressive_snappy", autotune: valuelog.AutotuneAggressive, codec: valuelog.BlockCodecSnappy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{
+				valueLogCompressionMode: uint8(vlogCompressionDict),
+				valueLogBlockCodec:      tc.codec,
+				valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: tc.autotune},
+			}
 
-	mode, codec, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096, false)
-	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
-		t.Fatalf("dict/aggressive with no dict should fall back to block/snappy, got mode=%v codec=%v probe=%v", mode, codec, probe)
+			mode, codec, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096, false)
+			if mode != vlogWriteBlock || codec != tc.codec || probe {
+				t.Fatalf("dict (%s) with no dict should fall back to block/%v, got mode=%v codec=%v probe=%v", tc.name, tc.codec, mode, codec, probe)
+			}
+		})
 	}
 }
 

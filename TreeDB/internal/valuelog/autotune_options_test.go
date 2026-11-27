@@ -4,8 +4,8 @@ import "testing"
 
 func TestNormalizeAutotuneOptions_DefaultDictCandidates(t *testing.T) {
 	opts := NormalizeAutotuneOptions(AutotuneOptions{}, true)
-	wantHistory := []int{64 << 10, 96 << 10, 128 << 10, 192 << 10}
-	wantDict := []int{40 << 10, 64 << 10, 96 << 10, 128 << 10}
+	wantHistory := []int{16 << 10, 32 << 10}
+	wantDict := []int{16 << 10, 32 << 10}
 	if len(opts.CandidateHistoryBytes) != len(wantHistory) {
 		t.Fatalf("history len=%d want=%d", len(opts.CandidateHistoryBytes), len(wantHistory))
 	}
@@ -26,8 +26,8 @@ func TestNormalizeAutotuneOptions_DefaultDictCandidates(t *testing.T) {
 
 func TestNormalizeAutotuneOptions_AggressiveDefaultDictCandidates(t *testing.T) {
 	opts := NormalizeAutotuneOptions(AutotuneOptions{Mode: AutotuneAggressive}, true)
-	wantHistory := []int{64 << 10, 96 << 10, 128 << 10, 192 << 10, 256 << 10, 512 << 10}
-	wantDict := []int{40 << 10, 64 << 10, 96 << 10, 128 << 10, 192 << 10, 256 << 10}
+	wantHistory := []int{16 << 10, 32 << 10, 64 << 10, 128 << 10}
+	wantDict := []int{16 << 10, 32 << 10, 64 << 10, 128 << 10}
 	if len(opts.CandidateHistoryBytes) != len(wantHistory) {
 		t.Fatalf("history len=%d want=%d", len(opts.CandidateHistoryBytes), len(wantHistory))
 	}

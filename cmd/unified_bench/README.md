@@ -352,8 +352,8 @@ native persistence semantics.
 - `-treedb-prefer-append-alloc` TreeDB: prefer append allocation over freelist reuse
 - `-treedb-force-value-pointers` TreeDB: force all values into the value log
 - `-treedb-value-log-threshold` TreeDB: inline-vs-pointer threshold
-- `-treedb-vlog-compression` TreeDB: value-log compression mode (`default|off|block|dict|auto`)
-- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4|zstd`). When `-treedb-vlog-compression=auto`, this is the forced block-mode/default block codec, not proof that auto selected that codec; use the value-log codec summary and `treedb.cache.vlog_auto.*` stats for actual per-frame selection.
+- `-treedb-vlog-compression` TreeDB: value-log compression mode (`default|off|block|dict|auto`). Production and benchmark TreeDB profiles (`fast`/`no_wal_fast`, `wal_on_fast`/`command_wal_relaxed`, `command_wal_durable`, `bench_unsafe`) default to `block` with `lz4` (preserving the 32 KiB balanced ordinary-value raw-frame cap without background dictionary training or auto-selector overhead); pass `auto` or `dict` explicitly to enable runtime auto-selection or dictionary training.
+- `-treedb-vlog-block-codec` TreeDB: block codec (`snappy|lz4|zstd`; TreeDB profiles default to `lz4`). When `-treedb-vlog-compression=auto`, this is the forced block-mode/default block codec, not proof that auto selected that codec; use the value-log codec summary and `treedb.cache.vlog_auto.*` stats for actual per-frame selection.
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-generation-policy` TreeDB: generation policy (`default|off|hot_warm_cold`)
 

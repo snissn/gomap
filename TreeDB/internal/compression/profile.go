@@ -9,18 +9,19 @@ import (
 )
 
 type ActiveProfile struct {
-	DictHash         uint64
-	DictBytes        int
-	Dict             []byte
-	HistoryBytes     int
-	K                int
-	PayloadRatio     float64
-	TotalRatio       float64
-	DecodeNsEstimate int64
-	EncodeNsEstimate int64
-	AvgSampleBytes   int
-	Samples          int
-	Timestamp        time.Time
+	DictHash          uint64
+	DictBytes         int
+	Dict              []byte
+	HistoryBytes      int
+	K                 int
+	PayloadRatio      float64
+	TotalRatio        float64
+	SingleSampleRatio float64
+	DecodeNsEstimate  int64
+	EncodeNsEstimate  int64
+	AvgSampleBytes    int
+	Samples           int
+	Timestamp         time.Time
 }
 
 type ChooseKOptions struct {
@@ -49,7 +50,7 @@ const (
 	// Bound evaluation work so training cost stays predictable on long streams.
 	// Use even down-sampling rather than prefix truncation to preserve shape.
 	maxChooseKEvalSamples = 4096
-	maxChooseKEvalBytes   = 512 << 10
+	maxChooseKEvalBytes   = 128 << 10
 	minChooseKEvalSamples = 64
 	maxDecodeCostSamples  = 256
 	maxDecodeCostBytes    = 128 << 10
@@ -178,17 +179,18 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		encodeNsEstimate = best.encodeNs / int64(best.records)
 	}
 	return &ActiveProfile{
-		DictHash:         xxhash.Sum64(dict),
-		DictBytes:        len(dict),
-		Dict:             dict,
-		K:                best.K,
-		PayloadRatio:     best.payloadRatio,
-		TotalRatio:       best.totalRatio,
-		DecodeNsEstimate: int64(nsPerByte * float64(best.K) * avgRaw),
-		EncodeNsEstimate: encodeNsEstimate,
-		AvgSampleBytes:   int(avgRaw),
-		Samples:          len(eval),
-		Timestamp:        time.Now(),
+		DictHash:          xxhash.Sum64(dict),
+		DictBytes:         len(dict),
+		Dict:              dict,
+		K:                 best.K,
+		PayloadRatio:      best.payloadRatio,
+		TotalRatio:        best.totalRatio,
+		SingleSampleRatio: baseline.payloadRatio,
+		DecodeNsEstimate:  int64(nsPerByte * float64(best.K) * avgRaw),
+		EncodeNsEstimate:  encodeNsEstimate,
+		AvgSampleBytes:    int(avgRaw),
+		Samples:           len(eval),
+		Timestamp:         time.Now(),
 	}
 }
 

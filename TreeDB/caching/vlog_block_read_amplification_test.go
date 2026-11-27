@@ -190,7 +190,9 @@ func TestValueLogBlockRawLimitEligibility(t *testing.T) {
 		{name: "leaf", mode: vlogCompressionAuto, write: vlogWriteBlock, leaf: true},
 		{name: "size", mode: vlogCompressionAuto, write: vlogWriteBlock, policy: vlogAutoSize},
 		{name: "throughput", mode: vlogCompressionAuto, write: vlogWriteBlock, policy: vlogAutoThroughput},
-		{name: "explicit_block", mode: vlogCompressionBlock, write: vlogWriteBlock},
+		{name: "ordinary_block", mode: vlogCompressionBlock, write: vlogWriteBlock, want: 32 << 10},
+		{name: "block_size", mode: vlogCompressionBlock, write: vlogWriteBlock, policy: vlogAutoSize},
+		{name: "block_throughput", mode: vlogCompressionBlock, write: vlogWriteBlock, policy: vlogAutoThroughput},
 		{name: "explicit_dict", mode: vlogCompressionDict, write: vlogWriteBlock},
 		{name: "default_dict", mode: vlogCompressionDefault, write: vlogWriteBlock},
 	} {

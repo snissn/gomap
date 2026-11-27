@@ -580,6 +580,43 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		return
 	}
 
+	// Split samples into disjoint train and holdout eval slices balanced by byte
+	// count (while preserving at least 4 samples in each partition) so dictionary
+	// evaluation measures true out-of-sample generalization even on alternating
+	// small/large record streams.
+	trainSamples := make([][]byte, 0, (len(validSamples)+1)/2)
+	evalSamples := make([][]byte, 0, len(validSamples)/2)
+	trainRawTotal := 0
+	evalRawTotal := 0
+	for i, sample := range validSamples {
+		rem := len(validSamples) - i
+		needTrain := 4 - len(trainSamples)
+		needEval := 4 - len(evalSamples)
+		var assignTrain bool
+		switch {
+		case needTrain > 0 && rem <= needTrain:
+			assignTrain = true
+		case needEval > 0 && rem <= needEval:
+			assignTrain = false
+		case trainRawTotal < evalRawTotal:
+			assignTrain = true
+		case evalRawTotal < trainRawTotal:
+			assignTrain = false
+		default:
+			assignTrain = len(trainSamples) <= len(evalSamples)
+		}
+		if assignTrain {
+			trainSamples = append(trainSamples, sample)
+			trainRawTotal += len(sample)
+		} else {
+			evalSamples = append(evalSamples, sample)
+			evalRawTotal += len(sample)
+		}
+	}
+	if len(trainSamples) < 4 || len(evalSamples) < 4 || trainRawTotal < 2048 {
+		return
+	}
+
 	dictID := slabID + 1
 	if dictID == 0 {
 		dictID = 1
@@ -619,13 +656,13 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			}
 		}
 	} else {
-		for _, v := range []int{16 << 10, 32 << 10, 40 << 10} {
+		for _, v := range []int{16 << 10, 32 << 10} {
 			if v > maxHistoryBytes {
 				continue
 			}
 			historyCandidates = append(historyCandidates, v)
 		}
-		isStd := dictBytes == 16<<10 || dictBytes == 32<<10 || dictBytes == 40<<10
+		isStd := dictBytes == 16<<10 || dictBytes == 32<<10
 		if !isStd && dictBytes <= maxHistoryBytes {
 			historyCandidates = append(historyCandidates, dictBytes)
 		}
@@ -651,35 +688,33 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	if len(dictCandidates) == 0 {
 		dictCandidates = append(dictCandidates, dictBytes)
 	}
-	if maxHistoryBytes > rawTotal {
-		maxHistoryBytes = rawTotal
+	// Never allow dictionary history to exceed 25% of the disjoint training
+	// corpus; otherwise the dictionary memorizes the training batch verbatim.
+	historyCap := trainRawTotal / 4
+	if historyCap < minHistoryBytes {
+		historyCap = minHistoryBytes
+	}
+	if maxHistoryBytes > historyCap {
+		maxHistoryBytes = historyCap
 	}
 	if maxHistoryBytes < minHistoryBytes {
 		return
 	}
 
-	// Build a single max-sized history buffer and slice it for smaller candidates.
+	// Build a single max-sized history buffer using even-strided sampling across
+	// trainSamples so the history represents the full corpus instead of only the
+	// first few samples.
 	maxCandidate := maxHistoryBytes
-	if maxCandidate > rawTotal {
-		maxCandidate = rawTotal
+	if maxCandidate > historyCap {
+		maxCandidate = historyCap
 	}
-	historyMax := make([]byte, 0, maxCandidate)
-	for _, sample := range validSamples {
-		if len(historyMax) >= maxCandidate {
-			break
-		}
-		need := maxCandidate - len(historyMax)
-		if len(sample) > need {
-			historyMax = append(historyMax, sample[:need]...)
-		} else {
-			historyMax = append(historyMax, sample...)
-		}
-	}
+	historyMax := buildStridedHistory(trainSamples, maxCandidate)
 	if len(historyMax) < minHistoryBytes {
 		return
 	}
 
-	samplesHash := hashSamples(validSamples)
+	samplesHash := hashSamples(trainSamples)
+	seenHistory := make(map[int]struct{}, len(historyCandidates))
 	prepared := make([]preparedDictCandidate, 0, len(historyCandidates)*len(dictCandidates))
 	for _, historyBytes := range historyCandidates {
 		if historyBytes <= 0 {
@@ -691,23 +726,32 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		if historyBytes < minHistoryBytes {
 			continue
 		}
+		if _, dup := seenHistory[historyBytes]; dup {
+			continue
+		}
+		seenHistory[historyBytes] = struct{}{}
 		cacheKey := dictCacheKey(samplesHash, historyBytes)
 		dict, dictHash, ok := t.lookupCachedDict(cacheKey)
 		fromCache := ok
 		if !ok {
 			var err error
-			dict, err = buildAndValidateDict(dictID, validSamples, historyMax[:historyBytes], level, &t.buildDictWS, &t.dictEncodeWS)
+			dict, err = buildAndValidateDict(dictID, trainSamples, historyMax[:historyBytes], level, &t.buildDictWS, &t.dictEncodeWS)
 			if err != nil || len(dict) == 0 {
 				continue
 			}
 			dictHash = xxhash.Sum64(dict)
 			t.storeCachedDict(cacheKey, dictHash, dict)
 		}
+		seenShapedLen := make(map[int]struct{}, len(dictCandidates))
 		for _, dictCandidateBytes := range dictCandidates {
 			shaped, err := shapeAndValidateDict(dict, dictCandidateBytes, level, &t.dictEncodeWS)
 			if err != nil || len(shaped) == 0 {
 				continue
 			}
+			if _, dupLen := seenShapedLen[len(shaped)]; dupLen {
+				continue
+			}
+			seenShapedLen[len(shaped)] = struct{}{}
 			prepared = append(prepared, preparedDictCandidate{
 				shaped:       shaped,
 				historyBytes: historyBytes,
@@ -724,7 +768,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	ks := resolveCandidateK(t.candidateK)
 	evalCandidates := prepared
 	if len(prepared) > 1 && len(ks) > 1 {
-		if probeEval, probeRawTotal := chooseKEvalSamples(validSamples, ks); probeRawTotal > 0 {
+		if probeEval, probeRawTotal := chooseKEvalSamples(evalSamples, ks); probeRawTotal > 0 {
 			probeK := selectProbeK(ks, len(probeEval))
 			used := (len(probeEval) / probeK) * probeK
 			if used > 0 {
@@ -773,7 +817,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	}
 	candProfiles := make([]dictCandidate, 0, len(evalCandidates))
 	for _, cand := range evalCandidates {
-		profile := ChooseKForDictOptions(cand.shaped, validSamples, ChooseKOptions{
+		profile := ChooseKForDictOptions(cand.shaped, evalSamples, ChooseKOptions{
 			CandidateK:         t.candidateK,
 			IoNsPerStoredByte:  ioNsPerStoredByte,
 			EncodeNsPerRawByte: t.encodeNsPerRawByte,
@@ -920,21 +964,14 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		}
 	}
 
-	storedTotal := 0
-	var encoded []byte
-	for _, sample := range validSamples {
-		var err error
-		encoded, err = t.dictEncodeWS.EncodeAllWithDict(sample, encoded[:0], bestProfile.Dict, level)
-		if err != nil {
-			log.Printf("treedb: dict training encode failed stream=%d err=%v", slabID, err)
-			return
-		}
-		storedTotal += len(encoded)
+	ratio := bestProfile.SingleSampleRatio
+	if ratio <= 0 {
+		ratio = bestProfile.TotalRatio
 	}
-	ratio := 1.0
-	if rawTotal > 0 {
-		ratio = float64(storedTotal) / float64(rawTotal)
+	if ratio <= 0 {
+		ratio = 1.0
 	}
+	storedEst := int(math.Round(ratio * float64(rawTotal)))
 	t.lastTrainRatio.Store(math.Float64bits(ratio))
 	t.lastTrainSamples.Store(uint64(len(validSamples)))
 	t.lastTrainDict.Store(uint64(len(bestProfile.Dict)))
@@ -944,12 +981,71 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			len(bestProfile.Dict),
 			len(validSamples),
 			rawTotal,
-			storedTotal,
+			storedEst,
 			ratio,
 		)
 	}
 	t.rollingRatioCur.Store(math.Float64bits(ratio))
 	t.maybeAcceptProfile(bestProfile)
+}
+
+// buildStridedHistory collects up to maxBytes of dictionary history by taking
+// evenly-spaced slices across samples rather than only a contiguous prefix.
+func buildStridedHistory(samples [][]byte, maxBytes int) []byte {
+	if maxBytes <= 0 || len(samples) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, maxBytes)
+	perSample := maxBytes / len(samples)
+	if perSample < 64 {
+		perSample = 64
+	}
+	// First pass: take up to perSample bytes from evenly strided samples so the
+	// full corpus contributes to the dictionary history.
+	stride := 1
+	if len(samples)*perSample > maxBytes {
+		maxSamples := maxBytes / perSample
+		if maxSamples < 1 {
+			maxSamples = 1
+		}
+		stride = len(samples) / maxSamples
+		if stride < 1 {
+			stride = 1
+		}
+	}
+	for i := 0; i < len(samples) && len(out) < maxBytes; i += stride {
+		s := samples[i]
+		if len(s) == 0 {
+			continue
+		}
+		take := perSample
+		if take > len(s) {
+			take = len(s)
+		}
+		if rem := maxBytes - len(out); take > rem {
+			take = rem
+		}
+		out = append(out, s[:take]...)
+	}
+	// Second pass: if short samples left spare budget, top up from remaining
+	// tails of samples.
+	for i := 0; i < len(samples) && len(out) < maxBytes; i++ {
+		s := samples[i]
+		start := 0
+		if i%stride == 0 {
+			start = perSample
+		}
+		if start >= len(s) {
+			continue
+		}
+		rem := maxBytes - len(out)
+		tail := s[start:]
+		if len(tail) > rem {
+			tail = tail[:rem]
+		}
+		out = append(out, tail...)
+	}
+	return out
 }
 
 type preparedDictCandidate struct {
@@ -1119,13 +1215,12 @@ func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel, e
 	if dictBytes <= 0 {
 		return nil, fmt.Errorf("invalid dict size %d", dictBytes)
 	}
-	shaped := dict
-	if len(dict) > dictBytes {
-		shaped = append([]byte(nil), dict[:dictBytes]...)
-	} else if len(dict) < dictBytes {
-		shaped = make([]byte, dictBytes)
-		copy(shaped, dict)
+	// Never zero-pad shorter dictionaries: trailing zero bytes occupy the
+	// highest-priority short-offset match window at the end of a zstd dictionary.
+	if len(dict) <= dictBytes {
+		return dict, nil
 	}
+	shaped := append([]byte(nil), dict[:dictBytes]...)
 	if err := validateDict(shaped, level, encodeWS); err != nil {
 		return nil, err
 	}

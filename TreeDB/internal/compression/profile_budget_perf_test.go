@@ -166,10 +166,10 @@ func TestChooseKForDictOptions_ByteBudgetAccuracyAndMinSamples(t *testing.T) {
 				t.Fatalf("ChooseKForDictOptions returned nil")
 			}
 
-			// On 4 KiB pages with a 512 KiB byte budget, eval must be downsampled to
-			// 128 samples, keeping >= 2*maxK (64) samples.
-			if prof.Samples != 128 {
-				t.Fatalf("expected byte-bounded eval samples=128 for 4 KiB pages, got %d", prof.Samples)
+			// On 4 KiB pages with a 128 KiB byte budget, eval is bounded by the
+			// 2*maxK (64) minimum sample floor while staying within 1% of full-set ratio.
+			if prof.Samples != 64 {
+				t.Fatalf("expected byte-bounded eval samples=64 for 4 KiB pages, got %d", prof.Samples)
 			}
 			if prof.K <= 0 {
 				t.Fatalf("expected valid K > 0, got %d", prof.K)
@@ -421,26 +421,25 @@ func TestTrainerTrain_MultiCandidateStagingAccuracySpeedAndCache(t *testing.T) {
 		t.Fatalf("expected cached dict lookups on second train, got DictDedupCache=%d", st.DictDedupCache)
 	}
 
-	// Verify ratio stays within 1% of evaluating every history candidate directly on all samples,
-	// and measure speedup vs unstaged full-sample evaluation.
-	historyMax := make([]byte, 0, 40<<10)
-	for _, s := range samples {
-		if len(historyMax) >= 40<<10 {
-			break
-		}
-		need := (40 << 10) - len(historyMax)
-		if len(s) > need {
-			historyMax = append(historyMax, s[:need]...)
+	// Verify holdout ratio stays within 1% of evaluating every history candidate
+	// directly on the same disjoint train/eval split, and measure speedup vs
+	// unstaged evaluation.
+	trainSamples := make([][]byte, 0, (len(samples)+1)/2)
+	evalSamples := make([][]byte, 0, len(samples)/2)
+	for i, s := range samples {
+		if i%2 == 0 {
+			trainSamples = append(trainSamples, s)
 		} else {
-			historyMax = append(historyMax, s...)
+			evalSamples = append(evalSamples, s)
 		}
 	}
+	historyMax := buildStridedHistory(trainSamples, 40<<10)
 	var buildWS zstd.BuildDictWorkspace
 	var encWS zstd.DictEncodeWorkspace
 	bestRefRatio := math.Inf(1)
 	refStart := time.Now()
 	for _, hb := range []int{16 << 10, 32 << 10, 40 << 10} {
-		dict, err := buildAndValidateDict(2, samples, historyMax[:hb], zstd.SpeedFastest, &buildWS, &encWS)
+		dict, err := buildAndValidateDict(2, trainSamples, historyMax[:hb], zstd.SpeedFastest, &buildWS, &encWS)
 		if err != nil {
 			t.Fatalf("buildAndValidateDict(%d): %v", hb, err)
 		}
@@ -448,7 +447,7 @@ func TestTrainerTrain_MultiCandidateStagingAccuracySpeedAndCache(t *testing.T) {
 		if err != nil {
 			t.Fatalf("shapeAndValidateDict(%d): %v", hb, err)
 		}
-		_, ratio := referenceChooseKRatio(shaped, samples, nil, 2.0, 1.0)
+		_, ratio := referenceChooseKRatio(shaped, evalSamples, nil, 2.0, 1.0)
 		if ratio < bestRefRatio {
 			bestRefRatio = ratio
 		}

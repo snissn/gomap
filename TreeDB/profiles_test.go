@@ -240,11 +240,11 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=false for fast profile")
 	}
-	if opts.ValueLog.Compression != ValueLogCompressionAuto {
-		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for fast profile, got %v", opts.ValueLog.Compression)
+	if opts.ValueLog.Compression != ValueLogCompressionBlock {
+		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionBlock for fast profile, got %v", opts.ValueLog.Compression)
 	}
-	if opts.ValueLog.BlockCodec != ValueLogBlockSnappy {
-		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockSnappy for fast profile, got %v", opts.ValueLog.BlockCodec)
+	if opts.ValueLog.BlockCodec != ValueLogBlockLZ4 {
+		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockLZ4 for fast profile, got %v", opts.ValueLog.BlockCodec)
 	}
 	if opts.ValueLog.AutoPolicy != ValueLogAutoBalanced {
 		t.Fatalf("expected ValueLog.AutoPolicy=ValueLogAutoBalanced for fast profile, got %v", opts.ValueLog.AutoPolicy)
@@ -303,11 +303,11 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=false for wal_on_fast profile")
 	}
-	if opts.ValueLog.Compression != ValueLogCompressionAuto {
-		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionAuto for wal_on_fast profile, got %v", opts.ValueLog.Compression)
+	if opts.ValueLog.Compression != ValueLogCompressionBlock {
+		t.Fatalf("expected ValueLog.Compression=ValueLogCompressionBlock for wal_on_fast profile, got %v", opts.ValueLog.Compression)
 	}
-	if opts.ValueLog.BlockCodec != ValueLogBlockSnappy {
-		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockSnappy for wal_on_fast profile, got %v", opts.ValueLog.BlockCodec)
+	if opts.ValueLog.BlockCodec != ValueLogBlockLZ4 {
+		t.Fatalf("expected ValueLog.BlockCodec=ValueLogBlockLZ4 for wal_on_fast profile, got %v", opts.ValueLog.BlockCodec)
 	}
 	if opts.ValueLog.AutoPolicy != ValueLogAutoBalanced {
 		t.Fatalf("expected ValueLog.AutoPolicy=ValueLogAutoBalanced for wal_on_fast profile, got %v", opts.ValueLog.AutoPolicy)
