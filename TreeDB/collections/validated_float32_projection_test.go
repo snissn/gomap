@@ -502,8 +502,25 @@ func TestValidateTrustedFloat32ProjectionMetaRejectsSchemaDrift(t *testing.T) {
 	}
 	scalarIndexed := copyCollectionMeta(nonColumn)
 	scalarIndexed.Indexes = []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
-	if err := validateTrustedFloat32ProjectionMeta(scalarIndexed, retainedProjection); err == nil {
-		t.Fatal("trusted retained projection accepted scalar-index metadata")
+	if err := validateTrustedFloat32ProjectionMeta(scalarIndexed, retainedProjection); err != nil {
+		t.Fatalf("trusted retained projection rejected non-overlapping scalar-index metadata: %v", err)
+	}
+	scalarIndexedColumn := copyCollectionMeta(nonColumn)
+	scalarIndexedColumn.Indexes = []IndexDefinition{{Name: "embedding_scalar", Field: "embedding", ValueType: IndexValueString}}
+	if err := validateTrustedFloat32ProjectionMeta(scalarIndexedColumn, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted overlapping scalar-index metadata")
+	}
+	scalarIndexedComposite := copyCollectionMeta(nonColumn)
+	scalarIndexedComposite.Indexes = []IndexDefinition{{
+		Name:      "embedding_comp",
+		ValueType: IndexValueString,
+		Components: []IndexComponent{
+			{Field: "kind", Direction: IndexDirectionAscending},
+			{Field: "embedding.sub", Direction: IndexDirectionAscending},
+		},
+	}}
+	if err := validateTrustedFloat32ProjectionMeta(scalarIndexedComposite, retainedProjection); err == nil {
+		t.Fatal("trusted retained projection accepted overlapping composite scalar-index metadata")
 	}
 	textIndexedColumn := copyCollectionMeta(nonColumn)
 	textIndexedColumn.TextIndexes = []TextIndexDefinition{{Name: "embedding_text", Fields: []TextIndexField{{Field: "embedding"}}}}

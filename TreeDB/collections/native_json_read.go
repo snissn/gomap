@@ -123,6 +123,34 @@ func nativeTypedNeedsReconstruct(meta *CollectionMeta) bool {
 	return nativeTypedMeta(*meta) && meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 }
 
+func nativeColumnNeedsReconstruct(meta *CollectionMeta) bool {
+	if meta == nil {
+		return false
+	}
+	return nativeTypedNeedsReconstruct(meta) || columnStoreCanReconstructDocument(*meta)
+}
+
+func (r *NativeJSONRead) reconstructColumnDocument(id, value []byte) ([]byte, error) {
+	if nativeTypedMeta(r.meta) {
+		return r.reconstructTyped(id, value)
+	}
+	if !columnStoreCanReconstructDocument(r.meta) {
+		return value, nil
+	}
+	if r.database == nil || r.collection == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	wrapper := r.nativeTypedReadCollection()
+	reconstructed, err := wrapper.reconstructColumnDocumentAtSnapshot(r.capture.Snapshot(), wrapper.catalog, id, value)
+	if err != nil {
+		return nil, err
+	}
+	if reconstructed == nil {
+		return nil, errors.New("collections: missing column document reconstruction")
+	}
+	return reconstructed, nil
+}
+
 func (m *NativeJSONManager) getIntoBorrowedCut(cut backenddb.NativeSemanticBorrowedCut, collection string, id, dst []byte) (value []byte, format DocumentFormat, handled bool, resultErr error) {
 	engine, ok := cut.State().(*nativeEngineVersion)
 	if !ok || engine == nil {
@@ -136,7 +164,7 @@ func (m *NativeJSONManager) getIntoBorrowedCut(cut backenddb.NativeSemanticBorro
 	meta := col.schema.meta
 	format = meta.Options.DocumentFormat
 	typed := nativeTypedMeta(*meta)
-	if nativeTypedNeedsReconstruct(meta) {
+	if nativeColumnNeedsReconstruct(meta) {
 		_ = cut.Release()
 		return nil, "", false, nil
 	}
@@ -245,7 +273,7 @@ func (m *NativeJSONManager) getIntoCapture(collection string, id, dst []byte) (v
 	meta := col.schema.meta
 	format = meta.Options.DocumentFormat
 	typed := nativeTypedMeta(*meta)
-	reconstruct := nativeTypedNeedsReconstruct(meta)
+	reconstruct := nativeColumnNeedsReconstruct(meta)
 	d, ok := col.domains.Get("primary")
 	if !ok {
 		return nil, format, tree.ErrKeyNotFound
@@ -365,7 +393,7 @@ func (m *NativeJSONManager) getIntoCapture(collection string, id, dst []byte) (v
 		}
 		if reconstruct {
 			r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
-			val, err = r.reconstructTyped(id, val)
+			val, err = r.reconstructColumnDocument(id, val)
 			scratchLease = r.detachScratch()
 			r = NativeJSONRead{}
 			if err != nil {
@@ -379,7 +407,7 @@ func (m *NativeJSONManager) getIntoCapture(collection string, id, dst []byte) (v
 	}
 	if reconstruct {
 		r := NativeJSONRead{meta: *meta, database: m.db, capture: capture, collection: col, oneShot: true}
-		val, err := r.reconstructTyped(id, entry.Value)
+		val, err := r.reconstructColumnDocument(id, entry.Value)
 		entry = node.LeafEntry{}
 		scratchLease = r.detachScratch()
 		r = NativeJSONRead{}
@@ -562,7 +590,7 @@ func (r *NativeJSONRead) getAdmittedLocked(id []byte, admitOutput func(uint64) e
 	if err != nil {
 		return nil, err
 	}
-	return r.materializeEntryLocked(id, entry, owned, admitOutput, typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull)
+	return r.materializeEntryLocked(id, entry, owned, admitOutput, nativeColumnNeedsReconstruct(&r.meta))
 }
 
 // pendingTypedValueLocked preserves the point-read fast path before any
@@ -601,12 +629,12 @@ func (r *NativeJSONRead) materializeEntryLocked(id []byte, entry node.LeafEntry,
 			return nil, err
 		}
 		if reconstruct {
-			return r.reconstructTyped(id, value)
+			return r.reconstructColumnDocument(id, value)
 		}
 		return value, nil
 	}
 	if reconstruct {
-		return r.reconstructTyped(id, entry.Value)
+		return r.reconstructColumnDocument(id, entry.Value)
 	}
 	if owned {
 		return entry.Value, nil

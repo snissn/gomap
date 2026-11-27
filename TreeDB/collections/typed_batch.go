@@ -391,7 +391,7 @@ func typedProjectionFromPayload(meta CollectionMeta, payload commitlog.Collectio
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn {
 		p.retainedJSON = docs
 	}
-	if !p.legacyTyped {
+	if p.retainedJSON != nil {
 		if _, err := validateTrustedFloat32ProjectionRetainedJSONWithOwnership(ids, p, false); err != nil {
 			return nil, nil, nil, err
 		}
