@@ -211,6 +211,79 @@ func (c *Coordinator) ReserveAccepted(maintenance bool) (AcceptedTicket, error) 
 	return p.reserveSlotLocked(c, slot, maintenance), nil
 }
 
+// AcceptedOrdinaryRefusal binds real single-slot ordinary capacity denial and
+// its unsettled frontier to one original owner. It never holds a reservation.
+// Copies share the private one-shot state; callers cannot copy or forge it.
+type AcceptedOrdinaryRefusal struct{ state *acceptedPairRefusal }
+
+func (r AcceptedOrdinaryRefusal) Valid() bool { return r.state != nil }
+
+// HasPending reports whether at least one ordered accepted entry was pending
+// retirement when this refusal was minted under accepted.mu.
+func (r AcceptedOrdinaryRefusal) HasPending() bool { return r.state != nil && r.state.pending }
+
+// ReserveAcceptedOrdinaryWithRefusal performs bounded single-slot ordinary
+// preaccept admission, returning a one-shot refusal witness only on true
+// capacity denial. Healthy success allocates nothing.
+func (c *Coordinator) ReserveAcceptedOrdinaryWithRefusal() (AcceptedTicket, AcceptedOrdinaryRefusal, error) {
+	c = c.AcceptedPrefixOwner()
+	var refusal AcceptedOrdinaryRefusal
+	if c == nil {
+		return AcceptedTicket{}, refusal, ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poison != nil {
+		return AcceptedTicket{}, refusal, p.poison
+	}
+	if p.closed || len(p.entries) == 0 {
+		return AcceptedTicket{}, refusal, ErrAcceptedReceipt
+	}
+	if p.freeCount == 0 {
+		refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers, pending: p.count > 0}
+		return AcceptedTicket{}, refusal, ErrAcceptedCapacity
+	}
+	p.freeCount--
+	slot := p.free[p.freeCount]
+	return p.reserveSlotLocked(c, slot, false), refusal, nil
+}
+
+// ReserveAcceptedOrdinaryAfterRetirement consumes a single actual refusal.
+// A clean miss has an invalid ticket and nil error. A terminal outcome is never
+// a miss. S comes only from completed accepted retirement; requireStableWAL
+// additionally requires W >= before.C for durable command-WAL callers.
+func (c *Coordinator) ReserveAcceptedOrdinaryAfterRetirement(observation AcceptedOrdinaryRefusal, requireStableWAL bool) (AcceptedTicket, error) {
+	c = c.AcceptedPrefixOwner()
+	refusal := observation.state
+	if c == nil || refusal == nil || refusal.owner != c {
+		return AcceptedTicket{}, nil
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poison != nil {
+		return AcceptedTicket{}, p.poison
+	}
+	if p.closed || len(p.entries) == 0 {
+		return AcceptedTicket{}, ErrAcceptedReceipt
+	}
+	if refusal.used {
+		return AcceptedTicket{}, nil
+	}
+	refusal.used = true
+	f, before := p.frontiers, refusal.denied
+	if p.freeCount < 1 || (requireStableWAL && f.W < before.C) ||
+		(before.S.LogicalSequence >= before.V && before.S.CanonicalLSN >= before.C) ||
+		f.S.LogicalSequence < before.S.LogicalSequence || f.S.CanonicalLSN < before.S.CanonicalLSN ||
+		f.S.LogicalSequence < before.V || f.S.CanonicalLSN < before.C {
+		return AcceptedTicket{}, nil
+	}
+	p.freeCount--
+	slot := p.free[p.freeCount]
+	return p.reserveSlotLocked(c, slot, false), nil
+}
+
 // ReserveAcceptedOrdinaryPair reserves a writer and its optional group marker
 // together. A refusal holds neither slot and leaves the maintenance reserve alone.
 func (c *Coordinator) ReserveAcceptedOrdinaryPair() (AcceptedTicket, AcceptedTicket, error) {
@@ -225,10 +298,15 @@ type AcceptedOrdinaryPairRefusal struct{ state *acceptedPairRefusal }
 
 func (r AcceptedOrdinaryPairRefusal) Valid() bool { return r.state != nil }
 
+// HasPending reports whether at least one ordered accepted entry was pending
+// retirement when this refusal was minted under accepted.mu.
+func (r AcceptedOrdinaryPairRefusal) HasPending() bool { return r.state != nil && r.state.pending }
+
 type acceptedPairRefusal struct {
-	owner  *Coordinator
-	denied LogicalFrontiers
-	used   bool // guarded by owner's accepted mutex
+	owner   *Coordinator
+	denied  LogicalFrontiers
+	pending bool
+	used    bool // guarded by owner's accepted mutex
 }
 
 // ReserveAcceptedOrdinaryPairWithRefusal is the initial raw-transaction
@@ -256,7 +334,7 @@ func (c *Coordinator) reserveAcceptedOrdinaryPair(captureRefusal bool) (Accepted
 	}
 	if p.freeCount < 2 {
 		if captureRefusal {
-			refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers}
+			refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers, pending: p.count > 0}
 		}
 		return AcceptedTicket{}, AcceptedTicket{}, refusal, ErrAcceptedCapacity
 	}

@@ -861,8 +861,9 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 }
 
 // admitCOWAccepted reserves the queue slot before any producer/publication gate.
-// A full finite prefix is sealed using the reserved maintenance lane, then the
-// original admission is retried once. Retained readers do not need to end.
+// On a full finite prefix, waiters join or run pressure retirement using the
+// reserved maintenance lane and retry while forward retirement progress occurs.
+// Retained readers do not need to end.
 func (b *Batch) admitCOWAccepted() error {
 	c := b.db.cow
 	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {
@@ -888,10 +889,14 @@ func (b *Batch) admitCOWAccepted() error {
 			return b.admitCOWAcceptedAfterNativeRefusal(nativeSpare, denied)
 		}
 	} else {
+		var denied rootpublication.AcceptedOrdinaryRefusal
 		var err error
-		ticket, err = c.prefix.ReserveAccepted(false)
+		ticket, denied, err = c.prefix.ReserveAcceptedOrdinaryWithRefusal()
 		if err != nil {
-			return b.admitCOWAcceptedAfterOrdinaryError(c, err)
+			if !denied.Valid() {
+				return acceptedAdmissionError(err)
+			}
+			return b.admitCOWAcceptedAfterOrdinaryRefusal(c, denied, err)
 		}
 	}
 	b.cowState.accepted = ticket
@@ -904,8 +909,8 @@ func (b *Batch) admitCOWAccepted() error {
 }
 
 //go:noinline
-func (b *Batch) admitCOWAcceptedAfterOrdinaryError(c *cowCache, cause error) error {
-	ticket, err := b.db.reserveCOWAcceptedOrdinaryAfterPressure(c, cause)
+func (b *Batch) admitCOWAcceptedAfterOrdinaryRefusal(c *cowCache, denied rootpublication.AcceptedOrdinaryRefusal, cause error) error {
+	ticket, err := b.db.reserveCOWAcceptedOrdinaryAfterPressure(c, denied, cause)
 	if err != nil {
 		return err
 	}
