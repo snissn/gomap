@@ -2932,6 +2932,14 @@ const (
 	maxRetainedMongoUpdateLFQueueCap        = 256
 	defaultUpdateCoalescingStickyIdleWindow = 5 * time.Millisecond
 	defaultUpdateCoalescingStickySoloLimit  = 8
+
+	// Adaptive group-commit linger bounds for slow/durable commit waves.
+	// Engaged only when recent waves run in the durable fsync regime
+	// (>= durableLingerSlowWaveThreshold) and concurrent writers > 1.
+	durableLingerSlowWaveThreshold = 500 * time.Microsecond
+	durableLingerMin               = 150 * time.Microsecond
+	durableLingerMax               = 350 * time.Microsecond
+	durableLingerMinBudgetMargin   = 2 * time.Millisecond
 )
 
 var errMongoUpdateCoalescerBatchAborted = errors.New("mongo gateway update coalescer batch aborted")
@@ -2971,6 +2979,7 @@ type mongoUpdateCoalescer struct {
 	lfQueue               []mongoUpdateCoalescerRequest
 	lfHead                int
 	lfLen                 int
+	lfLingerTarget        int
 	lfWakeCh              chan struct{}
 	lfSpaceCh             chan struct{}
 	stickyIdleWindow      time.Duration
@@ -2984,10 +2993,16 @@ type mongoUpdateCoalescer struct {
 	idleWaitCh       chan struct{}
 
 	// Scratch buffers owned exclusively by the single hot worker (maxDelay == 0) or delay worker (maxDelay > 0).
-	batchBuf     []mongoUpdateCoalescerRequest
-	updatesBuf   []mongoUpdateItem
-	bsonItemsBuf []collections.BSONSetUpdateBatchItem
-	dupSeen      map[string]struct{}
+	batchBuf         []mongoUpdateCoalescerRequest
+	updatesBuf       []mongoUpdateItem
+	bsonItemsBuf     []collections.BSONSetUpdateBatchItem
+	dupSeen          map[string]struct{}
+	lastWaveInFlight int
+
+	// testWaveHook is an optional test-only callback invoked once per executed
+	// wave (with the wave's batch size) to simulate durable fsync latency and
+	// observe coalesced batch sizes deterministically.
+	testWaveHook func(batchLen int)
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -3076,6 +3091,8 @@ func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, updat
 		if !c.lfInlineRunning && !c.lfWorkerBusy {
 			c.lfWorkerBusy = true
 			wake = c.ensureHotWorkerLocked()
+		} else if c.lfLingerTarget > 0 && c.lfLen >= c.lfLingerTarget {
+			wake = true
 		}
 		c.lfMu.Unlock()
 		if wake {
@@ -3110,6 +3127,9 @@ func waitForLFSpaceOrDeadline(spaceCh <-chan struct{}, budget *mongoWriteBudget)
 func (c *mongoUpdateCoalescer) runInlineFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
 	defer c.finishInlineFastPath()
 	c.inlineExecs.Add(1)
+	if c.testWaveHook != nil {
+		c.testWaveHook(1)
+	}
 	return runMongoUpdateOne(col, update)
 }
 
@@ -3166,6 +3186,49 @@ func (c *mongoUpdateCoalescer) signalLFWake() {
 	}
 }
 
+func computeDurableLinger(lastWaveDur time.Duration, earliestDeadline time.Time) time.Duration {
+	if lastWaveDur < durableLingerSlowWaveThreshold {
+		return 0
+	}
+	linger := lastWaveDur / 8
+	if linger < durableLingerMin {
+		linger = durableLingerMin
+	} else if linger > durableLingerMax {
+		linger = durableLingerMax
+	}
+	if !earliestDeadline.IsZero() {
+		remaining := time.Until(earliestDeadline)
+		if remaining <= durableLingerMinBudgetMargin {
+			return 0
+		}
+		if remaining < linger {
+			linger = remaining / 2
+		}
+	}
+	return linger
+}
+
+func (c *mongoUpdateCoalescer) lfEarliestDeadlineLocked() time.Time {
+	var earliest time.Time
+	qLen := len(c.lfQueue)
+	if qLen == 0 || c.lfLen == 0 {
+		return earliest
+	}
+	idx := c.lfHead
+	for i := 0; i < c.lfLen; i++ {
+		if b := c.lfQueue[idx].item.budget; b != nil && !b.deadline.IsZero() {
+			if earliest.IsZero() || b.deadline.Before(earliest) {
+				earliest = b.deadline
+			}
+		}
+		idx++
+		if idx == qLen {
+			idx = 0
+		}
+	}
+	return earliest
+}
+
 func (c *mongoUpdateCoalescer) runHotWorker() {
 	defer func() {
 		c.markStopped()
@@ -3173,6 +3236,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 		c.lfWorkerBusy = false
 		c.lfWorkerWaitingInline = false
 		c.lfSticky = false
+		c.lfLingerTarget = 0
 		c.closeDoneLocked()
 		c.lfMu.Unlock()
 	}()
@@ -3207,9 +3271,66 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 	}
 	defer stopStickyTimer()
 
+	var lingerTimer *time.Timer
+	stopLingerTimer := func() {
+		if lingerTimer == nil {
+			return
+		}
+		if !lingerTimer.Stop() {
+			select {
+			case <-lingerTimer.C:
+			default:
+			}
+		}
+	}
+	defer stopLingerTimer()
+
 	soloStreak := 0
 	var workerOps uint64
 	var stickyArmedAt uint64
+	var lastWaveDur time.Duration
+	lingerTarget := 0
+	prevWaveLen := 0
+	prevWaveSlow := false
+	resetLingerState := func() {
+		lastWaveDur = 0
+		lingerTarget = 0
+		prevWaveLen = 0
+		prevWaveSlow = false
+	}
+	updateLingerState := func(curLen, maxTake, observedInFlight int, waveDur time.Duration, lingered bool) {
+		lastWaveDur = waveDur
+		if waveDur < durableLingerSlowWaveThreshold {
+			lingerTarget = 0
+			prevWaveLen = curLen
+			prevWaveSlow = false
+			return
+		}
+		inFlightClamped := min(maxTake, observedInFlight)
+		if lingered && curLen < lingerTarget {
+			// Fewer writers arrived than expected while lingering: adapt down in 1 wave
+			// (e.g. w8 -> w4 adapts to 4; w8 -> w1 resets to 1 so w1 pays zero linger),
+			// while preserving in-flight concurrency if delayed writers arrived during
+			// this wave's fsync so the next wave resynchronizes immediately.
+			lingerTarget = max(curLen, inFlightClamped)
+		} else if prevWaveSlow && prevWaveLen == 1 && curLen >= 2 {
+			// Cold-start 1 + (N-1) convergence: active writers is prevWaveLen + curLen.
+			target := min(maxTake, prevWaveLen+curLen)
+			if inFlightClamped > target {
+				target = inFlightClamped
+			}
+			lingerTarget = target
+		} else if curLen >= 2 {
+			lingerTarget = max(curLen, inFlightClamped)
+		} else if inFlightClamped >= 2 {
+			// Solo durable wave with another writer already waiting behind it (e.g. w=2 cold start).
+			lingerTarget = inFlightClamped
+		} else {
+			lingerTarget = 1
+		}
+		prevWaveLen = curLen
+		prevWaveSlow = true
+	}
 
 	for {
 		c.lfMu.Lock()
@@ -3229,6 +3350,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 			if soloStreak >= defaultUpdateCoalescingStickySoloLimit {
 				c.lfSticky = false
 				soloStreak = 0
+				resetLingerState()
 			}
 			sticky := c.lfSticky
 			stickyWindow := c.stickyIdleWindow
@@ -3252,6 +3374,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 					if c.lfLen == 0 && !c.lfWorkerBusy {
 						c.lfSticky = false
 						soloStreak = 0
+						resetLingerState()
 					}
 					c.lfMu.Unlock()
 				}
@@ -3261,8 +3384,55 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 		}
 
 		c.lfWorkerBusy = true
-		workerOps++
 		maxTake := max(1, c.maxBatch)
+		lingered := false
+		if !c.lfStopped && lastWaveDur >= durableLingerSlowWaveThreshold && lingerTarget > 1 {
+			target := min(lingerTarget, maxTake)
+			if c.lfLen < target {
+				if linger := computeDurableLinger(lastWaveDur, c.lfEarliestDeadlineLocked()); linger > 0 {
+					lingered = true
+					c.lfLingerTarget = target
+					if lingerTimer == nil {
+						lingerTimer = time.NewTimer(linger)
+					} else {
+						lingerTimer.Reset(linger)
+					}
+					c.lfMu.Unlock()
+
+					lingerFired := false
+				lingerWait:
+					for {
+						select {
+						case <-c.lfWakeCh:
+							c.lfMu.Lock()
+							if c.lfStopped || c.lfLen >= target {
+								c.lfLingerTarget = 0
+								break lingerWait
+							}
+							c.lfMu.Unlock()
+						case <-lingerTimer.C:
+							lingerFired = true
+							c.lfMu.Lock()
+							c.lfLingerTarget = 0
+							break lingerWait
+						case <-c.stoppedCh:
+							c.lfMu.Lock()
+							c.lfLingerTarget = 0
+							break lingerWait
+						}
+					}
+					if !lingerFired {
+						stopLingerTimer()
+					}
+				}
+			}
+		}
+
+		if c.lfLen == 0 {
+			c.lfMu.Unlock()
+			continue
+		}
+		workerOps++
 		need := min(c.lfLen, maxTake)
 		if need == 1 {
 			req := c.lfPopFrontLocked()
@@ -3274,7 +3444,10 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 			}
 			c.lfMu.Unlock()
 
-			c.runHotWorkerSolo(req)
+			waveStart := time.Now()
+			observedInFlight := c.runHotWorkerSolo(req)
+			waveDur := time.Since(waveStart)
+			updateLingerState(1, maxTake, observedInFlight, waveDur, lingered)
 			continue
 		}
 
@@ -3283,19 +3456,23 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 			c.batchBuf = make([]mongoUpdateCoalescerRequest, 0, initCap)
 		}
 		batch := c.lfDrainIntoLocked(c.batchBuf[:0], maxTake)
+		batchLen := len(batch)
 		c.lfSticky = true
 		soloStreak = 0
 		c.lfMu.Unlock()
 
-		c.runHotWorkerBatch(batch)
+		waveStart := time.Now()
+		observedInFlight := c.runHotWorkerBatch(batch)
+		waveDur := time.Since(waveStart)
+		updateLingerState(batchLen, maxTake, observedInFlight, waveDur, lingered)
 	}
 }
 
-func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest) {
+func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest) int {
 	c.workerBatches.Add(1)
 	if err := req.item.budget.checkDeadline(); err != nil {
 		completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{err: err})
-		return
+		return 0
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -3308,12 +3485,18 @@ func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest)
 			}
 		}
 	}()
+	if c.testWaveHook != nil {
+		c.testWaveHook(1)
+	}
 	matched, modified, err := runMongoUpdateOne(req.col, req.item)
+	observedInFlight := int(c.inFlight.Load())
 	completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
+	return observedInFlight
 }
 
-func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerRequest) {
+func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerRequest) int {
 	c.workerBatches.Add(1)
+	c.lastWaveInFlight = 0
 	batchDone := false
 	defer func() {
 		if r := recover(); r != nil && !batchDone {
@@ -3331,8 +3514,15 @@ func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerReq
 		clear(batch)
 		c.batchBuf = batch[:0]
 	}()
+	if c.testWaveHook != nil {
+		c.testWaveHook(len(batch))
+	}
 	c.runBatch(batch)
 	batchDone = true
+	if c.lastWaveInFlight > 0 {
+		return c.lastWaveInFlight
+	}
+	return int(c.inFlight.Load())
 }
 
 func (c *mongoUpdateCoalescer) lfPushLocked(req mongoUpdateCoalescerRequest) {
@@ -4064,6 +4254,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		defer clear(updates)
 		results, batched, err = runMongoUpdateBatchResultsWithJournal(batch[0].col, updates, journal)
 	}
+	c.lastWaveInFlight = int(c.inFlight.Load())
 	installed := batched && journal != nil && journal.completion.Installed()
 	if err != nil && !installed && ((journal != nil && journal.completion.Selected()) || errors.Is(err, collections.ErrCommitAmbiguous)) {
 		for i := range batch {
