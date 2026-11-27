@@ -3564,6 +3564,19 @@ func (db *DB) detachLeafLogAppendLaneIfSealed(l *lane, sealedRawFileIDs map[uint
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
+	if len(l.vlogCreatedSegments) > 0 {
+		dst := l.vlogCreatedSegments[:0]
+		for _, seg := range l.vlogCreatedSegments {
+			if _, ok := sealedRawFileIDs[page.ValueLogSegmentID(seg.fileID)]; ok {
+				continue
+			}
+			dst = append(dst, seg)
+		}
+		for i := len(dst); i < len(l.vlogCreatedSegments); i++ {
+			l.vlogCreatedSegments[i] = laneValueLogSegment{}
+		}
+		l.vlogCreatedSegments = dst
+	}
 	if l.vlogPath == "" || l.vlogSeq <= 0 {
 		return nil
 	}
@@ -3576,7 +3589,11 @@ func (db *DB) detachLeafLogAppendLaneIfSealed(l *lane, sealedRawFileIDs map[uint
 		return nil
 	}
 	db.advanceLeafLogAppendSeqAtLeast(l.vlogSeq)
-	return db.detachLeafLogAppendLaneMuHeld(l)
+	detachErr := db.detachLeafLogAppendLaneMuHeld(l)
+	if l.vlog == nil && db.valueLogReader != nil {
+		db.valueLogReader.DemoteCurrentWritable(fileID)
+	}
+	return detachErr
 }
 
 func (db *DB) detachLeafLogAppendLaneMuHeld(l *lane) error {

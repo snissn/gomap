@@ -978,8 +978,9 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 	if err := db.runCompactStoragePhase(&stats, "leaf-generation-gc", func() error {
 		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 		gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-			ProtectedRootIDs:       protectedRootIDs,
-			ProtectedSystemRootIDs: protectedSystemRootIDs,
+			ProtectedRootIDs:           protectedRootIDs,
+			ProtectedSystemRootIDs:     protectedSystemRootIDs,
+			DetachSealedCurrentWriters: true,
 		}, !maintenanceLocked)
 		stats.LeafGenerationGC = gc
 		return err
@@ -999,8 +1000,9 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 			prior := stats.LeafGenerationGC
 			gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-				ProtectedRootIDs:       protectedRootIDs,
-				ProtectedSystemRootIDs: protectedSystemRootIDs,
+				ProtectedRootIDs:           protectedRootIDs,
+				ProtectedSystemRootIDs:     protectedSystemRootIDs,
+				DetachSealedCurrentWriters: true,
 			}, !maintenanceLocked)
 			gc.BytesDeleted += prior.BytesDeleted
 			gc.BytesEligible += prior.BytesEligible
@@ -1431,6 +1433,8 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	// Sidecar errors may call back into the DB. Report them after releasing
 	// the gate that serializes the manifest and operational view.
 	defer func() { db.persistLeafGenerationRecordLengthIndexes(sealedFileIDs) }()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
 	commitSeq := uint64(1)
@@ -1484,6 +1488,7 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 			if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedSet); err != nil {
 				return false, err
 			}
+			db.demoteSealedLeafLogCurrentWritable(sealedSet)
 		}
 	}
 
@@ -1608,8 +1613,9 @@ func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactS
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 				gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-					ProtectedRootIDs:       protectedRootIDs,
-					ProtectedSystemRootIDs: protectedSystemRootIDs,
+					ProtectedRootIDs:           protectedRootIDs,
+					ProtectedSystemRootIDs:     protectedSystemRootIDs,
+					DetachSealedCurrentWriters: true,
 				}, lockMaintenance)
 				stats.LeafGenerationGC = gc
 				return err
@@ -1628,8 +1634,9 @@ func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactS
 					protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
 					prior := stats.LeafGenerationGC
 					gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-						ProtectedRootIDs:       protectedRootIDs,
-						ProtectedSystemRootIDs: protectedSystemRootIDs,
+						ProtectedRootIDs:           protectedRootIDs,
+						ProtectedSystemRootIDs:     protectedSystemRootIDs,
+						DetachSealedCurrentWriters: true,
 					}, lockMaintenance)
 					gc.BytesDeleted += prior.BytesDeleted
 					gc.BytesEligible += prior.BytesEligible
@@ -3111,6 +3118,21 @@ func detachSealedLeafPageLogSegments(log LeafPageLog, sealedRawFileIDs map[uint3
 		return nil
 	}
 	return detacher.DetachSealedLeafPageLogSegments(sealedRawFileIDs)
+}
+
+func (db *DB) demoteSealedLeafLogCurrentWritable(sealedRawFileIDs map[uint32]struct{}) {
+	if db == nil || db.valueLogManager == nil || len(sealedRawFileIDs) == 0 {
+		return
+	}
+	for _, id := range db.valueLogManager.CurrentWritableFileIDs() {
+		lane, _ := valuelog.DecodeFileID(id)
+		if lane != valuelog.ReservedLeafLogLaneID {
+			continue
+		}
+		if _, sealed := sealedRawFileIDs[page.ValueLogSegmentID(id)]; sealed {
+			db.valueLogManager.DemoteCurrentWritable(id)
+		}
+	}
 }
 
 func compactStorageLeafPageLogOwnerClass(log LeafPageLog) CompactStorageLeafPageLogOwnerClass {

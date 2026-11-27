@@ -31,6 +31,15 @@ type LeafGenerationGCOptions struct {
 	// ProtectedSystemRootIDs are system-root page IDs whose collection root
 	// descriptors should be expanded into additional protected roots.
 	ProtectedSystemRootIDs []uint64
+
+	// DetachSealedCurrentWriters, when true on a destructive LeafGenerationGC
+	// call, flushes, syncs (unless relaxed sync is active), and detaches any
+	// multi-lane leaf-page-log writer lanes still parked on already-sealed
+	// generations before evaluating retention. Ordinary/background GC keeps this
+	// false so unrelated current append writers retain their own files;
+	// CompactStorage enables it so dead sealed generations pinned only by idle
+	// worker lanes can be reclaimed without allocating empty replacement files.
+	DetachSealedCurrentWriters bool
 }
 
 type LeafGenerationGCStats struct {
@@ -221,7 +230,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		return outcome, false, nil
 	}
 
-	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits, opts.DryRun)
+	stats, prepared, err := db.prepareLeafGenerationGCScan(ctx, opts.MaintenanceLimits, opts.DryRun, opts.DetachSealedCurrentWriters)
 	outcome.stats = stats
 	if err != nil || !prepared {
 		return outcome, false, err
@@ -307,7 +316,7 @@ type leafGenerationGCDecision struct {
 	zombieFileIDs           map[uint32]struct{}
 }
 
-func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits, dryRun bool) (LeafGenerationGCStats, bool, error) {
+func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenerationMaintenanceLimits, dryRun bool, detachSealedCurrentWriters bool) (LeafGenerationGCStats, bool, error) {
 	var stats LeafGenerationGCStats
 	if err := ctx.Err(); err != nil {
 		return stats, false, err
@@ -358,7 +367,7 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 		if err := db.flushDeferredLeafGenerationManifestLocked(); err != nil {
 			return stats, false, err
 		}
-		if db.leafPageLog != nil {
+		if detachSealedCurrentWriters && db.leafPageLog != nil {
 			db.mu.RLock()
 			var sealedRawFileIDs map[uint32]struct{}
 			if db.leafGenerationManifest != nil {
@@ -381,6 +390,7 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 				if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedRawFileIDs); err != nil {
 					return stats, false, err
 				}
+				db.demoteSealedLeafLogCurrentWritable(sealedRawFileIDs)
 			}
 		}
 	}

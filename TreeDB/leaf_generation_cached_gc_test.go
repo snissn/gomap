@@ -145,7 +145,10 @@ func TestOpenBackendWithCachedLeafLog_ReclaimsSealedDeadGenerationsAndHandlesCom
 			if err := backend.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint after compact: %v", err)
 			}
-			gcAfter, err := backend.LeafGenerationGC(context.Background(), db.LeafGenerationGCOptions{ConvergeFallback: true})
+			gcAfter, err := backend.LeafGenerationGC(context.Background(), db.LeafGenerationGCOptions{
+				ConvergeFallback:           true,
+				DetachSealedCurrentWriters: true,
+			})
 			if err != nil {
 				t.Fatalf("LeafGenerationGC after compact: %v", err)
 			}

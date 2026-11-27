@@ -646,6 +646,34 @@ concurrent rotation can defer collection until the next admitted pass. Immutable
 manifest revision GC still runs independently with fresh current/previous-root
 and reader protection, even when the segment phase has no candidate.
 
+Ordinary and periodic background `LeafGenerationGC` calls preserve unrelated
+current append writers (`DetachSealedCurrentWriters=false`), so a sealed
+generation still parked on an active worker lane stays live until that lane
+rotates or closes. Explicit `CompactStorage` `leaf-generation-gc` /
+`settle-leaf-generation-gc` passes (and callers that opt into
+`LeafGenerationGCOptions.DetachSealedCurrentWriters=true`) flush, sync unless
+relaxed sync is active, close, and detach any multi-lane leaf-page-log worker
+lanes parked on already-sealed generations under backend `maintenanceMu` ->
+`writeMu` -> `durablePublishMu` -> per-lane `vlogMu` before evaluating segment
+retention. Detach prunes matching sealed entries from each lane's pending
+created-segment list, demotes detached file IDs from current-writable tracking
+in the value-log reader and backend manager, and preserves the shared
+leaf-log sequence floor without allocating empty replacement segments; a
+detached lane lazily opens a strictly newer segment only on its next append.
+Dry-run `LeafGenerationGC` never flushes, closes, or detaches writer lanes.
+
+In non-exhaustive `CompactStorage` modes (`CompactStorageFull` and
+`CompactStorageQuick`), when `leaf-generation-pack` or
+`settle-leaf-generation-pack` cannot promote a packed generation because the
+platform lacks exact cross-parent no-replace move authority
+(`ErrNamespacePersistenceUnsupported`, e.g. macOS `darwin`), the phase is
+recorded as `CompactStoragePhaseStatusUnsupported` (`Skipped=true`), further
+pack passes in that run stop, and compaction continues through
+`leaf-generation-gc`, `index-vacuum`, and empty-file pruning while leaving any
+unpacked debt honestly reflected in `RemainingDebt` and `FullyCompacted=false`.
+`CompactStorageExhaustive` and direct `LeafGenerationPack*` calls remain
+strictly fail-closed.
+
 Leaf and value collection share the existing maintenance admission, checkpoint
 and COW writer fence, a 30-second cancellable context, 90-second attempt interval,
 and three-minute joint-noop cooldown. Leaf deletion clears that joint cooldown

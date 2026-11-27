@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -89,29 +90,50 @@ func TestCompactStorageNonExhaustiveHandlesUnsupportedLeafPackPromotion(t *testi
 			if err != nil {
 				t.Fatalf("CompactStorage(%s) returned error on unsupported leaf pack: %v", mode, err)
 			}
-			sawUnsupportedPack := false
+			sawUnsupportedPack := 0
+			sawSettlePack := false
 			sawLeafGC := false
 			for _, phase := range stats.Phases {
 				if strings.HasPrefix(phase.Name, "leaf-generation-pack-") {
-					if phase.Status == CompactStoragePhaseStatusUnsupported && phase.Skipped {
-						sawUnsupportedPack = true
+					if phase.Status != CompactStoragePhaseStatusUnsupported || !phase.Skipped {
+						t.Fatalf("unexpected status on %s in %s mode: %+v", phase.Name, mode, phase)
 					}
+					sawUnsupportedPack++
+				}
+				if strings.HasPrefix(phase.Name, "settle-leaf-generation-pack-") {
+					sawSettlePack = true
 				}
 				if phase.Name == "leaf-generation-gc" {
 					sawLeafGC = true
 				}
 			}
-			if !sawUnsupportedPack {
-				t.Fatalf("expected unsupported leaf-generation-pack phase in %s mode, phases=%+v", mode, stats.Phases)
+			if sawUnsupportedPack != 1 {
+				t.Fatalf("sawUnsupportedPack=%d want 1 in %s mode, phases=%+v", sawUnsupportedPack, mode, stats.Phases)
+			}
+			if sawSettlePack {
+				t.Fatalf("unexpected settle-leaf-generation-pack retry after unsupported pack in %s mode, phases=%+v", mode, stats.Phases)
 			}
 			if !sawLeafGC {
 				t.Fatalf("expected leaf-generation-gc to still run after unsupported pack in %s mode, phases=%+v", mode, stats.Phases)
+			}
+			if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+				t.Fatalf("expected compaction flags false while pack debt remains in %s mode: fully=%v policy=%v min=%v debt=%+v",
+					mode, stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+			}
+			if stats.RemainingDebt.LeafPackGenerations == 0 {
+				t.Fatalf("expected RemainingDebt.LeafPackGenerations > 0 in %s mode, debt=%+v", mode, stats.RemainingDebt)
+			}
+			if stats.LeafGenerationGC.GenerationsDeleted == 0 {
+				t.Fatalf("expected dead gen 2 to be deleted by leaf-generation-gc in %s mode, gc=%+v", mode, stats.LeafGenerationGC)
 			}
 		})
 	}
 
 	t.Run("exhaustive_remains_fail_closed", func(t *testing.T) {
 		d, leafLog := newTestDB(t)
+		if closer, ok := d.leafPageLog.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 		d.SetLeafPageLog(nil)
 		_ = leafLog.Close()
 		_, err := d.CompactStorage(context.Background(), CompactStorageOptions{
@@ -188,5 +210,22 @@ func TestDetachSealedLeafPageLogSegmentsHelper(t *testing.T) {
 	}
 	if len(log.current) != 1 || log.current[0].FileID != fileID2 {
 		t.Fatalf("remaining current=%+v want only fileID2", log.current)
+	}
+
+	// Verify *leafPageLogLaneGroup forwarding as well.
+	logB := &detachingTestLeafPageLog{
+		current: []LeafPageLogSegment{
+			{Path: "value-l255-000001.log", FileID: fileID1},
+		},
+	}
+	group := &leafPageLogLaneGroup{
+		lanes:     []LeafPageLog{logB},
+		laneLocks: []*sync.Mutex{newLeafPageLogLaneLock()},
+	}
+	if err := detachSealedLeafPageLogSegments(group, map[uint32]struct{}{raw1: {}}); err != nil {
+		t.Fatalf("group detachSealedLeafPageLogSegments: %v", err)
+	}
+	if logB.detachedCalls != 1 || len(logB.current) != 0 {
+		t.Fatalf("group detach did not forward to lane: calls=%d current=%+v", logB.detachedCalls, logB.current)
 	}
 }
