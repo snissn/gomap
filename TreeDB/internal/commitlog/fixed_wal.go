@@ -23,15 +23,17 @@ import (
 )
 
 const (
-	fixedWALHeaderSize            = 4096
-	fixedWALWitnessSize           = 96
-	fixedWALAlignment             = 64
-	fixedWALDefaultCapacity       = 4_199_424
-	fixedWALDefaultPhysicalBudget = 64 << 20
-	fixedWALReadBufferSize        = 64 << 10
-	fixedWALPendingRetainMaxCap   = 8 << 20
-	fixedWALExtentBufPoolMaxCap   = 8 << 20
-	fixedWALExtentBufPoolMinSize  = 256 << 10
+	fixedWALHeaderSize              = 4096
+	fixedWALWitnessSize             = 96
+	fixedWALAlignment               = 64
+	fixedWALDefaultCapacity         = 4_199_424
+	fixedWALDefaultPhysicalBudget   = 64 << 20
+	fixedWALBulkSteppingMinIncoming = 2 << 20
+	fixedWALBulkSteppingMinFrames   = 8
+	fixedWALReadBufferSize          = 64 << 10
+	fixedWALPendingRetainMaxCap     = 8 << 20
+	fixedWALExtentBufPoolMaxCap     = 8 << 20
+	fixedWALExtentBufPoolMinSize    = 256 << 10
 )
 
 // Read-only zero block shared by writeInitializedFixedWAL to avoid allocating
@@ -344,6 +346,21 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 		required, err := fixedWALFrameCapacity(plan.incoming)
 		if err != nil {
 			return fixedWALSizePlan{}, err
+		}
+		if reason == fixedWALPressureRotation && current != nil && plan.incoming >= fixedWALBulkSteppingMinIncoming {
+			// Multi-MiB bulk frames quickly churn through 4 -> 8 -> 16 MiB
+			// containers (causing repeated directory fsyncs, zero-fills, and
+			// cleanup scans). Step in quantized doublings (matching both
+			// ahead-reserve and synchronous rotation across slightly varying
+			// frame sizes) until the successor holds at least 8 frames or
+			// reaches the normal budget cap.
+			for normal < budget && normal/required < fixedWALBulkSteppingMinFrames {
+				if normal >= budget-normal {
+					normal = budget
+					break
+				}
+				normal += normal
+			}
 		}
 		normal = max(normal, required)
 	}

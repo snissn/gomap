@@ -40,6 +40,8 @@ type collectionSchemaCoordinator struct {
 	nativeBulkPreimageOnce                 sync.Once
 	nativeBulkPreimageCap                  int
 	nativeBulkPreimageTokens               chan struct{}
+	nativeLargeBulkPreimageOnce            sync.Once
+	nativeLargeBulkPreimageTokens          chan struct{}
 	nativeBSONSetMu                        sync.Mutex
 	nativeBSONSetActive                    bool
 	nativeBSONSetPending                   []*nativeBSONSetCoalescerItem
@@ -78,7 +80,39 @@ type collectionSchemaCoordinator struct {
 const (
 	nativeBulkPreimageMaxConcurrent        = 4
 	nativeBulkPreimageMaxConcurrentDurable = 16
+	nativeLargeBulkPreimageMinDocs         = 4000
 )
+
+// acquireBulkPreimageSlotForCount bounds concurrent off-gate bulk insert
+// preimages per collection. Under durable group commit, small batches (<4000
+// docs) may use up to nativeBulkPreimageMaxConcurrentDurable slots to feed
+// high producer counts, while multi-thousand-doc batches stay bounded to
+// nativeBulkPreimageMaxConcurrent so 8+ concurrent multi-index preimages do
+// not spike COW in-flight bytes into capacity-refusal fallback.
+func (coord *collectionSchemaCoordinator) acquireBulkPreimageSlotForCount(docCount int) func() {
+	if coord == nil {
+		return func() {}
+	}
+	if docCount >= nativeLargeBulkPreimageMinDocs && coord.nativeBulkPreimageCap > nativeBulkPreimageMaxConcurrent {
+		coord.nativeLargeBulkPreimageOnce.Do(func() {
+			tokens := make(chan struct{}, nativeBulkPreimageMaxConcurrent)
+			for range nativeBulkPreimageMaxConcurrent {
+				tokens <- struct{}{}
+			}
+			coord.nativeLargeBulkPreimageTokens = tokens
+		})
+		<-coord.nativeLargeBulkPreimageTokens
+		releaseInner := coord.acquireBulkPreimageSlot()
+		var releaseOnce sync.Once
+		return func() {
+			releaseOnce.Do(func() {
+				releaseInner()
+				coord.nativeLargeBulkPreimageTokens <- struct{}{}
+			})
+		}
+	}
+	return coord.acquireBulkPreimageSlot()
+}
 
 // acquireBulkPreimageSlot bounds concurrent off-gate bulk insert preimages per
 // collection so parallel producers overlap CPU preparation with serialized

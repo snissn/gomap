@@ -291,7 +291,7 @@ func (c *Collection) nativeInsertPreparedOnceWithJournalTrusted(ids, documents [
 		// queued writers neither hold vectorDDLMutationMu while waiting nor carry
 		// a stale pre-wait pressure observation across intervening commits.
 		coord := c.collectionSchemaCoordinator()
-		releaseSlot := coord.acquireBulkPreimageSlot()
+		releaseSlot := coord.acquireBulkPreimageSlotForCount(len(ids))
 		defer releaseSlot()
 		unlockVector, _, err := c.prepareNativeProducerMutation()
 		if err != nil {

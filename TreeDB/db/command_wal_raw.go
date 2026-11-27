@@ -3303,7 +3303,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		class = commitlog.CommandDurabilityDurable
 	}
 	appendStart := time.Now()
-	lsn, err := db.commandJournal.AppendCommandObservedWithHooks(commitlog.CommandEnvelope{
+	lsn, err := db.commandJournal.AppendCommandObservedWithImmutableHooks(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
 		DurabilityClass: class,
 		Kind:            intent.kind,

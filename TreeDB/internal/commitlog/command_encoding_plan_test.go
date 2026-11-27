@@ -287,3 +287,87 @@ func TestCommandJournalV2EncodingHookCapacityBeforeRotation(t *testing.T) {
 		t.Fatalf("post-hook capacity was not checked before rotation/reservation: lsn=%d err=%v segment=%d next=%d", lsn, err, j.segmentSeq, j.NextLSN())
 	}
 }
+
+func TestCommandJournalAppendObservedWithImmutableHooksMatchesAndReopens(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+
+	// Invalid payload must fail before hooks, rotation, or LSN reservation.
+	badEnv := CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindCollectionInsertBatchByID,
+		Scope:           CommandScopeCollection,
+		PayloadFormat:   PayloadFormatCollectionInsertBatchByIDV1,
+		Payload:         []byte{0xff, 0xff},
+	}
+	beforeCalls := 0
+	lsn, err := j.AppendCommandObservedWithImmutableHooks(badEnv, func() error {
+		beforeCalls++
+		return nil
+	}, nil)
+	if err == nil || lsn != 0 || beforeCalls != 0 || j.NextLSN() != 1 {
+		t.Fatalf("invalid immutable hook append: lsn=%d err=%v beforeCalls=%d nextLSN=%d", lsn, err, beforeCalls, j.NextLSN())
+	}
+
+	// Valid collection bulk payloads across rotation must emit identical frames
+	// and execute beforeAppend/afterAppend hooks exactly once per append.
+	docs := []CollectionDocument{
+		{ID: []byte("doc-1"), Document: []byte(`{"name":"Ada","n":1}`)},
+		{ID: []byte("doc-2"), Document: []byte(`{"name":"Grace","n":2}`)},
+	}
+	payload, err := EncodeCollectionInsertBatchByIDPayload("users", docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var afterLSNs []uint64
+	for i := 0; i < 3; i++ {
+		env := CommandEnvelope{
+			Version:         CommandFrameVersionV2,
+			DurabilityClass: CommandDurabilityDurable,
+			Kind:            CommandKindCollectionInsertBatchByID,
+			Scope:           CommandScopeCollection,
+			PayloadFormat:   PayloadFormatCollectionInsertBatchByIDV1,
+			Payload:         payload,
+		}
+		gotLSN, appendErr := j.AppendCommandObservedWithImmutableHooks(env, func() error {
+			beforeCalls++
+			return nil
+		}, func(assigned uint64, rotations []*CommandJournalStableRotation) error {
+			afterLSNs = append(afterLSNs, assigned)
+			for _, r := range rotations {
+				r.Release()
+			}
+			return nil
+		})
+		if appendErr != nil || gotLSN != uint64(i+1) {
+			t.Fatalf("append %d: lsn=%d err=%v", i, gotLSN, appendErr)
+		}
+	}
+	if beforeCalls != 3 || len(afterLSNs) != 3 || j.segmentSeq < 2 {
+		t.Fatalf("unexpected hook/rotation counts: before=%d after=%v segSeq=%d", beforeCalls, afterLSNs, j.segmentSeq)
+	}
+	if err := j.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.NextLSN() != 4 {
+		t.Fatalf("reopened NextLSN=%d want 4", reopened.NextLSN())
+	}
+	frames, err := ScanCommandFramesV2(j.path, Options{})
+	if err != nil || len(frames) != 1 || frames[0].LSN != 3 || !bytes.Equal(frames[0].Payload, payload) {
+		t.Fatalf("final rotated frame mismatch: frames=%d err=%v", len(frames), err)
+	}
+}
