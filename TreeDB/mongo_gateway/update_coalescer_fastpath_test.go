@@ -305,17 +305,24 @@ func TestUpdateCoalescerFastPathDelayCoalescingPreserved(t *testing.T) {
 
 func holdUpdateCoalescerLeaderForTest(t *testing.T, c *mongoUpdateCoalescer) func() {
 	t.Helper()
-	c.lfMu.Lock()
-	if c.lfExecuting {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.lfMu.Lock()
+		if !c.lfInlineRunning && !c.lfWorkerBusy && c.lfLen == 0 {
+			c.lfInlineRunning = true
+			c.lfMu.Unlock()
+			break
+		}
 		c.lfMu.Unlock()
-		t.Fatal("leader already executing")
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for coalescer idle to hold inline leader")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	c.lfExecuting = true
-	c.lfMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			c.handoffOrReleaseLeader()
+			c.finishInlineFastPath()
 		})
 	}
 }
@@ -615,20 +622,46 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 			}
 		}
 
-		// After the wave drains, lfExecuting must be released so a subsequent single
-		// writer executes directly as an immediate leader.
-		if coalescer.hasLeaderWork() {
-			t.Fatal("leader work remained active after wave completed")
-		}
+		// Immediately after a coalesced w=4 wave, sticky hot-worker mode keeps a
+		// follow-up update on the same hot worker (preventing cross-core stealing).
 		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 4, 404), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("post-wave single update: resp=%s err=%v", resp, err)
+			t.Fatalf("post-wave sticky update: resp=%s err=%v", resp, err)
 		}
-		if got := coalescer.inlineExecs.Load(); got != 1 {
-			t.Fatalf("post-wave inlineExecs=%d want 1", got)
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("post-wave sticky inlineExecs=%d want 0", got)
+		}
+		if got := coalescer.workerBatches.Load(); got != 2 {
+			t.Fatalf("post-wave sticky workerBatches=%d want 2", got)
 		}
 		if got := findDocN(t, s.Server, collName, 4); got != 404 {
 			t.Fatalf("doc 4 n=%d want 404", got)
+		}
+
+		// Once the quiet sticky window expires, uncontended w=1 resumes inline execution.
+		stickyDeadline := time.Now().Add(time.Second)
+		for time.Now().Before(stickyDeadline) {
+			coalescer.lfMu.Lock()
+			sticky := coalescer.lfSticky
+			busy := coalescer.lfWorkerBusy
+			coalescer.lfMu.Unlock()
+			if !sticky && !busy {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if coalescer.hasLeaderWork() {
+			t.Fatal("leader work remained active after sticky window expired")
+		}
+		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 5, 505), nil, 0)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("post-sticky single update: resp=%s err=%v", resp, err)
+		}
+		if got := coalescer.inlineExecs.Load(); got != 1 {
+			t.Fatalf("post-sticky inlineExecs=%d want 1", got)
+		}
+		if got := findDocN(t, s.Server, collName, 5); got != 505 {
+			t.Fatalf("doc 5 n=%d want 505", got)
 		}
 	})
 

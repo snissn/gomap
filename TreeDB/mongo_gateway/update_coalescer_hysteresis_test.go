@@ -53,9 +53,13 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		}
 		coalescer.lfMu.Lock()
 		queueAllocated := coalescer.lfQueue != nil
+		workerStarted := coalescer.lfWorkerStarted
 		coalescer.lfMu.Unlock()
 		if queueAllocated {
 			t.Fatal("uncontended w1 should not allocate follower queue")
+		}
+		if workerStarted {
+			t.Fatal("uncontended w1 should not spawn hot worker goroutine")
 		}
 		for i := 0; i < 8; i++ {
 			if got := findDocN(t, s.Server, collName, int64(i)); got != int64(10+i) {
@@ -178,8 +182,12 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		if soloRes.err == nil || !strings.Contains(soloRes.err.Error(), "exceeded its execution-time budget") {
 			t.Fatalf("solo expired promoted leader res=%+v want budget error", soloRes)
 		}
+		idleDeadline := time.Now().Add(time.Second)
+		for time.Now().Before(idleDeadline) && coalescer.hasLeaderWork() {
+			time.Sleep(time.Millisecond)
+		}
 		if coalescer.hasLeaderWork() {
-			t.Fatal("leader token leaked after expired solo promoted leader")
+			t.Fatal("hot worker remained busy after expired solo request")
 		}
 
 		// Subsequent update must succeed immediately.
@@ -349,8 +357,9 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 			t.Fatal("expected cached coalescer")
 		}
 
-		// Case A: Panic inside promoted leader's runBatch hook must abort waiting followers
-		// in that batch (never hang) and hand off leadership to subsequent waves.
+		// Panic inside hot worker's runBatch hook must recover cleanly, abort all waiting
+		// requests in that batch (never hang or crash the worker), clear batchBuf, and
+		// keep serving subsequent waves cleanly.
 		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
 		defer releaseLeader()
 
@@ -374,13 +383,11 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 			t.Fatalf("parse item1: %v", err)
 		}
 
-		panickedCh := make(chan any, 1)
-		followerResCh := make(chan mongoUpdateCoalescerResult, 1)
+		resCh0 := make(chan mongoUpdateCoalescerResult, 1)
+		resCh1 := make(chan mongoUpdateCoalescerResult, 1)
 		go func() {
-			defer func() {
-				panickedCh <- recover()
-			}()
-			_, _, _ = s.Server.runMongoUpdateCoalesced("app."+collName, col, item0)
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, item0)
+			resCh0 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) && coalescer.queuedLen() < 1 {
@@ -388,31 +395,30 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		}
 		go func() {
 			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, item1)
-			followerResCh <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+			resCh1 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
 		for time.Now().Before(deadline) && coalescer.queuedLen() < 2 {
 			time.Sleep(time.Millisecond)
 		}
 		releaseLeader()
 
-		select {
-		case pv := <-panickedCh:
-			if pv != "injected batch panic" {
-				t.Fatalf("panic value=%v want injected batch panic", pv)
+		for idx, ch := range []chan mongoUpdateCoalescerResult{resCh0, resCh1} {
+			select {
+			case res := <-ch:
+				if res.err == nil || !strings.Contains(res.err.Error(), "batch aborted") {
+					t.Fatalf("caller[%d] result=%+v want batch aborted error", idx, res)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("caller[%d] hung after hot worker batch panicked", idx)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("promoted leader did not panic as expected")
 		}
-		select {
-		case res := <-followerResCh:
-			if res.err == nil || !strings.Contains(res.err.Error(), "batch aborted") {
-				t.Fatalf("follower result=%+v want batch aborted error", res)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("follower hung after promoted leader panicked")
+
+		idleDeadline := time.Now().Add(time.Second)
+		for time.Now().Before(idleDeadline) && coalescer.hasLeaderWork() {
+			time.Sleep(time.Millisecond)
 		}
 		if coalescer.hasLeaderWork() {
-			t.Fatal("leader token leaked after promoted leader panicked")
+			t.Fatal("hot worker remained busy after recovering from batch panic")
 		}
 
 		// Subsequent update must execute cleanly without wedging.
@@ -422,6 +428,57 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		}
 		if got := findDocN(t, s.Server, collName, 2); got != 222 {
 			t.Fatalf("doc 2 n=%d want 222", got)
+		}
+	})
+
+	t.Run("SoloStreakClearsStickyMode", func(t *testing.T) {
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = s.Close() }()
+
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			t.Fatal("expected cached coalescer")
+		}
+
+		// Trigger a 2-writer coalesced batch to latch lfSticky = true.
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		errCh := make(chan error, 2)
+		for w := 0; w < 2; w++ {
+			w := w
+			go func() {
+				defer wg.Done()
+				resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), 1), nil, 0)
+				if err != nil || !mongoCommandResponseOK(resp) {
+					errCh <- fmt.Errorf("w%d: resp=%s err=%v", w, resp, err)
+				}
+			}()
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && coalescer.queuedLen() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		releaseLeader()
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatal(err)
+		}
+
+		// Now issue continuous solo updates without waiting for the 5ms quiet timer:
+		// after defaultUpdateCoalescingStickySoloLimit solo commits, lfSticky must
+		// clear so subsequent single-writer updates run inline again.
+		for step := int64(2); step <= int64(2+defaultUpdateCoalescingStickySoloLimit+4); step++ {
+			resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, step), nil, 0)
+			if err != nil || !mongoCommandResponseOK(resp) {
+				t.Fatalf("solo step %d: resp=%s err=%v", step, resp, err)
+			}
+		}
+		if got := coalescer.inlineExecs.Load(); got == 0 {
+			t.Fatalf("expected soloStreak to clear sticky mode and resume inline execution; inlineExecs=0 workerBatches=%d", coalescer.workerBatches.Load())
 		}
 	})
 
@@ -751,21 +808,25 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 			}
 		}
 
-		// Leader-follower mode runAsPromotedLeader buffer clearing and reuse.
+		// Hot worker mode runHotWorkerBatch buffer clearing and reuse.
 		cLF := &mongoUpdateCoalescer{
 			maxBatch:          8,
 			useLeaderFollower: true,
+			lfWakeCh:          make(chan struct{}, 1),
+			stoppedCh:         make(chan struct{}),
 			done:              make(chan struct{}),
 		}
-		cLF.lfExecuting = true
 		lfReq0 := makeReq(0, 66, false)
 		lfReq1 := makeReq(1, 77, true)
 		lfReq2 := makeReq(2, 88, false)
+		cLF.batchBuf = make([]mongoUpdateCoalescerRequest, 0, 8)
+		cLF.lfPushLocked(lfReq0)
 		cLF.lfPushLocked(lfReq1)
 		cLF.lfPushLocked(lfReq2)
-		matched, modified, err := cLF.runAsPromotedLeader(lfReq0.col, lfReq0.item, lfReq0.done)
-		if err != nil || !matched || !modified {
-			t.Fatalf("lfReq0 matched=%v modified=%v err=%v", matched, modified, err)
+		batch1 := cLF.lfDrainIntoLocked(cLF.batchBuf[:0], 8)
+		cLF.runHotWorkerBatch(batch1)
+		if res := <-lfReq0.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("lfReq0 result=%+v want matched,modified,nil", res)
 		}
 		if res := <-lfReq1.done; res.err == nil || !strings.Contains(res.err.Error(), "exceeded its execution-time budget") {
 			t.Fatalf("lfReq1 result=%+v want budget error", res)
@@ -782,15 +843,17 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 				t.Fatalf("cLF batchBuf slot[%d] not cleared: %+v", i, slot)
 			}
 		}
-		cLF.lfExecuting = true
 		lfReq3 := makeReq(0, 99, false)
 		lfReq4 := makeReq(2, 100, false)
+		cLF.lfPushLocked(lfReq3)
 		cLF.lfPushLocked(lfReq4)
-		if matched, modified, err := cLF.runAsPromotedLeader(lfReq3.col, lfReq3.item, lfReq3.done); err != nil || !matched || !modified {
-			t.Fatalf("lfReq3 matched=%v modified=%v err=%v", matched, modified, err)
+		batch2 := cLF.lfDrainIntoLocked(cLF.batchBuf[:0], 8)
+		cLF.runHotWorkerBatch(batch2)
+		if res := <-lfReq3.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("lfReq3 result=%+v want matched,modified,nil", res)
 		}
-		if res := <-lfReq4.done; res.err != nil {
-			t.Fatalf("lfReq4 err=%v", res.err)
+		if res := <-lfReq4.done; res.err != nil || !res.matched || !res.modified {
+			t.Fatalf("lfReq4 result=%+v want matched,modified,nil", res)
 		}
 		if &cLF.batchBuf[:1][0] != lfBackingPtr {
 			t.Fatal("cLF batchBuf backing array was reallocated instead of reused")
@@ -817,15 +880,17 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		cLFZero := &mongoUpdateCoalescer{
 			maxBatch:          0,
 			useLeaderFollower: true,
+			lfWakeCh:          make(chan struct{}, 1),
+			stoppedCh:         make(chan struct{}),
 			done:              make(chan struct{}),
-			lfExecuting:       true,
 		}
 		expiredLF := makeReq(3, 101, true)
-		if _, _, err := cLFZero.runAsPromotedLeader(expiredLF.col, expiredLF.item, expiredLF.done); err == nil || !strings.Contains(err.Error(), "exceeded its execution-time budget") {
-			t.Fatalf("cLFZero maxBatch=0 err=%v want budget error", err)
+		cLFZero.runHotWorkerSolo(expiredLF)
+		if res := <-expiredLF.done; res.err == nil || !strings.Contains(res.err.Error(), "exceeded its execution-time budget") {
+			t.Fatalf("cLFZero maxBatch=0 result=%+v want budget error", res)
 		}
 		if cLFZero.hasLeaderWork() {
-			t.Fatal("cLFZero leaked leader token")
+			t.Fatal("cLFZero leaked leader work")
 		}
 	})
 }
