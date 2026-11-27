@@ -219,19 +219,15 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	// Open/rebuild cannot mint completion credit. The existing DATA receipt
 	// identifies a successful publication in this exact live pager incarnation.
 	dependenciesCovered := false
-	if !durabilitycut.Enabled() && member.dependenciesPreSynced && base.pending == nil && len(base.ambiguous) == 0 {
-		dependenciesCovered = true
-	} else {
-		completed := base.primary.dataCompletion
-		if base.pending == nil && len(base.ambiguous) == 0 && completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
-			if durabilitycut.Enabled() {
-				dependenciesCovered, e = resources.RawLeafDependenciesCoveredBy(proofResources)
-			} else {
-				dependenciesCovered, e = resources.DependenciesCoveredBy(proofResources)
-			}
-			if e != nil {
-				return e
-			}
+	completed := base.primary.dataCompletion
+	if base.pending == nil && len(base.ambiguous) == 0 && completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
+		if durabilitycut.Enabled() {
+			dependenciesCovered, e = resources.RawLeafDependenciesCoveredBy(proofResources)
+		} else {
+			dependenciesCovered, e = resources.DependenciesCoveredBy(proofResources)
+		}
+		if e != nil {
+			return e
 		}
 	}
 	if e = growPrimaryRuntimeSlice(runtime, &runtime.seals, len(runtime.seals)+1); e != nil {
@@ -246,6 +242,7 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	seal.primary = &allocation.primary
 	seal.primary.dataParentCoverage = runtime.primaryDataParentCoverageV6(seal, base)
 	seal.dependenciesCovered = dependenciesCovered
+	seal.dependenciesPreSynced = member.dependenciesPreSynced
 	seal.metadata = runtime.idx.primary.MetadataOwner()
 	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)

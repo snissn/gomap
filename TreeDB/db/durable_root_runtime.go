@@ -2346,22 +2346,20 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	}
 	dependenciesCovered := false
 	if !durabilitycut.Enabled() && candidate.resources != nil && candidate.token != nil && candidate.idx != nil &&
-		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 {
-		if candidate.dependenciesPreSynced {
-			dependenciesCovered = true
-		} else if candidate.base.slot <= 1 && candidate.base.slotResources[candidate.base.slot] != nil {
-			completed := candidate.base.dataCompletion
-			if completed.pager == candidate.idx.pager && completed.incarnation == candidate.token.Generation() && completed.identity == candidate.token.Identity() {
-				if covered, covErr := candidate.resources.DependenciesCoveredBy(candidate.base.slotResources[candidate.base.slot]); covErr == nil {
-					dependenciesCovered = covered
-				}
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 && candidate.base.slot <= 1 && candidate.base.slotResources[candidate.base.slot] != nil {
+		completed := candidate.base.dataCompletion
+		if completed.pager == candidate.idx.pager && completed.incarnation == candidate.token.Generation() && completed.identity == candidate.token.Identity() {
+			if covered, covErr := candidate.resources.DependenciesCoveredBy(candidate.base.slotResources[candidate.base.slot]); covErr == nil {
+				dependenciesCovered = covered
 			}
 		}
 	}
+	dependenciesPreSynced := !durabilitycut.Enabled() && candidate.dependenciesPreSynced &&
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0
 	metaPath := filepath.Join(db.dir, indexFileName)
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
 		resources:             candidate.resources,
-		dependenciesCovered:   dependenciesCovered,
+		dependenciesCovered:   dependenciesCovered || dependenciesPreSynced,
 		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
 		materialize:           func() error { return db.materializeDurableRootCandidateV1(candidate) },
 		syncIndex:             candidate.token.SyncThrough,

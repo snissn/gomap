@@ -916,8 +916,10 @@ replacements and pre-enqueue operational manifest replacements on synchronous
 commits before a root inherits a manifest token); both barriers complete before
 index data sync or any durable meta write (a dependency sync failure aborts
 before creating the replacement manifest), avoiding same-directory journal and
-directory-lock contention while letting the publisher skip re-syncing
-dependencies already covered by that barrier.
+directory-lock contention while recording a per-seal pre-sync flag separate from
+published-parent coverage so the publisher skips redundant dependency syncs only
+when `durabilitycut` is disabled without letting an unpublished seal claim
+published-parent coverage.
 
 On platforms with stable relative namespace support, uncaptured split-leaf
 segment creation (`leaf_vlog/value-l*.log`) defers its parent-directory sync so
@@ -926,10 +928,12 @@ and the immutable manifest revision; a fail-closed pre-meta barrier syncs
 `leaf_vlog` whenever no manifest replacement covered the deferred creation
 sequence. Writable `Open` seeds the `index.db` namespace creation proof so the
 first publication revalidates the cached proof without performing an extra
-parent-directory `fsync` during `Checkpoint()`. Optional `vlog_ref_counts.meta`
-persistence skips rewriting an already-present valid empty V6 cache file when
-tracked ordinary `value_vlog` counts remain empty and no ordinary `value_vlog`
-segments exist. Opportunistic checkpoint/close WAL cleanup
+parent-directory `fsync` during `Checkpoint()`. Periodic GC/checkpoint
+persistence of the optional `vlog_ref_counts.meta` cache skips rewriting an
+already-present valid empty V6 cache file when tracked ordinary `value_vlog`
+counts remain empty and no ordinary `value_vlog` segments exist (while clean
+`Close()` refreshes `CommitSeq` once for zero-scan reopen, and startup rebuild
+scans run with `leafPageReadCache` disabled). Opportunistic checkpoint/close WAL cleanup
 (`CleanupCommandWALCoveredSegmentsAtCheckpoint` and `Close`) checks closed
 segment headers (and for fixed containers, the first extent witness at offset
 4096) at cleanup frontier `0` to avoid scanning retained stream segments or

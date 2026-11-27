@@ -130,28 +130,29 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalMu          sync.Mutex
-	disposalErr         error
-	disposalFailure     originalDBCleanupFailure
-	metadata            *retainedalloc.Owner
-	metadataCharge      uint64
-	primary             *primaryPublicationSealV5
-	latestSequence      uint64
-	groupLength         int
-	idx                 *indexGen
-	base                rootPublicationSealBaseV1
-	next                page.MetaPageBody
-	resources           *rootpublication.StableResourceSet
-	dependenciesCovered bool
-	manifest            *rootpublication.DependencyManifestV1
-	prepared            *freelist.PreparedCOWCandidateV1
-	prefix              []*freelist.PreparedCOWCandidateV1
-	token               *rootpublication.StableResourceToken
-	record              rootpublication.DurableRootRecordV1
-	meta                page.DurableMetaV1
-	target              uint64
-	materialized        bool
-	released            bool
+	disposalMu            sync.Mutex
+	disposalErr           error
+	disposalFailure       originalDBCleanupFailure
+	metadata              *retainedalloc.Owner
+	metadataCharge        uint64
+	primary               *primaryPublicationSealV5
+	latestSequence        uint64
+	groupLength           int
+	idx                   *indexGen
+	base                  rootPublicationSealBaseV1
+	next                  page.MetaPageBody
+	resources             *rootpublication.StableResourceSet
+	dependenciesCovered   bool
+	dependenciesPreSynced bool
+	manifest              *rootpublication.DependencyManifestV1
+	prepared              *freelist.PreparedCOWCandidateV1
+	prefix                []*freelist.PreparedCOWCandidateV1
+	token                 *rootpublication.StableResourceToken
+	record                rootpublication.DurableRootRecordV1
+	meta                  page.DurableMetaV1
+	target                uint64
+	materialized          bool
+	released              bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -1901,15 +1902,11 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	preparedOwned = false
 	dependenciesCovered := false
 	if !durabilitycut.Enabled() && resources != nil && token != nil && runtime.idx != nil &&
-		base.pending == nil && len(base.ambiguous) == 0 {
-		if memberDependenciesPreSynced {
-			dependenciesCovered = true
-		} else if base.slot <= 1 && base.slotResources[base.slot] != nil {
-			completed := base.dataCompletion
-			if completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
-				if covered, covErr := resources.DependenciesCoveredBy(base.slotResources[base.slot]); covErr == nil {
-					dependenciesCovered = covered
-				}
+		base.pending == nil && len(base.ambiguous) == 0 && base.slot <= 1 && base.slotResources[base.slot] != nil {
+		completed := base.dataCompletion
+		if completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
+			if covered, covErr := resources.DependenciesCoveredBy(base.slotResources[base.slot]); covErr == nil {
+				dependenciesCovered = covered
 			}
 		}
 	}
@@ -1921,7 +1918,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			slotMeta: base.slotMeta, slotRecord: base.slotRecord, ambiguous: base.ambiguous,
 		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
-		target: target, dependenciesCovered: dependenciesCovered,
+		target: target, dependenciesCovered: dependenciesCovered, dependenciesPreSynced: memberDependenciesPreSynced,
 	}
 	seal.disposalFailure.payload = seal
 	runtime.debt = append(runtime.debt, prepared)
@@ -2088,7 +2085,7 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
 		installAuthority:      installAuthority,
 		resources:             seal.resources,
-		dependenciesCovered:   seal.dependenciesCovered,
+		dependenciesCovered:   seal.dependenciesCovered || (!durabilitycut.Enabled() && seal.dependenciesPreSynced),
 		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
 		materialize:           func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {

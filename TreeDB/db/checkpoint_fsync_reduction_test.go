@@ -33,7 +33,7 @@ func TestValueLogRefTrackerSkipsEmptyCachePersistence(t *testing.T) {
 	}
 
 	// Track atomicfile writes to vlog_ref_counts.meta via durabilitycut:
-	// inline writes + ValueLogGC + Checkpoint + Close must NOT rewrite/fsync
+	// inline writes + ValueLogGC + Checkpoint must NOT rewrite/fsync
 	// vlog_ref_counts.meta while value_vlog remains empty.
 	var metaSyncs atomic.Int64
 	restore := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
@@ -55,26 +55,48 @@ func TestValueLogRefTrackerSkipsEmptyCachePersistence(t *testing.T) {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
 	restore()
 
 	if got := metaSyncs.Load(); got != 0 {
-		t.Fatalf("empty value_vlog lifecycle synced %s %d times, want 0", valueLogRefCountsFileName, got)
+		t.Fatalf("empty value_vlog GC/Checkpoint synced %s %d times, want 0", valueLogRefCountsFileName, got)
 	}
-	afterRaw, err := os.ReadFile(metaPath)
+	afterCheckpointRaw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read %s after checkpoint: %v", valueLogRefCountsFileName, err)
+	}
+	if !bytes.Equal(initialRaw, afterCheckpointRaw) {
+		t.Fatalf("empty value_vlog GC/Checkpoint rewrote %s unnecessarily", valueLogRefCountsFileName)
+	}
+
+	// Clean Close refreshes vlog_ref_counts.meta once to the final commitSeq so
+	// reopen hits the cache with zero full-tree scans.
+	wantClosedSeq := database.currentCommitSeq()
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	afterCloseRaw, err := os.ReadFile(metaPath)
 	if err != nil {
 		t.Fatalf("read %s after close: %v", valueLogRefCountsFileName, err)
 	}
-	if !bytes.Equal(initialRaw, afterRaw) {
-		t.Fatalf("empty value_vlog lifecycle rewrote %s unnecessarily", valueLogRefCountsFileName)
+	decodedAfterClose, err := decodeValueLogRefCounts(afterCloseRaw)
+	if err != nil {
+		t.Fatalf("decode %s after close: %v", valueLogRefCountsFileName, err)
+	}
+	if decodedAfterClose.commitSeq != wantClosedSeq || len(decodedAfterClose.counts) != 0 {
+		t.Fatalf("cache after clean close = (seq=%d counts=%v), want (seq=%d empty)",
+			decodedAfterClose.commitSeq, decodedAfterClose.counts, wantClosedSeq)
 	}
 
-	// Reopen must still recover inline data and rebuild the tracker cleanly.
+	// Reopen must recover inline data and load the persisted cache with 0 scans.
+	var reopenScans atomic.Int64
+	restoreScanHook := registerScanValueLogRefCountsHook(func() { reopenScans.Add(1) })
 	reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	restoreScanHook()
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
+	}
+	if got := reopenScans.Load(); got != 0 {
+		t.Fatalf("clean reopen ran %d full ref-count scans, want 0", got)
 	}
 	got, err := reopened.Get([]byte("inline-k"))
 	if err != nil || !bytes.Equal(got, []byte("inline-v")) {
@@ -134,6 +156,54 @@ func TestValueLogRefTrackerSkipsEmptyCachePersistence(t *testing.T) {
 	if decodedAfterDelete.commitSeq != wantSeq || len(decodedAfterDelete.counts) != 0 {
 		t.Fatalf("refreshed cache after delete = (seq=%d counts=%v), want (seq=%d empty)",
 			decodedAfterDelete.commitSeq, decodedAfterDelete.counts, wantSeq)
+	}
+}
+
+func TestInitValueLogRefTrackerRebuildDoesNotPolluteLeafPageReadCache(t *testing.T) {
+	database, leafLog, opts := openLeafLogLaneGCTestDB(t, 64<<10)
+	metaPath := filepath.Join(opts.Dir, valueLogRefCountsFileName)
+
+	batch := database.NewBatch()
+	for i := 0; i < 64; i++ {
+		key := fmt.Sprintf("a%03d", i)
+		val := fmt.Sprintf("val-%03d-%s", i, bytes.Repeat([]byte("x"), 64))
+		if err := batch.Set([]byte(key), []byte(val)); err != nil {
+			t.Fatalf("batch.Set: %v", err)
+		}
+	}
+	if err := errors.Join(batch.WriteSync(), batch.Close()); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	closeLeafLogLaneGCTestDB(t, database, leafLog)
+
+	// Remove vlog_ref_counts.meta to force a startup rebuild scan during Open().
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatalf("remove %s: %v", valueLogRefCountsFileName, err)
+	}
+
+	reopenOpts := opts
+	reopenOpts.LeafPageReadCacheEntries = 128
+	var scans atomic.Int64
+	restoreScanHook := registerScanValueLogRefCountsHook(func() { scans.Add(1) })
+	reopened, err := Open(reopenOpts)
+	restoreScanHook()
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	if got := scans.Load(); got != 1 {
+		t.Fatalf("reopen rebuild scan count = %d, want 1", got)
+	}
+	if reopened.leafPageReadCache == nil {
+		t.Fatal("expected leafPageReadCache to be initialized")
+	}
+	if reopened.leafPageReadCache.disabled.Load() {
+		t.Fatal("leafPageReadCache remained disabled after Open")
+	}
+	st := reopened.leafPageReadCache.stats()
+	if st.Stores != 0 || st.Misses != 0 || st.Hits != 0 || st.ReadMissAdmissionSkips != 0 {
+		t.Fatalf("startup ref-count rebuild polluted leafPageReadCache: %+v", st)
 	}
 }
 

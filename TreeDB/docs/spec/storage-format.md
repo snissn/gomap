@@ -2311,8 +2311,10 @@ flushes and syncs the candidate's already-captured external dependency handles
 sequentially before staging and syncing the replacement manifest revision;
 both barriers complete before index data sync or any durable meta write (and a
 dependency sync failure aborts before creating the replacement manifest),
-avoiding same-directory journal/directory-lock contention while letting the
-publisher skip re-syncing dependencies already covered by that barrier.
+avoiding same-directory journal/directory-lock contention while recording a
+per-seal pre-sync flag separate from published-parent coverage so the publisher
+skips redundant dependency syncs only when `durabilitycut` is disabled without
+letting an unpublished seal claim published-parent coverage.
 
 On platforms with stable relative namespace support, uncaptured split-leaf
 segment creation (`leaf_vlog/value-l*.log`) may defer its parent-directory
@@ -4552,13 +4554,16 @@ original Snapshot generation. V5, malformed tuples, checksum failures, or a
 foreign physical pair miss and rebuild through the existing full scan.
 Process-local index-generation IDs are not persisted. A completed scan never
 receives identities captured from a later current generation. No atomic-file
-rename persistence assumption can make an old physical pair eligible. Because
-`vlog_ref_counts.meta` tracks only ordinary `value_vlog` segments (excluding
-`leaf_vlog`), once a valid empty V6 cache file is already present on disk,
-subsequent `persistValueLogRefTracker` calls skip rewriting and syncing it
-while tracked counts remain empty and no ordinary `value_vlog` segments exist;
-any stale, corrupt, non-empty, or non-empty-to-empty transition is still
-rebuilt or refreshed normally.
+rename persistence assumption can make an old physical pair eligible. Because `vlog_ref_counts.meta` tracks only ordinary `value_vlog` segments
+(excluding `leaf_vlog`), once a valid empty V6 cache file is already present on
+disk, periodic GC/checkpoint persistence (`persistValueLogRefTrackerBestEffort`)
+skips rewriting and syncing it while tracked counts remain empty and no ordinary
+`value_vlog` segments exist (retaining dirty state so clean `Close` refreshes
+`CommitSeq` once for zero-scan reopen); any stale, corrupt, non-empty, or
+non-empty-to-empty transition is still rebuilt or refreshed normally, and
+startup rebuild scans during `Open` run with `leafPageReadCache` disabled so
+maintenance scans do not warm or seed read-miss probation state in the
+leaf-page cache.
 
 Native scalar JSON index DDL uses catalog command kind **201**, payload format
 **17**, payload version **1**. It records the collection incarnation and prior/next

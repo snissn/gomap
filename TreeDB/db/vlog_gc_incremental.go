@@ -615,7 +615,9 @@ func (db *DB) initValueLogRefTracker() error {
 	if loaded {
 		return nil
 	}
+	restoreLeafPageReadCache := db.disableLeafPageReadCacheForMaintenance()
 	counts, commitSeq, incarnation, err := db.scanValueLogRefCountsOwned(context.Background())
+	restoreLeafPageReadCache()
 	if err != nil {
 		return err
 	}
@@ -698,6 +700,10 @@ func (db *DB) hasOrdinaryValueLogFiles() bool {
 }
 
 func (db *DB) persistValueLogRefTracker() error {
+	return db.persistValueLogRefTrackerWithPolicy(false)
+}
+
+func (db *DB) persistValueLogRefTrackerWithPolicy(skipEmpty bool) error {
 	if db == nil || db.valueLogRefTracker == nil {
 		return nil
 	}
@@ -714,11 +720,13 @@ func (db *DB) persistValueLogRefTracker() error {
 		return nil
 	}
 	// vlog_ref_counts.meta is an optional scan cache covering only ordinary
-	// value_vlog segments (leaf_vlog is excluded). Once a valid empty cache file
-	// is already on disk, skip rewriting and fsyncing it again while tracked
-	// counts remain empty and no ordinary value_vlog segments exist.
-	if counts.used == 0 && persistedEmpty && !staleOnDisk && !db.hasOrdinaryValueLogFiles() {
-		db.valueLogRefTracker.markClean(commitSeq, incarnation, revision)
+	// value_vlog segments (leaf_vlog is excluded). For periodic GC/checkpoint
+	// persistence (skipEmpty == true), once a valid empty cache file is already
+	// on disk, skip rewriting and fsyncing it again while tracked counts remain
+	// empty and no ordinary value_vlog segments exist. Leave dirty=true so a
+	// clean Close() refreshes the file once to the final commitSeq and avoids a
+	// full-tree scan on reopen.
+	if skipEmpty && counts.used == 0 && persistedEmpty && !staleOnDisk && !db.hasOrdinaryValueLogFiles() {
 		return nil
 	}
 	blob, charge, err := encodeValueLogRefCountsOwned(commitSeq, incarnation, &counts)
@@ -740,7 +748,7 @@ func (db *DB) persistValueLogRefTracker() error {
 }
 
 func (db *DB) persistValueLogRefTrackerBestEffort() {
-	if err := db.persistValueLogRefTracker(); err != nil {
+	if err := db.persistValueLogRefTrackerWithPolicy(true); err != nil {
 		db.reportError(err)
 	}
 }
