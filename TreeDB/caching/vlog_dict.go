@@ -1098,15 +1098,45 @@ func (db *DB) applyValueLogDictProfile() {
 	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
 }
 
+// EnterCheckpointDictDeferral extends background dictionary-publication
+// deferral across multi-stage public checkpoints (cached flush, fallback
+// convergence, and command-WAL cleanup) so dictdb fsyncs do not collide on
+// ext4 JBD2 with checkpoint barriers. Pairs with LeaveCheckpointDictDeferral.
+func (db *DB) EnterCheckpointDictDeferral() {
+	if db == nil {
+		return
+	}
+	db.valueLogDictDeferDepth.Add(1)
+}
+
+// LeaveCheckpointDictDeferral releases one nesting level acquired by
+// EnterCheckpointDictDeferral and immediately kicks valueLogDictLoop if a
+// trained dictionary was deferred and no checkpoint scope remains active.
+func (db *DB) LeaveCheckpointDictDeferral() {
+	if db == nil {
+		return
+	}
+	if db.valueLogDictDeferDepth.Add(-1) <= 0 {
+		db.maybeKickDeferredValueLogDictPublish()
+	}
+}
+
+func (db *DB) maybeKickDeferredValueLogDictPublish() {
+	if db == nil || db.checkpointing.Load() || db.valueLogDictDeferDepth.Load() > 0 {
+		return
+	}
+	if db.valueLogDictPublishDeferred.Swap(false) {
+		db.valueLogDictKick()
+	}
+}
+
 func (db *DB) deferValueLogDictPublishDuringCheckpoint() bool {
-	if db == nil || !db.checkpointing.Load() {
+	if db == nil || (!db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0) {
 		return false
 	}
 	db.valueLogDictPublishDeferred.Store(true)
-	if !db.checkpointing.Load() {
-		if db.valueLogDictPublishDeferred.Swap(false) {
-			db.valueLogDictKick()
-		}
+	if !db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0 {
+		db.maybeKickDeferredValueLogDictPublish()
 		return false
 	}
 	return true

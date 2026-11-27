@@ -9553,6 +9553,7 @@ type DB struct {
 	valueLogDictQuiesceMu       sync.Mutex
 	valueLogDictQuiesced        atomic.Bool
 	valueLogDictPublishDeferred atomic.Bool
+	valueLogDictDeferDepth      atomic.Int32
 	valueLogDictTrainer         *compression.Trainer
 	valueLogDictTrainerByClass  [vlogDictClassCount]*compression.Trainer
 	valueLogDictKickCh          chan struct{}
@@ -26331,9 +26332,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
-		if db.valueLogDictPublishDeferred.Swap(false) {
-			db.valueLogDictKick()
-		}
+		db.maybeKickDeferredValueLogDictPublish()
 	}()
 	endWriteCutover := func() {
 		db.checkpointMu.Lock()
