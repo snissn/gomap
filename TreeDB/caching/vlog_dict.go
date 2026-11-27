@@ -152,6 +152,10 @@ type dictStoreK interface {
 	GetK(context.Context, uint64) (int, error)
 }
 
+type dictStorePublisher interface {
+	PublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool) (uint64, error)
+}
+
 func (db *DB) valueLogDictTrainingEnabled() bool {
 	// Dict training is enabled when TrainBytes > 0. caching.Open defaults this
 	// to a safe value for dict/auto compression modes so "turning it on" does
@@ -1194,37 +1198,73 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	dictID, err := writer.PutDictBytes(ctx, profile.Dict)
-	if err != nil {
-		db.reportValueLogDictPublishError(err)
-		return
-	}
-	// Persist the dictionary's compression parameter before publishing its
-	// current marker. A retryable metadata failure must leave the old profile
-	// current so a later publisher pass can retry the complete operation.
-	if ks, ok := store.(dictStoreK); ok {
-		if err := ks.SetK(ctx, dictID, profileK); err != nil {
+	classMode := db.dictClassMode()
+	publishedViaGlobalCurrent := false
+	var (
+		dictID uint64
+		err    error
+	)
+	if publisher, ok := store.(dictStorePublisher); ok {
+		publishK := 0
+		if _, hasK := store.(dictStoreK); hasK {
+			publishK = profileK
+		}
+		targetClass := ""
+		alsoSetGlobal := true
+		if classMode == vlogDictClassModeSplitOuterLeaf {
+			_, hasClassWriter := store.(dictStoreWriterByClass)
+			_, hasClassReader := store.(dictStoreCurrentByClass)
+			if hasClassWriter && hasClassReader {
+				targetClass = vlogDictClassSuffix(class)
+				alsoSetGlobal = class == vlogDictClassSingleValue
+				publishedViaGlobalCurrent = alsoSetGlobal
+			} else {
+				publishedViaGlobalCurrent = true
+			}
+		} else {
+			publishedViaGlobalCurrent = true
+		}
+		dictID, err = publisher.PublishDict(ctx, profile.Dict, publishK, targetClass, alsoSetGlobal)
+		if err != nil {
 			db.reportValueLogDictPublishError(err)
 			return
 		}
-	}
-	classMode := db.dictClassMode()
-	publishedViaGlobalCurrent := false
-	if classMode == vlogDictClassModeSplitOuterLeaf {
-		byClassWriter, hasClassWriter := store.(dictStoreWriterByClass)
-		_, hasClassReader := store.(dictStoreCurrentByClass)
-		if hasClassWriter && hasClassReader {
-			if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
+	} else {
+		dictID, err = writer.PutDictBytes(ctx, profile.Dict)
+		if err != nil {
+			db.reportValueLogDictPublishError(err)
+			return
+		}
+		// Persist the dictionary's compression parameter before publishing its
+		// current marker. A retryable metadata failure must leave the old profile
+		// current so a later publisher pass can retry the complete operation.
+		if ks, ok := store.(dictStoreK); ok {
+			if err := ks.SetK(ctx, dictID, profileK); err != nil {
 				db.reportValueLogDictPublishError(err)
 				return
 			}
-			if class == vlogDictClassSingleValue {
-				// Keep legacy global current in sync for mode switches/reopen paths
-				// that read only the global marker.
-				if err := writer.SetCurrent(ctx, dictID); err != nil {
+		}
+		if classMode == vlogDictClassModeSplitOuterLeaf {
+			byClassWriter, hasClassWriter := store.(dictStoreWriterByClass)
+			_, hasClassReader := store.(dictStoreCurrentByClass)
+			if hasClassWriter && hasClassReader {
+				if err := byClassWriter.SetCurrentForClass(ctx, vlogDictClassSuffix(class), dictID); err != nil {
 					db.reportValueLogDictPublishError(err)
 					return
 				}
+				if class == vlogDictClassSingleValue {
+					// Keep legacy global current in sync for mode switches/reopen paths
+					// that read only the global marker.
+					if err := writer.SetCurrent(ctx, dictID); err != nil {
+						db.reportValueLogDictPublishError(err)
+						return
+					}
+					publishedViaGlobalCurrent = true
+				}
+			} else if err := writer.SetCurrent(ctx, dictID); err != nil {
+				db.reportValueLogDictPublishError(err)
+				return
+			} else {
 				publishedViaGlobalCurrent = true
 			}
 		} else if err := writer.SetCurrent(ctx, dictID); err != nil {
@@ -1233,11 +1273,6 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		} else {
 			publishedViaGlobalCurrent = true
 		}
-	} else if err := writer.SetCurrent(ctx, dictID); err != nil {
-		db.reportValueLogDictPublishError(err)
-		return
-	} else {
-		publishedViaGlobalCurrent = true
 	}
 	// Make new dictionaries visible to the write path immediately. We intentionally
 	// avoid per-write dictdb reads (currentDictID refreshes only every N uses), so

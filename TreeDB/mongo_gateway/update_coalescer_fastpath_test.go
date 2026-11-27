@@ -542,19 +542,20 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 		}
 		ctx := context.Background()
 
-		// Case 1: inFlight >= 2 (incoming caller sees active >= 3) must skip inline
-		// even when execMu is unlocked and the queue is empty.
-		coalescer.inFlight.Add(2)
+		// Case 1: inFlight >= defaultUpdateCoalescingInlineMaxActive (incoming caller
+		// sees active > defaultUpdateCoalescingInlineMaxActive) must skip inline even
+		// when execMu is unlocked and the queue is empty.
+		coalescer.inFlight.Add(defaultUpdateCoalescingInlineMaxActive)
 		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, 101), nil, 0)
-		coalescer.inFlight.Add(-2)
+		coalescer.inFlight.Add(-defaultUpdateCoalescingInlineMaxActive)
 		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("inFlight>=2 update: resp=%s err=%v", resp, err)
+			t.Fatalf("inFlight>=%d update: resp=%s err=%v", defaultUpdateCoalescingInlineMaxActive, resp, err)
 		}
 		if got := coalescer.inlineExecs.Load(); got != 0 {
-			t.Fatalf("inFlight>=2 inlineExecs=%d want 0", got)
+			t.Fatalf("inFlight>=%d inlineExecs=%d want 0", defaultUpdateCoalescingInlineMaxActive, got)
 		}
 		if got := coalescer.workerBatches.Load(); got != 1 {
-			t.Fatalf("inFlight>=2 workerBatches=%d want 1", got)
+			t.Fatalf("inFlight>=%d workerBatches=%d want 1", defaultUpdateCoalescingInlineMaxActive, got)
 		}
 		if got := findDocN(t, s.Server, collName, 0); got != 101 {
 			t.Fatalf("doc 0 n=%d want 101", got)

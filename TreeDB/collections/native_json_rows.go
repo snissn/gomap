@@ -1063,10 +1063,10 @@ func (t *NativeJSONTxn) updatePrimaryOnlyBSONSetBatchInto(name string, input []B
 	g.primaryOnlyBSONSet = false
 
 	result = make([]UpdateBatchResult, len(input))
-	var singleDoc [1]commitlog.CollectionDocument
+	var inlineDocs [32]commitlog.CollectionDocument
 	var docs []commitlog.CollectionDocument
-	if len(input) <= len(singleDoc) {
-		docs = singleDoc[:0]
+	if len(input) <= len(inlineDocs) {
+		docs = inlineDocs[:0]
 	} else {
 		docs = make([]commitlog.CollectionDocument, 0, len(input))
 	}

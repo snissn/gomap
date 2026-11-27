@@ -561,6 +561,58 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	return outcome, db.publishLeafGenerationState(false)
 }
 
+// PruneDeletedLeafGenerations prunes already-Deleted leaf-generation manifest
+// records whose segment files are no longer present on disk and removes their
+// auxiliary record-length index files. It performs no index reachability scan
+// and never marks live or sealed generations deleted.
+func (db *DB) PruneDeletedLeafGenerations() (generationsDeleted int, filesDeleted int, err error) {
+	if db == nil || db.readOnly || !db.indexOuterLeavesInValueLog {
+		return 0, 0, nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return 0, 0, err
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	if db.closing.Load() {
+		return 0, 0, nil
+	}
+	db.mu.RLock()
+	hasDeleted := manifestHasDeletedLeafGenerationRecord(db.leafGenerationManifest)
+	var manifest *leafGenerationManifest
+	if hasDeleted {
+		manifest = db.leafGenerationManifest.clone()
+	}
+	db.mu.RUnlock()
+	if !hasDeleted || manifest == nil {
+		return 0, 0, nil
+	}
+	filePaths := db.leafGenerationFilePaths(manifest)
+	prePrune := manifest.clone()
+	prunedManifest, pruned, prunedFiles, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	if err != nil {
+		return 0, 0, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
+	}
+	if !pruned {
+		return 0, 0, nil
+	}
+	prunedGens := countPrunedLeafGenerations(prePrune, prunedManifest)
+	if err := db.replaceLeafGenerationManifest(prunedManifest); err != nil {
+		return 0, 0, err
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = prunedManifest
+	db.mu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		return 0, 0, err
+	}
+	return prunedGens, prunedFiles, nil
+}
+
 func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView, limits LeafGenerationMaintenanceLimits) (map[uint64]struct{}, error) {
 	captured := roots.Roots()
 	if len(captured) == 0 {

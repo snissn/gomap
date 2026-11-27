@@ -971,3 +971,168 @@ func TestManagerDiscoveryDoesNotAcceptReplayedRetirementWitness(t *testing.T) {
 		}
 	}
 }
+
+func TestManagerRemoveUnpinnedZombiesRespectsPinsAndAwaitsInFlightDelete(t *testing.T) {
+	var nilMgr *Manager
+	if err := nilMgr.RemoveUnpinnedZombies(); err != nil {
+		t.Fatalf("nil RemoveUnpinnedZombies: %v", err)
+	}
+
+	dir := t.TempDir()
+	// Create three segments:
+	// - id1: zombie pinned by Set + IdentityPin, then Set released (starts 200ms retry), then IdentityPin released -> must unlink immediately.
+	// - id2: zombie pinned by Set -> must stay untouched without blocking.
+	// - id3: zombie with in-flight deletionAdmission -> RemoveUnpinnedZombies must wait until unlink completes.
+	writeSeg := func(seq uint32) (uint32, string) {
+		t.Helper()
+		id, err := EncodeFileID(0, seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := SegmentPath(dir, id)
+		w, err := NewWriter(path, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Append(0, nil, uint64(seq), []byte("payload")); err != nil {
+			_ = w.Close()
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return id, path
+	}
+	id1, path1 := writeSeg(1)
+	id2, path2 := writeSeg(2)
+	id3, path3 := writeSeg(3)
+
+	registry := rootpublication.NewIdentityPinRegistry()
+	mgr, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+
+	// No zombies yet: fast no-op.
+	if err := mgr.RemoveUnpinnedZombies(); err != nil {
+		t.Fatalf("RemoveUnpinnedZombies (no zombies): %v", err)
+	}
+
+	// Retain a Set covering id1 and id2.
+	set1 := mgr.CurrentSetNoRefresh()
+	if set1 == nil {
+		t.Fatal("missing initial set")
+	}
+	// Pin id1 via IdentityPinRegistry (mirroring cowBackendBasis.pins).
+	ident1, ok := mgr.StableSegmentIdentity(id1)
+	if !ok {
+		t.Fatal("missing stable identity for id1")
+	}
+	pin1, err := registry.Pin(ident1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold an extra RefCount pin on id2 via a second set.
+	set2 := mgr.CurrentSetNoRefresh()
+	if set2 == nil {
+		t.Fatal("missing second set")
+	}
+
+	if err := mgr.MarkZombie(id1); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.MarkZombie(id2); err != nil {
+		t.Fatal(err)
+	}
+	// Release set1: id1 still pinned by set2 + pin1.
+	if err := mgr.Release(set1); err != nil {
+		t.Fatal(err)
+	}
+	// Drop id1 from set2? Instead release set2 after pinning id2 directly via Acquire.
+	mgr.mu.RLock()
+	f2 := mgr.files[id2]
+	mgr.mu.RUnlock()
+	f2.RefCount.Add(1)
+	defer func() {
+		if f2.RefCount.Load() > 0 {
+			f2.RefCount.Add(-1)
+		}
+	}()
+	// Release set2: id1 RefCount drops to 0 while pin1 is still held -> starts 200ms retryZombieDelete!
+	if err := mgr.Release(set2); err != nil {
+		t.Fatal(err)
+	}
+
+	// While pin1 and f2.RefCount are held, RemoveUnpinnedZombies must return
+	// immediately and leave both files on disk.
+	if err := mgr.RemoveUnpinnedZombies(); err != nil {
+		t.Fatalf("RemoveUnpinnedZombies while pinned: %v", err)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("identity-pinned zombie id1 removed early: %v", err)
+	}
+	if _, err := os.Stat(path2); err != nil {
+		t.Fatalf("refcount-pinned zombie id2 removed early: %v", err)
+	}
+
+	// Release pin1 and immediately reap unpinned zombies: id1 must disappear
+	// synchronously without waiting for the 200ms retry timer, while id2 stays.
+	pin1.Release()
+	if err := mgr.RemoveUnpinnedZombies(); err != nil {
+		t.Fatalf("RemoveUnpinnedZombies after pin1 release: %v", err)
+	}
+	if _, err := os.Stat(path1); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unpinned zombie id1 still exists after RemoveUnpinnedZombies: %v", err)
+	}
+	if _, err := os.Stat(path2); err != nil {
+		t.Fatalf("refcount-pinned zombie id2 disappeared: %v", err)
+	}
+
+	// Verify in-flight deletionAdmission waiting on id3.
+	if err := mgr.MarkZombie(id3); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	releaseHook := make(chan struct{})
+	mgr.directDeleteAdmissionHook = func() {
+		close(entered)
+		<-releaseHook
+	}
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.RemoveSegmentIfUnpinned(id3)
+		deleteDone <- err
+	}()
+	<-entered
+
+	reapDone := make(chan error, 1)
+	go func() {
+		reapDone <- mgr.RemoveUnpinnedZombies()
+	}()
+	select {
+	case err := <-reapDone:
+		t.Fatalf("RemoveUnpinnedZombies returned while id3 deletion was still in flight: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseHook)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("RemoveSegmentIfUnpinned(id3): %v", err)
+	}
+	if err := <-reapDone; err != nil {
+		t.Fatalf("RemoveUnpinnedZombies(id3): %v", err)
+	}
+	if _, err := os.Stat(path3); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("id3 still exists after RemoveUnpinnedZombies awaited in-flight delete: %v", err)
+	}
+	mgr.directDeleteAdmissionHook = nil
+
+	// Release f2's refcount and clean up id2 synchronously.
+	f2.RefCount.Add(-1)
+	if err := mgr.RemoveUnpinnedZombies(); err != nil {
+		t.Fatalf("RemoveUnpinnedZombies(id2): %v", err)
+	}
+	if _, err := os.Stat(path2); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("id2 still exists after final RemoveUnpinnedZombies: %v", err)
+	}
+}

@@ -662,6 +662,17 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGe
 	if len(pending) == 0 {
 		return result, nil
 	}
+	// Process pending and promoted files in ascending segment-sequence order so
+	// an earlier batch with a different commitSeq cannot raise maxSeq and
+	// suppress a lower-sequence segment that still needs registration.
+	sort.SliceStable(pending, func(i, j int) bool {
+		_, seqI := valuelog.DecodeSegmentID(pending[i].rawFileID)
+		_, seqJ := valuelog.DecodeSegmentID(pending[j].rawFileID)
+		if seqI != seqJ {
+			return seqI < seqJ
+		}
+		return pending[i].rawFileID < pending[j].rawFileID
+	})
 	working := base
 	changedAny := false
 	batch := make([]uint32, 0, len(pending))
