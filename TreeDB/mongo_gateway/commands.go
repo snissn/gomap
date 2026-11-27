@@ -1045,6 +1045,9 @@ func (s *Server) findMsgResponseInto(ctx context.Context, dst []byte, command wi
 			return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
 		}
 	}
+	if msg, handled, err := s.tryFastPrimaryEqualityFindMsgResponseInto(ctx, dst, command, requestID, responseTo); handled {
+		return msg, err
+	}
 	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err

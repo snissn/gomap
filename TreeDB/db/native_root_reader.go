@@ -112,6 +112,35 @@ func markPinnedCOWLeafViewChecksumVerified(lease tree.LeafLogPageViewLease) {
 	}
 }
 
+// GetEntryExactAtRootWithPinnedCOWLeafView combines NativeReaderAtRoot and
+// GetEntryExactWithPinnedCOWLeafView under a single snapshot beginRead/endRead
+// pin, halving readState atomic contention on concurrent point reads. When
+// readScratch is non-empty, unmapped outer-leaf misses read the full record
+// into readScratch in one positional ReadAt syscall without heap allocation.
+func (s *Snapshot) GetEntryExactAtRootWithPinnedCOWLeafView(
+	rootID uint64,
+	key, keyScratch, leafScratch, readScratch []byte,
+	limits valuelog.COWReadLimits,
+	checkShape func(valuelog.COWRecordShape) bool,
+	readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error),
+	consume func(node.LeafEntry) error,
+) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
+	if rootID == 0 {
+		return tree.ErrKeyNotFound
+	}
+	var tr tree.Tree
+	if s.state != nil && rootID == s.state.RootPageID {
+		tr = s.tree
+	} else {
+		tr.Reset(s.idx.pager, &s.reader, rootID)
+	}
+	return s.getEntryExactWithPinnedCOWLeafViewLocked(&tr, key, keyScratch, leafScratch, readScratch, limits, checkShape, readLeaf, consume)
+}
+
 // GetEntryExactWithPinnedCOWLeafView performs a bounded fixed-scratch point read
 // on this captured root that borrows verified leaf pages directly from the
 // owner's leaf page cache under a read lock (avoiding metadata reinspection and
@@ -129,8 +158,19 @@ func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafView(
 		return err
 	}
 	defer r.owner.endRead()
+	return r.owner.getEntryExactWithPinnedCOWLeafViewLocked(&r.tree, key, keyScratch, leafScratch, nil, limits, checkShape, readLeaf, consume)
+}
+
+func (s *Snapshot) getEntryExactWithPinnedCOWLeafViewLocked(
+	tr *tree.Tree,
+	key, keyScratch, leafScratch, readScratch []byte,
+	limits valuelog.COWReadLimits,
+	checkShape func(valuelog.COWRecordShape) bool,
+	readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error),
+	consume func(node.LeafEntry) error,
+) error {
 	if readLeaf == nil {
-		entry, err := r.tree.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, nil, nil)
+		entry, err := tr.GetEntryWithFixedScratchLeafCache(key, keyScratch, leafScratch, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -139,12 +179,12 @@ func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafView(
 		}
 		return nil
 	}
-	cache := r.owner.reader.leafPageCache
+	cache := s.reader.leafPageCache
 	var readView func(page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool)
 	var markView func(tree.LeafLogPageViewLease)
 	if cache != nil {
 		readView = func(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, tree.LeafLogPageReadState, bool) {
-			f, identity, err := r.owner.pinnedValueLogSegment(ptr.ValueLogFileID())
+			f, identity, err := s.pinnedValueLogSegment(ptr.ValueLogFileID())
 			if err != nil {
 				return nil, nil, tree.LeafLogPageReadState{}, false
 			}
@@ -156,11 +196,11 @@ func (r *SnapshotRootReader) GetEntryExactWithPinnedCOWLeafView(
 		}
 		markView = markPinnedCOWLeafViewChecksumVerified
 	}
-	return r.tree.GetEntryWithFixedScratchLeafView(
+	return tr.GetEntryWithFixedScratchLeafView(
 		key, keyScratch, leafScratch,
 		readView, markView,
 		func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageReadState, error) {
-			record, err := r.owner.inspectPinnedCOWLeafRecord(ptr, limits)
+			record, err := s.inspectPinnedCOWLeafRecordInto(ptr, limits, readScratch)
 			if err != nil {
 				return nil, tree.LeafLogPageReadState{}, err
 			}

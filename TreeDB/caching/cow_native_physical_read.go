@@ -58,12 +58,21 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspace(cache *cowCache, w *cowRe
 	return b.readNativeEntryWithWorkspaceAdmitted(cache, w, provider, root, key, copyValue, dst, useDst, nil)
 }
 
+func (w *cowReadWorkspace) cachedLeafReadScratch() []byte {
+	if w == nil {
+		return nil
+	}
+	if len(w.codecs) > 0 && w.codecs[0] != nil && cap(w.codecs[0].input) > 0 {
+		return w.codecs[0].input[:cap(w.codecs[0].input)]
+	}
+	if cap(w.input) > 0 {
+		return w.input[:cap(w.input)]
+	}
+	return nil
+}
+
 func (b *cowBackendBasis) readNativeEntryWithWorkspaceAdmitted(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool, dst []byte, useDst bool, admitOutput func(uint64) error) (node.LeafEntry, error) {
 	point, err := w.pointScratch()
-	if err != nil {
-		return node.LeafEntry{}, err
-	}
-	reader, err := b.snapshot.NativeReaderAtRoot(root)
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
@@ -74,10 +83,11 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspaceAdmitted(cache *cowCache, 
 	point.leafGen++
 	var out node.LeafEntry
 	// Borrow verified cached leaf pages under a read lock (zero-copy, zero-pread)
-	// while preserving dictionary capability, COWReadLimits, and leafPageCache
-	// accounting; any miss or policy mismatch falls back to full inspection.
-	err = reader.GetEntryExactWithPinnedCOWLeafView(
-		key, point.key[:], point.leaf[:], w.limits,
+	// with a single snapshot read pin while preserving dictionary capability,
+	// COWReadLimits, and leafPageCache accounting; any miss or policy mismatch
+	// falls back to full inspection.
+	err = b.snapshot.GetEntryExactAtRootWithPinnedCOWLeafView(
+		root, key, point.key[:], point.leaf[:], w.cachedLeafReadScratch(), w.limits,
 		func(shape valuelog.COWRecordShape) bool {
 			if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
 				return false
@@ -117,6 +127,34 @@ func (b *cowBackendBasis) readNativeEntryWithWorkspaceAdmitted(cache *cowCache, 
 		return node.LeafEntry{}, err
 	}
 	return out, nil
+}
+
+func (c *cowReadCut) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
+	if c == nil || c.basis == nil || c.cache == nil {
+		return node.LeafEntry{}, backenddb.ErrClosed
+	}
+	return c.basis.nativeEntryAtRoot(c.cache, c.dictionaryProvider(), root, key, copyValue)
+}
+
+func (c *cowReadCut) NativeEntryAtRootInto(root uint64, key, dst []byte) (node.LeafEntry, error) {
+	if c == nil || c.basis == nil || c.cache == nil {
+		return node.LeafEntry{}, backenddb.ErrClosed
+	}
+	return c.basis.nativeEntryAtRootInto(c.cache, c.dictionaryProvider(), root, key, true, dst, dst != nil)
+}
+
+func (c *cowReadCut) NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
+	if c == nil || c.basis == nil || c.cache == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return c.basis.nativeValueAtPointer(c.cache, c.dictionaryProvider(), ptr, admitOutput)
+}
+
+func (c *cowReadCut) NativeValueAtPointerInto(ptr page.ValuePtr, dst []byte, admitOutput func(uint64) error) ([]byte, error) {
+	if c == nil || c.basis == nil || c.cache == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return c.basis.nativeValueAtPointerInto(c.cache, c.dictionaryProvider(), ptr, dst, dst != nil, admitOutput)
 }
 
 func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {

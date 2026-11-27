@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"sort"
 	"sync"
 	"unsafe"
@@ -773,6 +774,103 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 	}
 	copy(b.leafPrevKey, key)
 	return nil
+}
+
+// TryAddLeafEntryWithRevisionReserve checks soft-reserve capacity and appends a
+// leaf entry in a single pass, avoiding duplicate prefix/size computation on
+// columnar prefix-v2 leaves.
+func (b *Builder) TryAddLeafEntryWithRevisionReserve(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, reserveBytes int) error {
+	if b.pType != page.PageTypeLeaf {
+		return ErrInvalidType
+	}
+	if b.leafColumnar && b.leafPrefixCompression && (revision == page.LegacyEntryRevision || b.leafEntryRevisions) {
+		valPtrSize := page.ValuePtrSize
+		if b.leafPackedValuePtr {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		valSize := 0
+		if flags&FlagPointer != 0 {
+			valSize = valPtrSize
+		} else if flags&FlagTombstone == 0 {
+			valSize = len(value)
+		}
+		prefixLen := 0
+		if b.leafIndex%leafPrefixRestartInterval != 0 && len(b.leafPrevKey) > 0 {
+			prefixLen = sharedPrefixLen(key, b.leafPrevKey)
+		}
+		suffixLen := len(key) - prefixLen
+		if prefixLen > int(^uint16(0)) || suffixLen > int(^uint16(0)) {
+			return ErrKeyTooLarge
+		}
+		if reserveBytes > 0 && b.count > 0 {
+			entrySize := suffixLen + valSize + leafColumnarPrefixV2MetaSize
+			if b.leafEntryRevisions {
+				entrySize += page.EntryRevisionSize
+			}
+			if b.heapStart-b.dirEnd < entrySize+DirectoryEntrySize+reserveBytes {
+				return ErrNodeFull
+			}
+		}
+		nextCount := int(b.count) + 1
+		nextKeyBytes := b.leafColumnarPrefixV2KeyBytes + suffixLen
+		nextValBytes := b.leafColumnarPrefixV2ValBytes + valSize
+		dirEnd := NodeHeaderSize + nextCount*leafColumnarPrefixV2MetaSize
+		if b.leafEntryRevisions {
+			dirEnd += nextCount * page.EntryRevisionSize
+		}
+		heapStart := len(b.data) - (nextKeyBytes + nextValBytes)
+		if heapStart < dirEnd {
+			return ErrNodeFull
+		}
+
+		suffixOff, suffixLenU16 := b.leafColumnarV2AppendBytes(key[prefixLen:])
+		valueOff, valueLen := uint32(0), uint16(0)
+		if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+			valueOff, valueLen = b.leafColumnarPrefixV2AppendValueBytes(value)
+		} else {
+			b.leafColumnarPrefixV2AllInline = false
+		}
+		if flags&FlagPointer == 0 {
+			b.leafColumnarPrefixV2AllPointer = false
+		}
+
+		b.leafColumnarPrefixV2Entries = append(b.leafColumnarPrefixV2Entries, leafColumnarPrefixV2Entry{
+			suffixOff: suffixOff,
+			suffixLen: suffixLenU16,
+			valueOff:  valueOff,
+			valueLen:  valueLen,
+			valPtr:    valPtr,
+			flags:     flags,
+			prefixLen: uint16(prefixLen),
+			revision:  revision,
+		})
+		b.leafColumnarPrefixV2KeyBytes = nextKeyBytes
+		b.leafColumnarPrefixV2ValBytes = nextValBytes
+		b.count++
+		b.leafIndex++
+		b.dirEnd = dirEnd
+		b.heapStart = heapStart
+
+		if len(key) <= len(b.leafPrevKeyBuf) {
+			b.leafPrevKey = b.leafPrevKeyBuf[:len(key)]
+		} else {
+			if cap(b.leafPrevKey) < len(key) {
+				b.leafPrevKey = make([]byte, len(key))
+			}
+			b.leafPrevKey = b.leafPrevKey[:len(key)]
+		}
+		copy(b.leafPrevKey, key)
+		return nil
+	}
+
+	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
+	if revision != page.LegacyEntryRevision && !b.leafEntryRevisions {
+		entrySize += page.EntryRevisionSize
+	}
+	if reserveBytes > 0 && b.count > 0 && b.FreeSpace() < entrySize+DirectoryEntrySize+reserveBytes {
+		return ErrNodeFull
+	}
+	return b.AddLeafEntryWithPrefixRevision(key, value, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 }
 
 // AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
@@ -1862,7 +1960,15 @@ func sharedPrefixLen(a, b []byte) int {
 	if len(b) < n {
 		n = len(b)
 	}
-	for i := 0; i < n; i++ {
+	i := 0
+	for i+8 <= n {
+		diff := binary.LittleEndian.Uint64(a[i:]) ^ binary.LittleEndian.Uint64(b[i:])
+		if diff != 0 {
+			return i + bits.TrailingZeros64(diff)>>3
+		}
+		i += 8
+	}
+	for ; i < n; i++ {
 		if a[i] != b[i] {
 			return i
 		}

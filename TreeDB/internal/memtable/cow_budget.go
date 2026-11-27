@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -60,20 +61,21 @@ const (
 // C2 charges caller-owned cut/vector/backend-lease allocations through an
 // external lease before allocation, or ExtraBytes before private preparation.
 type COWBudget struct {
-	mu             sync.Mutex
-	limits         COWLimits
-	stats          COWStats
-	closed         bool
-	idleBatchCount uint8
-	idleRead       [cowIdleReadMaxSlots]cowIdleReadScratch
-	idleReadCount  int
-	idleBatch      [cowIdleBatchMaxSlots]cowIdleBatchScratch
+	mu               sync.Mutex
+	limits           COWLimits
+	stats            COWStats
+	closed           bool
+	idleBatchCount   uint8
+	maintenanceChild bool // immutable before publication; ordinary hot path skips partition cleanup
+	idleRead         [cowIdleReadMaxSlots]cowIdleReadScratch
+	idleReadCount    int
+	idleBatch        [cowIdleBatchMaxSlots]cowIdleBatchScratch
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.
 	maintenance        *COWBudget
 	reservation        *COWExternalLease
-	maintenanceChild   bool // immutable before publication; ordinary hot path skips partition cleanup
 	maintenanceRefunds uint64
+	fastHeadroom       atomic.Uint64
 }
 
 func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
@@ -84,7 +86,50 @@ func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
 	if control > limits.MaxTotalBytes {
 		return nil, ErrCOWCapacity
 	}
-	return &COWBudget{limits: limits, stats: COWStats{TotalBytes: control, PeakBytes: control, ControlBytes: control}}, nil
+	b := &COWBudget{limits: limits, stats: COWStats{TotalBytes: control, PeakBytes: control, ControlBytes: control}}
+	b.updateFastHeadroomLocked()
+	return b, nil
+}
+
+// HasFastHeadroom reports whether the budget currently has at least bytes of
+// uncontested headroom across total, in-flight, and retirement limits without
+// acquiring b.mu or reclaiming idle scratch. Callers that observe false must
+// fall back to the authoritative locked admission path.
+func (b *COWBudget) HasFastHeadroom(bytes uint64) bool {
+	if b == nil {
+		return false
+	}
+	return b.fastHeadroom.Load() >= bytes
+}
+
+func (b *COWBudget) updateFastHeadroomLocked() {
+	if b.closed || b.stats.ExternalLeases == int(^uint(0)>>1) {
+		b.fastHeadroom.Store(0)
+		return
+	}
+	var free uint64
+	if b.stats.TotalBytes < b.limits.MaxTotalBytes {
+		free = b.limits.MaxTotalBytes - b.stats.TotalBytes
+	}
+	if b.stats.ReservedBytes < b.limits.MaxInFlightBytes {
+		if rem := b.limits.MaxInFlightBytes - b.stats.ReservedBytes; rem < free {
+			free = rem
+		}
+	} else {
+		free = 0
+	}
+	if free > 0 {
+		used, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
+		if ok {
+			used, ok = cowAdd(used, b.stats.DeferredBytes)
+		}
+		if !ok || used >= b.limits.MaxRetiredBytes {
+			free = 0
+		} else if rem := b.limits.MaxRetiredBytes - used; rem < free {
+			free = rem
+		}
+	}
+	b.fastHeadroom.Store(free)
 }
 
 func (b *COWBudget) Stats() COWStats   { b.mu.Lock(); defer b.mu.Unlock(); return b.stats }
@@ -109,6 +154,7 @@ func (b *COWBudget) Close() {
 	}
 	maintenance := b.maintenance
 	b.releaseControlLocked()
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	if maintenance != nil {
 		maintenance.Close()
@@ -210,6 +256,7 @@ func (b *COWBudget) AcquireExternalValue(bytes uint64) (COWExternalLease, error)
 	b.stats.ReservedBytes += bytes
 	b.stats.ExternalBytes += bytes
 	b.stats.ExternalLeases++
+	b.updateFastHeadroomLocked()
 	return COWExternalLease{budget: b, charge: bytes, embedded: true}, nil
 }
 
@@ -259,6 +306,7 @@ func (b *COWBudget) acquireExternal(bytes uint64, nativeSource bool) (*COWExtern
 	if nativeSource {
 		b.stats.Sources++
 	}
+	b.updateFastHeadroomLocked()
 	return &COWExternalLease{budget: b, charge: charge}, nil
 }
 
@@ -308,6 +356,7 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 		}
 	}
 	l.charge = target
+	b.updateFastHeadroomLocked()
 	return nil
 }
 
@@ -367,6 +416,7 @@ func (b *COWBudget) addLocked(n uint64) bool {
 	if total > b.stats.PeakBytes {
 		b.stats.PeakBytes = total
 	}
+	b.updateFastHeadroomLocked()
 	return true
 }
 
@@ -432,6 +482,7 @@ func newCOWGenerationWithConstruction(b *COWBudget, base uint64, maintenance *CO
 	} else {
 		b.stats.HistoryBytes += base
 	}
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	return &cowGeneration{budget: b, refs: 1, activeWriters: 1, history: base, reservedCharge: reserved, constructionLease: lease,
 		ids: make([]COWResourceID, 0, b.limits.MaxResources), owners: make([]cowResourceOwner, 0, b.limits.MaxResources)}, nil
@@ -487,6 +538,7 @@ func (g *cowGeneration) drain() {
 		b.stats.RetiredBytes -= history
 	}
 	b.releaseControlLocked()
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	if nativeSource != nil {
 		lease := nativeSource.detachGeneration()

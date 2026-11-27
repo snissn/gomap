@@ -220,6 +220,7 @@ func releaseInsertBatchPlanScratch(s *insertBatchPlanScratch) {
 		clear(s.encoder.valueRefs[:cap(s.encoder.valueRefs)])
 		s.encoder.valueRefs = s.encoder.valueRefs[:0]
 	}
+	s.encoder.tplRootPlan.reset(true)
 	if cap(s.uniqueProbes) > insertBatchPlanScratchMaxValueRefs {
 		s.uniqueProbes = nil
 	} else if s.uniqueProbes != nil {
@@ -359,10 +360,11 @@ type documentIndexState map[string][][]byte
 type orderedDocumentIndexState [][][]byte
 
 type indexEncodeArena struct {
-	buf       []byte
-	scratch   []byte
-	states    [][][]byte
-	valueRefs [][]byte
+	buf         []byte
+	scratch     []byte
+	states      [][][]byte
+	valueRefs   [][]byte
+	tplRootPlan templateV1RootIndexPlan
 }
 
 type groupedRootPublisher interface {
@@ -893,6 +895,7 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbesWithScratch(items []ins
 			encoder.buf = encoder.buf[:0]
 		}
 		encoder.scratch = encoder.scratch[:0]
+		encoder.tplRootPlan.reset(false)
 		if cap(encoder.states) < valueRefsNeed {
 			encoder.states = make([][][]byte, 0, valueRefsNeed)
 		} else {
@@ -1953,12 +1956,26 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTable(items []insertBatchItem
 	return p.emitGroupedSecondaryRunTableWithScratch(nil, items, runtimeIdx, indexName, valueType, documentIDOrder, entryCount, keyBytes)
 }
 
+func hashGroupedSecondaryEncoded(b []byte) uint32 {
+	h := uint32(2166136261) ^ uint32(len(b))
+	for _, c := range b {
+		h ^= uint32(c)
+		h *= 16777619
+	}
+	return h
+}
+
 func (p insertBatchPlanner) emitGroupedSecondaryRunTableWithScratch(scratch *insertBatchPlanScratch, items []insertBatchItem, runtimeIdx int, indexName string, valueType IndexValueType, documentIDOrder []int, entryCount, keyBytes int) (memtable.Table, bool, error) {
 	if entryCount <= 0 {
 		return nil, false, nil
 	}
 	var groupsBuf [secondaryGroupedRunMaxDistinctValues]secondaryValueGroup
 	groups := groupsBuf[:0]
+	// Stack-allocated 256-entry open-addressed hash table (load factor <= 50%
+	// since secondaryGroupedRunMaxDistinctValues == 128). 0 means empty;
+	// nonzero value v stores group index v-1.
+	const hashMask = 255
+	var hashSlots [hashMask + 1]uint8
 
 	var itemBuckets []uint16
 	var entryItems []int
@@ -1988,24 +2005,30 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTableWithScratch(scratch *ins
 			if lastGroupIdx >= 0 && bytes.Equal(groups[lastGroupIdx].encoded, encoded) {
 				groupIdx = lastGroupIdx
 			} else {
+				slot := int(hashGroupedSecondaryEncoded(encoded) & hashMask)
 				n := len(encoded)
-				for j := range groups {
-					if len(groups[j].encoded) == n && bytes.Equal(groups[j].encoded, encoded) {
-						groupIdx = j
+				for {
+					entry := hashSlots[slot]
+					if entry == 0 {
+						if len(groups) >= secondaryGroupedRunMaxDistinctValues {
+							saveBucketScratch()
+							return nil, false, nil
+						}
+						groupIdx = len(groups)
+						groups = append(groups, secondaryValueGroup{
+							encoded: encoded,
+							origIdx: uint16(groupIdx),
+						})
+						hashSlots[slot] = uint8(groupIdx + 1)
 						break
 					}
+					cand := int(entry - 1)
+					if len(groups[cand].encoded) == n && bytes.Equal(groups[cand].encoded, encoded) {
+						groupIdx = cand
+						break
+					}
+					slot = (slot + 1) & hashMask
 				}
-			}
-			if groupIdx < 0 {
-				if len(groups) >= secondaryGroupedRunMaxDistinctValues {
-					saveBucketScratch()
-					return nil, false, nil
-				}
-				groupIdx = len(groups)
-				groups = append(groups, secondaryValueGroup{
-					encoded: encoded,
-					origIdx: uint16(groupIdx),
-				})
 			}
 			lastGroupIdx = groupIdx
 			groups[groupIdx].count++
@@ -2052,22 +2075,24 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTableWithScratch(scratch *ins
 	keyArena := scratch.allocSecondaryKeyArena(keyBytes)
 	groupPos := 0
 	groupRem := groups[0].count
+	groupEncoded := groups[0].encoded
 	orderedPos := 0
-	if err := applyCollectionRunEntries(table, entryCount, func(_ int) (key, value []byte, err error) {
+	emitEntry := func(_ int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
 		for groupPos < len(groups) {
 			if groupRem > 0 {
 				documentID := items[ordered[orderedPos]].id
 				orderedPos++
 				groupRem--
-				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, valueType, groups[groupPos].encoded, documentID)
-				return key, nil, err
+				keyArena, key, err = appendIndexEntryKeyForValueType(keyArena, valueType, groupEncoded, documentID)
+				return key, nil, page.ValuePtr{}, node.FlagInline, err
 			}
 			groupPos++
 			if groupPos < len(groups) {
 				groupRem = groups[groupPos].count
+				groupEncoded = groups[groupPos].encoded
 			}
 		}
-		return nil, nil, fmt.Errorf(
+		return nil, nil, page.ValuePtr{}, 0, fmt.Errorf(
 			"collections: grouped secondary index entry count mismatch collection=%q index=%q runtimeIdx=%d entryCount=%d groups=%d groupPos=%d orderedPos=%d",
 			p.collection,
 			indexName,
@@ -2077,7 +2102,8 @@ func (p insertBatchPlanner) emitGroupedSecondaryRunTableWithScratch(scratch *ins
 			groupPos,
 			orderedPos,
 		)
-	}); err != nil {
+	}
+	if err := applyCollectionRunEntriesWithFlags(table, entryCount, emitEntry); err != nil {
 		scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 		return nil, false, err
 	}
@@ -2096,7 +2122,7 @@ func secondaryEntryOrderStats(items []insertBatchItem, runtimeIdx int, documentI
 			if len(encoded) > 65535 {
 				return 0, 0, false, errors.New("collections: index key too large")
 			}
-			if entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[idx].id) > 0 {
+			if alreadySorted && entryCount > 0 && compareIndexEntryKeyParts(lastValue, lastDocumentID, encoded, items[idx].id) > 0 {
 				alreadySorted = false
 			}
 			lastValue = encoded
