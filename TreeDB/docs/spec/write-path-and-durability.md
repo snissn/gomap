@@ -417,6 +417,17 @@ not a public acknowledgement contract.
   dependency-complete command-WAL prefix.
 - Sync operations (`SetSync`, `WriteSync`, `DeleteSync`) use the same durable
   prefix boundary; they need not checkpoint the backend root per call.
+- For foreground durable command-WAL ordered-root publications (outside explicit
+  synchronous root finalization or recovery replay), once the authoritative
+  Command WAL frame is durably synced, operational leaf-generation manifest
+  replacement and advisory `.lenidx` persistence are deferred until a
+  non-deferred synchronous root finalization, `Checkpoint`, `Close`, or admitted
+  leaf-generation maintenance (`rootPublication` continues sealing roots
+  asynchronously, and crash reopen reconciles unrecorded leaf-log segments and
+  replays the durable Command WAL). When caller deltas are already materialized
+  and no prepared-point limits or `durabilitycut` hooks are active, durable
+  Command WAL append/sync may overlap with COW root apply under the same commit
+  serialization locks, joining before error checks or visibility publication.
 - Checkpoint and clean close publish a sealed complete root.
 
 ### 1.2 `DurabilityWALOnRelaxed` command-WAL relaxed / legacy compatibility
@@ -928,8 +939,8 @@ The exact immutable token carries the completed content and namespace frontiers
 into the root publisher. When `durabilitycut` is disabled, flushing and syncing the
 candidate's already-captured external dependency handles executes sequentially
 before staging and syncing that replacement revision (both bound immutable
-replacements and pre-enqueue operational manifest replacements on synchronous
-commits before a root inherits a manifest token); both barriers complete before
+replacements and pre-enqueue operational manifest replacements on non-deferred
+synchronous commits before a root inherits a manifest token); both barriers complete before
 index data sync or any durable meta write (a dependency sync failure aborts
 before creating the replacement manifest), avoiding same-directory journal and
 directory-lock contention while recording a per-seal pre-sync flag separate from

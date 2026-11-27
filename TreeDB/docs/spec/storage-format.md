@@ -2380,16 +2380,20 @@ callback. The published leaf and manifest remain authoritative, and `Close`
 succeeds when its storage and cleanup operations succeed. An error reading a
 raw leaf segment while rebuilding that index remains a storage error.
 
-On relaxed (`!sync`) commits whose durable root does not require a bound
+On relaxed (`!sync`) commits and on foreground durable command-WAL ordered-root
+publications (where foreground durability is already established by the synced
+Command WAL frame, outside explicit caller-requested synchronous root
+finalization or recovery replay) whose durable root does not require a bound
 manifest revision replacement, TreeDB updates the in-memory leaf-generation
 manifest immediately and defers synchronous persistence of the operational
-manifest replacement until the next synchronous commit, `Checkpoint`, `Close`,
-or admitted mutating leaf-generation maintenance (`LeafGenerationPack` or
-non-dry-run `LeafGenerationGC`). Advisory `.lenidx` persistence is likewise
-deferred until `Checkpoint`, `Close`, or admitted `LeafGenerationPlan` /
-`LeafGenerationPack`. Durable-root publication that binds
-`ResourceOuterLeafManifest` keeps its synchronous immutable revision
-replacement path unchanged.
+manifest replacement until the next non-deferred synchronous root finalization
+(such as a non-command-WAL synchronous commit, explicit synchronous root
+publish, or recovery replay sync), `Checkpoint`, `Close`, or admitted mutating
+leaf-generation maintenance (`LeafGenerationPack` or non-dry-run
+`LeafGenerationGC`). Advisory `.lenidx` persistence is likewise deferred until
+`Checkpoint`, `Close`, or admitted `LeafGenerationPlan` / `LeafGenerationPack`.
+Durable-root publication that binds `ResourceOuterLeafManifest` keeps its
+synchronous immutable revision replacement path unchanged.
 
 A prepared immutable revision may be abandoned only while no recoverable meta
 slot can name it. Vacuum retains prepared revisions on failure because a
