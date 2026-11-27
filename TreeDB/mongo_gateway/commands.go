@@ -2980,6 +2980,7 @@ type mongoUpdateCoalescer struct {
 	lfHead                int
 	lfLen                 int
 	lfLingerTarget        int
+	lfLingerDeadline      time.Time
 	lfWakeCh              chan struct{}
 	lfSpaceCh             chan struct{}
 	stickyIdleWindow      time.Duration
@@ -3093,7 +3094,10 @@ func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, updat
 		if !c.lfInlineRunning && !c.lfWorkerBusy {
 			c.lfWorkerBusy = true
 			wake = c.ensureHotWorkerLocked()
-		} else if c.lfLingerTarget > 0 && c.lfLen >= c.lfLingerTarget {
+		} else if c.lfLingerTarget > 0 && (c.lfLen >= c.lfLingerTarget ||
+			(update.budget != nil && !update.budget.deadline.IsZero() &&
+				!c.lfLingerDeadline.IsZero() &&
+				update.budget.deadline.Before(c.lfLingerDeadline.Add(durableLingerMinBudgetMargin)))) {
 			wake = true
 		}
 		c.lfMu.Unlock()
@@ -3252,6 +3256,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 		c.lfWorkerWaitingInline = false
 		c.lfSticky = false
 		c.lfLingerTarget = 0
+		c.lfLingerDeadline = time.Time{}
 		c.closeDoneLocked()
 		c.lfMu.Unlock()
 	}()
@@ -3407,6 +3412,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 				if linger := computeDurableLingerWithBounds(lastWaveDur, c.lfEarliestDeadlineLocked(), c.lingerMinOverride, c.lingerMaxOverride); linger > 0 {
 					lingered = true
 					c.lfLingerTarget = target
+					c.lfLingerDeadline = time.Now().Add(linger)
 					if lingerTimer == nil {
 						lingerTimer = time.NewTimer(linger)
 					} else {
@@ -3422,6 +3428,14 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 							c.lfMu.Lock()
 							if c.lfStopped || c.lfLen >= target {
 								c.lfLingerTarget = 0
+								c.lfLingerDeadline = time.Time{}
+								break lingerWait
+							}
+							if earliest := c.lfEarliestDeadlineLocked(); !earliest.IsZero() &&
+								!c.lfLingerDeadline.IsZero() &&
+								earliest.Before(c.lfLingerDeadline.Add(durableLingerMinBudgetMargin)) {
+								c.lfLingerTarget = 0
+								c.lfLingerDeadline = time.Time{}
 								break lingerWait
 							}
 							c.lfMu.Unlock()
@@ -3429,10 +3443,12 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 							lingerFired = true
 							c.lfMu.Lock()
 							c.lfLingerTarget = 0
+							c.lfLingerDeadline = time.Time{}
 							break lingerWait
 						case <-c.stoppedCh:
 							c.lfMu.Lock()
 							c.lfLingerTarget = 0
+							c.lfLingerDeadline = time.Time{}
 							break lingerWait
 						}
 					}

@@ -560,6 +560,113 @@ func TestUpdateCoalescerDurableLinger_TightDeadlineSkipsLinger(t *testing.T) {
 	}
 }
 
+func TestUpdateCoalescerDurableLinger_MidLingerTightDeadlineWakesEarly(t *testing.T) {
+	s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 6)
+	defer func() { _ = s.Close() }()
+
+	col, err := s.Collections.OpenCollection("app." + collName)
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.lfMu.Lock()
+	coalescer.stickyIdleWindow = 10 * time.Second
+	coalescer.lingerMinOverride = 200 * time.Millisecond
+	coalescer.lingerMaxOverride = 200 * time.Millisecond
+	coalescer.lfMu.Unlock()
+
+	var slowPhase atomic.Bool
+	slowPhase.Store(true)
+	coalescer.testWaveHook = func(batchLen int) {
+		if slowPhase.Load() {
+			time.Sleep(4 * time.Millisecond)
+		}
+	}
+
+	// Establish lastWaveDur >= 4ms and lingerTarget = 4.
+	releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	wg.Add(4)
+	errCh := make(chan error, 4)
+	for w := 0; w < 4; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), 10), nil, 0)
+			if err != nil || !mongoCommandResponseOK(resp) {
+				errCh <- fmt.Errorf("w%d: resp=%s err=%v", w, resp, err)
+			}
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && coalescer.queuedLen() < 4 {
+		time.Sleep(time.Millisecond)
+	}
+	releaseLeader()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	// Enqueue request #1 (no deadline) so the worker enters a 200ms linger waiting
+	// for target=4, then submit request #2 (still below target: lfLen=2 < 4) with
+	// a 25ms deadline. Request #2 must wake the worker immediately so neither
+	// request waits out the 200ms linger or misses its deadline.
+	slowPhase.Store(false)
+	req1Done := make(chan error, 1)
+	go func() {
+		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 4, 404), nil, 0)
+		if err == nil && !mongoCommandResponseOK(resp) {
+			err = fmt.Errorf("req1 not ok: %s", resp)
+		}
+		req1Done <- err
+	}()
+	waitLingerDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(waitLingerDeadline) {
+		coalescer.lfMu.Lock()
+		inLinger := coalescer.lfLingerTarget == 4
+		coalescer.lfMu.Unlock()
+		if inLinger {
+			break
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+
+	tightItem, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: int64(5)}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int64(505)}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parseMongoUpdateItem: %v", err)
+	}
+	tightItem.budget = newMongoWriteBudget(1)
+	tightItem.budget.deadline = time.Now().Add(25 * time.Millisecond)
+
+	t0 := time.Now()
+	matched, modified, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, tightItem)
+	elapsed := time.Since(t0)
+	if err != nil || !matched || !modified {
+		t.Fatalf("mid-linger tight deadline update failed (elapsed=%v): matched=%v modified=%v err=%v", elapsed, matched, modified, err)
+	}
+	if elapsed >= 100*time.Millisecond {
+		t.Fatalf("mid-linger tight deadline update waited %v >= 100ms (did not wake lingering worker early)", elapsed)
+	}
+	if err := <-req1Done; err != nil {
+		t.Fatalf("req1 failed: %v", err)
+	}
+	if got := findDocN(t, s.Server, collName, 4); got != 404 {
+		t.Fatalf("doc 4 n=%d want 404", got)
+	}
+	if got := findDocN(t, s.Server, collName, 5); got != 505 {
+		t.Fatalf("doc 5 n=%d want 505", got)
+	}
+}
+
 func TestUpdateCoalescerDurableLinger_CleanShutdownWhileLingering(t *testing.T) {
 	for iter := 0; iter < 4; iter++ {
 		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 6)
