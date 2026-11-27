@@ -246,3 +246,103 @@ func TestAcceptedRootCustodyNeedsCompletedUnstableSingletonAndNoSparseObligation
 type prefixTestSealTarget struct{}
 
 func (*prefixTestSealTarget) BindAcceptedPhysicalSeal(PhysicalSealReceipt) {}
+
+func TestAcceptedNoWALRootCustodyCoalescesAndGuardsSparseObligations(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		preassign   bool
+		assignLSN   uint64
+		maintenance bool
+		descriptor  AcceptedDescriptor
+		returns     bool
+	}{
+		{name: "nowal-root-covered", descriptor: AcceptedDescriptor{Sequence: 1}, returns: true},
+		{name: "preassigned-wal-custody-refused", preassign: true, descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "assigned-lsn-refused", assignLSN: 1, descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "projection-refused", descriptor: AcceptedDescriptor{Sequence: 1, Projections: []ParticipantProjection{{Domain: 1}}}},
+		{name: "exact-seal-refused", descriptor: AcceptedDescriptor{Sequence: 1, SealTarget: new(prefixTestSealTarget)}},
+		{name: "admitted-bytes-refused", descriptor: AcceptedDescriptor{Sequence: 1, AdmittedBytes: 1}},
+		{name: "cleanup-bytes-refused", descriptor: AcceptedDescriptor{Sequence: 1, CleanupBytes: 1}},
+		{name: "root-neutral-refused", descriptor: AcceptedDescriptor{RootNeutral: true}},
+		{name: "maintenance-refused", maintenance: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, c)
+			if err := c.ConfigureAcceptedPrefix(4, LogicalFrontiers{}); err != nil {
+				t.Fatal(err)
+			}
+			ticket, err := c.ReserveAccepted(tc.maintenance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			released := 0
+			original := &prefixOriginalCustody{release: func() error { released++; return nil }}
+			if tc.preassign {
+				if err := ticket.BindPreassignedCustody(original); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.assignLSN != 0 {
+				if err := ticket.RecordAssigned(tc.assignLSN, nil, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d := tc.descriptor
+			d.Custody = original
+			install, err := ticket.BeginInstall(d)
+			if err != nil {
+				t.Fatalf("BeginInstall: %v", err)
+			}
+			if returned := install.CommitReturningNoWALRootCustody(); returned != tc.returns {
+				t.Fatalf("CommitReturningNoWALRootCustody=%t, want %t", returned, tc.returns)
+			}
+			c.accepted.mu.Lock()
+			_, entry := ticket.entryLocked()
+			stillOwned := entry != nil && entry.descriptor.Custody == original
+			c.accepted.mu.Unlock()
+			if stillOwned == tc.returns || released != 0 {
+				t.Fatalf("original still owned=%t, released=%d, want returned=%t", stillOwned, released, tc.returns)
+			}
+			if tc.returns {
+				// Subsequent NoWAL root-covered entries must coalesce into the same FIFO slot.
+				for seq := uint64(2); seq <= 16; seq++ {
+					nextTicket, err := c.ReserveAccepted(false)
+					if err != nil {
+						t.Fatalf("ReserveAccepted seq=%d: %v", seq, err)
+					}
+					nextCustody := &prefixOriginalCustody{release: func() error { return nil }}
+					nextInstall, err := nextTicket.BeginInstall(AcceptedDescriptor{Sequence: seq, Custody: nextCustody})
+					if err != nil {
+						t.Fatalf("BeginInstall seq=%d: %v", seq, err)
+					}
+					if !nextInstall.CommitReturningNoWALRootCustody() {
+						t.Fatalf("seq=%d did not return NoWAL custody", seq)
+					}
+				}
+				if c.accepted.count != 1 {
+					t.Fatalf("coalesced NoWAL root-covered entries retained %d slots, want 1", c.accepted.count)
+				}
+			}
+			if err := c.CloseAccepted(); err != nil {
+				t.Fatalf("CloseAccepted: %v", err)
+			}
+			if tc.returns {
+				if released != 0 {
+					t.Fatal("queue released custody already returned to caller")
+				}
+				if err := original.ReleaseAccepted(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if released != 1 {
+				t.Fatalf("original released %d times, want 1", released)
+			}
+		})
+	}
+}

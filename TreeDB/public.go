@@ -1422,9 +1422,15 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		idleInterval = 0
 	}
 	// Auto checkpointing manages cached redo WAL bytes, and in command-WAL mode
-	// uses the command-WAL active segment byte hook installed above.
+	// uses the command-WAL active segment byte hook installed above. In NoWAL
+	// COW modes there is no WAL to bound, so start the lightweight COW pressure
+	// drain worker to consume asynchronous generation and soft-reservation
+	// pressure signals without stalling foreground writers in synchronous
+	// checkpoints.
 	if (!disableWAL || out.commandWALCached) && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
+	} else if cached.COWMode() && !out.commandWALCached && !opts.ReadOnly {
+		cached.StartCOWPressureDrain()
 	}
 
 	vacuumInterval := opts.BackgroundIndexVacuumInterval

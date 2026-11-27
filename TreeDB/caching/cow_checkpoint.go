@@ -417,7 +417,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		frontier = db.cow.retainCut()
 		if frontier == nil {
 			err = backenddb.ErrClosed
-		} else if db.snapshotCommandWALCheckpointCutover() {
+		} else if db.snapshotCommandWALCheckpointCutover() || (!db.externalCommandWAL && db.nativePressureDrainEnabled()) {
 			db.checkpointPostFrontierAdmission.Store(true)
 		}
 		db.writeMu.Unlock()
@@ -575,7 +575,7 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 				err = wal.RotateCommandWALActiveSegment(true)
 			}
 		}
-		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {
+		if err == nil && postFrontier && ((db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL) || (!db.externalCommandWAL && db.nativePressureDrainEnabled())) {
 			db.checkpointPostFrontierAdmission.Store(true)
 		}
 		if err == nil && captured != nil {

@@ -478,6 +478,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 			}
 			sealed = backenddb.NewNativeSealReceipt(lease)
 		}
+		returnCustodyOnInstall := native.ReturnCustodyOnInstall
 		if err = b.SetNativeSemanticPublication(owner, native); err != nil {
 			return result, err
 		}
@@ -487,6 +488,9 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 			b.cowState.native.sealReceipt = sealed
 			err = b.WriteSync()
 		} else {
+			native.ReturnCustodyOnInstall = returnCustodyOnInstall &&
+				native.Reprepare != nil && native.Finalizer == nil && native.Resources == nil &&
+				native.ObserveAssigned == nil && !native.RequireInlineCompositeRaw && len(b.entries) == 0
 			err = b.Write()
 		}
 		receipt := b.COWReceipt()
