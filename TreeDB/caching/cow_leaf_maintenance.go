@@ -125,10 +125,11 @@ func (db *DB) shouldRunPeriodicPrivateCOWLeafPack(now time.Time) (bool, string) 
 }
 
 // Initial WAL-on scheduler state is not an opt-out. Explicit disables, unlike
-// that initial state, remain authoritative. ExternalCommandWAL disables only
-// the redundant cache journal, not durability. True WAL-off/non-COW is unchanged.
+// that initial state, remain authoritative. All private-COW stores with
+// outer-leaf generational storage (both command-WAL and NoWALFast) use this
+// bounded path; non-COW stores remain unchanged.
 func (db *DB) privateCOWLeafPackEnabled() bool {
-	if db == nil || db.cow == nil || db.cow.txnOwner == nil || (db.disableJournal && !db.externalCommandWAL) || !db.indexOuterLeavesInValueLog ||
+	if db == nil || db.cow == nil || db.cow.txnOwner == nil || !db.indexOuterLeavesInValueLog ||
 		db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) || envBool(envDisableVlogGenerationLoop) {
 		return false
 	}
@@ -335,17 +336,27 @@ func (db *DB) runPrivateCOWLeafPackLocked(parentCtx context.Context, maxGenerati
 		if db.cow.refreshRequired.Load() {
 			return true, packErr
 		}
-		if errors.Is(packErr, context.Canceled) || errors.Is(packErr, context.DeadlineExceeded) || errors.Is(packErr, backenddb.ErrLeafGenerationMaintenanceLimit) {
+		if !stats.Ran && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) {
+			// Platforms without relative-namespace pack promotion still support
+			// whole-generation LeafGenerationGC. Record the pack skip and fall
+			// through so already-dead sealed generations are reclaimed.
+			db.vlogGenerationLeafPackSkips.Add(1)
+			db.storeVlogGenerationLeafPackLastSkipReason(packErr.Error())
+			packErr = nil
+		} else if errors.Is(packErr, context.Canceled) || errors.Is(packErr, context.DeadlineExceeded) || errors.Is(packErr, backenddb.ErrLeafGenerationMaintenanceLimit) {
 			db.vlogGenerationLeafPackLastAttemptErrored.Store(true)
 			db.vlogGenerationLeafPackSkips.Add(1)
 			db.storeVlogGenerationLeafPackLastSkipReason(packErr.Error())
 			return true, nil
+		} else {
+			return true, packErr
 		}
-		return true, packErr
 	}
 	if !stats.Ran {
-		db.vlogGenerationLeafPackSkips.Add(1)
-		db.storeVlogGenerationLeafPackLastSkipReason(stats.SkipReason)
+		if atomicValueString(&db.vlogGenerationLeafPackLastSkipReason) == "" || stats.SkipReason != "" {
+			db.vlogGenerationLeafPackSkips.Add(1)
+			db.storeVlogGenerationLeafPackLastSkipReason(stats.SkipReason)
+		}
 	} else {
 		db.storeVlogGenerationLeafPackLastSkipReason("")
 	}
@@ -355,51 +366,87 @@ func (db *DB) runPrivateCOWLeafPackLocked(parentCtx context.Context, maxGenerati
 	// predicate and this slice's captured applied endpoint. No extra timeout,
 	// pending owner or logical coverage is created. Mutable suffixes survive;
 	// newer frozen suffixes defer to their own checkpoint as before.
-	if err := db.refreshCOWAutomaticCheckpointFallback(ctx, through); err != nil {
-		return true, db.privateCOWLeafMaintenanceError(err)
+	if db.externalCommandWAL {
+		if err := db.refreshCOWAutomaticCheckpointFallback(ctx, through); err != nil {
+			return true, db.privateCOWLeafMaintenanceError(err)
+		}
+	} else if stats.Ran {
+		if _, err := db.refreshNoWALPrivateCOWLeafPackFallback(ctx, through, true); err != nil {
+			return true, db.privateCOWLeafMaintenanceError(err)
+		}
 	}
 	// Even a no-op pack plan reaches GC: a later checkpoint may have released
 	// the fallback/pin that prevented an earlier retirement.
 	// No forced reclaim: both recoverable roots and historical reader pins still
 	// govern deletion. BytesDeleted is logical retirement, not proved unlink.
 	if gc, ok := db.backend.(backendLeafGenerationGCRunner); ok && !envBool(envDisableVlogGenerationGC) && ctx.Err() == nil && !db.closing.Load() {
-		opts := db.leafGenerationGCOptions()
-		gcStats, gcErr := gc.LeafGenerationGC(ctx, opts)
-		db.vlogGenerationLeafPackGCRuns.Add(1)
-		if gcStats.GenerationsEligible > 0 {
-			db.vlogGenerationLeafPackGCEligibleGenerations.Add(uint64(gcStats.GenerationsEligible))
+		runGCOnce := func() (backenddb.LeafGenerationGCStats, error) {
+			gcStats, gcErr := gc.LeafGenerationGC(ctx, db.leafGenerationGCOptions())
+			db.vlogGenerationLeafPackGCRuns.Add(1)
+			if gcStats.GenerationsEligible > 0 {
+				db.vlogGenerationLeafPackGCEligibleGenerations.Add(uint64(gcStats.GenerationsEligible))
+			}
+			db.vlogGenerationLeafPackGCLastEligibleGenerations.Store(int64(gcStats.GenerationsEligible))
+			if gcStats.GenerationsDeleted > 0 {
+				db.vlogGenerationLeafPackGCDeletedGenerations.Add(uint64(gcStats.GenerationsDeleted))
+			}
+			if gcStats.FilesDeleted > 0 {
+				db.vlogGenerationLeafPackGCDeletedFiles.Add(uint64(gcStats.FilesDeleted))
+			}
+			if gcStats.BytesDeleted > 0 {
+				db.vlogGenerationLeafPackGCDeletedBytes.Add(uint64(gcStats.BytesDeleted))
+			}
+			db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(gcStats.GenerationsDeleted))
+			db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(gcStats.FilesDeleted))
+			db.vlogGenerationLeafPackGCLastDeletedBytes.Store(gcStats.BytesDeleted)
+			return gcStats, gcErr
 		}
-		db.vlogGenerationLeafPackGCLastEligibleGenerations.Store(int64(gcStats.GenerationsEligible))
-		if gcStats.GenerationsDeleted > 0 {
-			db.vlogGenerationLeafPackGCDeletedGenerations.Add(uint64(gcStats.GenerationsDeleted))
-		}
-		if gcStats.FilesDeleted > 0 {
-			db.vlogGenerationLeafPackGCDeletedFiles.Add(uint64(gcStats.FilesDeleted))
-		}
-		if gcStats.BytesDeleted > 0 {
-			db.vlogGenerationLeafPackGCDeletedBytes.Add(uint64(gcStats.BytesDeleted))
-		}
-		db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(gcStats.GenerationsDeleted))
-		db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(gcStats.FilesDeleted))
-		db.vlogGenerationLeafPackGCLastDeletedBytes.Store(gcStats.BytesDeleted)
+		gcStats, gcErr := runGCOnce()
 		// GC can publish a manifest view even when it returns a later error.
 		if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
 			return true, errors.Join(gcErr, err)
+		}
+		// In NoWAL private-COW mode, a no-op pack pass (e.g. 100%-dead sealed
+		// generations awaiting whole-generation GC) can leave generations
+		// retiring solely behind the alternate durable meta slot. Converge that
+		// fallback slot once per distinct root pair and re-run GC so dead
+		// generations reclaim immediately without waiting for another write.
+		totalDeletedGens := gcStats.GenerationsDeleted
+		totalDeletedFiles := gcStats.FilesDeleted
+		totalDeletedBytes := gcStats.BytesDeleted
+		if !db.externalCommandWAL && !stats.Ran && gcErr == nil && gcStats.GenerationsRetiring > 0 && ctx.Err() == nil && !db.closing.Load() {
+			converged, fbErr := db.refreshNoWALPrivateCOWLeafPackFallback(ctx, through, false)
+			if fbErr != nil {
+				return true, db.privateCOWLeafMaintenanceError(fbErr)
+			}
+			if converged && ctx.Err() == nil && !db.closing.Load() {
+				gcStats2, gcErr2 := runGCOnce()
+				totalDeletedGens += gcStats2.GenerationsDeleted
+				totalDeletedFiles += gcStats2.FilesDeleted
+				totalDeletedBytes += gcStats2.BytesDeleted
+				db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(totalDeletedGens))
+				db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(totalDeletedFiles))
+				db.vlogGenerationLeafPackGCLastDeletedBytes.Store(totalDeletedBytes)
+				gcStats, gcErr = gcStats2, gcErr2
+				if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
+					return true, errors.Join(gcErr, err)
+				}
+			}
 		}
 		// Adopting the post-GC basis releases the previous COW basis snapshot
 		// and synchronously unlinks newly unpinned zombie segments. Prune any
 		// already-Deleted manifest records whose files are now gone from disk
 		// without re-running a full index reachability scan.
-		if gcErr == nil && (gcStats.GenerationsEligible > 0 || gcStats.BytesDeleted > 0) && gcStats.FilesDeleted == 0 && ctx.Err() == nil && !db.closing.Load() {
+		if gcErr == nil && (gcStats.GenerationsEligible > 0 || gcStats.BytesDeleted > 0) && ctx.Err() == nil && !db.closing.Load() {
 			if pruner, ok := db.backend.(backendLeafGenerationDeletedPruner); ok {
 				prunedGens, prunedFiles, pruneErr := pruner.PruneDeletedLeafGenerations()
 				if prunedGens > 0 {
 					db.vlogGenerationLeafPackGCDeletedGenerations.Add(uint64(prunedGens))
-					db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(gcStats.GenerationsDeleted + prunedGens))
+					db.vlogGenerationLeafPackGCLastDeletedGenerations.Store(int64(totalDeletedGens + prunedGens))
 				}
 				if prunedFiles > 0 {
 					db.vlogGenerationLeafPackGCDeletedFiles.Add(uint64(prunedFiles))
-					db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(gcStats.FilesDeleted + prunedFiles))
+					db.vlogGenerationLeafPackGCLastDeletedFiles.Store(int64(totalDeletedFiles + prunedFiles))
 				}
 				if prunedGens > 0 || prunedFiles > 0 || pruneErr != nil {
 					if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
@@ -485,6 +532,51 @@ func (db *DB) adoptPrivateCOWLeafBasisWithTransition(original backenddb.StateTok
 	}
 	db.cow.refreshRequired.Store(false)
 	return nil
+}
+
+// refreshNoWALPrivateCOWLeafPackFallback converges the alternate durable meta
+// slot for NoWAL private-COW stores after leaf-generation pack or when dead
+// generations are retiring behind the fallback slot. Like
+// refreshCOWAutomaticCheckpointFallback, it runs under flushMu while mutable
+// suffixes remain admitted and untouched.
+func (db *DB) refreshNoWALPrivateCOWLeafPackFallback(ctx context.Context, through rootpublication.SealedPrefix, forceAfterPack bool) (converged bool, retErr error) {
+	c := db.cow
+	cut := c.retainCut()
+	defer func() { retErr = joinCOWCleanupError(retErr, c.releaseCut(cut)) }()
+	if cut == nil || c.prefix == nil {
+		return false, backenddb.ErrClosed
+	}
+	basis, live := cut.basis.snapshot.StateToken()
+	if !live {
+		return false, backenddb.ErrClosed
+	}
+	if len(cut.frozen) != 0 ||
+		cut.basis.logicalSeq != through.LogicalSequence || basis.AppliedCommandLSN != 0 ||
+		cut.frozenLogicalSeq != through.LogicalSequence || cut.frozenCommandLSN != 0 {
+		return false, nil
+	}
+	if !forceAfterPack &&
+		basis.RootPageID == db.vlogGenerationNoWALFallbackConvergedRootPageID.Load() &&
+		basis.SystemRootPageID == db.vlogGenerationNoWALFallbackConvergedSystemRootPageID.Load() {
+		return false, nil
+	}
+	if err := c.prefix.WaitAccepted(ctx, through); err != nil {
+		return false, err
+	}
+	if c.prefix.LogicalFrontiers().S != through {
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	err := db.flushCOWFrozenCutForFallback(true, nil, cut, true)
+	cut = nil // flushCOWFrozenCutForFallback consumes this exact retained cut
+	if err != nil {
+		return false, err
+	}
+	db.vlogGenerationNoWALFallbackConvergedRootPageID.Store(basis.RootPageID)
+	db.vlogGenerationNoWALFallbackConvergedSystemRootPageID.Store(basis.SystemRootPageID)
+	return true, nil
 }
 
 // A late backend publication error may already have poisoned its original

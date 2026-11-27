@@ -10340,6 +10340,8 @@ type DB struct {
 	vlogGenerationLeafPackLastUnixNano                           atomic.Int64
 	vlogGenerationPrivateCOWPackLastAttemptNS                    atomic.Int64
 	vlogGenerationLeafPackLastAttemptErrored                     atomic.Bool
+	vlogGenerationNoWALFallbackConvergedRootPageID               atomic.Uint64
+	vlogGenerationNoWALFallbackConvergedSystemRootPageID         atomic.Uint64
 	vlogGenerationLeafPackCanceledLastNS                         atomic.Int64
 	vlogGenerationLeafPackDeadlineLastNS                         atomic.Int64
 	vlogGenerationLeafPackLastSkipReason                         atomic.Value // string

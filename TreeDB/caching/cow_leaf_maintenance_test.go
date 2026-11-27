@@ -1396,3 +1396,221 @@ func TestPrivateCOWCheckpointUnlinksWholeGenerationGCZombiesBeforeClose(t *testi
 			filesBefore, bytesBefore, filesAfterCP, bytesAfterCP)
 	}
 }
+
+func TestPrivateCOWLeafPackNoWALFastEnabledOptOutAndReclaim(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "0")
+
+	dir := t.TempDir()
+	backendDir := filepath.Join(dir, "backend")
+	native, err := backenddb.Open(backenddb.Options{
+		Dir:                        backendDir,
+		Durability:                 backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: backenddb.ValueLogOptions{
+			CurrentWritableMmap: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := native.BindPrivateCOWOwner(owner); err != nil {
+		_ = native.Close()
+		t.Fatal(err)
+	}
+	cache, err := Open(dir, native, Options{
+		TransactionOwner:                         owner,
+		MemtableMode:                             "cow_ordered",
+		DisableWAL:                               true,
+		RelaxedSync:                              true,
+		AllowUnsafe:                              true,
+		ExternalCommandWAL:                       false,
+		MemtableShards:                           2,
+		FlushThreshold:                           1 << 30,
+		IndexOuterLeavesInValueLog:               true,
+		ValueLogCurrentWritableMmap:              true,
+		ValueLogCompression:                      uint8(vlogCompressionOff),
+		ValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogGenerationLeafSegmentTargetBytes: 8 << 20,
+	})
+	if err != nil {
+		_ = native.Close()
+		t.Fatal(err)
+	}
+	if err := native.BindNativeSemanticBridge(owner, cache); err != nil {
+		_ = cache.Close()
+		t.Fatal(err)
+	}
+	cache.testSkipVlogCheckpointKick = true
+	skipRetainedPrune(cache)
+	held := &privateCOWPackHeldBackend{DB: native}
+	cache.backend = held
+	t.Cleanup(func() {
+		if !cache.closing.Load() {
+			_ = cache.Close()
+		}
+	})
+
+	// 1. Default enabled for NoWALFast private COW, respecting explicit opt-outs.
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	if err := os.Unsetenv(envEnableLeafGenerationPackMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.privateCOWLeafPackEnabled() {
+		t.Fatal("NoWALFast private COW did not enable privateCOWLeafPackEnabled by default")
+	}
+	if got := cache.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "true" {
+		t.Fatalf("private_cow_default stat = %q, want %q", got, "true")
+	}
+	for _, mode := range []string{"0", "false"} {
+		t.Setenv(envEnableLeafGenerationPackMaintenance, mode)
+		if cache.privateCOWLeafPackEnabled() {
+			t.Fatalf("NoWALFast ignored explicit opt-out %q", mode)
+		}
+	}
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	if cache.privateCOWLeafPackEnabled() {
+		t.Fatal("NoWALFast ignored TREEDB_DISABLE_VLOG_GENERATION_LOOP=1")
+	}
+
+	writeRange := func(prefix string, start, count int, fill byte) {
+		t.Helper()
+		b := cache.NewBatchWithSize(count)
+		defer b.Close()
+		val := bytes.Repeat([]byte{fill}, 128)
+		for i := start; i < start+count; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("%s-%05d", prefix, i)), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotateAllLeafLanes := func() {
+		t.Helper()
+		for _, ln := range cache.leafLogAppendLanesSnapshot() {
+			if ln == nil {
+				continue
+			}
+			ln.vlogMu.Lock()
+			rotateErr := cache.rotateValueLogMuHeld(ln)
+			ln.vlogMu.Unlock()
+			if rotateErr != nil {
+				t.Fatal(rotateErr)
+			}
+		}
+	}
+	leafDirBytes := func() (int, int64) {
+		t.Helper()
+		entries, err := os.ReadDir(backenddb.LeafLogDirPath(backendDir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		var total int64
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				t.Fatal(err)
+			}
+			count++
+			total += info.Size()
+		}
+		return count, total
+	}
+
+	// 2. Build 4 sealed generations, then overwrite 100% of keys on a single
+	// final generation. Leave only 1 Checkpoint() after the overwrite so the
+	// alternate durable meta slot still points to the old root — proving NoWAL
+	// fallback convergence + GC unlinks dead leaf files immediately before Close().
+	const keys = 512
+	for round := 1; round <= 4; round++ {
+		writeRange("nowal", 0, keys, byte(round))
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		rotateAllLeafLanes()
+	}
+	writeRange("nowal", 0, keys, 0x77)
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	filesBefore, bytesBefore := leafDirBytes()
+	sealedBefore, sealedBytesBefore := held.DB.LeafGenerationSealedDebt()
+	if sealedBefore < privateCOWCheckpointLeafPackDebtGenerations {
+		t.Fatalf("expected >= %d sealed generations before reclaim, got %d (bytes=%d)", privateCOWCheckpointLeafPackDebtGenerations, sealedBefore, sealedBytesBefore)
+	}
+
+	// Enable default private COW leaf maintenance and run an idle Checkpoint().
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	if err := os.Unsetenv(envEnableLeafGenerationPackMaintenance); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("NoWALFast idle Checkpoint: %v", err)
+	}
+
+	filesAfterCP, bytesAfterCP := leafDirBytes()
+	sealedAfterCP, sealedBytesAfterCP := held.DB.LeafGenerationSealedDebt()
+	t.Logf("NoWALFast reclaim: before=(%d files, %d bytes, %d sealed/%d B) afterCP=(%d files, %d bytes, %d sealed/%d B) calls=%d gcCalls=%d",
+		filesBefore, bytesBefore, sealedBefore, sealedBytesBefore,
+		filesAfterCP, bytesAfterCP, sealedAfterCP, sealedBytesAfterCP,
+		held.calls, held.gcCalls)
+	if held.calls == 0 || held.gcCalls == 0 {
+		t.Fatalf("NoWALFast idle Checkpoint did not invoke private COW leaf pack/GC: calls=%d gcCalls=%d", held.calls, held.gcCalls)
+	}
+	if filesAfterCP >= filesBefore || bytesAfterCP >= bytesBefore {
+		t.Fatalf("NoWALFast idle Checkpoint did not shrink leaf-log footprint before Close: before=(%d files, %d bytes) after=(%d files, %d bytes)",
+			filesBefore, bytesBefore, filesAfterCP, bytesAfterCP)
+	}
+
+	// Verify repeated no-op slice does not manufacture redundant fallback writes
+	// when root is unchanged.
+	stateBeforeNoop, _ := held.DB.StateToken()
+	cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+	if attempted, err := cache.runPrivateCOWLeafPackSlice(); err != nil || !attempted {
+		t.Fatalf("NoWALFast healthy no-op slice: attempted=%v err=%v", attempted, err)
+	}
+	stateAfterNoop, _ := held.DB.StateToken()
+	if stateAfterNoop.CommitSeq != stateBeforeNoop.CommitSeq {
+		t.Fatalf("NoWALFast healthy no-op slice published unexpected commit: before=%+v after=%+v", stateBeforeNoop, stateAfterNoop)
+	}
+
+	// 3. Close and reopen, verifying 100% data integrity with CurrentWritableMmap.
+	if err := cache.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{
+		Dir:                        backendDir,
+		Durability:                 backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: backenddb.ValueLogOptions{
+			CurrentWritableMmap: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	wantVal := bytes.Repeat([]byte{0x77}, 128)
+	for i := 0; i < keys; i++ {
+		k := []byte(fmt.Sprintf("nowal-%05d", i))
+		got, err := reopened.Get(k)
+		if err != nil || !bytes.Equal(got, wantVal) {
+			t.Fatalf("reopened Get(%q): len=%d err=%v", k, len(got), err)
+		}
+	}
+}

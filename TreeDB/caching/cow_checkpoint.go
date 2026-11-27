@@ -459,13 +459,13 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	flushedDirty := frontier != nil && len(frontier.frozen) > 0
+	flushedDirty := frontier != nil && (len(frontier.frozen) > 0 || frontier.frozenLogicalSeq > frontier.basis.logicalSeq)
 	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure, !deferRelaxedWALSync)
 	frontier = nil
 	if err != nil {
 		return err
 	}
-	flushedDirty = flushedDirty || publish.consumed || publish.appliedLSN != 0
+	flushedDirty = flushedDirty || publish.consumed || publish.appliedLSN != 0 || publish.seal.Valid()
 	if operation != nil {
 		// An adopted compaction has completed its original build and handoff.
 		// Finish this same checkpoint's durability and retirement boundary even
