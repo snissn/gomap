@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -289,39 +290,47 @@ func TestMongoGatewayInsertManyDurableUsesSharedJournalReceipt(t *testing.T) {
 	syncsBefore := parseStat("treedb.command_wal.group_commit.syncs_total")
 	forcedBefore := parseStat("treedb.command_wal.group_commit.forced_total")
 
+	sharedBoundary := s.Server.canShareStandaloneJournalBoundary("insert")
+	if !sharedBoundary && runtime.GOOS != "windows" {
+		t.Fatalf("expected shared standalone journal boundary on %s durable fixed WAL", runtime.GOOS)
+	}
+
 	// Deterministically overlap concurrent InsertMany batches at the CommandWAL
-	// sync boundary: hold the first physical WAL sync until at least 3 other
-	// concurrent batches have appended while it is in flight (bounded by 200ms
-	// so a lock-hold regression cannot deadlock). This proves workers release
-	// nativeBulkInsertMu before awaiting durable sync and coalesce into a shared
-	// group-commit wave even under GOMAXPROCS=1 or slow runners.
-	var (
-		firstSyncHeld atomic.Bool
-		appendsInSync atomic.Int32
-		releaseOnce   sync.Once
-		releaseSync   = make(chan struct{})
-	)
-	restoreCut := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
-		if e.Resource != durabilitycut.ResourceCommandWAL {
-			return nil
-		}
-		switch e.Point {
-		case durabilitycut.BeforeDependencyFileSync:
-			if firstSyncHeld.CompareAndSwap(false, true) {
-				timer := time.NewTimer(200 * time.Millisecond)
-				defer timer.Stop()
-				select {
-				case <-releaseSync:
-				case <-timer.C:
+	// sync boundary when the shared fixed-WAL journal boundary is active (Linux/
+	// macOS; Windows intentionally uses the exclusive fence because it does not
+	// use fixed preallocated command-WAL segments). Hold the first physical WAL
+	// sync until at least 3 other concurrent batches have appended while it is
+	// in flight (bounded by 200ms so a lock-hold regression cannot deadlock).
+	restoreCut := func() {}
+	if sharedBoundary {
+		var (
+			firstSyncHeld atomic.Bool
+			appendsInSync atomic.Int32
+			releaseOnce   sync.Once
+			releaseSync   = make(chan struct{})
+		)
+		restoreCut = sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
+			if e.Resource != durabilitycut.ResourceCommandWAL {
+				return nil
+			}
+			switch e.Point {
+			case durabilitycut.BeforeDependencyFileSync:
+				if firstSyncHeld.CompareAndSwap(false, true) {
+					timer := time.NewTimer(200 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-releaseSync:
+					case <-timer.C:
+					}
+				}
+			case durabilitycut.AfterDependencyAppend:
+				if firstSyncHeld.Load() && appendsInSync.Add(1) >= 3 {
+					releaseOnce.Do(func() { close(releaseSync) })
 				}
 			}
-		case durabilitycut.AfterDependencyAppend:
-			if firstSyncHeld.Load() && appendsInSync.Add(1) >= 3 {
-				releaseOnce.Do(func() { close(releaseSync) })
-			}
-		}
-		return nil
-	}))
+			return nil
+		}))
+	}
 	defer restoreCut()
 
 	batchCh := make(chan int, numBatches)
@@ -400,10 +409,10 @@ func TestMongoGatewayInsertManyDurableUsesSharedJournalReceipt(t *testing.T) {
 	if forcedDelta != 0 {
 		t.Fatalf("expected multi-doc InsertMany w1_j to use shared journal receipt with 0 forced syncs, got forced=%d", forcedDelta)
 	}
-	if syncDelta >= numBatches || maxGroup < 2 {
+	if sharedBoundary && (syncDelta >= numBatches || maxGroup < 2) {
 		t.Fatalf("expected concurrent durable gateway InsertMany to group-commit: batches=%d syncs=%d max_group=%d", numBatches, syncDelta, maxGroup)
 	}
-	if wcStats.JournalAcknowledgements != numBatches || wcStats.SyncFailures != 0 || wcStats.UncertainOutcomes != 0 {
+	if wcStats.JournalAcknowledgements != numBatches || wcStats.PhysicalSyncBoundaries != numBatches || wcStats.SyncFailures != 0 || wcStats.UncertainOutcomes != 0 {
 		t.Fatalf("unexpected writeConcern stats: %+v", wcStats)
 	}
 }
