@@ -30,21 +30,88 @@ chunks, err := chunking.SplitChunks("parent-doc-id", sourceText, cfg)
   An empty separator immediately hard-splits that window, so entries after
   `""` are unreachable. When all configured separators fail, the window
   hard-splits at the size boundary.
+- **Boundary-aware recursive options (opt-in).** Both options default to exact
+  legacy behavior and are valid only for `StrategyRecursive` (`Validate` fails
+  closed if enabled on `StrategyFixedWindow` or if `SeparatorPlacement` is
+  unrecognized):
+  - `SeparatorPlacement`: `""` or `SeparatorPlacementEnd` (default) keeps every
+    matched separator at the end of chunk `N`. `SeparatorPlacementStart` keeps
+    delimiter-only separators (whitespace and ASCII sentence/clause punctuation
+    `.`, `!`, `?`, `;`, `,` such as `"\n\n"`, `"\n"`, `" "`, `". "`) attached
+    to the end of chunk `N`, while attaching structural/prefix separators (such
+    as `"\n## "`, `"\nfunc "`, `"\ndef "`, `"\n\\section"`, `"## "`) to the
+    start of chunk `N+1` (keeping a leading `'\n'` at the end of chunk `N`).
+  - `SnapOverlapToBoundary`: when `true` and `Overlap > 0`, snaps the raw
+    overlap start (`end - Overlap`) forward within `[end-Overlap, end)` to a
+    clean line boundary (`'\n'`) first, or else a whitespace word boundary,
+    preserving a raw start that already sits immediately after `'\n'` or
+    whitespace and falling back to `end - Overlap` for unbroken tokens.
+  - **Format-aware separator presets:** in addition to `DefaultSeparators()`,
+    the package provides `MarkdownSeparators()`, `CodeSeparators()`, and
+    `LaTeXSeparators()` (each returning a fresh slice ending with the `""`
+    hard-split sentinel). Pair them with `SeparatorPlacementStart` so headings,
+    declarations, and LaTeX sections stay attached to their own chunks.
 - **Size unit.** Runes only (`SizeUnitRunes`), and this is explicit in the
   config. Token-based sizing would require a tokenizer dependency and a
   model-bound definition of "token"; rune counts are deterministic across
   platforms, which the determinism contract requires.
-- **Validation fails closed.** Unknown strategy/unit, non-positive size, and
-  any `overlap` outside `[0, size)` are errors before any work happens.
+- **Validation fails closed.** Unknown strategy/unit/placement, non-positive
+  size, any `overlap` outside `[0, size)`, and recursive-only boundary options
+  on `fixed_window` are errors before any work happens.
 - **Determinism.** `SplitChunks` is a pure function of (parent ID, text,
   config): the same inputs always produce an identical stream (IDs, ordinals,
   offsets, text). Golden fixtures can hash chunk streams and compare across
   runs.
 - **Coverage.** Every rune offset of the input appears in at least one
-  non-empty chunk; every chunk is at most `Size` runes; consecutive chunks
-  share exactly `Overlap` trailing/leading runes on fixed, separator, and hard
-  split paths. Empty text yields no chunks and trailing separators never emit
-  an empty chunk.
+  non-empty chunk and every chunk is at most `Size` runes. When
+  `SnapOverlapToBoundary` is `false` (default), consecutive chunks share
+  exactly `Overlap` trailing/leading runes on fixed, separator, and hard split
+  paths. When `SnapOverlapToBoundary` is `true` on `StrategyRecursive`,
+  consecutive chunks preserve strict forward progress and full rune coverage
+  with overlap bounded by `<= Overlap` runes. Empty text yields no chunks and
+  trailing separators never emit an empty chunk.
+
+## Embedder context-window validation
+
+Because `chunking.Config.Size` is measured in **runes** while embedding models
+truncate inputs by **tokens**, pairing an oversized chunk length (for example
+`Size: 3000`) with a 512-token embedder silently drops the tail of every chunk.
+`TreeDB/collections/embedding` provides a stdlib-only, fail-closed budget seam:
+
+- `embedding.ContextWindowReporter` (`MaxContextTokens() int`) is an optional
+  interface implemented by embedders with a known token limit.
+- `embedding.ValidateChunkSizeForEmbedder(chunkSizeRunes, emb, opts)` validates
+  a chunker's `Size` before ingestion, resolving `maxTokens` from
+  `opts.MaxContextTokens` (when `> 0`) or `emb.(ContextWindowReporter)`.
+- `embedding.ValidateTextsForContextWindow(texts, emb, opts)` validates a batch
+  of UTF-8 byte slices with zero heap allocations on the happy path, failing
+  closed with `embedding.ErrContextWindowExceeded` (wrapping batch index and
+  rune count) on the first entry exceeding `maxSafeRunes`.
+- When `opts.RequireKnownLimit` is `true` and neither `opts.MaxContextTokens`
+  nor `emb` reports a positive limit, both helpers fail closed with
+  `embedding.ErrContextWindowUnknown`.
+
+```go
+opts := embedding.ContextBudgetOptions{
+    MinRunesPerToken:   2.5, // default; conservative for code/LaTeX
+    HeaderReserveRunes: 128, // reserve space for contextual headers before chunking
+    RequireKnownLimit:  true,
+}
+if err := embedding.ValidateChunkSizeForEmbedder(cfg.Size, emb, opts); err != nil {
+    return err
+}
+```
+
+**Rune-to-token guidance:**
+- **Code, LaTeX, and math-heavy text:** ~2.5–3.0 runes/token — keep the default
+  `MinRunesPerToken: 2.5` (e.g., `<= 1280` runes for a 512-token model before
+  header reserve).
+- **English prose:** ~3.5–4.0 runes/token — callers with prose-only corpora may
+  raise `MinRunesPerToken` (e.g., `3.5` or `4.0`) after verifying with their
+  target tokenizer.
+- **Already-headered texts:** pass `HeaderReserveRunes: 0` to
+  `ValidateTextsForContextWindow` when the `texts` slice already includes any
+  contextual prefix so header runes are not subtracted twice.
 
 ## Linkage convention
 
