@@ -13,6 +13,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -4315,18 +4317,70 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.commitMu.Unlock()
 		}
 	}()
-	appendStart := time.Now()
-	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
-	if timing != nil {
-		timing.Append += time.Since(appendStart)
+	// When publishing a durable non-raw-KV command whose caller deltas are
+	// already materialized (buildContextDeltas == nil), the command-WAL append +
+	// fdatasync touches only db.commandJournal/db.commandWALDebt while the COW
+	// root build touches only idxGen/leafPageLog/valueLogManager. Overlapping
+	// the blocking WAL sync with COW root construction hides the WAL fsync
+	// latency behind parallel root apply while preserving identical lock
+	// ownership (writeMu + commitMu held throughout), poison semantics, and
+	// publish ordering (finalizeCommit never runs until WAL sync completes).
+	overlapCommandWALAppend := syncCommandWAL &&
+		buildContextDeltas == nil &&
+		opts.preparedLimits == nil &&
+		len(ordered) > 0 &&
+		!durabilitycut.Enabled() &&
+		commandWALIntent.inner.lsn == 0 &&
+		!commandWALIntent.inner.fromReplay &&
+		len(commandWALIntent.inner.durablePrefixGroup) == 0 &&
+		commandWALIntent.inner.dependencyResources == nil &&
+		!commandWALIntent.inner.rawKVDirect &&
+		commandWALIntent.inner.rawKVFinalize == nil &&
+		commandWALIntent.inner.kind != commitlog.CommandKindRawKVBatch &&
+		!db.commandWALFlushPoisoned.Load() &&
+		db.commandJournal != nil &&
+		!db.closing.Load()
+
+	var lsn uint64
+	type commandWALAppendResult struct {
+		lsn     uint64
+		elapsed time.Duration
+		err     error
 	}
-	if err != nil {
-		return 0, nil, err
-	}
-	commandAppended = true
-	if lsn == 0 {
-		err = errCommandWALContextZeroLSN
-		return 0, nil, err
+	var appendDone chan commandWALAppendResult
+	if overlapCommandWALAppend {
+		appendDone = make(chan commandWALAppendResult, 1)
+		go func() {
+			start := time.Now()
+			assignedLSN, appendErr := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
+			appendDone <- commandWALAppendResult{
+				lsn:     assignedLSN,
+				elapsed: time.Since(start),
+				err:     appendErr,
+			}
+		}()
+		defer func() {
+			if appendDone != nil {
+				res := <-appendDone
+				if res.lsn != 0 {
+					commandAppended = true
+				}
+			}
+		}()
+	} else {
+		appendStart := time.Now()
+		lsn, err = db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
+		if timing != nil {
+			timing.Append += time.Since(appendStart)
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		commandAppended = true
+		if lsn == 0 {
+			err = errCommandWALContextZeroLSN
+			return 0, nil, err
+		}
 	}
 	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
 	defer durableResourceBuilder.Abandon()
@@ -4435,18 +4489,45 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats, opts.preparedLimits != nil); err != nil {
+	prepareErr := db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats, opts.preparedLimits != nil)
+	var rootApplyResults []orderedRootDeltaBatchGroupApplyResult
+	var parallelRootApply bool
+	var phaseStart time.Time
+	if prepareErr == nil {
+		phaseStart = time.Now()
+		var rootProfiles []PreparedRootPointProfile
+		if opts.preparedLimits != nil {
+			rootProfiles = opts.preparedLimits.RootPointProfiles
+		}
+		rootApplyResults, parallelRootApply = db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply", true, opts.preparedLimits != nil, rootProfiles)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		if timing != nil {
+			timing.RootApply += time.Since(phaseStart)
+		}
+	}
+	if appendDone != nil {
+		res := <-appendDone
+		appendDone = nil
+		if timing != nil {
+			timing.Append += res.elapsed
+		}
+		lsn = res.lsn
+		if lsn != 0 {
+			commandAppended = true
+		}
+		if res.err != nil {
+			err = res.err
+			return 0, nil, err
+		}
+		if lsn == 0 {
+			err = errCommandWALContextZeroLSN
+			return 0, nil, err
+		}
+		ctx.AppliedCommandLSN = lsn
+	}
+	if prepareErr != nil {
+		err = prepareErr
 		return 0, nil, err
-	}
-	phaseStart := time.Now()
-	var rootProfiles []PreparedRootPointProfile
-	if opts.preparedLimits != nil {
-		rootProfiles = opts.preparedLimits.RootPointProfiles
-	}
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply", true, opts.preparedLimits != nil, rootProfiles)
-	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	if timing != nil {
-		timing.RootApply += time.Since(phaseStart)
 	}
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -4617,8 +4698,15 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	finalizeOpts.durableResourceRequirementWork = durableResourceRequirementWork
 	finalizeOpts.durableResourceRequirementsFallback = durableResourceRequirementsFallback
 	finalizeOpts.preparedLimits = opts.preparedLimits
+	// Command WAL durability was already satisfied by appendPublicCommandWALIntent
+	// above. Passing sync=true to root finalization would redundantly sync
+	// operational leaf-generation manifests, external dependencies, and advisory
+	// record-length indexes synchronously on every durable commit, even though
+	// command-WAL roots are sealed asynchronously by rootPublication (and flushed
+	// at Checkpoint/Close, or reconciled/replayed on crash reopen).
+	finalizeSync := commandWALIntent.inner.fromReplay
 	post, err := db.finalizeCommitReleasingRootSerialization(
-		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
+		userRoot, newSystemRoot, retired, finalizeSync, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,
 		baseSeq,
 		func() {
@@ -4720,7 +4808,8 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		db.finalizeCommitPostWork(post)
 		return post.accepted, nil
 	}
-	sync = commandWALIntentPublishSync(intent, sync)
+	requestedSync := sync
+	sync = commandWALIntentPublishSync(intent, requestedSync)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
 		unlockCommandWALPublish, err := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if err != nil {
@@ -4738,8 +4827,12 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = opts.durableResources
 	finalizeOpts.durableResourceRequirements = opts.durableResourceRequirements
+	// Command WAL durability was already satisfied by appendPublicCommandWALIntent
+	// above; only propagate synchronous root finalization when explicitly
+	// requested by the caller, non-command-WAL, or during recovery replay.
+	finalizeSync := requestedSync || !db.commandWAL || intent.inner.fromReplay
 	post, err := db.finalizeCommitReleasingRootSerialization(
-		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
+		newRootID, sysRootID, retired, finalizeSync, metrics, touchedValueLogSegments,
 		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs,
 		finalizeOpts, baseSeq,
 		func() {

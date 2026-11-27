@@ -7408,6 +7408,11 @@ func pointerizeInsertBatchPlanRuns(db *backenddb.DB, meta CollectionMeta, plan *
 	}
 	replacements := make([]memtable.Table, len(plan.runs))
 	for i := range plan.runs {
+		if plan.runs[i].emptyValuesOnly {
+			// Run contains only empty values (e.g., secondary index entries)
+			// and never requires value-log pointerization.
+			continue
+		}
 		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, plan.runs[i].name, plan.runs[i].table)
 		if err != nil {
 			resetCollectionTables(replacements)
