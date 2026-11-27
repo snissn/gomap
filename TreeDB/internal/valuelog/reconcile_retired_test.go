@@ -1118,4 +1118,82 @@ func TestManagerReconcileRetiredSegments_ConcurrentReadAndReconcile(t *testing.T
 			}
 		}
 	})
+
+	t.Run("borrowFileFor_closed_or_mid_delete_returns_not_found_without_refresh", func(t *testing.T) {
+		dir := t.TempDir()
+		id1, err := EncodeFileID(0, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path1 := SegmentPath(dir, id1)
+		w1, err := NewWriter(path1, id1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ptr1, err := w1.Append(0, nil, 1, []byte("closed-tracked-segment"))
+		if err != nil {
+			_ = w1.Close()
+			t.Fatal(err)
+		}
+		if err := w1.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		id2, err := EncodeFileID(0, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path2 := SegmentPath(dir, id2)
+		w2, err := NewWriter(path2, id2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ptr2, err := w2.Append(0, nil, 2, []byte("mid-delete-tracked-segment"))
+		if err != nil {
+			_ = w2.Close()
+			t.Fatal(err)
+		}
+		if err := w2.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		m, err := NewManager(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Close() })
+
+		// Case 1: tracked file is already closed while still linked on disk.
+		m.mu.RLock()
+		f1 := m.files[id1]
+		f2 := m.files[id2]
+		m.mu.RUnlock()
+		if err := f1.Close(); err != nil {
+			t.Fatalf("f1.Close: %v", err)
+		}
+		scansBefore := m.RefreshScanCount()
+		if _, err := m.Read(ptr1); !errors.Is(err, ErrFileNotFound) || errors.Is(err, os.ErrClosed) {
+			t.Fatalf("Read(closed tracked segment) = %v, want ErrFileNotFound (not os.ErrClosed)", err)
+		}
+		if gotScans := m.RefreshScanCount(); gotScans != scansBefore {
+			t.Fatalf("borrowFileFor triggered refreshDiscover for tracked closed segment: scans %d -> %d", scansBefore, gotScans)
+		}
+
+		// Case 2: tracked file has deletionAdmissions > 0 while still linked on disk.
+		m.mu.Lock()
+		f2.deletionAdmissions = 1
+		m.mu.Unlock()
+		defer func() {
+			m.mu.Lock()
+			f2.deletionAdmissions = 0
+			m.mu.Unlock()
+		}()
+		scansBefore = m.RefreshScanCount()
+		if _, err := m.Read(ptr2); !errors.Is(err, ErrFileNotFound) {
+			t.Fatalf("Read(mid-delete tracked segment) = %v, want ErrFileNotFound", err)
+		}
+		if gotScans := m.RefreshScanCount(); gotScans != scansBefore {
+			t.Fatalf("borrowFileFor triggered refreshDiscover for mid-delete segment: scans %d -> %d", scansBefore, gotScans)
+		}
+	})
 }

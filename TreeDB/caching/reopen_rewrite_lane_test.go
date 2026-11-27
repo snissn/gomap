@@ -739,10 +739,53 @@ func TestRetiredVlogReconcileNotifyErrorCallingCloseDoesNotDeadlock(t *testing.T
 		firstErr := errors.New("unrelated prior background error")
 		reconcileErr := errors.New("unconsumed async retired reconcile error")
 		db.retainOriginalCleanupError(firstErr)
+		db.recordRetiredVlogReconcileError(errors.Join(nil, reconcileErr))
 		db.recordRetiredVlogReconcileError(reconcileErr)
+		db.recordRetiredVlogReconcileError(firstErr)
 		closeErr := db.Close()
 		if !errors.Is(closeErr, firstErr) || !errors.Is(closeErr, reconcileErr) {
 			t.Fatalf("Close() = %v, want both %q and %q", closeErr, firstErr, reconcileErr)
+		}
+		if got := strings.Count(closeErr.Error(), firstErr.Error()); got != 1 {
+			t.Fatalf("Close() duplicated firstErr %d times: %v", got, closeErr)
+		}
+		if got := strings.Count(closeErr.Error(), reconcileErr.Error()); got != 1 {
+			t.Fatalf("Close() duplicated reconcileErr %d times: %v", got, closeErr)
+		}
+	})
+
+	t.Run("reconcile_and_close_deduplicate_joined_async_errors", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := Open(dir, NewMockBackend(), Options{
+			DisableWAL:  true,
+			AllowUnsafe: true,
+		})
+		if err != nil {
+			t.Fatalf("caching.Open: %v", err)
+		}
+		sharedErr := errors.New("shared retired reconcile error")
+		extraErr := errors.New("second distinct retired reconcile error")
+		db.recordRetiredVlogReconcileError(errors.Join(nil, sharedErr))
+		db.recordRetiredVlogReconcileError(errors.Join(sharedErr, extraErr))
+		reconcileErr := db.ReconcileRetiredValueLogReader()
+		if !errors.Is(reconcileErr, sharedErr) || !errors.Is(reconcileErr, extraErr) {
+			t.Fatalf("ReconcileRetiredValueLogReader() = %v, want both %q and %q", reconcileErr, sharedErr, extraErr)
+		}
+		if got := strings.Count(reconcileErr.Error(), sharedErr.Error()); got != 1 {
+			t.Fatalf("ReconcileRetiredValueLogReader() duplicated sharedErr %d times: %v", got, reconcileErr)
+		}
+		if got := strings.Count(reconcileErr.Error(), extraErr.Error()); got != 1 {
+			t.Fatalf("ReconcileRetiredValueLogReader() duplicated extraErr %d times: %v", got, reconcileErr)
+		}
+		// After consumption, recording the same error as bgErr must not duplicate in Close().
+		db.retainOriginalCleanupError(sharedErr)
+		db.recordRetiredVlogReconcileError(errors.Join(nil, sharedErr))
+		closeErr := db.Close()
+		if !errors.Is(closeErr, sharedErr) {
+			t.Fatalf("Close() = %v, want %q", closeErr, sharedErr)
+		}
+		if got := strings.Count(closeErr.Error(), sharedErr.Error()); got != 1 {
+			t.Fatalf("Close() duplicated sharedErr %d times: %v", got, closeErr)
 		}
 	})
 }

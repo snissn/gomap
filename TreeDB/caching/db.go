@@ -8212,31 +8212,64 @@ func (db *DB) NotifyRetiredValueLogSegment(_ uint32) {
 	}
 }
 
+func appendUniqueError(dst []error, err error) []error {
+	if err == nil {
+		return dst
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, sub := range multi.Unwrap() {
+			dst = appendUniqueError(dst, sub)
+		}
+		return dst
+	}
+	for _, existing := range dst {
+		if errors.Is(existing, err) {
+			return dst
+		}
+	}
+	return append(dst, err)
+}
+
+func joinUniqueErrors(errs []error) error {
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return errors.Join(errs...)
+	}
+}
+
 func (db *DB) recordRetiredVlogReconcileError(err error) {
 	if db == nil || err == nil {
 		return
 	}
 	db.retiredVlogReconcileErrMu.Lock()
-	db.retiredVlogReconcileErr = errors.Join(db.retiredVlogReconcileErr, err)
+	db.retiredVlogReconcileErrs = appendUniqueError(db.retiredVlogReconcileErrs, err)
 	db.retiredVlogReconcileErrMu.Unlock()
 }
 
-func (db *DB) consumeRetiredVlogReconcileError() error {
+func (db *DB) consumeRetiredVlogReconcileErrors() []error {
 	if db == nil {
 		return nil
 	}
 	db.retiredVlogReconcileErrMu.Lock()
-	err := db.retiredVlogReconcileErr
-	db.retiredVlogReconcileErr = nil
+	errs := db.retiredVlogReconcileErrs
+	db.retiredVlogReconcileErrs = nil
 	db.retiredVlogReconcileErrMu.Unlock()
-	return err
+	return errs
 }
 
 func (db *DB) reportRetiredVlogReconcileError(err error) {
 	if db == nil || err == nil {
 		return
 	}
-	// Retain original cleanup custody even if callback entry is refused or
+	original := rootpublication.IsOriginalCleanupError(err)
+	if !original && (errors.Is(err, errDBClosing) || db.closing.Load()) {
+		return
+	}
+	// Retain original cleanup custody once even if callback entry is refused or
 	// Close started concurrently. A NotifyError callback on this wg-tracked
 	// worker must never join the worker through Close.
 	db.retainOriginalCleanupError(err)
@@ -8248,7 +8281,7 @@ func (db *DB) reportRetiredVlogReconcileError(err error) {
 		return
 	}
 	defer guard.LeaveCheckpointNotification()
-	db.reportError(err)
+	db.notifyError(err)
 }
 
 func (db *DB) retiredVlogReconcileLoop() {
@@ -8291,7 +8324,7 @@ func (db *DB) runRetiredValueLogReaderReconcile(async bool) error {
 		if async {
 			return nil
 		}
-		return db.consumeRetiredVlogReconcileError()
+		return joinUniqueErrors(db.consumeRetiredVlogReconcileErrors())
 	}
 	reconcileErr := reader.ReconcileRetiredSegments()
 	if async {
@@ -8299,18 +8332,14 @@ func (db *DB) runRetiredValueLogReaderReconcile(async bool) error {
 		return reconcileErr
 	}
 	cleanupErr := reader.CleanupError()
-	asyncErr := db.consumeRetiredVlogReconcileError()
+	asyncErrs := db.consumeRetiredVlogReconcileErrors()
 	var errs []error
-	if reconcileErr != nil {
-		errs = append(errs, reconcileErr)
+	errs = appendUniqueError(errs, reconcileErr)
+	errs = appendUniqueError(errs, cleanupErr)
+	for _, subErr := range asyncErrs {
+		errs = appendUniqueError(errs, subErr)
 	}
-	if cleanupErr != nil && !errors.Is(reconcileErr, cleanupErr) {
-		errs = append(errs, cleanupErr)
-	}
-	if asyncErr != nil && !errors.Is(reconcileErr, asyncErr) && !errors.Is(cleanupErr, asyncErr) {
-		errs = append(errs, asyncErr)
-	}
-	return errors.Join(errs...)
+	return joinUniqueErrors(errs)
 }
 
 // ReconcileRetiredValueLogReader closes and detaches unpinned value-log segment
@@ -9479,7 +9508,7 @@ type DB struct {
 	retiredVlogReconcileCh         chan struct{}
 	retiredVlogReconcileRunMu      sync.Mutex
 	retiredVlogReconcileErrMu      sync.Mutex
-	retiredVlogReconcileErr        error
+	retiredVlogReconcileErrs       []error
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
@@ -27416,17 +27445,8 @@ func (db *DB) Close() error {
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
 	}
-	if asyncReconcileErr := db.consumeRetiredVlogReconcileError(); asyncReconcileErr != nil {
-		alreadyPresent := false
-		for _, existing := range errs {
-			if errors.Is(existing, asyncReconcileErr) {
-				alreadyPresent = true
-				break
-			}
-		}
-		if !alreadyPresent {
-			errs = append(errs, asyncReconcileErr)
-		}
+	for _, subErr := range db.consumeRetiredVlogReconcileErrors() {
+		errs = appendUniqueError(errs, subErr)
 	}
 	return errors.Join(errs...)
 }

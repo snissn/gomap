@@ -2228,12 +2228,25 @@ func (m *Manager) registerSegmentLocked(path string, id uint32, discovery bool) 
 		if filepath.Clean(existing.Path) != filepath.Clean(path) {
 			return fmt.Errorf("%w: value-log file id %d already names %q, not %q", rootpublication.ErrResourceConflict, id, existing.Path, path)
 		}
+		if discovery && existing.deletionAdmissions > 0 {
+			return nil
+		}
 		openInfo, openErr := existing.File.Stat()
 		pathInfo, pathErr := os.Stat(path)
-		if openErr != nil || pathErr != nil {
+		if openErr != nil {
 			return errors.Join(openErr, pathErr)
 		}
+		retired := existing.stableObserved && m.stableResourcePins != nil && m.stableResourcePins.IsRetired(existing.stableIdentity)
+		if pathErr != nil {
+			if discovery && isPendingDeleteSegmentPath(existing, path, pathErr, retired) {
+				return nil
+			}
+			return pathErr
+		}
 		if !os.SameFile(openInfo, pathInfo) {
+			if discovery && isPendingDeleteOrSameSegmentPath(existing, path, retired) {
+				return nil
+			}
 			return fmt.Errorf("%w: value-log file id %d path was rebound", rootpublication.ErrResourceConflict, id)
 		}
 		return nil
@@ -2735,10 +2748,14 @@ func (m *Manager) borrowFileFor(id uint32) (*File, error) {
 		m.mu.RUnlock()
 		return nil, &fileNotFoundError{id: id}
 	}
-	if f, ok := m.files[id]; ok && f != nil && !f.closed.Load() && f.deletionAdmissions == 0 {
-		f.RefCount.Add(1)
+	if f, ok := m.files[id]; ok {
+		if f != nil && !f.closed.Load() && f.deletionAdmissions == 0 {
+			f.RefCount.Add(1)
+			m.mu.RUnlock()
+			return f, nil
+		}
 		m.mu.RUnlock()
-		return f, nil
+		return nil, &fileNotFoundError{id: id}
 	}
 	m.mu.RUnlock()
 	if err := m.refreshDiscover(); err != nil {
@@ -2786,7 +2803,9 @@ func (m *Manager) releaseFileBorrow(f *File) {
 		return
 	}
 	if zombie {
-		_ = m.deleteZombieFile(f)
+		if err := m.deleteZombieFile(f); err != nil {
+			m.recordReleaseDeleteError(err)
+		}
 		f.refundProducerMetadata()
 		m.mu.Lock()
 		owner, charge := m.detachTerminalMetadataLocked()
@@ -2800,6 +2819,25 @@ func (m *Manager) releaseFileBorrow(f *File) {
 		if onReleased := m.onRetiredBorrowReleasedSnapshot(); onReleased != nil {
 			onReleased(f.ID)
 		}
+	}
+}
+
+func (m *Manager) recordReleaseDeleteError(err error) {
+	if m == nil || err == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closeErr == nil {
+		m.closeReceipt.manager, m.closeReceipt.cause = m, err
+		m.closeErr = &m.closeReceipt
+		if m.producerMetadata != nil {
+			m.producerMetadata.CleanupFailed()
+		}
+	}
+	existing := m.closeErr
+	m.mu.Unlock()
+	if existing != nil && !errors.Is(existing, err) {
+		log.Printf("valuelog: deferred zombie deletion after read borrow release failed: %v", err)
 	}
 }
 
