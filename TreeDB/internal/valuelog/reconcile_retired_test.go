@@ -306,8 +306,9 @@ func TestManagerReconcileRetiredSegments(t *testing.T) {
 		})
 
 		identity := retirementIdentityAtPath(t, path)
-		first.SetOnSegmentRetired(func(fileID uint32) error {
-			return second.ReconcileRetiredSegment(fileID)
+		reconcileErrCh := make(chan error, 1)
+		first.SetOnSegmentRetired(func(fileID uint32) {
+			reconcileErrCh <- second.ReconcileRetiredSegment(fileID)
 		})
 
 		// Simulate indexVacuumLeafGuard / active snapshot pinning the segment across
@@ -327,9 +328,12 @@ func TestManagerReconcileRetiredSegments(t *testing.T) {
 			t.Fatalf("expected 2 observers while pinned, got %d", got)
 		}
 
-		// Releasing held deletes the zombie and invokes SetOnSegmentRetired -> second reconciles in O(1).
+		// Releasing held deletes the zombie and invokes SetOnSegmentRetired -> second reconciles.
 		if err := first.Release(held); err != nil {
 			t.Fatalf("first.Release(held): %v", err)
+		}
+		if err := <-reconcileErrCh; err != nil {
+			t.Fatalf("secondary ReconcileRetiredSegment: %v", err)
 		}
 		second.mu.RLock()
 		_, stillTracked := second.files[id]
@@ -339,6 +343,193 @@ func TestManagerReconcileRetiredSegments(t *testing.T) {
 		}
 		if got := registry.ObserverCount(identity); got != 0 {
 			t.Fatalf("registry observer count=%d, want 0 after deferred zombie release", got)
+		}
+	})
+
+	t.Run("on_segment_retired_does_not_corrupt_primary_release_on_secondary_failure", func(t *testing.T) {
+		dir := t.TempDir()
+		id, path := writeIdentityPinTestSegment(t, dir)
+		registry := rootpublication.NewIdentityPinRegistry()
+
+		first, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := first.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		second, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second.mu.RLock()
+		original := second.files[id]
+		second.mu.RUnlock()
+		identity := retirementIdentityAtPath(t, path)
+
+		// Pre-close secondary handle so secondary reconciliation fails with os.ErrClosed.
+		if err := original.File.Close(); err != nil {
+			t.Fatalf("pre-close secondary handle: %v", err)
+		}
+
+		notified := make(chan uint32, 1)
+		first.SetOnSegmentRetired(func(fileID uint32) {
+			select {
+			case notified <- fileID:
+			default:
+			}
+		})
+
+		held := first.CurrentSetNoRefresh()
+		if err := first.MarkZombie(id); err != nil {
+			_ = first.Release(held)
+			t.Fatal(err)
+		}
+		// Primary Release MUST succeed cleanly without inheriting secondary failures.
+		if err := first.Release(held); err != nil {
+			t.Fatalf("first.Release(held) failed: %v", err)
+		}
+		if err := first.CleanupError(); err != nil {
+			t.Fatalf("first.CleanupError() = %v, want nil", err)
+		}
+		if got := <-notified; got != id {
+			t.Fatalf("notified fileID=%d, want %d", got, id)
+		}
+
+		// Secondary reconcile surfaces ManagerCleanupFailure and preserves CleanupError.
+		err = second.ReconcileRetiredSegment(id)
+		var receipt *ManagerCleanupFailure
+		if !errors.Is(err, os.ErrClosed) || !errors.As(err, &receipt) {
+			t.Fatalf("secondary ReconcileRetiredSegment = %v, want ManagerCleanupFailure(os.ErrClosed)", err)
+		}
+		if !errors.Is(second.CleanupError(), os.ErrClosed) {
+			t.Fatalf("second.CleanupError() = %v, want os.ErrClosed", second.CleanupError())
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("registry observer count=%d, want 0", got)
+		}
+		if !errors.Is(second.Close(), os.ErrClosed) {
+			t.Fatalf("second.Close() dropped secondary cleanup receipt")
+		}
+	})
+
+	t.Run("fileFor_discovers_live_segment_despite_unrelated_retired_conflict", func(t *testing.T) {
+		dir := t.TempDir()
+		idA, pathA := writeIdentityPinTestSegment(t, dir)
+		registry := rootpublication.NewIdentityPinRegistry()
+
+		first, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := first.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		second, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := second.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		if removed, err := first.RemoveSegmentIfUnpinned(idA); err != nil || !removed {
+			t.Fatalf("first.RemoveSegmentIfUnpinned(%d): removed=%t err=%v", idA, removed, err)
+		}
+		// Put a directory at retired pathA so live discovery skips it while
+		// ReconcileRetiredSegments fails closed on pathA.
+		if err := os.Mkdir(pathA, 0o700); err != nil {
+			t.Fatalf("Mkdir(%s): %v", pathA, err)
+		}
+		// Create a brand new live segment B on disk not yet known to second.
+		idB := writeTestSegment(t, dir, 0, 2, 99, []byte("live-segment-b"))
+
+		// Lazy lookup via fileFor(idB) must discover and serve live segment B.
+		fB, err := second.fileFor(idB)
+		if err != nil || fB == nil || fB.ID != idB {
+			t.Fatalf("second.fileFor(%d) = (%v, %v), want live segment B", idB, fB, err)
+		}
+		// Explicit Refresh() must still surface the reconciliation refusal on retired pathA.
+		if err := second.Refresh(); err == nil {
+			t.Fatalf("second.Refresh() = nil, want conflict error for directory at retired pathA")
+		}
+	})
+
+	t.Run("pinned_borrow_release_notifies_reconciler_immediately", func(t *testing.T) {
+		dir := t.TempDir()
+		id, path := writeIdentityPinTestSegment(t, dir)
+		registry := rootpublication.NewIdentityPinRegistry()
+
+		first, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := first.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		second, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := second.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+
+		releasedCh := make(chan uint32, 1)
+		second.SetOnRetiredBorrowReleased(func(fileID uint32) {
+			select {
+			case releasedCh <- fileID:
+			default:
+			}
+		})
+
+		identity := retirementIdentityAtPath(t, path)
+		set := second.CurrentSetNoRefresh()
+		if removed, err := first.RemoveSegmentIfUnpinned(id); err != nil || !removed {
+			_ = second.Release(set)
+			t.Fatalf("first.RemoveSegmentIfUnpinned(%d): removed=%t err=%v", id, removed, err)
+		}
+
+		// Reconciling while pinned leaves file intact and marks pendingRetiredReconcile.
+		if err := second.ReconcileRetiredSegments(); err != nil {
+			_ = second.Release(set)
+			t.Fatalf("ReconcileRetiredSegments while pinned: %v", err)
+		}
+		if got := registry.ObserverCount(identity); got != 1 {
+			_ = second.Release(set)
+			t.Fatalf("observer count while pinned=%d, want 1", got)
+		}
+
+		// Releasing the last borrow triggers onRetiredBorrowReleased immediately.
+		if err := second.Release(set); err != nil {
+			t.Fatalf("second.Release(set): %v", err)
+		}
+		select {
+		case gotID := <-releasedCh:
+			if gotID != id {
+				t.Fatalf("onRetiredBorrowReleased got fileID=%d, want %d", gotID, id)
+			}
+		default:
+			t.Fatal("onRetiredBorrowReleased did not fire when last pinned retired borrow released")
+		}
+		if err := second.ReconcileRetiredSegment(id); err != nil {
+			t.Fatalf("post-release ReconcileRetiredSegment(%d): %v", id, err)
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("observer count after post-release reconcile=%d, want 0", got)
 		}
 	})
 }

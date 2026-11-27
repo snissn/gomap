@@ -5581,9 +5581,11 @@ func (db *DB) Zipper() *zipper.Zipper {
 	return idx.zipper
 }
 
-// SetPostValueLogGCHook registers an optional callback invoked after a
-// non-dry-run ValueLogGC pass deletes or leaves pending segments. The callback
-// runs strictly outside publishPrepareMu and valueLogPublicationMu; any non-nil
+// SetPostValueLogGCHook registers an optional callback invoked after every
+// non-dry-run ValueLogGC pass. The callback runs strictly outside
+// publishPrepareMu and valueLogPublicationMu, while maintenanceMu may still be
+// held; callbacks must not invoke APIs that acquire maintenanceMu (such as
+// CaptureRecoverableRootSet or nested maintenance operations). Any non-nil
 // error is propagated outward from ValueLogGC.
 func (db *DB) SetPostValueLogGCHook(fn func() error) {
 	if db == nil {
@@ -5604,15 +5606,22 @@ func (db *DB) postValueLogGCHookSnapshot() func() error {
 	return fn
 }
 
-// SetValueLogSegmentRetiredHook registers an optional callback invoked by the
-// backend value-log manager after physical deletion and registry retirement
-// complete for a segment (including deferred snapshot release, leaf-log GC, and
-// retry completion).
-func (db *DB) SetValueLogSegmentRetiredHook(fn func(fileID uint32) error) {
-	if db == nil || db.valueLogManager == nil {
+// SetValueLogSegmentRetiredHook registers an optional non-blocking notification
+// callback invoked by the backend value-log manager after physical deletion and
+// registry retirement complete for a segment (including deferred snapshot
+// release, leaf-log GC, and retry completion). Callbacks must not acquire
+// cross-layer locks or block.
+func (db *DB) SetValueLogSegmentRetiredHook(fn func(fileID uint32)) {
+	if db == nil {
 		return
 	}
-	db.valueLogManager.SetOnSegmentRetired(fn)
+	db.mu.RLock()
+	vm := db.valueLogManager
+	db.mu.RUnlock()
+	if vm == nil {
+		return
+	}
+	vm.SetOnSegmentRetired(fn)
 }
 
 // SetZipperParallelMergePressureSource installs an optional pressure signal for

@@ -809,7 +809,14 @@ func (m *Manager) ReconcileRetiredSegments() error {
 	var parentsToClose []*os.File
 	var errs []error
 	for _, file := range m.files {
-		if file == nil || file.IsZombie.Load() || file.closed.Load() || !m.ownsUnpinnedRetiredSegmentLocked(file) {
+		if file == nil || file.IsZombie.Load() || file.closed.Load() {
+			continue
+		}
+		if !m.ownsUnpinnedRetiredSegmentLocked(file) {
+			if file.stableObserved && file.RefCount.Load() > 0 && file.deletionAdmissions == 0 &&
+				m.stableResourcePins.IsRetired(file.stableIdentity) {
+				file.pendingRetiredReconcile.Store(true)
+			}
 			continue
 		}
 		if _, parentToClose, err := m.prepareRetirementIdentityLocked(file); err != nil {
@@ -855,7 +862,15 @@ func (m *Manager) ReconcileRetiredSegment(id uint32) error {
 		return nil
 	}
 	file := m.files[id]
-	if file == nil || file.IsZombie.Load() || file.closed.Load() || !m.ownsUnpinnedRetiredSegmentLocked(file) {
+	if file == nil || file.IsZombie.Load() || file.closed.Load() {
+		m.mu.Unlock()
+		return nil
+	}
+	if !m.ownsUnpinnedRetiredSegmentLocked(file) {
+		if file.stableObserved && file.RefCount.Load() > 0 && file.deletionAdmissions == 0 &&
+			m.stableResourcePins.IsRetired(file.stableIdentity) {
+			file.pendingRetiredReconcile.Store(true)
+		}
 		m.mu.Unlock()
 		return nil
 	}
@@ -874,12 +889,13 @@ func (m *Manager) ReconcileRetiredSegment(id uint32) error {
 	return nil
 }
 
-// SetOnSegmentRetired registers an optional callback invoked outside m.mu after
-// this manager completes physical deletion and commits registry retirement for
-// a segment. Secondary managers sharing the same pin registry can use this to
-// reconcile their stale zero-reference handles immediately in O(1), including
-// when deletion happens on delayed snapshot release or background retry.
-func (m *Manager) SetOnSegmentRetired(fn func(fileID uint32) error) {
+// SetOnSegmentRetired registers an optional non-blocking notification callback
+// invoked outside m.mu after this manager completes physical deletion and
+// commits registry retirement for a segment. Callbacks must not acquire locks
+// across DB layers or perform blocking I/O; secondary reconciliation must run
+// asynchronously outside primary locks and never pollute primary deletion
+// outcomes.
+func (m *Manager) SetOnSegmentRetired(fn func(fileID uint32)) {
 	if m == nil {
 		return
 	}
@@ -888,12 +904,36 @@ func (m *Manager) SetOnSegmentRetired(fn func(fileID uint32) error) {
 	m.onSegmentRetiredMu.Unlock()
 }
 
-func (m *Manager) onSegmentRetiredSnapshot() func(fileID uint32) error {
+func (m *Manager) onSegmentRetiredSnapshot() func(fileID uint32) {
 	if m == nil {
 		return nil
 	}
 	m.onSegmentRetiredMu.Lock()
 	fn := m.onSegmentRetired
+	m.onSegmentRetiredMu.Unlock()
+	return fn
+}
+
+// SetOnRetiredBorrowReleased registers an optional non-blocking notification
+// callback invoked outside m.mu when the last active Set borrow releases a
+// non-zombie segment that was previously observed as retired while pinned.
+// Normal non-retired releases perform only a single atomic load and never
+// query the pin registry.
+func (m *Manager) SetOnRetiredBorrowReleased(fn func(fileID uint32)) {
+	if m == nil {
+		return
+	}
+	m.onSegmentRetiredMu.Lock()
+	m.onRetiredBorrowReleased = fn
+	m.onSegmentRetiredMu.Unlock()
+}
+
+func (m *Manager) onRetiredBorrowReleasedSnapshot() func(fileID uint32) {
+	if m == nil {
+		return nil
+	}
+	m.onSegmentRetiredMu.Lock()
+	fn := m.onRetiredBorrowReleased
 	m.onSegmentRetiredMu.Unlock()
 	return fn
 }
@@ -1043,9 +1083,7 @@ func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublicati
 	m.mu.Unlock()
 	finishErr := m.finishOriginalDeletion(file, errors.Join(removeErr, unobserveErr), parent)
 	if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
-		if retiredErr := onRetired(file.ID); retiredErr != nil {
-			finishErr = errors.Join(finishErr, retiredErr)
-		}
+		onRetired(file.ID)
 	}
 	return finishErr
 }
@@ -1773,9 +1811,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	m.mu.Unlock()
 	finishErr := m.finishOriginalDeletion(file, errors.Join(unlinkErr, syncErr, unobserveErr), parent)
 	if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
-		if retiredErr := onRetired(file.ID); retiredErr != nil {
-			finishErr = errors.Join(finishErr, retiredErr)
-		}
+		onRetired(file.ID)
 	}
 	return finishErr
 }

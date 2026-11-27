@@ -5308,7 +5308,39 @@ func (db *DB) forgetValueLogRetain(path string) {
 	if db.valueLogRetain != nil {
 		delete(db.valueLogRetain, path)
 	}
+	db.untrackExternalValueLogSegmentValueLogMuHeld(path)
 	db.valueLogMu.Unlock()
+}
+
+func (db *DB) untrackExternalValueLogSegment(path string) {
+	if db == nil || path == "" {
+		return
+	}
+	db.valueLogMu.Lock()
+	db.untrackExternalValueLogSegmentValueLogMuHeld(path)
+	db.valueLogMu.Unlock()
+}
+
+func (db *DB) untrackExternalValueLogSegmentValueLogMuHeld(path string) {
+	if db.externalVlogClosedSizes == nil || path == "" {
+		return
+	}
+	size, ok := db.externalVlogClosedSizes[path]
+	if !ok {
+		return
+	}
+	delete(db.externalVlogClosedSizes, path)
+	db.valueLogRetainedClosedBytes.Add(-size)
+	for {
+		cur := db.externalVlogClosedBytes.Load()
+		next := cur - size
+		if next < 0 {
+			next = 0
+		}
+		if db.externalVlogClosedBytes.CompareAndSwap(cur, next) {
+			break
+		}
+	}
 }
 
 func (db *DB) cleanupMissingRetainedValueLog(path string) bool {
@@ -5423,11 +5455,22 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 	for path := range db.valueLogRetain {
 		paths = append(paths, path)
 	}
+	var externalSizes map[string]int64
+	if len(db.externalVlogClosedSizes) > 0 {
+		externalSizes = make(map[string]int64, len(db.externalVlogClosedSizes))
+		for path, size := range db.externalVlogClosedSizes {
+			externalSizes[path] = size
+		}
+	}
 	db.valueLogMu.Unlock()
 
 	pathSizes := make(map[string]int64)
 	currentSizes := make(map[string]int64)
 	pathClasses := make(map[string]uint8)
+	for path, size := range externalSizes {
+		pathSizes[path] = size
+		pathClasses[path] = vlogGenerationClassHot
+	}
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			l := &db.lanes[i]
@@ -7024,7 +7067,10 @@ func (db *DB) valueLogClosedSegmentSize(path string) int64 {
 	}
 	l := db.valueLogLaneByID(laneID)
 	if l == nil {
-		return 0
+		db.valueLogMu.Lock()
+		size := db.externalVlogClosedSizes[path]
+		db.valueLogMu.Unlock()
+		return size
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
@@ -8150,13 +8196,72 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	return db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false)
 }
 
-// ReconcileRetiredValueLogReader closes and detaches unpinned value-log segment
-// handles held by the cached reader whose physical identities have already been
-// retired by another manager sharing the same pin registry.
-func (db *DB) ReconcileRetiredValueLogReader() error {
+// NotifyRetiredValueLogSegment schedules an asynchronous, coalesced
+// reconciliation of retired segments on the cached value-log reader.
+//
+// It is strictly non-blocking and acquires no locks so primary backend
+// retirement paths (including deferred Snapshot.Close / Release and retry
+// completion) never block or invert locks across DB layers.
+func (db *DB) NotifyRetiredValueLogSegment(_ uint32) {
+	if db == nil || db.closing.Load() || db.retiredVlogReconcileCh == nil {
+		return
+	}
+	select {
+	case db.retiredVlogReconcileCh <- struct{}{}:
+	default:
+	}
+}
+
+func (db *DB) recordRetiredVlogReconcileError(err error) {
+	if db == nil || err == nil {
+		return
+	}
+	db.retiredVlogReconcileErrMu.Lock()
+	db.retiredVlogReconcileErr = errors.Join(db.retiredVlogReconcileErr, err)
+	db.retiredVlogReconcileErrMu.Unlock()
+}
+
+func (db *DB) consumeRetiredVlogReconcileError() error {
+	if db == nil {
+		return nil
+	}
+	db.retiredVlogReconcileErrMu.Lock()
+	err := db.retiredVlogReconcileErr
+	db.retiredVlogReconcileErr = nil
+	db.retiredVlogReconcileErrMu.Unlock()
+	return err
+}
+
+func (db *DB) retiredVlogReconcileLoop() {
+	defer db.wg.Done()
+	for {
+		if db.closing.Load() {
+			return
+		}
+		select {
+		case <-db.closeCh:
+			return
+		case <-db.retiredVlogReconcileCh:
+			if db.closing.Load() {
+				return
+			}
+			if err := db.runRetiredValueLogReaderReconcile(true); err != nil {
+				db.recordRetiredVlogReconcileError(err)
+				db.reportError(err)
+			}
+		}
+	}
+}
+
+func (db *DB) runRetiredValueLogReaderReconcile(async bool) error {
 	if db == nil || db.closing.Load() {
 		return nil
 	}
+	db.retiredVlogReconcileRunMu.Lock()
+	defer db.retiredVlogReconcileRunMu.Unlock()
+	if db.closing.Load() {
+		return nil
+	}
 	db.valueLogReaderMu.RLock()
 	if db.closing.Load() {
 		db.valueLogReaderMu.RUnlock()
@@ -8165,29 +8270,37 @@ func (db *DB) ReconcileRetiredValueLogReader() error {
 	reader := db.valueLogReader
 	db.valueLogReaderMu.RUnlock()
 	if reader == nil {
-		return nil
+		if async {
+			return nil
+		}
+		return db.consumeRetiredVlogReconcileError()
 	}
-	return reader.ReconcileRetiredSegments()
+	reconcileErr := reader.ReconcileRetiredSegments()
+	if async {
+		return reconcileErr
+	}
+	cleanupErr := reader.CleanupError()
+	asyncErr := db.consumeRetiredVlogReconcileError()
+	var errs []error
+	if reconcileErr != nil {
+		errs = append(errs, reconcileErr)
+	}
+	if cleanupErr != nil && !errors.Is(reconcileErr, cleanupErr) {
+		errs = append(errs, cleanupErr)
+	}
+	if asyncErr != nil && !errors.Is(reconcileErr, asyncErr) && !errors.Is(cleanupErr, asyncErr) {
+		errs = append(errs, asyncErr)
+	}
+	return errors.Join(errs...)
 }
 
-// ReconcileRetiredValueLogSegment closes and detaches a single unpinned
-// value-log segment handle held by the cached reader if its physical identity
-// has already been retired in the shared pin registry.
-func (db *DB) ReconcileRetiredValueLogSegment(fileID uint32) error {
-	if db == nil || fileID == 0 || db.closing.Load() {
-		return nil
-	}
-	db.valueLogReaderMu.RLock()
-	if db.closing.Load() {
-		db.valueLogReaderMu.RUnlock()
-		return nil
-	}
-	reader := db.valueLogReader
-	db.valueLogReaderMu.RUnlock()
-	if reader == nil {
-		return nil
-	}
-	return reader.ReconcileRetiredSegment(fileID)
+// ReconcileRetiredValueLogReader closes and detaches unpinned value-log segment
+// handles held by the cached reader whose physical identities have already been
+// retired by another manager sharing the same pin registry. It serializes with
+// the background retired-segment reconciler and surfaces any live reconciliation
+// error, sticky reader cleanup failure, or unconsumed async reconciliation error.
+func (db *DB) ReconcileRetiredValueLogReader() error {
+	return db.runRetiredValueLogReaderReconcile(false)
 }
 
 // admittedCompletion is valid only while the original maintenance flushMu lease
@@ -8200,8 +8313,10 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	reader := db.valueLogReader
 	db.valueLogReaderMu.RUnlock()
 	if reader != nil {
-		// Refresh also reconciles retired segments on reader.
 		if err := reader.Refresh(); err != nil {
+			return err
+		}
+		if err := db.ReconcileRetiredValueLogReader(); err != nil {
 			return err
 		}
 	}
@@ -9342,12 +9457,18 @@ type DB struct {
 	valueLogRewriteMinSegmentAge   time.Duration
 	valueLogReaderMu               sync.RWMutex
 	valueLogReader                 *valuelog.Manager
+	retiredVlogReconcileCh         chan struct{}
+	retiredVlogReconcileRunMu      sync.Mutex
+	retiredVlogReconcileErrMu      sync.Mutex
+	retiredVlogReconcileErr        error
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
 	valueLogColdLanes              []int
 	valueLogMu                     sync.Mutex
 	valueLogRetain                 map[string]struct{}
+	externalVlogClosedSizes        map[string]int64
+	externalVlogClosedBytes        atomic.Int64
 	backendReadVlogDirtySeq        atomic.Uint64
 	backendReadVlogFlushedSeq      atomic.Uint64
 	valueLogWarned                 atomic.Bool
@@ -13425,6 +13546,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutableShardMask:                           uint64(shardCount - 1),
 		hashSortedIndexer:                          indexer,
 		closeCh:                                    make(chan struct{}),
+		retiredVlogReconcileCh:                     make(chan struct{}, 1),
 		flushCh:                                    make(chan struct{}, 1),
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
@@ -13535,6 +13657,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			l := db.valueLogLaneByID(seg.lane)
 			if l == nil {
 				if seg.valueLog {
+					if db.splitValueLog {
+						if db.externalVlogClosedSizes == nil {
+							db.externalVlogClosedSizes = make(map[string]int64)
+						}
+						db.externalVlogClosedSizes[seg.path] = seg.size
+						db.externalVlogClosedBytes.Add(seg.size)
+						if _, retained := db.valueLogRetain[seg.path]; retained {
+							db.valueLogRetainedClosedBytes.Add(seg.size)
+						}
+					}
 					continue
 				}
 				if seg.lane < 0 || seg.lane >= len(db.lanes) {
@@ -13623,6 +13755,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.valueLogReader.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
 			return db.flushValueLogForFileIDWithSize(fileID)
 		})
+		db.valueLogReader.SetOnRetiredBorrowReleased(db.NotifyRetiredValueLogSegment)
 	}
 	db.installBackendValueLogReadBarrier()
 
@@ -13646,12 +13779,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead, db.beginRawForegroundRead)
 	}
 
-	// Start background flusher
-	db.wg.Add(1)
+	// Start background flusher and retired value-log reader reconciler
+	db.wg.Add(2)
 	if db.cow != nil {
 		db.cow.flushWake = db.flushCh
 	}
 	go db.flushLoop()
+	go db.retiredVlogReconcileLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
 	registerTreeDBExpvarStatsDB(db)
@@ -27151,6 +27285,7 @@ func (db *DB) Close() error {
 	db.valueLogReader = nil
 	db.valueLogReaderMu.Unlock()
 	if reader != nil {
+		reader.SetOnRetiredBorrowReleased(nil)
 		if err := reader.Close(); err != nil {
 			errs = append(errs, err)
 		}
@@ -29842,6 +29977,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 	}
 	l := db.valueLogLaneByID(laneID)
 	if l == nil {
+		db.untrackExternalValueLogSegment(path)
 		return
 	}
 	db.untrackValueLogSegmentFromLane(l, path)
@@ -32701,6 +32837,15 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	if splitValueLog && valueLogOn {
+		db.valueLogMu.Lock()
+		extSegments := int64(len(db.externalVlogClosedSizes))
+		db.valueLogMu.Unlock()
+		extBytes := db.externalVlogClosedBytes.Load()
+		if extBytes < 0 {
+			extBytes = 0
+		}
+		vlogShapeSegmentsTotal += extSegments
+		vlogShapeBytesTotal += extBytes
 		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)
 		stats["treedb.cache.vlog_shape.bytes_total"] = fmt.Sprintf("%d", vlogShapeBytesTotal)
 		stats["treedb.cache.vlog_shape.l0.segments_total"] = fmt.Sprintf("%d", vlogShapeL0Segments)

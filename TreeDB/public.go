@@ -1370,8 +1370,8 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	backend.SetPostValueLogGCHook(func() error {
 		return cached.ReconcileRetiredValueLogReader()
 	})
-	backend.SetValueLogSegmentRetiredHook(func(fileID uint32) error {
-		return cached.ReconcileRetiredValueLogSegment(fileID)
+	backend.SetValueLogSegmentRetiredHook(func(fileID uint32) {
+		cached.NotifyRetiredValueLogSegment(fileID)
 	})
 	if cached.COWMode() {
 		// Bind the original public writer once. Each transaction still owns

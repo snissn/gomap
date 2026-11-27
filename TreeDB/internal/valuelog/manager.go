@@ -56,6 +56,9 @@ type File struct {
 	stableIdentity     rootpublication.StableIdentity
 	stableNamespace    string
 	stableObserved     bool
+	// pendingRetiredReconcile packs into the 7-byte alignment hole after
+	// stableObserved so File keeps its exact 3104-byte layout.
+	pendingRetiredReconcile atomic.Bool
 	// Registered parent authority is immutable and independent of pin observation.
 	// Registration closes its short-lived handle; retirement retains its own.
 	registeredParentIdentity rootpublication.StableIdentity
@@ -1551,7 +1554,8 @@ type Manager struct {
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
 	onSegmentRetiredMu          sync.Mutex
-	onSegmentRetired            func(fileID uint32) error
+	onSegmentRetired            func(fileID uint32)
+	onRetiredBorrowReleased     func(fileID uint32)
 }
 
 // PreparedReadProfile reports the configuration that bounds value-log reads
@@ -2058,8 +2062,21 @@ func (m *Manager) RefreshScanCount() uint64 {
 	return m.refreshScans.Load()
 }
 
-// Refresh scans the directory and registers any new segments.
+// Refresh scans the directory, registers any new segments, and reconciles
+// unpinned non-zombie segment observations whose identities are already retired
+// in the shared pin registry.
 func (m *Manager) Refresh() error {
+	if err := m.refreshDiscover(); err != nil {
+		return err
+	}
+	return m.ReconcileRetiredSegments()
+}
+
+// refreshDiscover scans configured segment directories and registers new live
+// segments without running unrelated secondary retired-segment reconciliation.
+// Lazy read lookup (fileFor) uses this so a conflict on an unrelated retired
+// segment cannot block reading a newly discovered live segment.
+func (m *Manager) refreshDiscover() error {
 	m.refreshScans.Add(1)
 	m.mu.RLock()
 	if m.closing {
@@ -2124,7 +2141,7 @@ func (m *Manager) Refresh() error {
 		}
 		m.mu.Unlock()
 	}
-	return m.ReconcileRetiredSegments()
+	return nil
 }
 
 func (m *Manager) recoverStableDeleteDirOnce(dir string) error {
@@ -2688,7 +2705,7 @@ func (m *Manager) fileFor(id uint32) (*File, error) {
 	if ok {
 		return f, nil
 	}
-	if err := m.Refresh(); err != nil {
+	if err := m.refreshDiscover(); err != nil {
 		return nil, err
 	}
 	m.mu.RLock()
@@ -2761,6 +2778,10 @@ func (m *Manager) releaseOriginalFileBorrow(f *File) error {
 		err = m.finishTerminalFile(f)
 	} else if f.IsZombie.Load() {
 		err = m.deleteZombieFile(f)
+	} else if f.pendingRetiredReconcile.Load() && f.pendingRetiredReconcile.CompareAndSwap(true, false) {
+		if onReleased := m.onRetiredBorrowReleasedSnapshot(); onReleased != nil {
+			onReleased(f.ID)
+		}
 	}
 	// This method itself checks actual physical completion and live operands;
 	// consumption of a reference is not a successful last physical Close.
@@ -2883,9 +2904,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
 			}
 			if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
-				if retiredErr := onRetired(f.ID); retiredErr != nil {
-					log.Printf("valuelog: post-retirement reconcile failed for %s: %v", f.Path, retiredErr)
-				}
+				onRetired(f.ID)
 			}
 			return
 		} else if !isWindowsSharingViolationError(removeErr) {

@@ -33,6 +33,9 @@ func countOpenDeletedSegmentFDs(t *testing.T, valueLogDir string, deletedInodes 
 	}
 	f, err := os.Open(fdDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0
+		}
 		t.Fatalf("Open(%s): %v", fdDir, err)
 	}
 	names, err := f.Readdirnames(-1)

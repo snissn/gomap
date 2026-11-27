@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -65,20 +67,37 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 			t.Fatalf("cycle %d OpenBackendWithCachedLeafLogStats: %v", cycle, err)
 		}
 
-		// Verify reopen did not explode hot lanes after prior rewrite lanes (e.g. lane 254).
-		hotLanes := -1
-		if st := statsFn(); st != nil {
-			if raw, ok := st["treedb.cache.journal_lanes.hot"]; ok {
-				parsed, parseErr := strconv.Atoi(raw)
-				if parseErr != nil {
-					_ = cleanup()
-					t.Fatalf("cycle %d parse treedb.cache.journal_lanes.hot=%q: %v", cycle, raw, parseErr)
-				}
-				hotLanes = parsed
-				if hotLanes > opts.JournalLanes {
-					t.Errorf("cycle %d reopen exploded hot lanes: got %d, want <= %d", cycle, hotLanes, opts.JournalLanes)
-				}
-			}
+		// Verify reopen did not explode effective or hot lanes after prior rewrite lanes (e.g. lane 254).
+		st := statsFn()
+		if st == nil {
+			_ = cleanup()
+			t.Fatalf("cycle %d statsFn returned nil", cycle)
+		}
+		rawEffective, ok := st["treedb.cache.journal_lanes.effective"]
+		if !ok {
+			_ = cleanup()
+			t.Fatalf("cycle %d missing stat treedb.cache.journal_lanes.effective", cycle)
+		}
+		effectiveLanes, parseErr := strconv.Atoi(rawEffective)
+		if parseErr != nil {
+			_ = cleanup()
+			t.Fatalf("cycle %d parse treedb.cache.journal_lanes.effective=%q: %v", cycle, rawEffective, parseErr)
+		}
+		if effectiveLanes > opts.JournalLanes {
+			t.Errorf("cycle %d reopen exploded effective lanes: got %d, want <= %d", cycle, effectiveLanes, opts.JournalLanes)
+		}
+		rawHot, ok := st["treedb.cache.journal_lanes.hot"]
+		if !ok {
+			_ = cleanup()
+			t.Fatalf("cycle %d missing stat treedb.cache.journal_lanes.hot", cycle)
+		}
+		hotLanes, parseErr := strconv.Atoi(rawHot)
+		if parseErr != nil {
+			_ = cleanup()
+			t.Fatalf("cycle %d parse treedb.cache.journal_lanes.hot=%q: %v", cycle, rawHot, parseErr)
+		}
+		if hotLanes > opts.JournalLanes {
+			t.Errorf("cycle %d reopen exploded hot lanes: got %d, want <= %d", cycle, hotLanes, opts.JournalLanes)
 		}
 
 		// Write and overwrite values via the backend value-log appender so
@@ -260,8 +279,15 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 				cycle, matchedInodeFDs, procDeletedFDs, staleObservers)
 		}
 
-		// Read-back all expected keys before closing this cycle.
+		// Read-back all expected keys (including Has check for empty values) before closing this cycle.
 		for k, want := range expected {
+			if len(want) == 0 {
+				exists, hasErr := backend.Has([]byte(k))
+				if hasErr != nil || !exists {
+					_ = cleanup()
+					t.Fatalf("cycle %d Has(%q)=(%t, %v), want (true, nil)", cycle, k, exists, hasErr)
+				}
+			}
 			got, getErr := backend.Get([]byte(k))
 			if getErr != nil {
 				_ = cleanup()
@@ -289,6 +315,12 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 		}
 	}()
 	for k, want := range expected {
+		if len(want) == 0 {
+			exists, hasErr := reopen.Has([]byte(k))
+			if hasErr != nil || !exists {
+				t.Fatalf("final reopen Has(%q)=(%t, %v), want (true, nil)", k, exists, hasErr)
+			}
+		}
 		got, err := reopen.Get([]byte(k))
 		if err != nil {
 			t.Fatalf("final reopen Get(%q): %v", k, err)
@@ -536,5 +568,242 @@ func TestOpen_CompactStorageNoDeletedFDs(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("Get(%q) mismatch", k)
 		}
+	}
+}
+
+func TestOpenBackendWithCachedLeafLog_DeferredSnapshotReleaseAsyncClosesDeletedFDs(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.JournalLanes = 2
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.Policy = ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 8 << 10
+
+	backend, cleanup, err := OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	}()
+
+	for round := 0; round < 6; round++ {
+		vals := make([][]byte, 64)
+		for i := range vals {
+			buf := make([]byte, 512)
+			for j := range buf {
+				buf[j] = byte((round*37 + i*19 + j*11) & 0xff)
+			}
+			vals[i] = buf
+		}
+		ptrs, err := backend.AppendValueLogValues(vals)
+		if err != nil {
+			t.Fatalf("round %d AppendValueLogValues: %v", round, err)
+		}
+		b := backend.NewBatch()
+		pb := b.(interface {
+			SetPointer([]byte, page.ValuePtr) error
+		})
+		for i := range vals {
+			if err := pb.SetPointer([]byte(fmt.Sprintf("ds-%03d", i)), ptrs[i]); err != nil {
+				_ = b.Close()
+				t.Fatalf("SetPointer: %v", err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			t.Fatalf("WriteSync: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Batch.Close: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		b := backend.NewBatch()
+		if err := b.Set([]byte(fmt.Sprintf("ds-bump-%d", i)), nil); err != nil {
+			_ = b.Close()
+			t.Fatalf("Set bump: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			t.Fatalf("WriteSync bump: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Batch.Close bump: %v", err)
+		}
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	type trackedSeg struct {
+		path     string
+		identity rootpublication.StableIdentity
+		inode    segmentInode
+		hasInode bool
+	}
+	var preSegments []trackedSeg
+	entries, err := os.ReadDir(valueLogDir)
+	if err != nil {
+		t.Fatalf("ReadDir(value_vlog): %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
+		}
+		p := filepath.Join(valueLogDir, entry.Name())
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatalf("Open(%s): %v", p, err)
+		}
+		id, idErr := rootpublication.StableIdentityFromFile(f)
+		_ = f.Close()
+		if idErr != nil {
+			t.Fatalf("StableIdentityFromFile(%s): %v", p, idErr)
+		}
+		ino, hasIno := statSegmentInode(p)
+		preSegments = append(preSegments, trackedSeg{path: p, identity: id, inode: ino, hasInode: hasIno})
+	}
+
+	// Pin all segments across ValueLogGC so deletion happens strictly AFTER
+	// ValueLogGC returns, when the snapshot closes, with no extra GC calls.
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	gcStats, err := backend.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if gcStats.SegmentsPending == 0 {
+		_ = snap.Close()
+		t.Fatalf("expected SegmentsPending > 0 while snapshot is held, got %+v", gcStats)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("snap.Close: %v", err)
+	}
+
+	registry := backend.ValueLogIdentityPinRegistry()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		deletedInodes := make(map[segmentInode]string)
+		deletedCount := 0
+		var staleObservers uint64
+		for _, seg := range preSegments {
+			if _, err := os.Stat(seg.path); os.IsNotExist(err) {
+				deletedCount++
+				if seg.hasInode {
+					deletedInodes[seg.inode] = seg.path
+				}
+				staleObservers += registry.ObserverCount(seg.identity)
+			}
+		}
+		matchedFDs, procDeletedFDs := countOpenDeletedSegmentFDs(t, valueLogDir, deletedInodes)
+		if deletedCount > 0 && staleObservers == 0 && matchedFDs == 0 && procDeletedFDs == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("async retired reconciler did not close deleted FDs after deferred snapshot release: deleted=%d staleObservers=%d matchedFDs=%d procDeletedFDs=%d",
+				deletedCount, staleObservers, matchedFDs, procDeletedFDs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestOpen_ReopenLane254PrunedByCompactStorage(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.JournalLanes = 4
+	opts.IndexOuterLeavesInValueLog = false
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.Policy = ValueLogGenerationHotWarmCold
+
+	// Initialize DB and close so maindb/value_vlog exists.
+	initDB, err := Open(opts)
+	if err != nil {
+		t.Fatalf("initial Open: %v", err)
+	}
+	if err := initDB.SetSync([]byte("live-key"), bytes.Repeat([]byte("l"), 512)); err != nil {
+		_ = initDB.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := initDB.Checkpoint(); err != nil {
+		_ = initDB.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := initDB.Close(); err != nil {
+		t.Fatalf("initial Close: %v", err)
+	}
+
+	// Plant a dead lane-254 rewrite segment on disk before reopening.
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	fileID, err := valuelog.EncodeFileID(254, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	lane254Path := valuelog.SegmentPath(valueLogDir, fileID)
+	w, err := valuelog.NewWriter(lane254Path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 9999, bytes.Repeat([]byte("stale-rewrite"), 64)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	info, err := os.Stat(lane254Path)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", lane254Path, err)
+	}
+	lane254Size := info.Size()
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen Open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("reopen Close: %v", err)
+		}
+	}()
+
+	st := db.Stats()
+	if hotLanes, err := strconv.Atoi(st["treedb.cache.journal_lanes.hot"]); err != nil || hotLanes > opts.JournalLanes {
+		t.Fatalf("reopen with lane-254 exploded hot lanes: %q (err=%v)", st["treedb.cache.journal_lanes.hot"], err)
+	}
+	if closedBytes, err := strconv.ParseInt(st["treedb.cache.vlog_retained_prune.closed_bytes"], 10, 64); err != nil || closedBytes < lane254Size {
+		t.Fatalf("reopened lane-254 missing from retained closed_bytes: got %q (err=%v), want >= %d",
+			st["treedb.cache.vlog_retained_prune.closed_bytes"], err, lane254Size)
+	}
+
+	if _, err := db.CompactStorage(context.Background(), CompactStorageOptions{
+		Mode: CompactStorageFull,
+	}); err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if _, err := os.Stat(lane254Path); !os.IsNotExist(err) {
+		t.Fatalf("dead reopened lane-254 segment %s was stranded after CompactStorage (stat err=%v)", lane254Path, err)
+	}
+	got, err := db.Get([]byte("live-key"))
+	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte("l"), 512)) {
+		t.Fatalf("live-key readback failed: err=%v len=%d", err, len(got))
 	}
 }

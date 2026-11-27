@@ -194,6 +194,29 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 		return nil
 	}
+	var publishPrepareLocked bool
+	unlockPublishPrepare := func() {
+		if publishPrepareLocked {
+			db.publishPrepareMu.Unlock()
+			publishPrepareLocked = false
+		}
+	}
+	defer unlockPublishPrepare()
+
+	runPostValueLogGCHook := func() error {
+		if opts.DryRun {
+			return nil
+		}
+		// Release publishPrepareMu strictly before invoking the post-GC hook so
+		// secondary managers (e.g. cached.valueLogReader) reconcile retired handles
+		// outside publishPrepareMu and valueLogPublicationMu.
+		unlockPublishPrepare()
+		if hook := db.postValueLogGCHookSnapshot(); hook != nil {
+			return hook()
+		}
+		return nil
+	}
+
 	finishEmptyInventory := func() error {
 		if err := missingObservedSourceError(); err != nil {
 			return err
@@ -201,7 +224,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if !opts.DryRun && !db.readOnly {
 			db.persistValueLogRefTrackerBestEffort()
 		}
-		return nil
+		return runPostValueLogGCHook()
 	}
 	if !observedOnly {
 		if err := ctx.Err(); err != nil {
@@ -287,15 +310,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
-	var publishPrepareLocked bool
-	unlockPublishPrepare := func() {
-		if publishPrepareLocked {
-			db.publishPrepareMu.Unlock()
-			publishPrepareLocked = false
-		}
-	}
-	defer unlockPublishPrepare()
-
 	{
 		var err error
 		if opts.DryRun {
@@ -715,16 +729,8 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if !opts.DryRun && !db.readOnly {
 		db.persistValueLogRefTrackerBestEffort()
 	}
-	// Release publishPrepareMu strictly before invoking the post-GC hook so
-	// secondary managers (e.g. cached.valueLogReader) reconcile retired handles
-	// outside publishPrepareMu and valueLogPublicationMu.
-	unlockPublishPrepare()
-	if !opts.DryRun && (stats.SegmentsDeleted > 0 || stats.SegmentsPending > 0) {
-		if hook := db.postValueLogGCHookSnapshot(); hook != nil {
-			if err := hook(); err != nil {
-				return stats, err
-			}
-		}
+	if err := runPostValueLogGCHook(); err != nil {
+		return stats, err
 	}
 	return stats, nil
 }
