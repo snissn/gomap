@@ -909,14 +909,15 @@ stats update is not a valid source of recovery truth.
 Stable split-leaf manifest replacement syncs the immutable revision file and
 its retained parent, then syncs the separate compatibility file and its rename.
 The exact immutable token carries the completed content and namespace frontiers
-into the root publisher. When `durabilitycut` is disabled, staging and syncing
-that replacement revision (both bound immutable replacements and pre-enqueue
-operational manifest replacements on synchronous commits before a root inherits
-a manifest token) may execute concurrently with flushing and syncing
-the candidate's already-captured external dependency handles; both barriers
-complete before index data sync or any durable meta write (or fail and abandon
-any unpublished bound manifest), and the publisher skips re-syncing dependencies
-already covered by that barrier.
+into the root publisher. When `durabilitycut` is disabled, flushing and syncing the
+candidate's already-captured external dependency handles executes sequentially
+before staging and syncing that replacement revision (both bound immutable
+replacements and pre-enqueue operational manifest replacements on synchronous
+commits before a root inherits a manifest token); both barriers complete before
+index data sync or any durable meta write (a dependency sync failure aborts
+before creating the replacement manifest), avoiding same-directory journal and
+directory-lock contention while letting the publisher skip re-syncing
+dependencies already covered by that barrier.
 
 On platforms with stable relative namespace support, uncaptured split-leaf
 segment creation (`leaf_vlog/value-l*.log`) defers its parent-directory sync so

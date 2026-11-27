@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -239,46 +238,30 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	// operational manifest fixed while the staged successor does its file and
 	// directory syncs. No code may reacquire build locks under that gate.
 	opts.releaseRootConstruction()
+	if !durabilitycut.Enabled() && resources != nil {
+		// Sync the candidate's external dependency files (e.g. value-l255-*.log)
+		// sequentially BEFORE staging and syncing the new immutable manifest
+		// revision in leaf_vlog. Running sequentially avoids ext4 JBD2 and
+		// leaf_vlog parent i_rwsem contention while ensuring dependency bytes
+		// are durable before the manifest naming them is linked, and lets
+		// Publish() skip redundant re-syncing.
+		if flushErr := resources.FlushThrough(); flushErr != nil {
+			return result, update, fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
+		}
+		if syncErr := resources.SyncThrough(); syncErr != nil {
+			return result, update, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+		}
+		update.dependenciesPreSynced = true
+	}
 	// Sample the deferred leaf_vlog directory-sync sequence strictly before the
 	// stable manifest replacement syncs maindb/leaf_vlog. Any segment created
 	// before this load is provably durable in leaf_vlog once replacement returns.
 	leafDirSeq := db.leafLogDirUnsyncedSeq.Load()
-	if !durabilitycut.Enabled() && resources != nil {
-		// Overlap syncing the candidate's external dependency files (e.g.
-		// value-l255-*.log) with staging and syncing the new immutable manifest
-		// revision in leaf_vlog. Both barriers must finish before any index sync
-		// or durable meta write can proceed.
-		var (
-			wg         sync.WaitGroup
-			resSyncErr error
-		)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if flushErr := resources.FlushThrough(); flushErr != nil {
-				resSyncErr = fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
-				return
-			}
-			if syncErr := resources.SyncThrough(); syncErr != nil {
-				resSyncErr = fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
-			}
-		}()
-		update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
-		wg.Wait()
-		if err == nil {
-			db.markLeafLogDirSyncedThrough(leafDirSeq)
-		}
-		if err != nil || resSyncErr != nil {
-			return result, update, errors.Join(err, resSyncErr)
-		}
-		update.dependenciesPreSynced = true
-	} else {
-		update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
-		if err != nil {
-			return result, update, err
-		}
-		db.markLeafLogDirSyncedThrough(leafDirSeq)
+	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
+	if err != nil {
+		return result, update, err
 	}
+	db.markLeafLogDirSyncedThrough(leafDirSeq)
 	if pack != nil {
 		if err := opts.packedRootPublication.afterManifestPreparation(); err != nil {
 			return result, update, err
@@ -300,8 +283,10 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 // (authority.revision == 0, such as initial checkpoints before any pack).
 // Running operational manifest replacement here — before EnqueueBuilt — lets
 // its fsync(leaf_vlog) satisfy any deferred leaf_vlog segment creation barrier
-// in one directory sync and overlap with flushing/syncing the candidate's
-// external dependencies (e.g. value-l255-*.log) when durabilitycut is disabled.
+// in one directory sync and pre-sync external dependencies (e.g.
+// value-l255-*.log) sequentially before manifest replacement when
+// durabilitycut is disabled so Publish() skips redundant re-syncing without
+// ext4 JBD2/directory-lock contention.
 func (db *DB) prepareSyncOperationalLeafManifest(
 	resources *rootpublication.StableResourceSet,
 	next page.MetaPageBody,
@@ -332,31 +317,16 @@ func (db *DB) prepareSyncOperationalLeafManifest(
 	}
 	opts.releaseRootConstruction()
 	if !durabilitycut.Enabled() && resources != nil {
-		var (
-			wg         sync.WaitGroup
-			resSyncErr error
-		)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if flushErr := resources.FlushThrough(); flushErr != nil {
-				resSyncErr = fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
-				return
-			}
-			if syncErr := resources.SyncThrough(); syncErr != nil {
-				resSyncErr = fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
-			}
-		}()
-		manifestErr := db.replaceLeafGenerationManifest(toPersist)
-		wg.Wait()
-		if manifestErr != nil || resSyncErr != nil {
-			return nil, nil, false, errors.Join(manifestErr, resSyncErr)
+		if flushErr := resources.FlushThrough(); flushErr != nil {
+			return nil, nil, false, fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
+		}
+		if syncErr := resources.SyncThrough(); syncErr != nil {
+			return nil, nil, false, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
 		}
 		dependenciesPreSynced = true
-	} else {
-		if err := db.replaceLeafGenerationManifest(toPersist); err != nil {
-			return nil, nil, false, err
-		}
+	}
+	if err := db.replaceLeafGenerationManifest(toPersist); err != nil {
+		return nil, nil, false, err
 	}
 	db.leafGenerationManifestDirty.Store(false)
 	if !staged.changed {

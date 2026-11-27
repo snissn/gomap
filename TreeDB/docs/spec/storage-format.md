@@ -2306,12 +2306,13 @@ rebuild syncs may execute concurrently across distinct handles/directories when
 sequential execution when `durabilitycut` is enabled. When `durabilitycut` is
 disabled and a successor requires a stable leaf-generation manifest replacement
 (either an immutable bound revision or an operational manifest replacement on a
-synchronous commit before a root inherits a manifest token), the producer may
-overlap flushing and syncing the candidate's already-captured external
-dependency handles with staging and syncing the replacement manifest revision;
-both barriers complete (or abort and abandon any unpublished bound manifest)
-before index data sync or any durable meta write, and the publisher avoids
-re-syncing dependencies already covered by that barrier.
+synchronous commit before a root inherits a manifest token), the producer
+flushes and syncs the candidate's already-captured external dependency handles
+sequentially before staging and syncing the replacement manifest revision;
+both barriers complete before index data sync or any durable meta write (and a
+dependency sync failure aborts before creating the replacement manifest),
+avoiding same-directory journal/directory-lock contention while letting the
+publisher skip re-syncing dependencies already covered by that barrier.
 
 On platforms with stable relative namespace support, uncaptured split-leaf
 segment creation (`leaf_vlog/value-l*.log`) may defer its parent-directory

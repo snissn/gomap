@@ -354,7 +354,7 @@ func TestDeferredLeafLogDirSyncAmortizedAndFailClosed(t *testing.T) {
 	})
 }
 
-func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
+func TestPreSyncedDependenciesBeforeManifestReplacement(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("stable relative namespace unsupported on this platform")
 	}
@@ -364,8 +364,8 @@ func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
 		defer closeLeafLogLaneGCTestDB(t, database, leafLog)
 
 		// Without durabilitycut enabled, the first write that creates a leaf_vlog
-		// segment and replaces the immutable manifest overlaps dependency sync with
-		// manifest preparation and skips re-syncing in Publish().
+		// segment and replaces the manifest pre-syncs external dependencies
+		// sequentially before manifest replacement and skips re-syncing in Publish().
 		b := database.NewBatch()
 		for i := 0; i < 64; i++ {
 			if err := b.Set([]byte(fmt.Sprintf("pk-%04d", i)), bytes.Repeat([]byte("p"), 128)); err != nil {
@@ -391,11 +391,118 @@ func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
 		}
 		database.durablePublishMu.Unlock()
 		if leafPhysicalSyncs > 1 {
-			t.Fatalf("outer-leaf log physical syncs = %d, want <= 1 (no redundant sync in Publish after parallel manifest prep)", leafPhysicalSyncs)
+			t.Fatalf("outer-leaf log physical syncs = %d, want <= 1 (no redundant sync in Publish after pre-sync)", leafPhysicalSyncs)
 		}
 	})
 
-	t.Run("dependency_sync_error_abandons_unpublished_manifest", func(t *testing.T) {
+	t.Run("syncs_dependency_strictly_before_manifest_temp_create", func(t *testing.T) {
+		database, leafLog, opts := openLeafLogLaneGCTestDB(t, 64<<10)
+		defer closeLeafLogLaneGCTestDB(t, database, leafLog)
+
+		if err := database.SetSync([]byte("base"), bytes.Repeat([]byte("b"), 64)); err != nil {
+			t.Fatalf("SetSync base: %v", err)
+		}
+		leafDir := LeafLogDirPath(opts.Dir)
+		tmpFile, err := os.CreateTemp(t.TempDir(), "ordered-dep-*")
+		if err != nil {
+			t.Fatalf("CreateTemp: %v", err)
+		}
+		defer func() { _ = tmpFile.Close() }()
+		if _, err := tmpFile.Write([]byte("payload")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+
+		var mu sync.Mutex
+		var events []string
+		depToken, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+			Kind:           rootpublication.ResourceValueLog,
+			LogicalLane:    "test/order",
+			ResourceID:     "ordered-dep",
+			Generation:     998,
+			DiagnosticPath: "value_vlog/ordered-dep",
+			Reachability:   rootpublication.ReachabilityValueLogPointer,
+			File:           tmpFile,
+			Frontier:       rootpublication.DurableFrontier{Bytes: 7},
+			SyncThrough: func(*os.File, rootpublication.DurableFrontier) error {
+				mu.Lock()
+				events = append(events, "dep-sync")
+				mu.Unlock()
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewStableResourceToken: %v", err)
+		}
+		builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+		if err := builder.Add(depToken); err != nil {
+			depToken.Release()
+			t.Fatalf("Add dep token: %v", err)
+		}
+		depSet, err := builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatalf("Freeze dep set: %v", err)
+		}
+
+		packFileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 98)
+		if err != nil {
+			depSet.Release()
+			t.Fatalf("EncodeFileID: %v", err)
+		}
+		packPath := filepath.Join(leafDir, "value-l255-000098.log")
+		if err := os.WriteFile(packPath, []byte("leaf-pack-stub"), 0o644); err != nil {
+			depSet.Release()
+			t.Fatalf("write stub leaf segment: %v", err)
+		}
+		if err := database.RefreshValueLogSet(); err != nil {
+			depSet.Release()
+			t.Fatalf("RefreshValueLogSet: %v", err)
+		}
+		packRawID := page.ValueLogSegmentID(packFileID)
+
+		store := database.leafGenerationManifestStore
+		prevHook := store.hooks.BeforeTempCreate
+		store.hooks.BeforeTempCreate = func() error {
+			mu.Lock()
+			events = append(events, "manifest-temp-create")
+			mu.Unlock()
+			return nil
+		}
+		defer func() { store.hooks.BeforeTempCreate = prevHook }()
+
+		database.mu.RLock()
+		packBase := database.leafGenerationManifest.clone()
+		nextMeta := database.meta
+		database.mu.RUnlock()
+		nextMeta.CommitSeq++
+
+		finalizeOpts := finalizeCommitOptions{
+			packedRootPublication: &packedRootPublication{
+				afterManifestPreparation: func() error { return nil },
+			},
+		}
+		res, update, bindErr := database.bindPublicationLeafManifest(depSet, database.idx.Load(), nextMeta, packBase, []uint32{packRawID}, &finalizeOpts)
+		if bindErr != nil {
+			t.Fatalf("bindPublicationLeafManifest: %v", bindErr)
+		}
+		defer func() {
+			if res != nil {
+				res.Release()
+			}
+			_ = update.finish(false)
+		}()
+		if !update.dependenciesPreSynced {
+			t.Fatal("expected update.dependenciesPreSynced == true")
+		}
+		mu.Lock()
+		gotEvents := append([]string(nil), events...)
+		mu.Unlock()
+		if len(gotEvents) != 2 || gotEvents[0] != "dep-sync" || gotEvents[1] != "manifest-temp-create" {
+			t.Fatalf("unexpected barrier order: got=%v, want [dep-sync manifest-temp-create]", gotEvents)
+		}
+	})
+
+	t.Run("dependency_sync_error_skips_manifest_creation", func(t *testing.T) {
 		database, leafLog, opts := openLeafLogLaneGCTestDB(t, 64<<10)
 		defer closeLeafLogLaneGCTestDB(t, database, leafLog)
 
@@ -409,10 +516,11 @@ func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
 			t.Fatalf("glob before: %v", err)
 		}
 
-		// Build a synthetic resource set with a failing SyncThrough alongside a
-		// real base closure, and invoke bindPublicationLeafManifest directly
-		// with !durabilitycut.Enabled() to verify abandonment on parallel failure.
-		syncBoom := errors.New("injected parallel dependency sync error")
+		// Build a synthetic resource set with a failing SyncThrough and invoke
+		// bindPublicationLeafManifest directly with !durabilitycut.Enabled() to
+		// verify that dependency sync failure fails closed BEFORE creating any
+		// manifest temp/revision file.
+		syncBoom := errors.New("injected dependency sync error")
 		tmpFile, err := os.CreateTemp(t.TempDir(), "failing-dep-*")
 		if err != nil {
 			t.Fatalf("CreateTemp: %v", err)
@@ -448,21 +556,30 @@ func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
 			t.Fatalf("Freeze failing set: %v", err)
 		}
 
-		// Stage a real registrable leaf_vlog file so bindPublicationLeafManifest
-		// executes prepareLeafGenerationManifestStableCandidate in parallel with
-		// failingSet.SyncThrough().
 		packFileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 99)
 		if err != nil {
+			failingSet.Release()
 			t.Fatalf("EncodeFileID: %v", err)
 		}
 		packPath := filepath.Join(leafDir, "value-l255-000099.log")
 		if err := os.WriteFile(packPath, []byte("leaf-pack-stub"), 0o644); err != nil {
+			failingSet.Release()
 			t.Fatalf("write stub leaf segment: %v", err)
 		}
 		if err := database.RefreshValueLogSet(); err != nil {
+			failingSet.Release()
 			t.Fatalf("RefreshValueLogSet: %v", err)
 		}
 		packRawID := page.ValueLogSegmentID(packFileID)
+
+		var tempCreates atomic.Int64
+		store := database.leafGenerationManifestStore
+		prevHook := store.hooks.BeforeTempCreate
+		store.hooks.BeforeTempCreate = func() error {
+			tempCreates.Add(1)
+			return nil
+		}
+		defer func() { store.hooks.BeforeTempCreate = prevHook }()
 
 		database.mu.RLock()
 		packBase := database.leafGenerationManifest.clone()
@@ -481,13 +598,16 @@ func TestParallelManifestAndDependencySyncPreSynced(t *testing.T) {
 		if !errors.Is(bindErr, syncBoom) {
 			t.Fatalf("bindPublicationLeafManifest error=%v, want %v", bindErr, syncBoom)
 		}
+		if got := tempCreates.Load(); got != 0 {
+			t.Fatalf("manifest temp create ran %d times after dependency sync error, want 0", got)
+		}
 
 		afterFiles, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json"))
 		if err != nil {
 			t.Fatalf("glob after: %v", err)
 		}
 		if len(afterFiles) != len(beforeFiles) {
-			t.Fatalf("unpublished manifest revision leaked after parallel dependency sync failure: before=%v after=%v", beforeFiles, afterFiles)
+			t.Fatalf("manifest revision created after dependency sync failure: before=%v after=%v", beforeFiles, afterFiles)
 		}
 	})
 }
