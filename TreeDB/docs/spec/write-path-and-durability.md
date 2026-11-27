@@ -256,25 +256,41 @@ The fixed consequences are:
   stable complete frame closure without forcing a backend root; journal-free `*Sync`
   waits for a sealed root covering the call.
 - For explicit `Checkpoint` in relaxed command-WAL mode
-  (`command_wal_relaxed`, when `durabilitycut` and
-  checkpoint/WAL flush test hooks are inactive), frontier capture records the
+  (`command_wal_relaxed`) and explicit public `Checkpoint` in durable
+  command-WAL mode (`command_wal_durable` via
+  `CheckpointDeferringCommandWALCleanup`), when `durabilitycut` and
+  checkpoint/WAL flush test hooks are inactive (and outside automatic
+  checkpoints or column compactions), frontier capture records the
   command-WAL frontier without pre-rotating or fsyncing the active WAL segment
-  prior to backend materialization; backend flush still drains userspace WAL
-  buffers and surfaces journal-local failures (`FlushCommandWAL(false)`). After
-  backend publication crosses `WaitThrough(visibleCommitSeq)` so the durable
-  root's `AppliedCommandLSN` durably covers the checkpoint frontier, checkpoint
-  teardown closes the command-WAL prefix: if `durableAppliedLSN >= frontier`,
-  the superseded active WAL segment rotates without fsyncing its contents
-  immediately before cleanup unlinks it (`RotateCommandWALActiveSegment(false)`),
-  while any un-synced new empty target retains `dirSyncPending` so the next
-  explicit `Sync` persists its directory entry. If any concurrent post-frontier
-  write advances `frontier > durableAppliedLSN` (or under `command_wal_durable`,
-  `durabilitycut`, or active test hooks), teardown falls back to synchronous
-  prefix sync and rotation (`RotateCommandWALActiveSegment(true)`).
-  Newly rotated empty non-fixed WAL segments that are already directory-synced
-  record `cleanEmptySynced` so redundant empty-segment syncs are skipped until
-  bytes are appended, while explicit barrier syncs on unrotated segments always
-  execute their file sync.
+  prior to backend materialization; after releasing `writeMu`, it may kick
+  asynchronous pre-initialization of the small default fixed-WAL checkpoint
+  reserve (`PrepareFixedWALCheckpointReserve`) so reserve initialization
+  overlaps with B-tree flush and `WaitThrough`, while backend flush still drains
+  userspace WAL buffers and surfaces journal-local failures
+  (`FlushCommandWAL(false)`). After backend publication crosses
+  `WaitThrough(visibleCommitSeq)` so the durable root's `AppliedCommandLSN`
+  durably covers the checkpoint frontier, checkpoint teardown closes the
+  command-WAL prefix: if `durableAppliedLSN >= frontier` (under
+  `command_wal_relaxed` or `command_wal_durable`, when `durabilitycut` and
+  flush-failpoint hooks are inactive), the superseded active WAL segment rotates
+  without re-fsyncing its contents immediately before cleanup unlinks it
+  (`RotateCommandWALActiveSegment(false)`), while any un-synced new empty target
+  retains `dirSyncPending` so the next explicit `Sync`, `CaptureSync`, or
+  non-empty rotation persists its directory entry before acknowledging any frame
+  on that segment. If any concurrent post-frontier write advances
+  `frontier > durableAppliedLSN` (or under `durabilitycut`, active test hooks,
+  automatic checkpoints, column compactions, or direct cache-level durable
+  `Checkpoint`), teardown falls back to synchronous prefix sync and rotation
+  (`RotateCommandWALActiveSegment(true)`), which skips a redundant `fdatasync`
+  on the superseded segment only when `journalFileSync` proves that exact
+  segment sequence and flushed physical byte offset were already durably synced
+  with no error (`!durabilitycut.Enabled()`, `!dirSyncPending`, and default sync
+  hook) and avoids double-syncing the parent directory on fixed-container
+  publication.
+  Newly rotated empty stream or fixed WAL segments that are already
+  directory-synced record `cleanEmptySynced` so redundant empty-segment syncs
+  are skipped until bytes are appended, while explicit barrier syncs on
+  unrotated segments always execute their file sync.
 - Durable-root publication tracks a live-session completion receipt for the
   currently selected durable slot (`dataCompletion`, never minted by reopen or
   rebuild). When `durabilitycut` is inactive and every dependency in a new

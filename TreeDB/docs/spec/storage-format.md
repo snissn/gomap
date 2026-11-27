@@ -4801,16 +4801,23 @@ the normal ceiling. Large logical targets may therefore get more physical
 rotations. Only unpublished fresh successors can change size.
 
 A journal with an actual fixed container may prepare one pressure successor
-once its flushed physical occupancy reaches half capacity. It uses the same
+once its flushed physical occupancy reaches half capacity, or one small initial
+(`Cbase`) forced/checkpoint successor when an explicit checkpoint requests
+`PrepareFixedWALCheckpointReserve`. It uses the same
 header, complete zero-fill and full-file synchronization under an unpublished
-`.wal-ahead-<32 lowercase hex>` name. The journal owns one worker and one extra
-reserve of at most 64 MiB; standalone Writers remain synchronous. Preparation
+`.wal-ahead-<32 lowercase hex>` name. The journal owns at most one worker and one extra
+reserve of at most 64 MiB (requesting a checkpoint reserve cancels any active
+pressure reserve and starts the small `Cbase` reserve only after the previous
+worker finishes disposal); standalone Writers remain synchronous. Preparation
 neither creates a canonical segment nor reserves an LSN or certifies content.
-At rotation, only a ready exact generation, retained-parent/current-file identity,
+At rotation, only a ready exact generation, rotation-reason (`pressure` vs
+`forced`), retained-parent/current-file identity,
 size-plan and frame-fit match may replace that rotation's newly created empty
-canonical successor through the existing rename, directory-sync and canonical
-reopen sequence. Existing occupied or pre-existing empty successors are not
-replaced by ahead material. New active tokens still have unsynced content.
+canonical successor through the existing rename, directory-sync (or deferred
+`dirSyncPending` on forced `!syncCurrent && !observe` checkpoint rotation) and
+canonical reopen sequence. Existing occupied or pre-existing empty successors
+are not replaced by ahead material. New active tokens still have unsynced
+content.
 
 An in-flight or stale prediction never makes append wait for worker readiness:
 the ordinary synchronous path remains available. Its initialization can overlap
@@ -4867,8 +4874,11 @@ reserves. It then reacquires exclusion to verify the prefix and validate the
 remaining inventory. It checks sealed streams' size and modification time
 against the captured handles. Ineligible inventories, `CleanupCommandWALCoveredSegments`, synchronous
 checkpoint and Close use the complete locked scan (reusing one read-ahead
-`CleanupReadBuffer` across closed stream segments while keeping fixed-container
-extent/reserve validation unchanged). When opportunistic checkpoint/close
+`CleanupReadBuffer` across closed stream segments while fixed-container
+`loadFixedWAL` validates extent and inner frame CRCs in a single pass via exact
+CRC-32 IEEE combination and serves `ReadValidatedCommandFrameLSN` from those
+validated frame summaries without weakening extent, frame, footer,
+`MaxSegmentSize`, or zero-reserve validation). When opportunistic checkpoint/close
 cleanup (`CleanupCommandWALCoveredSegmentsAtCheckpoint` or `Close`) observes
 cleanup frontier `0`, it inspects closed non-active segment headers (and for
 fixed containers, the first extent witness at offset 4096) under append
