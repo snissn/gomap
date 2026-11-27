@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -743,4 +745,258 @@ func TestCompactStorageConvergesOnManySmallTwoLeafCollections(t *testing.T) {
 				got.emptyLeafPages, got.underfullLeafPages)
 		}
 	})
+}
+
+func TestCompactStorageVacuumIndexOnlineCanceledBeforeFallbackRefresh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		ResolvedProfile:            ProfileNoWALFast,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: false,
+		DisableBackgroundPrune:     true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, d)
+
+	if err := d.SetSync([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("SetSync k1: %v", err)
+	}
+	if err := d.SetSync([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("SetSync k2: %v", err)
+	}
+
+	d.durablePublishMu.Lock()
+	beforeSlot := d.durableRoot.slot
+	beforeRec0 := d.durableRoot.slotRecord[0]
+	beforeRec1 := d.durableRoot.slotRecord[1]
+	d.durablePublishMu.Unlock()
+	if beforeRec0.CommitSeq == 0 || beforeRec1.CommitSeq == 0 || beforeRec0.UserRootPageID == beforeRec1.UserRootPageID {
+		t.Fatalf("expected two distinct durable slots before canceled call: rec0=%+v rec1=%+v", beforeRec0, beforeRec1)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.compactStorageVacuumIndexOnline(ctx, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("compactStorageVacuumIndexOnline(canceled) err=%v want context.Canceled", err)
+	}
+
+	d.durablePublishMu.Lock()
+	afterSlot := d.durableRoot.slot
+	afterRec0 := d.durableRoot.slotRecord[0]
+	afterRec1 := d.durableRoot.slotRecord[1]
+	d.durablePublishMu.Unlock()
+	if afterSlot != beforeSlot || afterRec0 != beforeRec0 || afterRec1 != beforeRec1 {
+		t.Fatalf("canceled compactStorageVacuumIndexOnline mutated durable slots: before=(slot=%d r0=%d/%d r1=%d/%d) after=(slot=%d r0=%d/%d r1=%d/%d)",
+			beforeSlot, beforeRec0.CommitSeq, beforeRec0.UserRootPageID, beforeRec1.CommitSeq, beforeRec1.UserRootPageID,
+			afterSlot, afterRec0.CommitSeq, afterRec0.UserRootPageID, afterRec1.CommitSeq, afterRec1.UserRootPageID)
+	}
+}
+
+func TestCompactStorageExpectedVacuumSlotCopiesReflectsSlotConvergence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		ResolvedProfile:            ProfileNoWALFast,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: false,
+		DisableBackgroundPrune:     true,
+		LeafPrefixCompression:      true,
+		ChunkSize:                  64 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, d)
+
+	// Populate enough live pages (>256) so whole_file_slack thresholds are active.
+	payload := bytes.Repeat([]byte("S"), 240)
+	b1 := d.NewBatch()
+	for i := 0; i < 4200; i++ {
+		if err := b1.Set([]byte(fmt.Sprintf("k-%06d", i)), payload); err != nil {
+			_ = b1.Close()
+			t.Fatalf("b1.Set: %v", err)
+		}
+	}
+	if err := b1.WriteSync(); err != nil {
+		_ = b1.Close()
+		t.Fatalf("b1.WriteSync: %v", err)
+	}
+	_ = b1.Close()
+	// One more distinct commit so slot0 and slot1 diverge.
+	if err := d.SetSync([]byte("k-000000"), bytes.Repeat([]byte("T"), 240)); err != nil {
+		t.Fatalf("SetSync diverge: %v", err)
+	}
+
+	if got := d.compactStorageExpectedVacuumSlotCopies(); got != 2 {
+		t.Fatalf("compactStorageExpectedVacuumSlotCopies with distinct non-command-WAL slots = %d, want 2", got)
+	}
+
+	// Run a 2-slot online vacuum directly (distinct durable slots -> 2 copies in index.db).
+	vacStats, err := d.VacuumIndexOnlineWithStats(context.Background())
+	if err != nil {
+		t.Fatalf("VacuumIndexOnlineWithStats: %v", err)
+	}
+	if vacStats.OlderRootRebuilds == 0 {
+		t.Fatalf("expected 2-slot rebuild with distinct slots, got OlderRootRebuilds=0")
+	}
+	if got := d.compactStorageExpectedVacuumSlotCopies(); got != 2 {
+		t.Fatalf("compactStorageExpectedVacuumSlotCopies after 2-slot vacuum = %d, want 2", got)
+	}
+
+	// While the two durable slots remain distinct, CompactStoragePlan must NOT
+	// report whole_file_slack on a file whose size matches a 2-copy rebuild
+	// (preventing futile repeated 2-slot vacuums under concurrent writers).
+	planDistinct, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan(distinct): %v", err)
+	}
+	if planDistinct.RemainingDebt.IndexVacuumRequired && planDistinct.RemainingDebt.IndexVacuumReason == "whole_file_slack" {
+		t.Fatalf("CompactStoragePlan falsely reported whole_file_slack on 2-copy distinct-slot index: debt=%+v", planDistinct.RemainingDebt)
+	}
+
+	// On a quiet DB, CompactStorage(Full) should converge the distinct slots via
+	// fallback refresh, shrink the 2-copy file down to 1 copy, and converge
+	// cleanly in a single pass.
+	beforeSize, err := os.Stat(filepath.Join(dir, indexFileName))
+	if err != nil {
+		t.Fatalf("stat before CompactStorage: %v", err)
+	}
+	csStats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
+	if err != nil {
+		t.Fatalf("CompactStorage(Full) on quiet 2-copy DB: %v", err)
+	}
+	assertNoCompactStorageSettlePhase(t, csStats)
+	if csStats.RemainingDebt.IndexVacuumRequired {
+		t.Fatalf("CompactStorage(Full) did not converge: debt=%+v", csStats.RemainingDebt)
+	}
+	if got := d.compactStorageExpectedVacuumSlotCopies(); got != 1 {
+		t.Fatalf("compactStorageExpectedVacuumSlotCopies after convergence = %d, want 1", got)
+	}
+	afterSize, err := os.Stat(filepath.Join(dir, indexFileName))
+	if err != nil {
+		t.Fatalf("stat after CompactStorage: %v", err)
+	}
+	if afterSize.Size() >= beforeSize.Size() {
+		t.Fatalf("quiet CompactStorage(Full) failed to shrink 2-copy index: before=%d after=%d", beforeSize.Size(), afterSize.Size())
+	}
+}
+
+func TestCompactStoragePrivateCOWAndNativeSemanticSkipFallbackRefreshInPlan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		ResolvedProfile:            ProfileNoWALFast,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: false,
+		DisableBackgroundPrune:     true,
+		LeafPrefixCompression:      true,
+		ChunkSize:                  64 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, d)
+
+	// Build a 2-copy diverged-slot index where slotCopies=2 reports no debt,
+	// while slotCopies=1 would report whole_file_slack — the exact branch that
+	// triggers pre-vacuum fallback convergence on unowned DBs.
+	payload := bytes.Repeat([]byte("N"), 240)
+	b1 := d.NewBatch()
+	for i := 0; i < 4200; i++ {
+		if err := b1.Set([]byte(fmt.Sprintf("k-%06d", i)), payload); err != nil {
+			_ = b1.Close()
+			t.Fatalf("b1.Set: %v", err)
+		}
+	}
+	if err := b1.WriteSync(); err != nil {
+		_ = b1.Close()
+		t.Fatalf("b1.WriteSync: %v", err)
+	}
+	_ = b1.Close()
+	if err := d.SetSync([]byte("k-000000"), bytes.Repeat([]byte("M"), 240)); err != nil {
+		t.Fatalf("SetSync diverge: %v", err)
+	}
+	vacStats, err := d.VacuumIndexOnlineWithStats(context.Background())
+	if err != nil {
+		t.Fatalf("VacuumIndexOnlineWithStats: %v", err)
+	}
+	if vacStats.OlderRootRebuilds == 0 {
+		t.Fatalf("expected 2-slot rebuild, got OlderRootRebuilds=0")
+	}
+
+	// Verify the precondition: slotCopies=2 has no debt, slotCopies=1 has whole_file_slack.
+	rep, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport: %v", err)
+	}
+	debt2 := d.compactStorageIndexVacuumDebtFromReport(CompactStorageOptions{Mode: CompactStorageFull}, rep, 2)
+	debt1 := d.compactStorageIndexVacuumDebtFromReport(CompactStorageOptions{Mode: CompactStorageFull}, rep, 1)
+	if debt2.IndexVacuumRequired || !debt1.IndexVacuumRequired {
+		t.Fatalf("precondition failed: debt2=%+v debt1=%+v", debt2, debt1)
+	}
+
+	owner := transactionowner.New()
+	if err := d.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatalf("BindPrivateCOWOwner: %v", err)
+	}
+
+	snapshotSlots := func() (uint64, [2]uint64, [2]uint64) {
+		d.durablePublishMu.Lock()
+		defer d.durablePublishMu.Unlock()
+		return d.durableRoot.slot,
+			[2]uint64{d.durableRoot.slotRecord[0].CommitSeq, d.durableRoot.slotRecord[1].CommitSeq},
+			[2]uint64{d.durableRoot.slotRecord[0].UserRootPageID, d.durableRoot.slotRecord[1].UserRootPageID}
+	}
+
+	// Case 1: CompactStorageForPrivateCOW with nativeSemanticActive=false must
+	// not run unowned fallback refresh or mutate durable slots during planning.
+	beforeSlot, beforeSeqs, beforeRoots := snapshotSlots()
+	stats1, err := d.CompactStorageForPrivateCOW(owner, context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
+	if err != nil {
+		t.Fatalf("CompactStorageForPrivateCOW(nativeSemanticActive=false): %v", err)
+	}
+	afterSlot, afterSeqs, afterRoots := snapshotSlots()
+	if afterSlot != beforeSlot || afterSeqs != beforeSeqs || afterRoots != beforeRoots {
+		t.Fatalf("CompactStorageForPrivateCOW mutated durable slots during index-vacuum-plan: before=(slot=%d seq=%v roots=%v) after=(slot=%d seq=%v roots=%v)",
+			beforeSlot, beforeSeqs, beforeRoots, afterSlot, afterSeqs, afterRoots)
+	}
+	for _, ph := range stats1.Phases {
+		if ph.Name == "index-vacuum" && ph.Status == CompactStoragePhaseStatusFailed {
+			t.Fatalf("unexpected failed index-vacuum phase: %+v", ph)
+		}
+	}
+
+	// Case 2: With nativeSemanticActive=true, CompactStorageForPrivateCOW must
+	// NOT fail with ErrNativeSemanticUnsupported inside index-vacuum-plan and
+	// must leave durable slots untouched.
+	d.nativeSemanticActive.Store(true)
+	defer d.nativeSemanticActive.Store(false)
+
+	beforeSlot, beforeSeqs, beforeRoots = snapshotSlots()
+	stats2, err := d.CompactStorageForPrivateCOW(owner, context.Background(), CompactStorageOptions{Mode: CompactStorageFull})
+	if err != nil {
+		t.Fatalf("CompactStorageForPrivateCOW(nativeSemanticActive=true): %v", err)
+	}
+	afterSlot, afterSeqs, afterRoots = snapshotSlots()
+	if afterSlot != beforeSlot || afterSeqs != beforeSeqs || afterRoots != beforeRoots {
+		t.Fatalf("CompactStorageForPrivateCOW(nativeSemanticActive=true) mutated durable slots: before=(slot=%d seq=%v roots=%v) after=(slot=%d seq=%v roots=%v)",
+			beforeSlot, beforeSeqs, beforeRoots, afterSlot, afterSeqs, afterRoots)
+	}
+	for _, ph := range stats2.Phases {
+		if ph.Name == "index-vacuum" && ph.Status == CompactStoragePhaseStatusFailed {
+			t.Fatalf("unexpected failed index-vacuum phase under nativeSemanticActive: %+v", ph)
+		}
+	}
 }

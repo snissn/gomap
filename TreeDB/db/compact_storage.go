@@ -995,7 +995,7 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 		return stats, err
 	}
 
-	indexDebt, err := db.compactStorageIndexVacuumDebt(ctx, opts)
+	indexDebt, err := db.compactStorageIndexVacuumDebtForExecution(ctx, opts, owner)
 	if err != nil {
 		stats.Phases = append(stats.Phases, CompactStoragePhaseStats{
 			Name:       "index-vacuum",
@@ -1053,7 +1053,10 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 			if err := db.checkpoint(maintenanceLocked); err != nil {
 				return err
 			}
-			return db.refreshDurableRootFallback()
+			if err := db.refreshDurableRootFallback(); err != nil && (db.commandWAL || !compactStorageFallbackRefreshNonConvergence(err)) {
+				return err
+			}
+			return nil
 		}); err != nil {
 			return stats, err
 		}
@@ -1135,7 +1138,10 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 				if err := db.checkpoint(maintenanceLocked); err != nil {
 					return err
 				}
-				return db.refreshDurableRootFallback()
+				if err := db.refreshDurableRootFallback(); err != nil && (db.commandWAL || !compactStorageFallbackRefreshNonConvergence(err)) {
+					return err
+				}
+				return nil
 			}); err != nil {
 				return stats, err
 			}
@@ -1214,18 +1220,78 @@ func compactStorageIndexVacuumPlanPhase(debt CompactStorageDebt) CompactStorageP
 	return phase
 }
 
+func (db *DB) compactStorageIndexVacuumDebtFromReport(opts CompactStorageOptions, report IndexVacuumTriggerReport, slotCopies uint64) CompactStorageDebt {
+	var debt CompactStorageDebt
+	populateCompactStorageIndexDebtWithSlotCopies(opts, report, slotCopies, &debt)
+	if !debt.IndexVacuumRequired && opts.Mode == CompactStorageExhaustive && db.compactStorageIndexChunkSlackReclaimable(report) {
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "chunk_slack"
+	}
+	return debt
+}
+
 func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactStorageOptions) (CompactStorageDebt, error) {
 	report, err := db.IndexVacuumTriggerReportContext(ctx)
 	if err != nil {
 		return CompactStorageDebt{}, err
 	}
-	var debt CompactStorageDebt
-	populateCompactStorageIndexDebtWithSlotCopies(opts, report, db.compactStorageExpectedVacuumSlotCopies(), &debt)
-	if !debt.IndexVacuumRequired && opts.Mode == CompactStorageExhaustive && db.compactStorageIndexChunkSlackReclaimable(report) {
-		debt.IndexVacuumRequired = true
-		debt.IndexVacuumReason = "chunk_slack"
+	return db.compactStorageIndexVacuumDebtFromReport(opts, report, db.compactStorageExpectedVacuumSlotCopies()), nil
+}
+
+func (db *DB) compactStorageIndexVacuumDebtForExecution(ctx context.Context, opts CompactStorageOptions, owner *transactionowner.Owner) (CompactStorageDebt, error) {
+	report, err := db.IndexVacuumTriggerReportContext(ctx)
+	if err != nil {
+		return CompactStorageDebt{}, err
+	}
+	slotCopies := db.compactStorageExpectedVacuumSlotCopies()
+	debt := db.compactStorageIndexVacuumDebtFromReport(opts, report, slotCopies)
+	// On non-command-WAL DATA indexes whose durable slots currently diverge,
+	// check whether converging the fallback slot onto the current durable root
+	// would let a 1-copy online vacuum reclaim whole-file slack. Attempt a
+	// best-effort fallback refresh now: on a quiet DB the slots converge and
+	// vacuum shrinks the file to 1x; under active writers non-convergence leaves
+	// slotCopies == 2 so CompactStorage avoids launching a futile 2-slot rebuild.
+	// Never issue an unowned fallback refresh while private-COW or native
+	// semantic ownership is active (matching compactStorageVacuumIndexOnlineWithOwner).
+	if !debt.IndexVacuumRequired && slotCopies == 2 && db != nil && !db.commandWAL &&
+		owner == nil && !db.nativeSemanticActive.Load() &&
+		runtime.GOOS != "windows" && !db.readOnly {
+		if idx := db.idx.Load(); idx != nil && idx.primary == nil {
+			singleCopyDebt := db.compactStorageIndexVacuumDebtFromReport(opts, report, 1)
+			if singleCopyDebt.IndexVacuumRequired {
+				if ctx != nil {
+					if err := ctx.Err(); err != nil {
+						return CompactStorageDebt{}, err
+					}
+				}
+				if err := db.refreshDurableRootFallback(); err != nil && !compactStorageFallbackRefreshNonConvergence(err) {
+					return CompactStorageDebt{}, err
+				}
+				slotCopies = db.compactStorageExpectedVacuumSlotCopies()
+				debt = db.compactStorageIndexVacuumDebtFromReport(opts, report, slotCopies)
+			}
+		}
 	}
 	return debt, nil
+}
+
+func compactStorageFallbackRefreshNonConvergence(err error) bool {
+	return errors.Is(err, errDurableRootFallbackDidNotConverge)
+}
+
+func (db *DB) compactStorageDurableSlotsDiverged() bool {
+	if db == nil {
+		return false
+	}
+	db.durablePublishMu.Lock()
+	s0 := db.durableRoot.slotRecord[0]
+	s1 := db.durableRoot.slotRecord[1]
+	db.durablePublishMu.Unlock()
+	return s0.CommitSeq != 0 && s1.CommitSeq != 0 &&
+		(s0.UserRootPageID != s1.UserRootPageID ||
+			s0.SystemRootPageID != s1.SystemRootPageID ||
+			s0.AppliedCommandLSN != s1.AppliedCommandLSN ||
+			s0.MaxEntryRevision != s1.MaxEntryRevision)
 }
 
 func (db *DB) compactStorageExpectedVacuumSlotCopies() uint64 {
@@ -1236,22 +1302,13 @@ func (db *DB) compactStorageExpectedVacuumSlotCopies() uint64 {
 	if idx != nil && idx.primary != nil {
 		return 2
 	}
-	if !db.commandWAL {
-		return 1
+	if db.commandWAL {
+		state := db.state.Load()
+		if state != nil && state.AppliedCommandLSN != 0 {
+			return 1
+		}
 	}
-	state := db.state.Load()
-	if state != nil && state.AppliedCommandLSN != 0 {
-		return 1
-	}
-	db.durablePublishMu.Lock()
-	s0 := db.durableRoot.slotRecord[0]
-	s1 := db.durableRoot.slotRecord[1]
-	db.durablePublishMu.Unlock()
-	if s0.CommitSeq != 0 && s1.CommitSeq != 0 &&
-		(s0.UserRootPageID != s1.UserRootPageID ||
-			s0.SystemRootPageID != s1.SystemRootPageID ||
-			s0.AppliedCommandLSN != s1.AppliedCommandLSN ||
-			s0.MaxEntryRevision != s1.MaxEntryRevision) {
+	if db.compactStorageDurableSlotsDiverged() {
 		return 2
 	}
 	return 1
@@ -1319,13 +1376,13 @@ func (db *DB) compactStorageVacuumIndexOnlineWithOwner(ctx context.Context, lock
 	// non-fatal and falls through safely to standard 2-slot online vacuum.
 	if db != nil && runtime.GOOS != "windows" && !db.readOnly {
 		if idx := db.idx.Load(); idx != nil && idx.primary == nil {
-			if err := db.refreshDurableRootFallback(); err != nil {
-				if errors.Is(err, ErrClosed) || errors.Is(err, ErrRecoveryRequired) ||
-					errors.Is(err, ErrReadOnly) || errors.Is(err, context.Canceled) ||
-					errors.Is(err, context.DeadlineExceeded) ||
-					!strings.Contains(err.Error(), "did not converge") {
+			if ctx != nil {
+				if err := ctx.Err(); err != nil {
 					return err
 				}
+			}
+			if err := db.refreshDurableRootFallback(); err != nil && !compactStorageFallbackRefreshNonConvergence(err) {
+				return err
 			}
 		}
 	}

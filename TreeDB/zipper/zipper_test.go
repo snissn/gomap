@@ -2036,8 +2036,12 @@ func TestZipperPrunesEmptyLeavesWhenBudgetExhausted(t *testing.T) {
 		}
 		for _, id := range retired {
 			if !wantRetired[id] {
-				t.Fatalf("unexpected retired page %d (retired=%v)", id, retired)
+				t.Fatalf("unexpected or duplicate retired page %d (retired=%v)", id, retired)
 			}
+			delete(wantRetired, id)
+		}
+		if len(wantRetired) != 0 {
+			t.Fatalf("missing expected retired pages %v (retired=%v)", wantRetired, retired)
 		}
 	})
 

@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"os"
 	"strconv"
 	"testing"
@@ -321,5 +324,114 @@ func TestFragmentationSpanRatioRejectsInvalidAndPreservesWideArithmetic(t *testi
 	}
 	if value, err := fragmentationSpanRatio(0, 0); err != nil || value != 0 {
 		t.Fatalf("empty ratio=%d err=%v", value, err)
+	}
+}
+
+func TestIndexVacuumTriggerReportPropagatesSystemTreeWalkError(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                        t.TempDir(),
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: false,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	// Build a multi-leaf system tree via real publication containing:
+	//  - a valid collection root descriptor under "collections/root/..."
+	//  - enough keys after "collections/root0" (outside the descriptor prefix)
+	//    so the system tree spans multiple leaves and has a trailing leaf
+	//    ("zzz/...") that descriptor scans never touch.
+	gen := d.idx.Load()
+	p := gen.pager
+
+	colLeafID, err := gen.allocator.Alloc(0)
+	if err != nil {
+		t.Fatalf("alloc col leaf: %v", err)
+	}
+	colLeafBuf, err := p.GetForWrite(colLeafID)
+	if err != nil {
+		t.Fatalf("get col leaf: %v", err)
+	}
+	cb := node.NewBuilder(colLeafBuf, page.PageTypeLeaf)
+	cb.SetPageID(colLeafID)
+	if err := cb.AddLeafEntry([]byte("k1"), []byte("v1"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("add col leaf entry: %v", err)
+	}
+	cb.Finish()
+
+	if _, _, err := d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		mt, err := memtable.NewWithCapacityMode(64*1024, memtable.ModeHashSorted)
+		if err != nil {
+			return nil, err
+		}
+		mt.Set([]byte("collections/root/corrupt_sys_test/primary"), encodeCollectionRootDescriptorRootID(colLeafID))
+		filler := bytes.Repeat([]byte("X"), 500)
+		for i := 0; i < 32; i++ {
+			mt.Set([]byte(fmt.Sprintf("collections/zzzz/%03d", i)), filler)
+		}
+		for i := 0; i < 32; i++ {
+			mt.Set([]byte(fmt.Sprintf("zzz/non_descriptor/%03d", i)), filler)
+		}
+		mt.Freeze()
+		return mt.NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+	}
+
+	beforeRep, err := d.IndexVacuumTriggerReportContext(context.Background())
+	if err != nil {
+		t.Fatalf("healthy IndexVacuumTriggerReportContext: %v", err)
+	}
+	if beforeRep.SystemPages < 4 || beforeRep.CollectionRootCount != 1 {
+		t.Fatalf("expected multi-leaf healthy system tree: SystemPages=%d CollectionRootCount=%d",
+			beforeRep.SystemPages, beforeRep.CollectionRootCount)
+	}
+
+	// Find the trailing non-descriptor leaf ("zzz/...") in the published system
+	// tree and corrupt its page type in place.
+	state := d.State()
+	sysRootID := state.SystemRootPageID
+	var badLeafID uint64
+	if err := tree.New(p, d.valueLogManager, sysRootID).WalkPages(func(pageID uint64, n node.Node) error {
+		if n.Type() != page.PageTypeLeaf || n.Count() == 0 {
+			return nil
+		}
+		k, _, _, _, err := n.GetLeafEntryView(0)
+		if err != nil {
+			return err
+		}
+		if bytes.HasPrefix(k, []byte("zzz/")) {
+			badLeafID = pageID
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk healthy system tree: %v", err)
+	}
+	if badLeafID == 0 {
+		t.Fatalf("failed to locate trailing non-descriptor leaf in system tree")
+	}
+
+	badLeafBuf, err := p.GetForWrite(badLeafID)
+	if err != nil {
+		t.Fatalf("get bad leaf %d: %v", badLeafID, err)
+	}
+	badNode := node.NewNode(badLeafBuf)
+	badNode.SetType(page.PageType(0xff))
+	badNode.UpdateChecksum()
+
+	// Sanity check: descriptor scan alone still succeeds because it only scans
+	// collections/root* prefixes and never loads badLeafID.
+	descs, err := vacuumCollectCollectionRootDescriptors(p, d.valueLogManager, sysRootID)
+	if err != nil || len(descs) != 1 {
+		t.Fatalf("expected descriptor scan to succeed before full walk: descs=%+v err=%v", descs, err)
+	}
+
+	// IndexVacuumTriggerReportContext MUST propagate the system-tree walk error
+	// instead of succeeding with zeroed SystemPages and collection counts.
+	rep, err := d.IndexVacuumTriggerReportContext(context.Background())
+	if err == nil {
+		t.Fatalf("IndexVacuumTriggerReportContext unexpectedly succeeded on degraded system tree: report=%+v", rep)
 	}
 }
