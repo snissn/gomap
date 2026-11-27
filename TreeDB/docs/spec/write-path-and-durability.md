@@ -298,7 +298,28 @@ The fixed consequences are:
   stable namespace) or matches an unchanged mutable-append outer-leaf/value-log
   handle and frontier already synced by that live-session parent slot
   (`DependenciesCoveredBy`), the transaction skips redundant dependency file
-  re-fsyncs while preserving index data-before-meta sync ordering.
+  re-fsyncs while preserving index data-before-meta sync ordering. When
+  `durabilitycut` is inactive, deferred outer-leaf directory syncs
+  (`syncPendingLeafLogDir`) may run concurrently with `index.db` data sync
+  after page materialization (both joining strictly before any alternate meta
+  write), and operational/stable leaf-generation manifest file syncs may run
+  concurrently with pre-flushed external dependency file syncs (both joining
+  strictly before the manifest rename). For an isolated same-root fallback
+  convergence where the opposite meta slot is already durable at identical
+  `UserRootPageID`, `SystemRootPageID`, `AppliedCommandLSN != 0`, and covered
+  dependencies (`singleBarrierSameRootFallback`), the alternate record pages
+  and alternate meta slot may be persisted in one full `index.db` sync because
+  recovery validates the new record/freelist/manifest digests before selection
+  and falls back to the intact opposite slot on any torn write.
+- In fixed-container command-WAL mode when `durabilitycut` is inactive,
+  captured durable-prefix syncs (`CommandWALCapturedPrefix.Sync`) may overlap
+  pending rotated-segment parent-directory syncs (`maindb/wal`) concurrently
+  with the active segment `fdatasync`, joining both barriers strictly before
+  closing `commandWALDurableLSN` or acknowledging any caller; failure of either
+  barrier poisons the handle (`ErrRecoveryRequired`) and retains retry debt.
+  Checkpoint teardown may pre-scan read-only closed WAL segments concurrently
+  with fallback root convergence, re-validating exact file identity and size
+  before consuming cached scan results at cleanup.
 - Value-log dictionary publication to `dictdb` persists dictionary bytes,
   content hash, frame group size `K`, and class/global current markers in a
   single atomic `WriteSync` commit; pointer-backed dictionary segments are

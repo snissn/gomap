@@ -1296,6 +1296,12 @@ func (w *Writer) commandFrameSizeError(size int) error {
 	return nil
 }
 
+// ChecksumCommandPayload computes the canonical IEEE CRC32 of a command WAL
+// payload so callers can precompute it off-lock before acquiring journal locks.
+func ChecksumCommandPayload(payload []byte) uint32 {
+	return crc.Checksum(payload)
+}
+
 // appendCommandV2Prepared consumes the journal's private plan under its existing
 // ownership. Public writer entrypoints always construct their own plan first.
 func (w *Writer) appendCommandV2Prepared(plan commandFrameV2Encoding) error {
@@ -1305,18 +1311,87 @@ func (w *Writer) appendCommandV2Prepared(plan commandFrameV2Encoding) error {
 	var err error
 	if w.fixed != nil {
 		err = w.appendFixedCommandV2Prepared(plan)
+	} else if len(plan.env.Payload) >= directCommandPayloadMinLen {
+		// Emit large V2 command frames on stream segments via zero-copy
+		// writev([segHdr||frameHdr, payload, sections?]) instead of copying
+		// multi-MiB payloads through w.scratch and w.bw.
+		err = w.appendStreamCommandV2Direct(plan)
 	} else {
 		payload := plan.encodeTo(w.scratch[:0])
 		w.scratch = payload
 		// Strict V2 readers reject compressed segment storage so recovery can
 		// inspect frame identity directly at a torn terminal tail. Keep V2 command
 		// frames raw even when compression remains enabled for other journal data.
-		err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
+		var sum uint32
+		if plan.hasPayloadCRC {
+			sum = crc32IEEECombine(crc.Checksum(payload[:commandFrameHeaderSize]), plan.payloadCRC, len(plan.env.Payload))
+			if sections := payload[commandFrameHeaderSize+len(plan.env.Payload):]; len(sections) > 0 {
+				sum = crc32IEEECombine(sum, crc.Checksum(sections), len(sections))
+			}
+		} else {
+			sum = crc.Checksum(payload)
+		}
+		err = w.writeRawSegmentWithChecksum(payload, sum)
 	}
 	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
 		w.scratch = make([]byte, 0, w.commandBufRetain)
 	}
 	return err
+}
+
+func (w *Writer) appendStreamCommandV2Direct(plan commandFrameV2Encoding) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
+	frameHeader := prefix[segmentHeaderSize:]
+	plan.encodeHeaderTo(frameHeader)
+	binary.LittleEndian.PutUint32(prefix[0:4], uint32(plan.total))
+	sectionsLen := plan.externalRefsLen + plan.preconditionsLen + plan.assertionsLen
+	var sections []byte
+	if sectionsLen > 0 {
+		if cap(w.scratch) < sectionsLen {
+			w.scratch = make([]byte, sectionsLen)
+		} else {
+			w.scratch = w.scratch[:sectionsLen]
+		}
+		sections = w.scratch
+		plan.putSections(sections)
+	}
+	var sum uint32
+	if plan.hasPayloadCRC {
+		sum = crc32IEEECombine(crc.Checksum(frameHeader), plan.payloadCRC, len(plan.env.Payload))
+		if len(sections) > 0 {
+			sum = crc32IEEECombine(sum, crc.Checksum(sections), len(sections))
+		}
+	} else {
+		sum = crc.ChecksumParts(frameHeader, plan.env.Payload)
+		if len(sections) > 0 {
+			sum = crc32IEEECombine(sum, crc.Checksum(sections), len(sections))
+		}
+	}
+	binary.LittleEndian.PutUint32(prefix[4:8], sum)
+	var parts [3][]byte
+	parts[0] = prefix[:]
+	parts[1] = plan.env.Payload
+	nParts := 2
+	if len(sections) > 0 {
+		parts[2] = sections
+		nParts = 3
+	}
+	if err := w.writev(parts[:nParts]); err != nil {
+		return w.poisonCommandBuffer(err)
+	}
+	w.size += int64(segmentHeaderSize + plan.total)
+	return nil
 }
 
 // appendFixedCommandV2Prepared emits directly into the existing canonical
@@ -1359,9 +1434,29 @@ func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error
 	frame := plan.encodeTo(pending[before+segmentHeaderSize : before+segmentHeaderSize])
 	header := pending[before : before+segmentHeaderSize]
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
-	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	var frameCRC uint32
+	if plan.hasPayloadCRC {
+		frameCRC = crc32IEEECombine(crc.Checksum(frame[:commandFrameHeaderSize]), plan.payloadCRC, len(plan.env.Payload))
+		if sections := frame[commandFrameHeaderSize+len(plan.env.Payload):]; len(sections) > 0 {
+			frameCRC = crc32IEEECombine(frameCRC, crc.Checksum(sections), len(sections))
+		}
+	} else {
+		frameCRC = crc.Checksum(frame)
+	}
+	binary.LittleEndian.PutUint32(header[4:8], frameCRC)
 	w.cleanEmptySynced = false
+	if before == 0 {
+		w.fixed.pendingTrustedEnd = 0
+		w.fixed.pendingTrustedLastLSN = w.fixed.lastLSN
+	}
+	if w.fixed.pendingTrustedEnd == before && plan.env.LSN > w.fixed.pendingTrustedLastLSN {
+		w.fixed.pendingTrustedEnd = len(pending)
+		w.fixed.pendingTrustedLastLSN = plan.env.LSN
+	}
 	w.fixed.pending = pending
+	if int64(plan.total) > w.fixed.maxIncoming {
+		w.fixed.maxIncoming = int64(plan.total)
+	}
 	w.fixed.recordPendingFrame(int64(size))
 	w.size += int64(size)
 	return nil
@@ -1425,6 +1520,14 @@ func (w *Writer) appendFixedRawKVPointCommandV2Direct(class CommandDurabilityCla
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
 	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
 	w.cleanEmptySynced = false
+	if before == 0 {
+		w.fixed.pendingTrustedEnd = 0
+		w.fixed.pendingTrustedLastLSN = w.fixed.lastLSN
+	}
+	if w.fixed.pendingTrustedEnd == before && lsn > w.fixed.pendingTrustedLastLSN {
+		w.fixed.pendingTrustedEnd = len(pending)
+		w.fixed.pendingTrustedLastLSN = lsn
+	}
 	w.fixed.pending = pending
 	w.fixed.recordPendingFrame(int64(total))
 	w.size += int64(total)

@@ -427,6 +427,10 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 // serialize the manifest transition without holding db.mu or the root-reuse
 // gate. They transfer the returned closure to a root candidate or abandon it.
 func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenerationManifest) (closure *LeafGenerationManifestStablePreparedClosure, persisted *leafGenerationManifest, retErr error) {
+	return db.prepareLeafGenerationManifestStableCandidateWithDeps(candidate, nil)
+}
+
+func (db *DB) prepareLeafGenerationManifestStableCandidateWithDeps(candidate *leafGenerationManifest, syncDeps func() error) (closure *LeafGenerationManifestStablePreparedClosure, persisted *leafGenerationManifest, retErr error) {
 	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
 		return nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)
 	}
@@ -472,7 +476,7 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 	beforeContent := store.durabilityCounters.ContentSyncs.Load()
 	beforeNamespace := store.durabilityCounters.NamespaceSyncs.Load()
 	var err error
-	token, err = store.replaceForPreparedClosure(candidate, original)
+	token, err = store.replaceWithOptions(candidate, original, leafGenerationManifestReplaceOptions{syncDeps: syncDeps})
 	err = errors.Join(err, original.closeAuxiliary(), original.closeReplacementFiles())
 	if err != nil {
 		return nil, nil, err

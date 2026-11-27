@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -884,18 +885,30 @@ func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest
 }
 
 func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) error {
+	return db.replaceLeafGenerationManifestOperationalWithOptions(manifest, nil, false)
+}
+
+func (db *DB) replaceLeafGenerationManifestOperationalWithOptions(manifest *leafGenerationManifest, syncDeps func() error, deferParentSync bool) error {
 	if db == nil {
 		return ErrClosed
 	}
 	leafDirSeq := db.leafLogDirUnsyncedSeq.Load()
 	if db.leafGenerationManifestStore == nil {
+		if syncDeps != nil {
+			if err := syncDeps(); err != nil {
+				return err
+			}
+		}
 		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
 			return err
 		}
 		db.markLeafLogDirSyncedThrough(leafDirSeq)
 		return nil
 	}
-	token, err := db.leafGenerationManifestStore.Replace(manifest)
+	token, err := db.leafGenerationManifestStore.replaceWithOptions(manifest, nil, leafGenerationManifestReplaceOptions{
+		syncDeps:        syncDeps,
+		deferParentSync: deferParentSync,
+	})
 	if token != nil {
 		// #3679 will transfer this token into the root candidate. Until that
 		// ordering owner lands, current paths explicitly release the exact pin
@@ -903,7 +916,11 @@ func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) er
 		token.Release()
 	}
 	if err == nil {
-		db.markLeafLogDirSyncedThrough(leafDirSeq)
+		if deferParentSync && !durabilitycut.Enabled() && db.leafGenerationManifestStore.mode == leafGenerationManifestStable && db.leafGenerationManifestStore.hooks.BeforeParentSync == nil {
+			db.NoteLeafLogDirSyncPending()
+		} else {
+			db.markLeafLogDirSyncedThrough(leafDirSeq)
+		}
 	}
 	return err
 }

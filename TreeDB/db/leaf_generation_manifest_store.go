@@ -106,8 +106,13 @@ func (db *DB) initializeLeafGenerationManifestStore(leafDir string, registry *ro
 	db.leafGenerationManifestStore = store
 }
 
+type leafGenerationManifestReplaceOptions struct {
+	syncDeps        func() error
+	deferParentSync bool
+}
+
 func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
-	return s.replace(manifest, nil)
+	return s.replaceWithOptions(manifest, nil, leafGenerationManifestReplaceOptions{})
 }
 
 // replaceForPreparedClosure persists one immutable manifest revision under the
@@ -115,10 +120,10 @@ func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) 
 // transfer its exact token or abandon the unpublished revision before meta
 // visibility.
 func (s *leafGenerationManifestStore) replaceForPreparedClosure(manifest *leafGenerationManifest, closure *LeafGenerationManifestStablePreparedClosure) (*rootpublication.StableResourceToken, error) {
-	return s.replace(manifest, closure)
+	return s.replaceWithOptions(manifest, closure, leafGenerationManifestReplaceOptions{})
 }
 
-func (s *leafGenerationManifestStore) replace(manifest *leafGenerationManifest, custody *LeafGenerationManifestStablePreparedClosure) (*rootpublication.StableResourceToken, error) {
+func (s *leafGenerationManifestStore) replaceWithOptions(manifest *leafGenerationManifest, custody *LeafGenerationManifestStablePreparedClosure, opts leafGenerationManifestReplaceOptions) (*rootpublication.StableResourceToken, error) {
 	if s == nil || s.leafDir == "" {
 		return nil, errors.New("missing leaf_vlog manifest store")
 	}
@@ -131,12 +136,17 @@ func (s *leafGenerationManifestStore) replace(manifest *leafGenerationManifest, 
 		return nil, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
 	}
 	if s.mode == leafGenerationManifestCompatibility {
+		if opts.syncDeps != nil {
+			if err := opts.syncDeps(); err != nil {
+				return nil, err
+			}
+		}
 		return s.replaceCompatibility(manifest)
 	}
 	if s.mode != leafGenerationManifestStable {
 		return nil, fmt.Errorf("%w: unknown leaf generation manifest replacement mode %d", rootpublication.ErrUnresolvedResource, s.mode)
 	}
-	return s.replaceStable(manifest, custody)
+	return s.replaceStable(manifest, custody, opts)
 }
 
 // seedSelectedRevision seeds monotonic revision allocation and the store's
@@ -429,7 +439,7 @@ func (s *leafGenerationManifestStore) replaceCompatibility(manifest *leafGenerat
 	return nil, nil
 }
 
-func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationManifest, custody *LeafGenerationManifestStablePreparedClosure) (_ *rootpublication.StableResourceToken, retErr error) {
+func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationManifest, custody *LeafGenerationManifestStablePreparedClosure, opts leafGenerationManifestReplaceOptions) (_ *rootpublication.StableResourceToken, retErr error) {
 	if s.stableCapability == nil || !s.stableCapability() {
 		return nil, fmt.Errorf("%w: retained-parent manifest replacement unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
@@ -537,8 +547,36 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		if _, err := revisionFile.Write(data); err != nil {
 			return nil, err
 		}
-		if err := syncLeafGenerationManifestFile(revisionFile, s.leafDir); err != nil {
-			return nil, err
+		if opts.syncDeps != nil && attempt == 0 {
+			if !durabilitycut.Enabled() {
+				// Complete delayed-allocation extent writeback for the staged
+				// manifest file before launching both fsyncs so ext4 JBD2
+				// coalesces manifest + dependency file syncs into one commit.
+				hintStableFileWriteback(revisionFile)
+				depErrCh := make(chan error, 1)
+				go func() {
+					depErrCh <- opts.syncDeps()
+				}()
+				manifestSyncErr := syncLeafGenerationManifestFile(revisionFile, s.leafDir)
+				depErr := <-depErrCh
+				if manifestSyncErr != nil {
+					return nil, manifestSyncErr
+				}
+				if depErr != nil {
+					return nil, depErr
+				}
+			} else {
+				if err := opts.syncDeps(); err != nil {
+					return nil, err
+				}
+				if err := syncLeafGenerationManifestFile(revisionFile, s.leafDir); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			if err := syncLeafGenerationManifestFile(revisionFile, s.leafDir); err != nil {
+				return nil, err
+			}
 		}
 		s.durabilityCounters.ContentSyncs.Add(1)
 		if attempt == 0 {
@@ -599,6 +637,15 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, revisionFile, revisionName); err != nil {
 		return nil, s.ambiguous(err)
+	}
+	if opts.deferParentSync && custody == nil && !durabilitycut.Enabled() && s.hooks.BeforeParentSync == nil {
+		// Operational-only manifest replacement defers fsync(leaf_vlog) to the
+		// enclosing durable-root transaction's pre-meta directory barrier so it
+		// can overlap with index.db materialization and fdatasync(index.db).
+		manifest.ManifestRevision = candidate.ManifestRevision
+		s.lastRevision = candidate.ManifestRevision
+		s.currentRevision = candidate.ManifestRevision
+		return nil, nil
 	}
 	proof, err := rootpublication.NewOwnedStableNamespaceCreationProof(parent, revisionFile, revisionName, s.registry.MetadataOwner())
 	if custody != nil {
@@ -805,6 +852,7 @@ func (s *leafGenerationManifestStore) syncParentDir() error {
 	if err := s.parent.Sync(); err != nil {
 		return err
 	}
+	s.durabilityCounters.NamespaceSyncs.Add(1)
 	return durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent)
 }
 

@@ -227,6 +227,25 @@ func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir stri
 	return nil
 }
 
+func (debt *CommandWALDependencyDebt) hasPendingRotationNamespacesThrough(lsn uint64) bool {
+	if debt == nil {
+		return false
+	}
+	debt.mu.Lock()
+	defer debt.mu.Unlock()
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		for _, token := range entry.rotationFiles {
+			if token != nil && token.Namespace() != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (debt *CommandWALDependencyDebt) stabilizeRotationNamespacesThrough(root, walDir string, lsn uint64) error {
 	if debt == nil {
 		return nil
