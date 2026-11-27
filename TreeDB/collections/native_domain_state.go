@@ -35,20 +35,52 @@ type nativeDomainState struct {
 	finished         bool
 }
 
-// newNativeDomainState consumes pending only on success. Its descriptor/name
-// and original independent refund receipt are admitted before allocation. The
-// returned reference belongs to the original sparse plan until transferred.
-func newNativeDomainState(name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, pending *memtable.COWRoot, admit cowbtree.OwnedMapAdmit) (*nativeDomainState, error) {
-	if name == "" || interpretation == 0 || admit == nil {
+// nativeOwnedRefundWithLease fuses an independent OwnedMapRefund with its
+// embedded value COWExternalLease into one small accounting allocation with
+// zero backpointer to any domain or collection descriptor.
+type nativeOwnedRefundWithLease struct {
+	refund cowbtree.OwnedMapRefund
+	lease  memtable.COWExternalLease
+}
+
+func admitNativeOwnedMapRefund(charge uint64, valAlloc nativeExternalValueAllocator, admit cowbtree.OwnedMapAdmit) (*cowbtree.OwnedMapRefund, error) {
+	if valAlloc != nil {
+		leaseVal, err := valAlloc.AcquireExternalValue(charge)
+		if err != nil {
+			return nil, err
+		}
+		box := &nativeOwnedRefundWithLease{lease: leaseVal}
+		box.refund.Init(&box.lease)
+		return &box.refund, nil
+	}
+	if admit == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	charge := nativeDomainStateCharge(name)
 	lease, err := admit(charge)
 	if err != nil {
 		return nil, err
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
+	return refund, nil
+}
+
+// newNativeDomainState consumes pending only on success. Its descriptor/name
+// and original independent refund receipt are admitted before allocation. The
+// returned reference belongs to the original sparse plan until transferred.
+func newNativeDomainState(name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, pending *memtable.COWRoot, admit cowbtree.OwnedMapAdmit) (*nativeDomainState, error) {
+	return newNativeDomainStateWithValueAllocator(name, baseRoot, interpretation, policy, pending, nil, admit)
+}
+
+func newNativeDomainStateWithValueAllocator(name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, pending *memtable.COWRoot, valAlloc nativeExternalValueAllocator, admit cowbtree.OwnedMapAdmit) (*nativeDomainState, error) {
+	if name == "" || interpretation == 0 || (valAlloc == nil && admit == nil) {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	charge := nativeDomainStateCharge(name)
+	refund, err := admitNativeOwnedMapRefund(charge, valAlloc, admit)
+	if err != nil {
+		return nil, err
+	}
 	ownedName := "primary"
 	if name != "primary" {
 		ownedName = strings.Clone(name)
@@ -110,7 +142,7 @@ func (nativeDomainLifetime) Release(d *nativeDomainState) (cowbtree.OwnedMapComp
 
 func nativeDomainStateCharge(name string) uint64 {
 	metadata := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainState{}))) +
-		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeOwnedRefundWithLease{})))
 	text := memtable.COWAllocationCharge(uint64(len(name)))
 	if text > ^uint64(0)-metadata {
 		return ^uint64(0) // original admission rejects before allocating anything

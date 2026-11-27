@@ -88,6 +88,27 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// CanParallelNativeBSONSet reports whether this collection supports concurrent
+// optimistic MVCC BSON $set updates without pre-commit serialization (i.e.,
+// standalone COW in non-durable fast/relaxed modes).
+func (c *Collection) CanParallelNativeBSONSet() bool {
+	return c != nil && c.nativeJSON != nil && c.nativeJSON.db != nil && !c.nativeJSON.db.NativeCommandWALGroupCommitActive()
+}
+
+// UpdateBSONSetParallel applies one structured top-level BSON $set update
+// directly on the native optimistic MVCC path without acquiring the
+// collection-level native BSON-set coalescing mutex. It returns contended=true
+// if a concurrent row conflict triggered a retry so callers can escalate hot
+// keys to serialized batch coalescing.
+func (c *Collection) UpdateBSONSetParallel(documentID []byte, fields []BSONSetField) (matched, modified, contended bool, err error) {
+	if c != nil && c.nativeJSON != nil {
+		matched, modified, _, contended, err = c.nativeUpdateBSONSetWithJournalObserved(documentID, fields, false)
+		return matched, modified, contended, err
+	}
+	matched, modified, err = c.UpdateBSONSet(documentID, fields)
+	return matched, modified, false, err
+}
+
 // UpdateBSONSetWithJournalReceipt runs the original singleton BSON update and
 // returns any checked journal completion from its final attempt.
 func (c *Collection) UpdateBSONSetWithJournalReceipt(documentID []byte, fields []BSONSetField) (matched, modified bool, completion backenddb.NativeJournalCompletion, err error) {

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -664,9 +666,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
-	benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
-	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
-	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+	benchmarkReportCollectionShapePostInsertEvidence(b, backend, b.N, startTreeDBStats, startKeyFallback, startPrefixFallback)
 	if !checkpoint && benchmarkBoolEnv(b, "TREEDB_COLLECTION_BENCH_NATIVE_COW_COMPANION", false) &&
 		benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
 		b.ReportMetric(float64(benchmarkVerifyCollectionShapeIDs(b, collection)), "verified_shape_docs")
@@ -741,9 +741,22 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
+	benchmarkReportCollectionShapePostInsertEvidence(b, backend, b.N, startTreeDBStats, startKeyFallback, startPrefixFallback)
+}
+
+func benchmarkReportCollectionShapePostInsertEvidence(
+	b *testing.B,
+	backend *backenddb.DB,
+	docCount int,
+	startTreeDBStats map[string]string,
+	startKeyFallback, startPrefixFallback uint64,
+) {
+	totalBytes, reportedDiskUsage := benchmarkReportTreeDBPostInsertDiskUsage(b, backend, docCount)
 	benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
-	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+	if reportedDiskUsage {
+		benchmarkReportTreeDBPostInsertMaintenance(b, backend, docCount, totalBytes)
+	}
 }
 
 func BenchmarkCollectionShapeInsertBatchSingleStringJSON(b *testing.B) {
@@ -1224,5 +1237,85 @@ func BenchmarkCollectionMixedReadWriteScalingSecondaryUnique(b *testing.B) {
 		b.Run(fmt.Sprintf("readers_%d/writers_%d", tc.readers, tc.writers), func(b *testing.B) {
 			benchmarkCollectionMixedReadWriteScaling(b, tc.readers, tc.writers, true)
 		})
+	}
+}
+
+// TestCollectionShapeInsertBatchNoWALFastReportsSpanNativeEvidence ensures
+// no_wal_fast zero-index shape insert benchmarks flush buffered data to disk
+// before snapshotting span-native counters, so post-insert production evidence
+// is populated even when all inserted documents fit in RAM during the timed loop.
+func TestCollectionShapeInsertBatchNoWALFastReportsSpanNativeEvidence(t *testing.T) {
+	t.Setenv("TREEDB_COLLECTION_BENCH_ENGINE", "no_wal_fast")
+	t.Setenv("TREEDB_COLLECTION_BENCH_DOCUMENT_FORMAT", "json")
+	t.Setenv("TREEDB_COLLECTION_REPORT_DISK_USAGE", "true")
+	t.Setenv("TREEDB_COLLECTION_REPORT_VLOG_REWRITE", "false")
+	t.Setenv("TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC", "false")
+
+	opts := treedb.OptionsForBenchmark(treedb.ProfileFast, t.TempDir())
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("close backend: %v", err)
+		}
+	})
+	manager := collections.NewCollectionManager(backend)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "test_shape_no_wal_fast_evidence",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	collection, err := manager.OpenCollection("test_shape_no_wal_fast_evidence")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	startTreeDBStats := backend.Stats()
+	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(t, backend)
+
+	const docCount = 1000
+	ids, docs := benchmarkDocumentBatch(t, 0, docCount, true)
+	if _, err := collection.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	// Verify the precondition that triggered the no_wal_fast indexes_0 guardrail
+	// error: small RAM-fit batches have not flushed via span-native yet prior to
+	// post-insert checkpointing.
+	preCheckpointStats := backend.Stats()
+	if delta := benchmarkStatUint64Delta(t, startTreeDBStats, preCheckpointStats, "treedb.flush_apply.span_native.used_ops_total"); delta != 0 {
+		t.Fatalf("expected 0 pre-checkpoint flush_span_used_ops for %d-doc no_wal_fast batch, got %d", docCount, delta)
+	}
+
+	// Verify the shared post-insert helper flushes before snapshotting span-native
+	// stats and reports positive production evidence.
+	var ranOnce sync.Once
+	res := testing.Benchmark(func(b *testing.B) {
+		b.StopTimer()
+		ranOnce.Do(func() {
+			benchmarkReportCollectionShapePostInsertEvidence(b, backend, docCount, startTreeDBStats, startKeyFallback, startPrefixFallback)
+		})
+		benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
+		benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
+	})
+	if res.Extra["flush_span_candidate_ops"] <= 0 {
+		t.Fatalf("flush_span_candidate_ops=%v want > 0", res.Extra["flush_span_candidate_ops"])
+	}
+	if res.Extra["flush_span_used_ops"] <= 0 {
+		t.Fatalf("flush_span_used_ops=%v want > 0", res.Extra["flush_span_used_ops"])
+	}
+	if res.Extra["flush_span_fallbacks"] != 0 {
+		t.Fatalf("flush_span_fallbacks=%v want 0", res.Extra["flush_span_fallbacks"])
+	}
+	postStats := backend.Stats()
+	if got := benchmarkStatUint64Delta(t, startTreeDBStats, postStats, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
+		t.Fatalf("post-helper flush_span_used_ops delta = 0, want > 0")
 	}
 }

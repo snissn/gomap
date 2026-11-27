@@ -67,10 +67,11 @@ func prepareNativeDomainUpdateObservedWithAdmit(base *nativeDomainState, name st
 	retirement := writer.Close()
 	writer = nil
 	retirement.Drain()
-	if admit == nil {
+	valAlloc, _ := allocator.(nativeExternalValueAllocator)
+	if valAlloc == nil && admit == nil {
 		admit = func(bytes uint64) (cowbtree.OwnedMapLease, error) { return allocator.AdmitNativeBytes(bytes) }
 	}
-	domain, err := newNativeDomainState(name, baseRoot, interpretation, policy, root, admit)
+	domain, err := newNativeDomainStateWithValueAllocator(name, baseRoot, interpretation, policy, root, valAlloc, admit)
 	if err != nil {
 		retirement = root.Release()
 		root = nil

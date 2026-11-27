@@ -39488,6 +39488,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), release
 		return err
 	}
 
+	if b.db.cow != nil && len(b.entries) == 0 && b.db.disableJournal && !b.hasViewOps && len(b.stableViewValueLeaseChunks) == 0 {
+		return b.writeCOWPublication(syncWrite, unlockWriteMu)
+	}
+
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
 	shardAdds := b.shardAdds

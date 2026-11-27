@@ -25,6 +25,7 @@ const cowResourceValueLogFile = 1
 type cowBatchPreparation struct {
 	mutation     txnMutationOwner
 	cut          *cowPreparedCut
+	inlineCut    cowPreparedCut
 	scratch      *memtable.COWExternalLease
 	files        [][]uint32
 	resources    []*cowLiveResource
@@ -162,7 +163,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		*p = cowBatchPreparation{mutation: mutation}
 		mutation = txnMutationOwner{}
 		b.cowState.prepared = p // caller drains all cancellation, including partial stage
-		p.cut, err = c.prepareNativeOnly(b.cowState.native)
+		p.cut, err = c.prepareNativeOnlyInto(b.cowState.native, &p.inlineCut)
 		if err == nil {
 			err = durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
 		}
@@ -459,6 +460,7 @@ func (p *cowBatchPreparation) drainCancelled() error {
 func (p *cowBatchPreparation) detachScratch() *memtable.COWExternalLease {
 	refund := p.scratch
 	p.cut, p.scratch = nil, nil
+	p.inlineCut = cowPreparedCut{}
 	p.files, p.resources, p.dictionaries = nil, nil, nil
 	p.mutation = txnMutationOwner{}
 	return refund

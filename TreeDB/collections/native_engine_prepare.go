@@ -70,7 +70,17 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	if err != nil {
 		return nil, err
 	}
-	lease, err := allocation.AdmitNativeBytes(charge)
+	var (
+		leaseVal memtable.COWExternalLease
+		useVal   bool
+		leasePtr *memtable.COWExternalLease
+	)
+	if valAlloc, ok := allocation.(nativeExternalValueAllocator); ok {
+		leaseVal, err = valAlloc.AcquireExternalValue(charge)
+		useVal = true
+	} else {
+		leasePtr, err = allocation.AdmitNativeBytes(charge)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +91,14 @@ func newNativeEnginePreparation(base *nativeEngineVersion, collectionCount, doma
 	e.allocator = base.allocator
 	e.maintenance = base.maintenance
 	e.noPendingTyped = base.noPendingTyped
-	e.refund = &nativeEngineRefund{lease: lease}
+	refund := &nativeEngineRefund{}
+	if useVal {
+		refund.leaseStorage = leaseVal
+		refund.lease = &refund.leaseStorage
+	} else {
+		refund.lease = leasePtr
+	}
+	e.refund = refund
 	e.preparation = p
 	if domainCount <= len(p.inlineDomains) {
 		p.ownedDomains = p.inlineDomains[:0]
