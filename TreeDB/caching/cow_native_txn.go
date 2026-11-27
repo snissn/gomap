@@ -3,6 +3,7 @@ package caching
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -14,9 +15,20 @@ import (
 )
 
 // nativeConditionalTxn adapts only method names; its sole opening owner is P1.
+// inlineBatch and inlineSnap embed the deferred cowBatchOwner and internal
+// Snapshot so native-only transactions do not heap-allocate separate batch or
+// snapshot handles per transaction.
 type nativeConditionalTxn struct {
 	ConditionalTxn
+	inlineBatch  cowBatchOwner
+	inlineSnap   Snapshot
 	nativeClosed bool
+}
+
+var nativeConditionalTxnPool = sync.Pool{
+	New: func() any {
+		return new(nativeConditionalTxn)
+	},
 }
 
 // BeginNativeConditionalTxn uses the original P1 opening Snapshot, sequence,
@@ -34,9 +46,11 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 	if db == nil || db.cow == nil {
 		return nil, ErrCOWUnsupported
 	}
-	extraCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{})))
-	tx := &nativeConditionalTxn{}
-	if err := db.initOwnedCOWTxnWithOptions(&tx.ConditionalTxn, db.cow.txnOwner, false, nil, extraCharge, true); err != nil {
+	extraCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeConditionalTxn{}) - unsafe.Sizeof(cowBatchOwner{}) - unsafe.Sizeof(Snapshot{})))
+	tx := nativeConditionalTxnPool.Get().(*nativeConditionalTxn)
+	if err := db.initOwnedCOWTxnWithOptions(&tx.ConditionalTxn, db.cow.txnOwner, false, nil, extraCharge, true, &tx.inlineBatch, &tx.inlineSnap); err != nil {
+		*tx = nativeConditionalTxn{}
+		nativeConditionalTxnPool.Put(tx)
 		return nil, err
 	}
 	return tx, nil
@@ -429,6 +443,21 @@ func (tx *nativeConditionalTxn) Close() error {
 		releaseErr = tx.batch.releaseNativePublication()
 	}
 	return joinCOWCleanupError(tx.ConditionalTxn.Close(), releaseErr)
+}
+
+// ReleaseNativeConditionalTxn closes tx (if not already closed) and returns
+// its zeroed storage to the internal pool. Callers MUST guarantee no reference
+// to tx survives this call (including no subsequent Close).
+func (tx *nativeConditionalTxn) ReleaseNativeConditionalTxn() error {
+	if tx == nil {
+		return nil
+	}
+	err := tx.Close()
+	if tx.closed && tx.nativeClosed && tx.batch == nil && tx.snap == nil && tx.cow == nil {
+		*tx = nativeConditionalTxn{}
+		nativeConditionalTxnPool.Put(tx)
+	}
+	return err
 }
 
 func (tx *nativeConditionalTxn) NativeRawEntries() []batch.Entry {

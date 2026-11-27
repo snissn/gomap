@@ -54,10 +54,10 @@ func (db *DB) InitOwnedCOWTxnWithRawDurableAdmission(tx *ConditionalTxn, owner *
 }
 
 func (db *DB) initOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error) error {
-	return db.initOwnedCOWTxnWithOptions(tx, owner, durableOrdinaryEligible, write, 0, false)
+	return db.initOwnedCOWTxnWithOptions(tx, owner, durableOrdinaryEligible, write, 0, false, nil, nil)
 }
 
-func (db *DB) initOwnedCOWTxnWithOptions(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error, extraCharge uint64, deferRawDomains bool) error {
+func (db *DB) initOwnedCOWTxnWithOptions(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error, extraCharge uint64, deferRawDomains bool, batchOwner *cowBatchOwner, snapDst *Snapshot) error {
 	if db == nil || db.cow == nil || owner == nil || db.cow.txnOwner != owner {
 		return backenddb.ErrConditionalTxnUnsupported
 	}
@@ -92,14 +92,18 @@ func (db *DB) initOwnedCOWTxnWithOptions(tx *ConditionalTxn, owner *transactiono
 	if err != nil {
 		return err
 	}
-	snap, err := db.acquireCOWSnapshotWithOptions(deferRawDomains)
+	snap, err := db.acquireCOWSnapshotInto(snapDst, deferRawDomains)
 	if err != nil {
 		lease.Close()
 		return err
 	}
 	var b *Batch
 	if deferRawDomains {
-		b = db.newCOWBatchDeferred()
+		if batchOwner != nil {
+			b = db.initCOWBatchDeferredInto(batchOwner)
+		} else {
+			b = db.newCOWBatchDeferred()
+		}
 	} else {
 		b = db.NewBatch()
 	}

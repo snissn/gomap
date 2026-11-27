@@ -382,6 +382,13 @@ func (db *DB) BorrowNativeSemanticCut() (backenddb.NativeSemanticBorrowedCut, er
 
 func (c *cowReadCut) State() backenddb.NativeSemanticState { return c.semanticRootSet }
 
+func (c *cowReadCut) NativeAllocator() backenddb.NativeSemanticAllocator {
+	if c == nil || c.cache == nil {
+		return nil
+	}
+	return c.cache.budget
+}
+
 func (c *cowReadCut) Release() error {
 	if c == nil || c.cache == nil {
 		return nil
@@ -540,7 +547,14 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	if completionErr != nil {
 		return result, completionErr
 	}
-	r := &cowNativeCommandWALRequest{batch: b, backend: backend, native: native, intent: intent, owner: owner, bridge: bridge, durable: effectiveDurable}
+	r := cowNativeCommandWALRequestPool.Get().(*cowNativeCommandWALRequest)
+	r.batch = b
+	r.backend = backend
+	r.native = native
+	r.intent = intent
+	r.owner = owner
+	r.bridge = bridge
+	r.durable = effectiveDurable
 	cancelUnconsumedSpare := func() {
 		if b.cowState != nil && b.cowState.native != nil {
 			b.cowState.native.barrierSpareSlot = nil
@@ -559,7 +573,9 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		if r.completion != nil {
 			r.completion.ReleaseNativeCommandWAL()
 		}
-		*r = cowNativeCommandWALRequest{}
+		regFn, appFn := r.registerFn, r.appendFn
+		*r = cowNativeCommandWALRequest{registerFn: regFn, appendFn: appFn}
+		cowNativeCommandWALRequestPool.Put(r)
 		r = nil
 		completionLease.Close()
 	}()
@@ -574,7 +590,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 			}
 		}
 	}
-	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
+	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.registerFn)
 	cancelUnconsumedSpare()
 	if r.completion != nil {
 		r.result, err = r.completion.CompleteNativeCommandWAL(err)
@@ -613,6 +629,17 @@ type cowNativeCommandWALRequest struct {
 	result       backenddb.NativeCommandWALCompletionResult
 	barrierSpare rootpublication.AcceptedTicket
 	durable      bool
+	registerFn   func() error
+	appendFn     func(bool) (uint64, error)
+}
+
+var cowNativeCommandWALRequestPool = sync.Pool{
+	New: func() any {
+		r := new(cowNativeCommandWALRequest)
+		r.registerFn = r.register
+		r.appendFn = r.append
+		return r
+	},
 }
 
 func (r *cowNativeCommandWALRequest) register() error {
@@ -632,13 +659,13 @@ func (r *cowNativeCommandWALRequest) register() error {
 	}
 	if spare.Valid() {
 		if spareReg, ok := r.completion.(backenddb.NativeCommandWALSpareCompletion); ok {
-			return spareReg.RegisterNativeCommandWALWithSpare(r.append, spare)
+			return spareReg.RegisterNativeCommandWALWithSpare(r.appendFn, spare)
 		}
 		if cancelErr := spare.CancelAccepted(); cancelErr != nil {
 			return cancelErr
 		}
 	}
-	return r.completion.RegisterNativeCommandWAL(r.append)
+	return r.completion.RegisterNativeCommandWAL(r.appendFn)
 }
 func emptyCOWBatchReplay(func(batch.Entry) error) error {
 	return nil

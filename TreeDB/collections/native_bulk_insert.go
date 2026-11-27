@@ -1028,6 +1028,6 @@ func (m *NativeJSONManager) commitBulkInsertAttempt(
 		coord.nativeBulkInsertMu.Lock()
 		defer coord.nativeBulkInsertMu.Unlock()
 	}
-	tx, err := m.beginPrepared(name)
+	tx, err := m.beginPreparedPooled(name)
 	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 }

@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -12,7 +13,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-const warmIndexRangeMaxLimit = 256
+const (
+	warmIndexRangeMaxLimit     = 256
+	warmRangeScratchMaxSlabCap = 64 << 10
+)
+
+var errWarmRangeBorrowFallback = errors.New("collections: warm range borrow fallback")
 
 type nativePhysicalRangeScanner interface {
 	NativeScanLiveKeysAtRoot(root uint64, start, end []byte, visit func(key []byte) (bool, error)) error
@@ -22,6 +28,14 @@ type nativePhysicalBatchEntryReader interface {
 	NativeEntriesAtRoot(root uint64, keys [][]byte, dst []node.LeafEntry, found []bool, copyValues bool) error
 }
 
+type nativePhysicalBatchEntryIntoReader interface {
+	NativeEntriesAtRootInto(root uint64, keys [][]byte, dst []node.LeafEntry, found []bool, slab []byte) ([]byte, error)
+}
+
+type nativeCutAllocator interface {
+	NativeAllocator() backenddb.NativeSemanticAllocator
+}
+
 type warmRangeDocBatch struct {
 	entries [17]node.LeafEntry
 	found   [17]bool
@@ -29,26 +43,67 @@ type warmRangeDocBatch struct {
 }
 
 type warmRangeCollector struct {
-	lease             *memtable.COWExternalLease
-	charge            uint64
-	preAdmitted       uint64
-	valueType         IndexValueType
-	limit             int
-	documents         bool
-	dedupe            bool
-	hasLookahead      bool
-	seen              map[string]struct{}
-	collectedIDs      [][]byte
-	inlineIDs         [16][]byte
-	lookaheadID       []byte
-	lookaheadRawKey   []byte
-	lastEmittedRawKey []byte
+	lease              *memtable.COWExternalLease
+	charge             uint64
+	preAdmitted        uint64
+	valueType          IndexValueType
+	limit              int
+	documents          bool
+	dedupe             bool
+	borrow             bool
+	hasLookahead       bool
+	seen               map[string]struct{}
+	collectedIDs       [][]byte
+	inlineIDs          [16][]byte
+	idBuf              []byte
+	lookaheadID        []byte
+	lookaheadRawKey    []byte
+	lookaheadRawKeyBuf []byte
+	lastEmittedRawKey  []byte
+}
+
+type warmRangeScratch struct {
+	collector          warmRangeCollector
+	batch              warmRangeDocBatch
+	idArena            [512]byte
+	lastRawKeyBuf      [256]byte
+	lookaheadRawKeyBuf [256]byte
+	valSlab            []byte
+	ptrValBuf          []byte
+	collectFn          func([]byte) (bool, error)
+}
+
+var warmRangeScratchPool = sync.Pool{
+	New: func() any {
+		sc := new(warmRangeScratch)
+		sc.collectFn = sc.collector.collect
+		return sc
+	},
+}
+
+func (sc *warmRangeScratch) reset() {
+	sc.collector.reset()
+	clear(sc.batch.entries[:])
+	clear(sc.batch.keys[:])
+	if cap(sc.valSlab) > warmRangeScratchMaxSlabCap {
+		sc.valSlab = nil
+	} else {
+		sc.valSlab = sc.valSlab[:0]
+	}
+	if cap(sc.ptrValBuf) > warmRangeScratchMaxSlabCap {
+		sc.ptrValBuf = nil
+	} else {
+		sc.ptrValBuf = sc.ptrValBuf[:0]
+	}
 }
 
 func (c *warmRangeCollector) admit(n uint64) error {
 	if n <= c.preAdmitted {
 		c.preAdmitted -= n
 		return nil
+	}
+	if c.lease == nil {
+		return errWarmRangeBorrowFallback
 	}
 	extra := n - c.preAdmitted
 	c.preAdmitted = 0
@@ -60,6 +115,15 @@ func (c *warmRangeCollector) admit(n uint64) error {
 	}
 	c.charge += extra
 	return nil
+}
+
+func (c *warmRangeCollector) copyInternalID(id []byte) []byte {
+	if len(id) <= cap(c.idBuf)-len(c.idBuf) {
+		off := len(c.idBuf)
+		c.idBuf = append(c.idBuf, id...)
+		return c.idBuf[off : off+len(id) : off+len(id)]
+	}
+	return bytes.Clone(id)
 }
 
 func (c *warmRangeCollector) collect(key []byte) (bool, error) {
@@ -86,8 +150,12 @@ func (c *warmRangeCollector) collect(key []byte) (bool, error) {
 			if err := c.admit(idCharge + keyCharge); err != nil {
 				return false, err
 			}
-			c.lookaheadID = bytes.Clone(id)
-			c.lookaheadRawKey = bytes.Clone(key)
+			c.lookaheadID = c.copyInternalID(id)
+			if len(key) <= cap(c.lookaheadRawKeyBuf) {
+				c.lookaheadRawKey = append(c.lookaheadRawKeyBuf[:0], key...)
+			} else {
+				c.lookaheadRawKey = bytes.Clone(key)
+			}
 		}
 		return false, nil
 	}
@@ -106,7 +174,11 @@ func (c *warmRangeCollector) collect(key []byte) (bool, error) {
 			return false, err
 		}
 	}
-	c.collectedIDs = append(c.collectedIDs, bytes.Clone(id))
+	if c.borrow {
+		c.collectedIDs = append(c.collectedIDs, c.copyInternalID(id))
+	} else {
+		c.collectedIDs = append(c.collectedIDs, bytes.Clone(id))
+	}
 	if c.documents {
 		if len(key) > cap(c.lastEmittedRawKey) {
 			newCap := max(256, len(key))
@@ -127,8 +199,10 @@ func (c *warmRangeCollector) reset() {
 }
 
 // One original capture supplies both secondary winners and primary documents.
-// The result wrappers own their copies; callbacks never borrow a physical page.
-func (c *Collection) scanNativeIndexRange(name string, opts IndexRangeOptions, documents bool, visit func([]byte, []byte) (bool, error)) (truncated, indexFound bool, resultErr error) {
+// When borrow is true, ID and document slices passed to visit may alias pooled
+// buffers valid only for the duration of the callback; callers requiring owned
+// slices pass borrow=false.
+func (c *Collection) scanNativeIndexRange(name string, opts IndexRangeOptions, documents, borrow bool, visit func([]byte, []byte) (bool, error)) (truncated, indexFound bool, resultErr error) {
 	if err := ValidateIndexName(name); err != nil {
 		return false, false, err
 	}
@@ -141,15 +215,329 @@ func (c *Collection) scanNativeIndexRange(name string, opts IndexRangeOptions, d
 	if opts.Desc {
 		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
+	if trunc, found, handled, err := c.scanNativeIndexRangeBorrowedCut(name, opts, documents, borrow, visit); handled {
+		return trunc, found, err
+	}
 	err := c.nativeJSON.withOneShotRead(c.name, func(read *NativeJSONRead) error {
 		var scanErr error
-		truncated, indexFound, scanErr = read.scanIndexRange(name, opts, documents, visit)
+		truncated, indexFound, scanErr = read.scanIndexRangeWithBorrow(name, opts, documents, borrow, visit)
 		return scanErr
 	})
 	return truncated, indexFound, err
 }
 
+func warmIndexRangeInitialCharge(name string, index IndexDefinition, opts IndexRangeOptions, documents, dedupe, primaryBatched bool) (charge, preAdmitted uint64, err error) {
+	charge = memtable.COWAllocationCharge(uint64(len(name))+6) +
+		memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeCollector{}))) +
+		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+	if opts.Limit > len(warmRangeCollector{}.inlineIDs) {
+		charge += memtable.COWAllocationCharge(uint64(opts.Limit) * uint64(unsafe.Sizeof([]byte{})))
+	}
+	if index.ValueType == IndexValueBSONOrderedV2 {
+		charge += memtable.COWAllocationCharge(page.PageSize)
+	}
+	if dedupe {
+		charge += memtable.COWAllocationCharge(256)
+	}
+	for _, bound := range [2]IndexRangeBound{opts.Lower, opts.Upper} {
+		if bound.Unbounded {
+			continue
+		}
+		amount, boundErr := nativeIndexQueryCharge(index, bound.Value)
+		if boundErr != nil {
+			return 0, 0, boundErr
+		}
+		if amount > ^uint64(0)-charge {
+			return 0, 0, memtable.ErrCOWCapacity
+		}
+		charge += amount
+	}
+	idSlots := uint64(opts.Limit)
+	if documents {
+		idSlots++
+	}
+	collectorAllowance := idSlots * memtable.COWAllocationCharge(64)
+	if documents {
+		collectorAllowance += 2 * memtable.COWAllocationCharge(256)
+	}
+	if dedupe {
+		collectorAllowance += uint64(opts.Limit) * (memtable.COWAllocationCharge(768) + memtable.COWAllocationCharge(64))
+	}
+	if primaryBatched {
+		batchAllowance := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeDocBatch{})))
+		if batchAllowance > ^uint64(0)-collectorAllowance {
+			return 0, 0, memtable.ErrCOWCapacity
+		}
+		collectorAllowance += batchAllowance
+	}
+	if collectorAllowance > ^uint64(0)-charge {
+		return 0, 0, memtable.ErrCOWCapacity
+	}
+	charge += collectorAllowance
+	return charge, collectorAllowance, nil
+}
+
+// scanNativeIndexRangeBorrowedCut executes a bounded warm settled index range
+// scan directly against a borrowed live cut without allocating a
+// NativeSemanticCapture or NativeJSONRead handle. Any non-settled domain,
+// typed schema, oversized batch, orphan/missing primary doc, or budget resize
+// falls back cleanly to withOneShotRead before visit is ever invoked.
+func (c *Collection) scanNativeIndexRangeBorrowedCut(
+	name string,
+	opts IndexRangeOptions,
+	documents, borrow bool,
+	visit func([]byte, []byte) (bool, error),
+) (truncated, indexFound, handled bool, resultErr error) {
+	if c == nil || c.nativeJSON == nil || c.nativeJSON.db == nil {
+		return false, false, false, nil
+	}
+	if err := ValidateCollectionName(c.name); err != nil {
+		return false, false, true, err
+	}
+	if opts.Limit <= 0 || opts.Limit > warmIndexRangeMaxLimit {
+		return false, false, false, nil
+	}
+	if documents && opts.Limit+1 > len(warmRangeDocBatch{}.entries) {
+		return false, false, false, nil
+	}
+	cut, err := c.nativeJSON.db.BorrowNativeSemanticCut()
+	if err != nil {
+		if errors.Is(err, backenddb.ErrClosed) {
+			return false, false, true, err
+		}
+		return false, false, false, nil
+	}
+	releaseCut := func() error {
+		if cut == nil {
+			return nil
+		}
+		rel := cut
+		cut = nil
+		return rel.Release()
+	}
+	defer func() {
+		if cut != nil {
+			relErr := releaseCut()
+			if handled {
+				resultErr = errors.Join(resultErr, relErr)
+			}
+		}
+	}()
+
+	engine, ok := cut.State().(*nativeEngineVersion)
+	if !ok || engine == nil {
+		return false, false, false, nil
+	}
+	col, ok := engine.names.Get(c.name)
+	if !ok {
+		return false, false, true, tree.ErrKeyNotFound
+	}
+	meta := col.schema.meta
+	index, found := findIndex(meta.Indexes, name)
+	if !found {
+		return false, false, true, nil
+	}
+	if orderedBSONIndexRequiresCompoundRangeAPI(index) {
+		return false, false, true, errors.New("collections: compound or descending BSON v2 indexes require FindByCompoundIndexRange")
+	}
+	if documents && nativeTypedMeta(*meta) {
+		return false, false, false, nil
+	}
+	idxDomain, hasIdxDomain := col.domains.Get("index/" + name)
+	if !hasIdxDomain || idxDomain == nil || idxDomain.refs.Load() <= 0 ||
+		idxDomain.baseRoot == 0 || idxDomain.pending != nil || idxDomain.captured != nil {
+		return false, false, false, nil
+	}
+	var primDomain *nativeDomainState
+	if documents {
+		var hasPrim bool
+		primDomain, hasPrim = col.domains.Get("primary")
+		if !hasPrim || primDomain == nil || primDomain.refs.Load() <= 0 ||
+			primDomain.baseRoot == 0 || primDomain.pending != nil || primDomain.captured != nil {
+			return false, false, false, nil
+		}
+	}
+	scanner, hasScanner := cut.(nativePhysicalRangeScanner)
+	if !hasScanner {
+		return false, false, false, nil
+	}
+	var batchInto nativePhysicalBatchEntryIntoReader
+	if documents {
+		var hasBatchInto bool
+		batchInto, hasBatchInto = cut.(nativePhysicalBatchEntryIntoReader)
+		if !hasBatchInto {
+			return false, false, false, nil
+		}
+	}
+	cutAlloc, hasAlloc := cut.(nativeCutAllocator)
+	if !hasAlloc {
+		return false, false, false, nil
+	}
+	valAlloc, hasValAlloc := cutAlloc.NativeAllocator().(nativeExternalValueAllocator)
+	if !hasValAlloc {
+		return false, false, false, nil
+	}
+
+	dedupe := shouldDedupeIndexDocumentIDs(index, meta.Options)
+	charge, preAdmitted, err := warmIndexRangeInitialCharge(name, index, opts, documents, dedupe, documents)
+	if err != nil {
+		return false, true, true, err
+	}
+	leaseVal, err := valAlloc.AcquireExternalValue(charge)
+	if err != nil {
+		return false, false, false, nil
+	}
+	defer leaseVal.Close()
+
+	start, end, empty, err := indexRangeScanBounds(index.ValueType, opts)
+	if err != nil || empty {
+		return false, true, true, err
+	}
+
+	sc := warmRangeScratchPool.Get().(*warmRangeScratch)
+	defer func() {
+		sc.reset()
+		warmRangeScratchPool.Put(sc)
+	}()
+
+	var seen map[string]struct{}
+	if dedupe {
+		seen = make(map[string]struct{})
+	}
+	collector := &sc.collector
+	collector.lease = nil
+	collector.charge = charge
+	collector.preAdmitted = preAdmitted
+	collector.valueType = index.ValueType
+	collector.limit = opts.Limit
+	collector.documents = documents
+	collector.dedupe = dedupe
+	collector.borrow = borrow
+	collector.seen = seen
+	collector.idBuf = sc.idArena[:0]
+	collector.lookaheadRawKeyBuf = sc.lookaheadRawKeyBuf[:0]
+	collector.lastEmittedRawKey = sc.lastRawKeyBuf[:0]
+	if opts.Limit <= len(collector.inlineIDs) {
+		collector.collectedIDs = collector.inlineIDs[:0]
+	} else {
+		collector.collectedIDs = make([][]byte, 0, opts.Limit)
+	}
+
+	if scanErr := scanner.NativeScanLiveKeysAtRoot(idxDomain.baseRoot, start, end, sc.collectFn); scanErr != nil {
+		if errors.Is(scanErr, errWarmRangeBorrowFallback) {
+			return false, false, false, nil
+		}
+		return false, true, true, scanErr
+	}
+
+	numDocs := len(collector.collectedIDs)
+	if !documents {
+		for i := 0; i < numDocs; i++ {
+			id := collector.collectedIDs[i]
+			collector.collectedIDs[i] = nil
+			cont, visitErr := visit(id, nil)
+			if visitErr != nil {
+				return false, true, true, visitErr
+			}
+			if !cont {
+				return false, true, true, nil
+			}
+		}
+		return collector.hasLookahead, true, true, nil
+	}
+
+	if numDocs == 0 {
+		return false, true, true, nil
+	}
+	totalKeys := numDocs
+	if collector.hasLookahead {
+		totalKeys++
+	}
+	if err := collector.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeDocBatch{})))); err != nil {
+		if errors.Is(err, errWarmRangeBorrowFallback) {
+			return false, false, false, nil
+		}
+		return false, true, true, err
+	}
+	entries := sc.batch.entries[:totalKeys]
+	foundFlags := sc.batch.found[:totalKeys]
+	batchKeys := sc.batch.keys[:totalKeys]
+	copy(batchKeys, collector.collectedIDs)
+	lookIdx := numDocs
+	if collector.hasLookahead {
+		batchKeys[lookIdx] = collector.lookaheadID
+	}
+
+	var batchErr error
+	if borrow {
+		sc.valSlab, batchErr = batchInto.NativeEntriesAtRootInto(primDomain.baseRoot, batchKeys, entries, foundFlags, sc.valSlab)
+	} else {
+		_, batchErr = batchInto.NativeEntriesAtRootInto(primDomain.baseRoot, batchKeys, entries, foundFlags, nil)
+	}
+	if batchErr != nil {
+		return false, true, true, batchErr
+	}
+
+	// Verify no missing/tombstoned primary docs (including lookahead) BEFORE
+	// calling visit so any rare orphan case falls back cleanly to withOneShotRead.
+	for i := 0; i < totalKeys; i++ {
+		if !foundFlags[i] || entries[i].Flags&node.FlagTombstone != 0 {
+			return false, false, false, nil
+		}
+	}
+
+	for i := 0; i < numDocs; i++ {
+		id := collector.collectedIDs[i]
+		collector.collectedIDs[i] = nil
+		batchKeys[i] = nil
+		var document []byte
+		if entries[i].Flags&node.FlagPointer != 0 {
+			ptr := entries[i].ValuePtr
+			entries[i] = node.LeafEntry{}
+			var valErr error
+			if borrow {
+				sc.ptrValBuf, valErr = cut.NativeValueAtPointerInto(ptr, sc.ptrValBuf[:0], nil)
+				document = sc.ptrValBuf
+			} else {
+				document, valErr = cut.NativeValueAtPointer(ptr, nil)
+			}
+			if valErr != nil {
+				return false, true, true, valErr
+			}
+		} else {
+			document = entries[i].Value
+			entries[i] = node.LeafEntry{}
+		}
+		cont, visitErr := visit(id, document)
+		document = nil
+		if visitErr != nil {
+			return false, true, true, visitErr
+		}
+		if !cont {
+			return false, true, true, nil
+		}
+	}
+	if !collector.hasLookahead {
+		return false, true, true, nil
+	}
+	if entries[lookIdx].Flags&node.FlagPointer != 0 {
+		lookPtr := entries[lookIdx].ValuePtr
+		entries[lookIdx] = node.LeafEntry{}
+		batchKeys[lookIdx] = nil
+		var lookErr error
+		sc.ptrValBuf, lookErr = cut.NativeValueAtPointerInto(lookPtr, sc.ptrValBuf[:0], nil)
+		if lookErr != nil {
+			return false, true, true, lookErr
+		}
+	}
+	return true, true, true, nil
+}
+
 func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, documents bool, visit func([]byte, []byte) (bool, error)) (truncated, indexFound bool, resultErr error) {
+	return r.scanIndexRangeWithBorrow(name, opts, documents, false, visit)
+}
+
+func (r *NativeJSONRead) scanIndexRangeWithBorrow(name string, opts IndexRangeOptions, documents, borrow bool, visit func([]byte, []byte) (bool, error)) (truncated, indexFound bool, resultErr error) {
 	r.mu.Lock()
 	if r.capture == nil || r.failure != nil || r.closing || r.visits == ^uint32(0) {
 		r.mu.Unlock()
@@ -275,7 +663,7 @@ func (r *NativeJSONRead) scanIndexRange(name string, opts IndexRangeOptions, doc
 		domain = nil
 		lease.Close()
 	}()
-	truncated, err = r.scanIndexRangeAdmitted(index.ValueType, opts, documents, dedupe, hasDomain, domain, canWarmScan, scanner, lease, charge, preAdmitted, visit)
+	truncated, err = r.scanIndexRangeAdmitted(index.ValueType, opts, documents, borrow, dedupe, hasDomain, domain, canWarmScan, scanner, lease, charge, preAdmitted, visit)
 	return truncated, true, err
 }
 
@@ -283,6 +671,7 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 	valueType IndexValueType,
 	opts IndexRangeOptions,
 	documents bool,
+	borrow bool,
 	dedupe bool,
 	hasDomain bool,
 	domain *nativeDomainState,
@@ -311,24 +700,31 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 	}()
 
 	if canWarmScan {
-		collector := &warmRangeCollector{
-			lease:       lease,
-			charge:      charge,
-			preAdmitted: preAdmitted,
-			valueType:   valueType,
-			limit:       opts.Limit,
-			documents:   documents,
-			dedupe:      dedupe,
-			seen:        seen,
-		}
+		sc := warmRangeScratchPool.Get().(*warmRangeScratch)
+		defer func() {
+			sc.reset()
+			warmRangeScratchPool.Put(sc)
+		}()
+		collector := &sc.collector
+		collector.lease = lease
+		collector.charge = charge
+		collector.preAdmitted = preAdmitted
+		collector.valueType = valueType
+		collector.limit = opts.Limit
+		collector.documents = documents
+		collector.dedupe = dedupe
+		collector.borrow = borrow
+		collector.seen = seen
+		collector.idBuf = sc.idArena[:0]
+		collector.lookaheadRawKeyBuf = sc.lookaheadRawKeyBuf[:0]
+		collector.lastEmittedRawKey = sc.lastRawKeyBuf[:0]
 		if opts.Limit <= len(collector.inlineIDs) {
 			collector.collectedIDs = collector.inlineIDs[:0]
 		} else {
 			collector.collectedIDs = make([][]byte, 0, opts.Limit)
 		}
-		defer collector.reset()
 
-		if scanErr := scanner.NativeScanLiveKeysAtRoot(domain.baseRoot, start, end, collector.collect); scanErr != nil {
+		if scanErr := scanner.NativeScanLiveKeysAtRoot(domain.baseRoot, start, end, sc.collectFn); scanErr != nil {
 			return false, scanErr
 		}
 
@@ -352,19 +748,17 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 				totalKeys++
 			}
 			var (
-				batch     *warmRangeDocBatch
 				entries   []node.LeafEntry
 				found     []bool
 				batchKeys [][]byte
 			)
-			if totalKeys <= len(warmRangeDocBatch{}.entries) {
+			if totalKeys <= len(sc.batch.entries) {
 				if err := collector.admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(warmRangeDocBatch{})))); err != nil {
 					return false, err
 				}
-				batch = &warmRangeDocBatch{}
-				entries = batch.entries[:totalKeys]
-				found = batch.found[:totalKeys]
-				batchKeys = batch.keys[:totalKeys]
+				entries = sc.batch.entries[:totalKeys]
+				found = sc.batch.found[:totalKeys]
+				batchKeys = sc.batch.keys[:totalKeys]
 			} else {
 				eCharge := memtable.COWAllocationCharge(uint64(totalKeys) * uint64(unsafe.Sizeof(node.LeafEntry{})))
 				fCharge := memtable.COWAllocationCharge(uint64(totalKeys) * uint64(unsafe.Sizeof(bool(false))))
@@ -383,7 +777,6 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 				clear(entries)
 				clear(batchKeys)
 				entries, found, batchKeys = nil, nil, nil
-				batch = nil
 			}()
 
 			copy(batchKeys, collector.collectedIDs)
@@ -391,10 +784,19 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 			if collector.hasLookahead {
 				batchKeys[lookIdx] = collector.lookaheadID
 			}
-			if batchErr := batchReader.NativeEntriesAtRoot(r.domain.domain.baseRoot, batchKeys, entries, found, true); batchErr != nil {
-				return false, batchErr
+			if batchInto, ok := r.capture.(nativePhysicalBatchEntryIntoReader); ok && borrow {
+				var batchErr error
+				sc.valSlab, batchErr = batchInto.NativeEntriesAtRootInto(r.domain.domain.baseRoot, batchKeys, entries, found, sc.valSlab)
+				if batchErr != nil {
+					return false, batchErr
+				}
+			} else {
+				if batchErr := batchReader.NativeEntriesAtRoot(r.domain.domain.baseRoot, batchKeys, entries, found, true); batchErr != nil {
+					return false, batchErr
+				}
 			}
 
+			valInto, hasValInto := r.capture.(nativePhysicalValueIntoReader)
 			for i := 0; i < numDocs; i++ {
 				id := collector.collectedIDs[i]
 				collector.collectedIDs[i] = nil
@@ -412,7 +814,12 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 					ptr := entries[i].ValuePtr
 					entries[i] = node.LeafEntry{}
 					var valErr error
-					document, valErr = r.readValue(ptr, nil)
+					if borrow && hasValInto {
+						sc.ptrValBuf, valErr = valInto.NativeValueAtPointerInto(ptr, sc.ptrValBuf[:0], nil)
+						document = sc.ptrValBuf
+					} else {
+						document, valErr = r.readValue(ptr, nil)
+					}
 					if valErr != nil {
 						return false, valErr
 					}
@@ -451,7 +858,13 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 				batchKeys[lookIdx] = nil
 				if lookFound && lookFlags&node.FlagTombstone == 0 {
 					if lookFlags&node.FlagPointer != 0 {
-						if _, lookErr := r.readValue(lookPtr, nil); lookErr != nil {
+						if borrow && hasValInto {
+							var lookErr error
+							sc.ptrValBuf, lookErr = valInto.NativeValueAtPointerInto(lookPtr, sc.ptrValBuf[:0], nil)
+							if lookErr != nil {
+								return false, lookErr
+							}
+						} else if _, lookErr := r.readValue(lookPtr, nil); lookErr != nil {
 							return false, lookErr
 						}
 					}
@@ -468,7 +881,6 @@ func (r *NativeJSONRead) scanIndexRangeAdmitted(
 			clear(entries)
 			clear(batchKeys)
 			entries, found, batchKeys = nil, nil, nil
-			batch = nil
 			fallbackCharge := memtable.COWAllocationCharge(page.PageSize+1) +
 				memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainCursor{})))
 			if err := collector.admit(fallbackCharge); err != nil {

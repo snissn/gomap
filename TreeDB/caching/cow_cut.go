@@ -838,6 +838,10 @@ func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
 }
 
 func (db *DB) acquireCOWSnapshotWithOptions(deferRawDomains bool) (*Snapshot, error) {
+	return db.acquireCOWSnapshotInto(nil, deferRawDomains)
+}
+
+func (db *DB) acquireCOWSnapshotInto(dst *Snapshot, deferRawDomains bool) (*Snapshot, error) {
 	stripe := uint32(db.cow.captureCalls.Add(1))
 	if !db.cow.beginReadStripe(stripe) {
 		return nil, backenddb.ErrClosed
@@ -847,17 +851,21 @@ func (db *DB) acquireCOWSnapshotWithOptions(deferRawDomains bool) (*Snapshot, er
 	if cut == nil {
 		return nil, backenddb.ErrClosed
 	}
-	return db.snapshotFromCOWCutWithOptions(cut, deferRawDomains)
+	return db.snapshotFromCOWCutInto(cut, dst, deferRawDomains)
 }
 
 // snapshotFromCOWCut consumes the caller's retained cut, including on admission
 // failure. The caller already holds the cache read gate; no recursive admission
 // is allowed while a concurrent Close may be waiting for that gate.
 func (db *DB) snapshotFromCOWCut(cut *cowReadCut) (*Snapshot, error) {
-	return db.snapshotFromCOWCutWithOptions(cut, false)
+	return db.snapshotFromCOWCutInto(cut, nil, false)
 }
 
 func (db *DB) snapshotFromCOWCutWithOptions(cut *cowReadCut, deferRawDomains bool) (*Snapshot, error) {
+	return db.snapshotFromCOWCutInto(cut, nil, deferRawDomains)
+}
+
+func (db *DB) snapshotFromCOWCutInto(cut *cowReadCut, dst *Snapshot, deferRawDomains bool) (*Snapshot, error) {
 	// Admission and allocation are outside cutMu. The temporary cut reference
 	// prevents a concurrent publication from retiring the chosen anchor.
 	extra := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(Snapshot{})))
@@ -873,7 +881,14 @@ func (db *DB) snapshotFromCOWCutWithOptions(cut *cowReadCut, deferRawDomains boo
 	if err != nil {
 		return nil, joinCOWCleanupError(err, db.cow.releaseCut(cut))
 	}
-	snap := newActiveCOWSnapshot()
+	var snap *Snapshot
+	if dst != nil {
+		*dst = Snapshot{}
+		dst.generation.Store(1)
+		snap = dst
+	} else {
+		snap = newActiveCOWSnapshot()
+	}
 	snap.db = db
 	snap.cowCache = db.cow
 	snap.cowCut = cut
