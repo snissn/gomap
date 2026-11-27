@@ -37,6 +37,19 @@ func (s rawIndexPageSource) ReadPage(pageID uint64) ([]byte, error) {
 	return s.data[off : off+page.PageSize], nil
 }
 
+type recordingIndexPageSource struct {
+	base    rawIndexPageSource
+	visited map[uint64]struct{}
+}
+
+func (s recordingIndexPageSource) ReadPage(pageID uint64) ([]byte, error) {
+	img, err := s.base.ReadPage(pageID)
+	if err == nil && s.visited != nil {
+		s.visited[pageID] = struct{}{}
+	}
+	return img, err
+}
+
 type forensicRootStats struct {
 	name                string
 	rootID              uint64
@@ -346,18 +359,42 @@ func inspectIndexDBForensics(t *testing.T, indexPath string) forensicIndexCensus
 		}
 	}
 
+	// Account for metadata and auxiliary pages strictly by walking structures
+	// owned by the valid durable slots (meta slots 0/1, each slot's root record,
+	// dependency manifest or dependency directory tree, and COW freelist
+	// generation pages). Page types are never treated as ownership evidence and
+	// are decoded solely to report unaccounted pages.
+	ownedMetaAux := map[uint64]struct{}{
+		0: {},
+		1: {},
+	}
+	recSrc := recordingIndexPageSource{base: src, visited: ownedMetaAux}
 	var gen *freelist.FreelistGenerationV1
-	if sel.valid {
-		var err error
-		gen, err = freelist.LoadGenerationV1(src, sel.record.Freelist)
-		if err != nil {
-			t.Fatalf("LoadGenerationV1(slot=%d): %v", out.selectedSlot, err)
+	for s := uint64(0); s < 2; s++ {
+		slotInfo := out.slots[s]
+		if !slotInfo.valid {
+			continue
 		}
-		out.freelistFree = gen.FreeCount()
-		out.freelistRetired = gen.RetiredCount()
+		ownedMetaAux[slotInfo.meta.RootRecordPageID] = struct{}{}
+		if slotInfo.record.Directory.RootPageID != 0 {
+			walkTree(slotInfo.record.Directory.RootPageID, ownedMetaAux, nil)
+		} else if slotInfo.record.Manifest.PageCount > 0 {
+			if _, err := rootpublication.LoadDependencyManifestV1(recSrc, slotInfo.record.Manifest); err != nil {
+				t.Fatalf("LoadDependencyManifestV1(slot=%d): %v", s, err)
+			}
+		}
+		slotGen, err := freelist.LoadGenerationV1(recSrc, slotInfo.record.Freelist)
+		if err != nil {
+			t.Fatalf("LoadGenerationV1(slot=%d): %v", s, err)
+		}
+		if s == out.selectedSlot {
+			gen = slotGen
+			out.freelistFree = gen.FreeCount()
+			out.freelistRetired = gen.RetiredCount()
+		}
 	}
 
-	// Exact page-by-page accounting across [0 .. totalPages-1].
+	// Exact page-by-page accounting across [0 .. highWater-1].
 	// Note: pages within [0 .. HighWater-1] are managed by the COW freelist;
 	// pages >= HighWater (if any) are preallocated tail chunk padding.
 	highWater := out.totalPages
@@ -365,7 +402,7 @@ func inspectIndexDBForensics(t *testing.T, indexPath string) forensicIndexCensus
 		highWater = gen.HighWater()
 	}
 	for id := uint64(0); id < highWater; id++ {
-		if id < 2 {
+		if _, ok := ownedMetaAux[id]; ok {
 			out.metaAndAuxPages++
 			continue
 		}
@@ -386,16 +423,6 @@ func inspectIndexDBForensics(t *testing.T, indexPath string) forensicIndexCensus
 			continue
 		}
 		pt := node.NewNode(img).Type()
-		switch pt {
-		case page.PageTypeFreelistGeneration,
-			page.PageTypeFreelistIndex,
-			page.PageTypeFreelistChunk,
-			page.PageTypeFreelistReservation,
-			page.PageTypeDependencyManifest,
-			page.PageTypeDurableRootRecord:
-			out.metaAndAuxPages++
-			continue
-		}
 		out.unaccountedPages++
 		out.unaccountedByType[pt]++
 		if out.unaccountedPages == 1 || id < out.unaccountedMinPage {
@@ -673,10 +700,20 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("pre-probe Checkpoint: %v", err)
 	}
-	repPreVac, _ := d.IndexVacuumTriggerReport()
-	planPreVac, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	repPreVac, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport pre-vac1: %v", err)
+	}
+	planPreVac, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan pre-vac1: %v", err)
+	}
 	cPreVac := inspectIndexDBForensics(t, indexPath)
 	t.Log(formatForensicCensus("probe-before-VacuumIndexOnline(distinct-slots)", cPreVac, repPreVac, planPreVac))
+	if !cPreVac.slots[0].valid || !cPreVac.slots[1].valid || cPreVac.slotsSameRoots {
+		t.Fatalf("probe #1 requires two valid distinct durable slots before VacuumIndexOnline: slot0Valid=%v slot1Valid=%v sameRoots=%v",
+			cPreVac.slots[0].valid, cPreVac.slots[1].valid, cPreVac.slotsSameRoots)
+	}
 
 	var mBeforeVac1, mAfterVac1 runtime.MemStats
 	runtime.GC()
@@ -688,8 +725,17 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VacuumIndexOnlineWithStats #1: %v", err)
 	}
-	repPostVac1, _ := d.IndexVacuumTriggerReport()
-	planPostVac1, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if vacStats1.OlderRootRebuilds == 0 {
+		t.Fatalf("VacuumIndexOnline #1 with distinct input slots did not rebuild older slot: OlderRootRebuilds=0")
+	}
+	repPostVac1, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport post-vac1: %v", err)
+	}
+	planPostVac1, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan post-vac1: %v", err)
+	}
 	cPostVac1 := inspectIndexDBForensics(t, indexPath)
 	t.Logf("VacuumIndexOnline #1 stats: dur=%v B=%d allocs=%d OlderRootRebuilds=%d OlderRootRebuiltPages=%d ReplacementPagerPages=%d",
 		vac1Dur, mAfterVac1.TotalAlloc-mBeforeVac1.TotalAlloc, mAfterVac1.Mallocs-mBeforeVac1.Mallocs,
@@ -701,8 +747,14 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactStorage after VacuumIndexOnline #1: %v", err)
 	}
-	repPostCS, _ := d.IndexVacuumTriggerReport()
-	planPostCS, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	repPostCS, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport post-CS: %v", err)
+	}
+	planPostCS, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan post-CS: %v", err)
+	}
 	cPostCS := inspectIndexDBForensics(t, indexPath)
 	t.Logf("CompactStorage after vac1: FullyCompacted=%v PolicyFullyCompacted=%v RemainingDebt.IndexVacuumRequired=%v Reason=%q",
 		compactAfterVac.Storage.FullyCompacted, compactAfterVac.Storage.PolicyFullyCompacted,
@@ -726,8 +778,14 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("post-vac1 Checkpoint: %v", err)
 	}
-	repPostSupersede, _ := d.IndexVacuumTriggerReport()
-	planPostSupersede, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	repPostSupersede, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport post-supersede: %v", err)
+	}
+	planPostSupersede, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan post-supersede: %v", err)
+	}
 	cPostSupersede := inspectIndexDBForensics(t, indexPath)
 	t.Log(formatForensicCensus("probe-after-superseding-slot^1-via-next-commit", cPostSupersede, repPostSupersede, planPostSupersede))
 
@@ -746,17 +804,36 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 		csExDur, mAfterCSEx.TotalAlloc-mBeforeCSEx.TotalAlloc, mAfterCSEx.Mallocs-mBeforeCSEx.Mallocs,
 		csExStats.Storage.FullyCompacted, csExStats.Storage.PolicyFullyCompacted, csExStats.Storage.ByteMinimized,
 		csExStats.Storage.RemainingDebt.IndexVacuumRequired, csExStats.Storage.RemainingDebt.IndexVacuumReason)
-	repPreVac2, _ := d.IndexVacuumTriggerReport()
-	planPreVac2, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	repPreVac2, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport pre-vac2: %v", err)
+	}
+	planPreVac2, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan(Exhaustive) pre-vac2: %v", err)
+	}
 	cPreVac2 := inspectIndexDBForensics(t, indexPath)
 	t.Log(formatForensicCensus("probe-after-Exhaustive-CompactStorage", cPreVac2, repPreVac2, planPreVac2))
+	if !cPreVac2.slots[0].valid || !cPreVac2.slots[1].valid || !cPreVac2.slotsSameRoots {
+		t.Fatalf("probe #2 requires two valid identical durable slots before VacuumIndexOnline: slot0Valid=%v slot1Valid=%v sameRoots=%v",
+			cPreVac2.slots[0].valid, cPreVac2.slots[1].valid, cPreVac2.slotsSameRoots)
+	}
 
 	vacStats2, err := d.VacuumIndexOnlineWithStats(ctx)
 	if err != nil {
 		t.Fatalf("VacuumIndexOnlineWithStats #2: %v", err)
 	}
-	repPostVac2, _ := d.IndexVacuumTriggerReport()
-	planPostVac2, _ := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if vacStats2.OlderRootRebuilds != 0 {
+		t.Fatalf("VacuumIndexOnline #2 with identical input slots unexpectedly rebuilt older slot: OlderRootRebuilds=%d", vacStats2.OlderRootRebuilds)
+	}
+	repPostVac2, err := d.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("IndexVacuumTriggerReport post-vac2: %v", err)
+	}
+	planPostVac2, err := d.CompactStoragePlan(ctx, backenddb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan post-vac2: %v", err)
+	}
 	cPostVac2 := inspectIndexDBForensics(t, indexPath)
 	t.Logf("VacuumIndexOnline #2 stats: OlderRootRebuilds=%d OlderRootRebuiltPages=%d ReplacementPagerPages=%d",
 		vacStats2.OlderRootRebuilds, vacStats2.OlderRootRebuiltPages, vacStats2.ReplacementPagerPages)
@@ -814,8 +891,15 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if cPreVac2.termsStats.leafPages > 0 && cPreVac2.termsStats.avgLeafFillPct() < 75.0 {
 		t.Errorf("terms avg leaf fill too low after compaction: got %.1f%%, want >= 75.0%%", cPreVac2.termsStats.avgLeafFillPct())
 	}
+	if csExStats.Storage.RemainingDebt.IndexVacuumRequired {
+		t.Errorf("Exhaustive CompactStorage did not converge: RemainingDebt.IndexVacuumRequired=true reason=%q", csExStats.Storage.RemainingDebt.IndexVacuumReason)
+	}
+	if !csExStats.Storage.FullyCompacted || !csExStats.Storage.PolicyFullyCompacted || !csExStats.Storage.ByteMinimized {
+		t.Errorf("Exhaustive CompactStorage flags not converged: FullyCompacted=%v PolicyFullyCompacted=%v ByteMinimized=%v debt=%+v",
+			csExStats.Storage.FullyCompacted, csExStats.Storage.PolicyFullyCompacted, csExStats.Storage.ByteMinimized, csExStats.Storage.RemainingDebt)
+	}
 	if planPreVac2.RemainingDebt.IndexVacuumRequired {
-		t.Errorf("Exhaustive CompactStorage did not converge: RemainingDebt.IndexVacuumRequired=true reason=%q", planPreVac2.RemainingDebt.IndexVacuumReason)
+		t.Errorf("Exhaustive follow-up CompactStoragePlan did not converge: RemainingDebt.IndexVacuumRequired=true reason=%q", planPreVac2.RemainingDebt.IndexVacuumReason)
 	}
 
 	if len(searchBefore.Results) == 0 {
@@ -844,20 +928,28 @@ func TestMaintainTextIndexes_IndexDBFootprintRepro(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen OpenCollection: %v", err)
 	}
+	assertTextSearchResultsEqual := func(label string, before, after TextSearchResponse) {
+		t.Helper()
+		if len(after.Results) != len(before.Results) {
+			t.Fatalf("%s result count mismatch across reopen: before=%d after=%d", label, len(before.Results), len(after.Results))
+		}
+		for i := range before.Results {
+			if !bytes.Equal(after.Results[i].DocumentID, before.Results[i].DocumentID) {
+				t.Fatalf("%s result[%d] DocumentID mismatch across reopen: before=%q after=%q",
+					label, i, before.Results[i].DocumentID, after.Results[i].DocumentID)
+			}
+		}
+	}
 	searchAfter, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: "anchor_common_00", TopK: 20})
 	if err != nil {
 		t.Fatalf("SearchText after reopen: %v", err)
 	}
-	if len(searchAfter.Results) != len(searchBefore.Results) {
-		t.Fatalf("SearchText result count mismatch across reopen: before=%d after=%d", len(searchBefore.Results), len(searchAfter.Results))
-	}
+	assertTextSearchResultsEqual("SearchText", searchBefore, searchAfter)
 	phraseAfter, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Phrase: &TextSearchPhraseQuery{Query: "phrase_alpha phrase_beta"}, TopK: 20})
 	if err != nil {
 		t.Fatalf("PhraseSearch after reopen: %v", err)
 	}
-	if len(phraseAfter.Results) != len(phraseBefore.Results) {
-		t.Fatalf("PhraseSearch result count mismatch across reopen: before=%d after=%d", len(phraseBefore.Results), len(phraseAfter.Results))
-	}
+	assertTextSearchResultsEqual("PhraseSearch", phraseBefore, phraseAfter)
 }
 
 func TestBufferedIndexedOverlayRoots_VacuumPreservesTombstones(t *testing.T) {

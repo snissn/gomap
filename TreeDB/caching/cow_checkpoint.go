@@ -49,13 +49,29 @@ func (db *DB) observeCOWCheckpointRun(start time.Time) {
 	updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
 }
 
+// cowAcceptedPressureShouldRetry decides whether a capacity refusal after a
+// pressure checkpoint pass represents forward progress worth retrying. It
+// requires that reclaimable pending entries existed atomically at refusal time
+// (hadPending) and that either S strictly advanced or an already-sealed
+// frontier (before.(V,C) <= before.S) accumulated newly installed entries
+// (after.(V,C) > after.S) while the checkpoint ran.
+func cowAcceptedPressureShouldRetry(before, after rootpublication.LogicalFrontiers, hadPending bool) bool {
+	if !hadPending {
+		return false
+	}
+	return after.S.LogicalSequence > before.S.LogicalSequence ||
+		after.S.CanonicalLSN > before.S.CanonicalLSN ||
+		((before.V <= before.S.LogicalSequence && before.C <= before.S.CanonicalLSN) &&
+			(after.V > after.S.LogicalSequence || after.C > after.S.CanonicalLSN))
+}
+
 // reserveRawTxnPairAfterPressure is only for ordinary durable paired denial.
 // It never duplicates flush ownership, holds half a pair, or waits with a
 // foreground publication lock. The original retry remains outside flushMu.
 // Under high concurrency, other writers can refill the accepted-prefix ring
 // between retirement inside the checkpoint and the caller's retry; keep
-// retrying while retirement strictly advances S and reclaimable pending
-// entries exist in the ring.
+// retrying while forward progress occurs (S advances, or an empty frontier
+// accumulates new unsealed entries) and pending entries existed at denial time.
 func (db *DB) reserveRawTxnPairAfterPressure(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
 	for {
 		before := db.cow.prefix.LogicalFrontiers()
@@ -72,8 +88,7 @@ func (db *DB) reserveRawTxnPairAfterPressure(denied rootpublication.AcceptedOrdi
 			return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
 		}
 		after := db.cow.prefix.LogicalFrontiers()
-		progressed := after.S.LogicalSequence > before.S.LogicalSequence || after.S.CanonicalLSN > before.S.CanonicalLSN
-		if !progressed || db.cow.prefix.AcceptedPendingCount() == 0 {
+		if !cowAcceptedPressureShouldRetry(before, after, nextDenied.HasPending()) {
 			return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
 		}
 		denied = nextDenied
@@ -82,31 +97,66 @@ func (db *DB) reserveRawTxnPairAfterPressure(denied rootpublication.AcceptedOrdi
 
 // reserveCOWAcceptedOrdinaryAfterPressure seals a full accepted-prefix ring
 // using the reserved maintenance lane and retries ordinary single-slot
-// admission. If concurrent writers refill the ring after forward retirement
-// progress, keep retrying while S advances and reclaimable pending entries
-// exist.
-func (db *DB) reserveCOWAcceptedOrdinaryAfterPressure(c *cowCache, cause error) (rootpublication.AcceptedTicket, error) {
-	if !errors.Is(cause, rootpublication.ErrAcceptedCapacity) {
+// admission. Queued waiters entering flushMu after another writer already
+// retired the refused prefix reuse that retirement instead of running
+// back-to-back checkpoints. If concurrent writers refill the ring after forward
+// progress and pending entries existed at denial time, keep retrying.
+func (db *DB) reserveCOWAcceptedOrdinaryAfterPressure(c *cowCache, denied rootpublication.AcceptedOrdinaryRefusal, cause error) (rootpublication.AcceptedTicket, error) {
+	if !denied.Valid() {
 		return rootpublication.AcceptedTicket{}, acceptedAdmissionError(cause)
 	}
 	for {
 		before := c.prefix.LogicalFrontiers()
-		if err := db.checkpointCOWPressure(context.Background(), nil); err != nil {
-			return rootpublication.AcceptedTicket{}, err
+		ticket, err := db.joinCOWAcceptedOrdinaryPressureCheckpoint(denied)
+		if err != nil || ticket.Valid() {
+			return ticket, err
 		}
-		ticket, err := c.prefix.ReserveAccepted(false)
+		var nextDenied rootpublication.AcceptedOrdinaryRefusal
+		ticket, nextDenied, err = c.prefix.ReserveAcceptedOrdinaryWithRefusal()
 		if err == nil {
 			return ticket, nil
 		}
-		if !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		if !nextDenied.Valid() {
 			return rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
 		}
 		after := c.prefix.LogicalFrontiers()
-		progressed := after.S.LogicalSequence > before.S.LogicalSequence || after.S.CanonicalLSN > before.S.CanonicalLSN
-		if !progressed || c.prefix.AcceptedPendingCount() == 0 {
+		if !cowAcceptedPressureShouldRetry(before, after, nextDenied.HasPending()) {
 			return rootpublication.AcceptedTicket{}, acceptedAdmissionError(err)
 		}
+		denied = nextDenied
 	}
+}
+
+func (db *DB) joinCOWAcceptedOrdinaryPressureCheckpoint(denied rootpublication.AcceptedOrdinaryRefusal) (rootpublication.AcceptedTicket, error) {
+	if db.closing.Load() {
+		return rootpublication.AcceptedTicket{}, errDBClosing
+	}
+	start := time.Now()
+	checkpoint := false
+	defer func() {
+		if checkpoint {
+			db.observeCOWCheckpointRun(start)
+		}
+	}()
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	if db.closing.Load() {
+		return rootpublication.AcceptedTicket{}, errDBClosing
+	}
+	if !db.maintenanceActive.Load() &&
+		db.cow.handoff == nil && !db.cow.refreshRequired.Load() && db.nativePressureDrainEnabled() {
+		if err := backendPublicationReady(db.backend); err != nil {
+			return rootpublication.AcceptedTicket{}, err
+		}
+		requireStableWAL := db.externalCommandWAL && !db.relaxedSync
+		ticket, err := db.cow.prefix.ReserveAcceptedOrdinaryAfterRetirement(denied, requireStableWAL)
+		if err != nil || ticket.Valid() {
+			return ticket, err
+		}
+	}
+	checkpoint = true
+	err := db.materializeCOWPrefixProjectedLocked(context.Background(), false, nil, cowCheckpointMaterialization, nil, false)
+	return rootpublication.AcceptedTicket{}, err
 }
 
 func (db *DB) joinRawTxnPressureCheckpoint(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {

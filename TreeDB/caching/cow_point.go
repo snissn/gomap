@@ -418,9 +418,12 @@ func (db *DB) WritePrivateCOWInlinePoint(owner *transactionowner.Owner, key, val
 	}
 	var accepted rootpublication.AcceptedTicket
 	if c.prefix != nil {
-		ticket, admitErr := c.prefix.ReserveAccepted(false)
+		ticket, denied, admitErr := c.prefix.ReserveAcceptedOrdinaryWithRefusal()
 		if admitErr != nil {
-			ticket, admitErr = db.reserveCOWAcceptedOrdinaryAfterPressure(c, admitErr)
+			if !denied.Valid() {
+				return true, acceptedAdmissionError(admitErr)
+			}
+			ticket, admitErr = db.reserveCOWAcceptedOrdinaryAfterPressure(c, denied, admitErr)
 			if admitErr != nil {
 				return true, admitErr
 			}

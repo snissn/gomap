@@ -62,6 +62,14 @@ const (
 	// DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns pairs with
 	// DefaultIndexedWriteMemtableAsyncFlushMaxDocuments.
 	DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	// DefaultNoIndexCommandWALDirectBatchDocuments keeps medium-to-large
+	// 0-index command-WAL InsertBatch calls on the immediate publish path.
+	// Unlike multi-index collections (which coalesce random secondary-index
+	// writes up to DefaultIndexedWriteMemtableDirectBatchDocuments), a 0-index
+	// collection only updates the single primary root, so batches at or above
+	// this threshold already amortize root apply and avoid staging/flush copy
+	// overhead (including tail batches of 16k-batched loads).
+	DefaultNoIndexCommandWALDirectBatchDocuments = DefaultIndexedWriteMemtableAccumulatorBatchDocuments
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
@@ -5398,8 +5406,8 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
-func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {
-	if c == nil || c.db == nil || c.writeDomain == nil || commandWALIntent != nil || documentCount <= 0 {
+func (c *Collection) canUseCommandWALNoIndexInsertBuffer(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent) bool {
+	if c == nil || c.db == nil || c.writeDomain == nil || commandWALIntent != nil {
 		return false
 	}
 	if !c.db.CommandWALEnabled() || c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed {
@@ -5414,6 +5422,16 @@ func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, 
 	default:
 		return false
 	}
+}
+
+func (c *Collection) canBufferCommandWALNoIndexInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {
+	if documentCount <= 0 || !c.canUseCommandWALNoIndexInsertBuffer(meta, format, commandWALIntent) {
+		return false
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments > 0 && !isDefaultIndexedWriteMemtableMaxDocuments(meta.Options) {
+		return true
+	}
+	return documentCount < DefaultNoIndexCommandWALDirectBatchDocuments
 }
 
 func (c *Collection) canUseCommandWALIndexedInsertBuffer(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent) bool {
@@ -12970,11 +12988,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return nil, err
 		}
 	}
+	commandWALNoIndexBufferEnabled := c.canUseCommandWALNoIndexInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 	commandWALNoIndexBufferedMode := c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 	commandWALIndexedBufferEnabled := c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 	commandWALIndexedBufferedMode := c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 	commandWALBufferedMode := commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
-	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+	indexedMemtablesEnabled := (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferEnabled || commandWALIndexedBufferEnabled
 	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
 		if execOpts.prepared != nil {
@@ -13025,11 +13044,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 		plannerOptions.learnTemplateIDs = templateEncoder != nil
 		plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+		commandWALNoIndexBufferEnabled = c.canUseCommandWALNoIndexInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 		commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 		commandWALIndexedBufferEnabled = c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 		commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 		commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
-		indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+		indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferEnabled || commandWALIndexedBufferEnabled
 		bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	}
 	if bufferIndexedInserts {
@@ -13051,11 +13071,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 				c.meta = meta
 				plannerOptions.learnTemplateIDs = templateEncoder != nil
 				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
+				commandWALNoIndexBufferEnabled = c.canUseCommandWALNoIndexInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 				commandWALNoIndexBufferedMode = c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 				commandWALIndexedBufferEnabled = c.canUseCommandWALIndexedInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 				commandWALIndexedBufferedMode = c.canBufferCommandWALIndexedInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
 				commandWALBufferedMode = commandWALNoIndexBufferedMode || commandWALIndexedBufferedMode
-				indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferedMode || commandWALIndexedBufferEnabled
+				indexedMemtablesEnabled = (!commandWALActive && c.shouldBufferIndexedInserts(meta)) || commandWALNoIndexBufferEnabled || commandWALIndexedBufferEnabled
 				bufferIndexedInserts = (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 			}
 		}
@@ -14010,15 +14031,24 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, err
 	}
 	var entries []noIndexBatchEntry
+	var presortedIDs [][]byte
 	if prepared := execOpts.prepared; prepared != nil {
 		entries = prepared.entries
 	} else {
 		entries = make([]noIndexBatchEntry, len(documents))
+		presorted := true
 		for i := range documents {
 			id := resultIDs[i]
 			entries[i] = noIndexBatchEntry{id: id, document: documents[i]}
+			if presorted && i > 0 && bytes.Compare(entries[i-1].id, id) > 0 {
+				presorted = false
+			}
 		}
-		sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
+		if presorted {
+			presortedIDs = resultIDs
+		} else {
+			sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
+		}
 	}
 	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
@@ -14029,7 +14059,7 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	rootName := collectionPrimaryRootName(c.meta.Name)
-	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries); err != nil {
+	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries, presortedIDs); err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
@@ -14116,26 +14146,46 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	if commandWALIntent == nil && c.commandWALActive(nil) {
-		commandDocuments := collectionDocumentsFromNoIndexEntries(entries)
+		poolWALBuffers := !columnStoreWriteEnabled(c.meta) && execOpts.trustedFloat32Projection == nil
+		var docsLease *commandWALDocsLease
+		var commandDocuments []commitlog.CollectionDocument
+		if poolWALBuffers {
+			docsLease = acquireCommandWALDocs(len(entries))
+			defer releaseCommandWALDocs(docsLease)
+			commandDocuments = docsLease.docs[:len(entries)]
+			for i := range entries {
+				commandDocuments[i] = commitlog.CollectionDocument{ID: entries[i].id, Document: entries[i].document}
+			}
+			docsLease.docs = commandDocuments
+		} else {
+			commandDocuments = collectionDocumentsFromNoIndexEntries(entries)
+		}
 		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON == nil && retainedDocuments != nil {
 			projection.preparedRetainedDocuments = commandDocuments
 			projection.preparedRetainedJSON = retainedDocuments
 		}
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(commandDocuments, nil, execOpts.trustedFloat32Projection)
+		var releaseCommandWALPayload func()
+		commandWALIntent, releaseCommandWALPayload, err = c.newCollectionInsertCommandWALIntentForMetaWithPool(c.meta, commandDocuments, nil, execOpts.trustedFloat32Projection, poolWALBuffers)
 		if err != nil {
 			return nil, err
+		}
+		if releaseCommandWALPayload != nil {
+			defer releaseCommandWALPayload()
 		}
 	}
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	var rowRemainderBytes int64
-	for i := range entries {
+	if err := applyCollectionRunEntries(table, len(entries), func(i int) (key, value []byte, err error) {
 		storedDocument := entries[i].document
 		if retainedDocuments != nil {
 			storedDocument = retainedDocuments[i]
 		}
 		rowRemainderBytes = saturatingAddNonNegativeInt64(rowRemainderBytes, int64(len(entries[i].id)+len(storedDocument)))
-		setCollectionRunValue(table, entries[i].id, storedDocument)
+		return entries[i].id, storedDocument, nil
+	}); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
@@ -14309,7 +14359,7 @@ func (c *Collection) insertBatchNoIndex(
 				_ = current.Close()
 				return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
 			}
-			if err := rejectNoIndexBatchDocumentConflicts(current, currentCatalog, rootName, entries); err != nil {
+			if err := rejectNoIndexBatchDocumentConflicts(current, currentCatalog, rootName, entries, presortedIDs); err != nil {
 				_ = current.Close()
 				return nil, err
 			}
@@ -14430,15 +14480,18 @@ func (c *Collection) insertBatchNoIndex(
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }
 
-func rejectNoIndexBatchDocumentConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, entries []noIndexBatchEntry) error {
+func rejectNoIndexBatchDocumentConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, entries []noIndexBatchEntry, presortedKeys [][]byte) error {
 	if len(catalog.overlayRootIDs(rootName)) == 0 {
 		rootID := catalog.rootID(rootName)
 		if rootID == 0 {
 			return nil
 		}
-		keys := make([][]byte, len(entries))
-		for i := range entries {
-			keys[i] = entries[i].id
+		keys := presortedKeys
+		if len(keys) != len(entries) {
+			keys = make([][]byte, len(entries))
+			for i := range entries {
+				keys[i] = entries[i].id
+			}
 		}
 		exists, err := snap.HasAnySortedAtRoot(rootID, keys)
 		if err != nil {

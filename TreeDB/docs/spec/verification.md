@@ -1342,6 +1342,24 @@ Publication metadata reuse (#4627) has additional production DB witnesses:
 - The vacuum M0 fixture manufactures explicit retired user-tree debt with
   fixed append-only compactions, recorded in its parameters. Its minimum 50%
   reclaimable-page and 40% shrink checks must not depend on metadata leakage.
+- `TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages` verifies that
+  `appendRebuiltDurableRootV1` structurally excludes every page reachable from
+  the successor's user root, system root, collection roots, and dependency
+  directory from `older.pages` retirement while still retiring strictly
+  older-only pages at `older.CommitSeq`.
+- `TestVacuumIndexOnlineRebuiltSlotRetirementAndFallbackRecovery` covers online
+  vacuum rebuilt-slot retirement and identical-slot root sharing across four
+  recovery states: (1) distinct-slot fallback protection after corrupting
+  `MetaPage1ID` (fallback `MetaPage0ID` recovers user and collection data with
+  retired older-only pages protected in `FreelistRetired`), (2) post-supersede
+  promotion from `FreelistRetired` to `FreelistFree` and physical page reuse
+  across subsequent commits and clean reopen, (3) shared-slot fallback recovery
+  after identical-slot DATA online vacuum and `MetaPage1ID` corruption (valid
+  independent `DurableRootRecordV1`, freelist, and manifest/directory), and (4)
+  crash recovery between final sync (`index.db.new` + `index.db.new.ready`) and
+  index file swap for the shared-slot path (pre-swap rollback to original
+  `index.db`, mid-swap roll-forward to the shared-slot replacement, and fallback
+  reopen after `MetaPage1ID` corruption).
 
 Pure scenario-validator unit tests under
 `TreeDB/internal/powerlossoracle/scenario_test.go` cover durable acknowledgement

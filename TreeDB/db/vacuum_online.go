@@ -1651,7 +1651,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			var initialFree []uint64
 			initialFree, finalSyncErr = drainVacuumLegacyFreelistPages(newAlloc, newPager.PageCount(), db.preferAppendAlloc)
 			if finalSyncErr == nil {
-				finalSyncErr = writeRebuiltDurableRootsV1WithFree(db.dir, newPath, newPager, []rebuiltDurableRootV1{
+				var reader tree.SlabReader
+				if db.valueLogManager != nil {
+					reader = db.valueLogManager
+				}
+				finalSyncErr = writeRebuiltDurableRootsV1WithFreeAndReader(db.dir, newPath, newPager, reader, []rebuiltDurableRootV1{
 					*olderReplacement,
 					{meta: nextMeta, resources: durableResources},
 				}, initialFree)
