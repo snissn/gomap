@@ -1031,6 +1031,28 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 	for fileID := range additionalReferences {
 		delete(references, fileID)
 	}
+	if db.valueLogManager != nil && len(references) > 0 {
+		set := db.valueLogManager.CurrentSubsetNoRefresh(references)
+		hasZombie := false
+		for fileID := range references {
+			file := set.Files[fileID]
+			if file != nil && (file.IsZombie.Load() || file.File == nil) {
+				hasZombie = true
+				break
+			}
+		}
+		if err := db.valueLogManager.Release(set); err != nil {
+			return nil, false, err
+		}
+		if hasZombie {
+			// A predecessor-inherited raw outer-leaf or value-log segment may have
+			// reached zero live references and been retired/zombied by GC while
+			// still pinned by base. Decline base reuse so the exact candidate
+			// scanner drops unreachable retired segments while remaining strictly
+			// fail-closed if any live pointer still references a zombie file.
+			return nil, false, nil
+		}
+	}
 	return references, true, nil
 }
 
