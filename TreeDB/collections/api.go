@@ -24329,7 +24329,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		return false, false, errCollectionNil
 	}
 	if c.nativeJSON != nil {
-		return c.scanNativeIndexRange(indexName, opts, true, func(id, document []byte) (bool, error) {
+		return c.scanNativeIndexRange(indexName, opts, true, true, func(id, document []byte) (bool, error) {
 			return fn(BorrowedDocumentRecord{ID: id, Document: document})
 		})
 	}
@@ -24824,7 +24824,7 @@ func (c *Collection) findByIndexExact(indexName, stringValue string, hasStringVa
 func (c *Collection) findByIndexRange(indexName string, opts IndexRangeOptions) ([][]byte, bool, error) {
 	if c != nil && c.nativeJSON != nil {
 		var collector indexIDCollector
-		truncated, found, err := c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
+		truncated, found, err := c.scanNativeIndexRange(indexName, opts, false, true, func(id, _ []byte) (bool, error) {
 			collector.appendID(id, false, opts.Limit)
 			return true, nil
 		})
@@ -25123,7 +25123,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 
 func (c *Collection) scanIndexRangeWithCloneMode(indexName string, opts IndexRangeOptions, cloneIDs bool, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c != nil && c.nativeJSON != nil {
-		return c.scanNativeIndexRange(indexName, opts, false, func(id, _ []byte) (bool, error) {
+		return c.scanNativeIndexRange(indexName, opts, false, !cloneIDs, func(id, _ []byte) (bool, error) {
 			return fn(id)
 		})
 	}

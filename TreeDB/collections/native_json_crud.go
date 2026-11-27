@@ -57,7 +57,7 @@ func (c *Collection) nativeUpdateBatchModeWithJournalDst(items []UpdateBatchItem
 		return nil, false, err
 	}
 	defer lockVector.unlock()
-	tx, err := c.nativeJSON.beginPrepared(c.name)
+	tx, err := c.nativeJSON.beginPreparedPooled(c.name)
 	if err != nil {
 		return nil, false, err
 	}
@@ -73,7 +73,7 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 func (c *Collection) finishPreparedNativeUpdateBatchWithJournalDst(tx *NativeJSONTxn, items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal, resultDst []UpdateBatchResult) (results []UpdateBatchResult, complete bool, resultErr error) {
 	var err error
 	defer func() {
-		closeErr := tx.Close()
+		closeErr := tx.releasePooled()
 		if closeErr != nil && retry != nil {
 			retry.rowConflict = false
 		}
@@ -279,11 +279,11 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 		return 0, err
 	}
 	defer unlockVector()
-	tx, err := c.nativeJSON.beginPrepared(c.name)
+	tx, err := c.nativeJSON.beginPreparedPooled(c.name)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, tx.releasePooled()) }()
 	count, err = tx.DeleteBatch(ids)
 	if err != nil {
 		return 0, err
@@ -775,11 +775,11 @@ func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte
 		return false, err
 	}
 	defer unlockVector()
-	tx, err := c.nativeJSON.beginPrepared(c.name)
+	tx, err := c.nativeJSON.beginPreparedPooled(c.name)
 	if err != nil {
 		return false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, tx.releasePooled()) }()
 	if predicate != nil {
 		current, err := tx.Get(id)
 		if errors.Is(err, tree.ErrKeyNotFound) {
@@ -851,7 +851,7 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 			}
 			return false, false, err
 		}
-		tx, err := c.nativeJSON.beginPrepared(c.name)
+		tx, err := c.nativeJSON.beginPreparedPooled(c.name)
 		if err != nil {
 			unlockVector()
 			if nativeSingleMutationRetryable(err) {
@@ -863,7 +863,7 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 		}
 		results, err := tx.UpdateBatch([]UpdateBatchItem{{DocumentID: id, Update: update}})
 		if err != nil {
-			err = errors.Join(err, tx.Close())
+			err = errors.Join(err, tx.releasePooled())
 			unlockVector()
 			if nativeSingleMutationRetryable(err) {
 				lastErr = err
@@ -877,12 +877,12 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 			return false, false, err
 		}
 		if len(results) != 1 {
-			closeErr := tx.Close()
+			closeErr := tx.releasePooled()
 			unlockVector()
 			return false, false, errors.Join(fmt.Errorf("collections: update result count %d for single update", len(results)), closeErr)
 		}
 		if !results[0].Matched || !results[0].Modified || len(tx.members) == 0 {
-			closeErr := tx.Close()
+			closeErr := tx.releasePooled()
 			unlockVector()
 			if closeErr != nil {
 				return false, false, closeErr
@@ -905,7 +905,7 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 			bytes.Equal(g.rows.rows[0].id, id)
 		if !canCoalesce {
 			commitErr := tx.commitNativePlanWithJournal(false, nil, false, nil, nil, nil, nil, nil)
-			commitErr = errors.Join(commitErr, tx.Close())
+			commitErr = errors.Join(commitErr, tx.releasePooled())
 			unlockVector()
 			if nativeSingleMutationRetryable(commitErr) {
 				lastErr = commitErr
@@ -923,7 +923,7 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 			coord.nativeUpdateCommitActive = true
 			coord.nativeUpdateCommitMu.Unlock()
 			commitErr := tx.commitNativePlanWithJournal(false, nil, false, nil, nil, nil, nil, nil)
-			commitErr = errors.Join(commitErr, tx.Close())
+			commitErr = errors.Join(commitErr, tx.releasePooled())
 			// Drain queued follower commits while still holding unlockVector so
 			// coalesced commits never re-acquire vectorDDLMutationMu.RLock behind
 			// a waiting DDL writer.
@@ -956,7 +956,7 @@ func (c *Collection) nativeUpdateDocument(id []byte, update func([]byte) ([]byte
 
 		// Release this caller's COW transaction/snapshot budget before waiting
 		// for the leader to commit the coalesced batch.
-		closeErr := tx.Close()
+		closeErr := tx.releasePooled()
 		<-item.done
 		unlockVector()
 
@@ -1033,7 +1033,7 @@ func (coord *collectionSchemaCoordinator) drainNativeUpdateCommitPending() {
 			clear(batch)
 			continue
 		}
-		btx, err := firstCol.nativeJSON.beginPrepared(firstCol.name)
+		btx, err := firstCol.nativeJSON.beginPreparedPooled(firstCol.name)
 		if err != nil {
 			retryable := nativeSingleMutationRetryable(err)
 			for _, it := range batch {
@@ -1098,7 +1098,7 @@ func (coord *collectionSchemaCoordinator) drainNativeUpdateCommitPending() {
 					it.done <- struct{}{}
 					continue
 				}
-				itx, ierr := it.col.nativeJSON.beginPrepared(it.col.name)
+				itx, ierr := it.col.nativeJSON.beginPreparedPooled(it.col.name)
 				if ierr != nil {
 					it.err = ierr
 					it.needRetry = nativeSingleMutationRetryable(ierr)

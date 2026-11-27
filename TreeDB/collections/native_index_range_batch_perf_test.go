@@ -741,4 +741,164 @@ func BenchmarkScanIndexRangeBatchedLimit10StandaloneCOW(b *testing.B) {
 			}
 		})
 	})
+
+	b.Run("Borrowed_Serial", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			count := 0
+			trunc, err := col.ScanBorrowedDocumentsByIndexRange("age", rangeOpts[i%numRanges], func(rec BorrowedDocumentRecord) (bool, error) {
+				count++
+				if len(rec.ID) == 0 || len(rec.Document) == 0 {
+					return false, errors.New("empty borrowed record")
+				}
+				return true, nil
+			})
+			if err != nil || !trunc || count != 10 {
+				b.Fatalf("ScanBorrowedDocumentsByIndexRange: count=%d trunc=%v err=%v", count, trunc, err)
+			}
+		}
+	})
+
+	b.Run("Borrowed_Parallel32", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetParallelism(32/max(runtime.GOMAXPROCS(0), 1) + 1)
+		var counter atomic.Uint64
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				idx := counter.Add(1) % numRanges
+				count := 0
+				trunc, err := col.ScanBorrowedDocumentsByIndexRange("age", rangeOpts[idx], func(rec BorrowedDocumentRecord) (bool, error) {
+					count++
+					if len(rec.ID) == 0 || len(rec.Document) == 0 {
+						return false, errors.New("empty borrowed record")
+					}
+					return true, nil
+				})
+				if err != nil || !trunc || count != 10 {
+					b.Errorf("ScanBorrowedDocumentsByIndexRange: count=%d trunc=%v err=%v", count, trunc, err)
+					return
+				}
+			}
+		})
+	})
+}
+
+func TestScanBorrowedIndexRangeSlabReuseAndDoubleCloseSafety(t *testing.T) {
+	owner, _, col := openNativeIndexRangeFixture(t, nativeIndexRangeFixtureOpts{
+		outerLeavesDict: runtime.GOOS != "windows",
+		pointerThresh:   512,
+	})
+	smallPad := string(bytes.Repeat([]byte("s"), 64))
+	largePad := string(bytes.Repeat([]byte("L"), 5120))
+	const total = 64
+	ids := make([][]byte, total)
+	docs := make([][]byte, total)
+	docByID := make(map[string][]byte, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("r%04d", i)
+		ids[i] = []byte(id)
+		pad := smallPad
+		if i%9 == 0 {
+			pad = largePad
+		}
+		docs[i] = makeNativeRangeBSONDoc(t, int64(i), []string{fmt.Sprintf("t%03d", i%20)}, pad)
+		docByID[id] = docs[i]
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify NativeEntriesAtRootInto reuses caller slab cleanly across calls.
+	read, err := col.nativeJSON.Capture(col.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchInto, ok := read.capture.(nativePhysicalBatchEntryIntoReader)
+	if !ok {
+		read.Close()
+		t.Fatal("capture does not implement nativePhysicalBatchEntryIntoReader")
+	}
+	primDomain, hasPrim := read.collection.domains.Get("primary")
+	if !hasPrim || primDomain == nil || primDomain.baseRoot == 0 {
+		read.Close()
+		t.Fatal("missing settled primary domain")
+	}
+	var slab []byte
+	dst := make([]node.LeafEntry, 4)
+	found := make([]bool, 4)
+	for round := 0; round < 3; round++ {
+		keys := [][]byte{ids[1+round], ids[2+round], []byte("missing-id"), ids[3+round]}
+		slab, err = batchInto.NativeEntriesAtRootInto(primDomain.baseRoot, keys, dst, found, slab)
+		if err != nil {
+			read.Close()
+			t.Fatalf("round %d NativeEntriesAtRootInto: %v", round, err)
+		}
+		if !found[0] || !bytes.Equal(dst[0].Value, docByID[string(keys[0])]) {
+			read.Close()
+			t.Fatalf("round %d entry 0 mismatch", round)
+		}
+		if found[2] || dst[2].Value != nil {
+			read.Close()
+			t.Fatalf("round %d missing key unexpectedly found", round)
+		}
+		if !found[3] || !bytes.Equal(dst[3].Value, docByID[string(keys[3])]) {
+			read.Close()
+			t.Fatalf("round %d entry 3 mismatch", round)
+		}
+	}
+	if err := read.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify ScanBorrowedDocumentsByIndexRange and FindDocumentsByIndexRange parity
+	// across settled borrowed-cut path (both inline and pointer docs) and early stop.
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: bsonRawInt64(t, 0), Inclusive: true},
+		Upper: IndexRangeBound{Value: bsonRawInt64(t, 30), Inclusive: true},
+		Limit: 10,
+	}
+	ownedRecs, ownedTrunc, err := col.FindDocumentsByIndexRange("age", opts)
+	if err != nil || !ownedTrunc || len(ownedRecs) != 10 {
+		t.Fatalf("FindDocumentsByIndexRange: len=%d trunc=%v err=%v", len(ownedRecs), ownedTrunc, err)
+	}
+	var borrowedIDs []string
+	borrowedTrunc, err := col.ScanBorrowedDocumentsByIndexRange("age", opts, func(rec BorrowedDocumentRecord) (bool, error) {
+		idx := len(borrowedIDs)
+		if !bytes.Equal(rec.ID, ownedRecs[idx].ID) || !bytes.Equal(rec.Document, ownedRecs[idx].Document) {
+			return false, fmt.Errorf("borrowed record %d mismatch", idx)
+		}
+		borrowedIDs = append(borrowedIDs, string(rec.ID))
+		return true, nil
+	})
+	if err != nil || borrowedTrunc != ownedTrunc || len(borrowedIDs) != 10 {
+		t.Fatalf("ScanBorrowedDocumentsByIndexRange: len=%d trunc=%v err=%v", len(borrowedIDs), borrowedTrunc, err)
+	}
+
+	// Verify public NativeJSONTxn.Close() and BeginPreparedNativeConditionalTxn().Close()
+	// remain idempotent on double-close.
+	pubTx, err := col.nativeJSON.Begin(col.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pubTx.Close(); err != nil {
+		t.Fatalf("first public NativeJSONTxn.Close: %v", err)
+	}
+	if err := pubTx.Close(); err != nil {
+		t.Fatalf("second public NativeJSONTxn.Close: %v", err)
+	}
+	rawCore, err := col.nativeJSON.db.BeginPreparedNativeConditionalTxn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rawCore.Close(); err != nil {
+		t.Fatalf("first rawCore.Close: %v", err)
+	}
+	if err := rawCore.Close(); err != nil {
+		t.Fatalf("second rawCore.Close: %v", err)
+	}
 }

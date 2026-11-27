@@ -22,10 +22,16 @@ type nativeMutationCustody struct {
 	collections       []*nativeCollectionState
 	inlineDomains     [1]*nativeDomainState
 	inlineCollections [1]*nativeCollectionState
+	leaseStorage      memtable.COWExternalLease
+	refundStorage     nativeEngineRefund
 	refund            *nativeEngineRefund
 	assignedFailure   error
-	typedResources    backenddb.NativePublicationResources
+	typedResources    *backenddb.NativePublicationResources
 	hasTypedResources bool
+}
+
+type nativeExternalValueAllocator interface {
+	AcquireExternalValue(bytes uint64) (memtable.COWExternalLease, error)
 }
 
 func newNativeMutationCustody(domainCount, collectionCount int, allocator backenddb.NativeSemanticAllocator) (*nativeMutationCustody, error) {
@@ -36,7 +42,7 @@ func newNativeMutationCustody(domainCount, collectionCount int, allocator backen
 	if slots > ^uint64(0)/uint64(unsafe.Sizeof(uintptr(0))) {
 		return nil, memtable.ErrCOWCapacity
 	}
-	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeMutationCustody{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeEngineRefund{})))
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeMutationCustody{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(backenddb.NativePublicationResources{})))
 	// Assigned typed descriptors use the original empty resource builder/set;
 	// their independent backing stays charged until this exact custody retires.
 	charge += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSetBuilder{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.StableResourceSet{}))) + preparedSemanticStreamMapEntryReserveBytes
@@ -50,11 +56,30 @@ func newNativeMutationCustody(domainCount, collectionCount int, allocator backen
 	if domainBytes > ^uint64(0)-charge || collectionBytes > ^uint64(0)-charge-domainBytes {
 		return nil, memtable.ErrCOWCapacity
 	}
-	lease, err := allocator.AdmitNativeBytes(charge + domainBytes + collectionBytes)
+	totalCharge := charge + domainBytes + collectionBytes
+	var (
+		leaseVal memtable.COWExternalLease
+		useVal   bool
+		leasePtr *memtable.COWExternalLease
+		err      error
+	)
+	if valAlloc, ok := allocator.(nativeExternalValueAllocator); ok {
+		leaseVal, err = valAlloc.AcquireExternalValue(totalCharge)
+		useVal = true
+	} else {
+		leasePtr, err = allocator.AdmitNativeBytes(totalCharge)
+	}
 	if err != nil {
 		return nil, err
 	}
-	w := &nativeMutationCustody{refund: &nativeEngineRefund{lease: lease}}
+	w := &nativeMutationCustody{}
+	if useVal {
+		w.leaseStorage = leaseVal
+		w.refundStorage.lease = &w.leaseStorage
+	} else {
+		w.refundStorage.lease = leasePtr
+	}
+	w.refund = &w.refundStorage
 	if domainCount <= len(w.inlineDomains) {
 		w.domains = w.inlineDomains[:0:domainCount]
 	} else {
@@ -107,6 +132,7 @@ func (w *nativeMutationCustody) FinishSemanticCleanup() (rootpublication.Semanti
 		if err := w.typedResources.ReleaseNativeResources(); err != nil {
 			return rootpublication.SemanticCleanupCompletion{}, err
 		}
+		w.typedResources = nil
 		w.hasTypedResources = false
 	}
 	// Collections may also own the adopted domain descriptors. Release their
@@ -142,6 +168,8 @@ func (w *nativeMutationCustody) FinishSemanticCleanup() (rootpublication.Semanti
 	clear(w.inlineCollections[:])
 	clear(w.inlineDomains[:])
 	w.collections, w.domains = nil, nil
+	w.cleanup.Work = nil
+	w.assignedFailure = nil
 	refund := w.refund
 	w.refund = nil
 	return rootpublication.SemanticCleanupCompletion{Refund: refund}, nil

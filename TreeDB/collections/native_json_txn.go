@@ -65,32 +65,48 @@ type NativeJSONTxn struct {
 	count                int
 	imported             *nativeEngineVersion
 	dependencies         []txnhistory.Dependency
-	inlineDeps           [2]txnhistory.Dependency
+	inlineDeps           [8]txnhistory.Dependency
+	inlinePrefetchIDs    [256]byte
 	custody              *nativeMutationCustody
 	rawStaged            bool
 	structuredBSONUpdate bool
+	pooled               bool
 	lease                *memtable.COWExternalLease
 	stageLeases          []*memtable.COWExternalLease
 	singleStageLease     [1]*memtable.COWExternalLease
 	logicalGroup         nativeJSONLogicalGroup
 	preparedPub          backenddb.NativePreparedPublication
+	admitStage0          func(uint64) error
 	charge               uint64
 	failure              error
+}
+
+var nativeJSONTxnPool = sync.Pool{
+	New: func() any {
+		return new(NativeJSONTxn)
+	},
 }
 
 // Begin binds the collection's original logical incarnation and interpretation.
 // Close must be called on every outcome. Database.Close retains database ownership.
 func (m *NativeJSONManager) Begin(name string, additional ...string) (result *NativeJSONTxn, resultErr error) {
-	return m.begin(name, additional, false)
+	return m.begin(name, additional, false, false)
 }
 
 // beginPrepared shares the original opening and planner, but never checkpoints
 // below an outer collection mutation gate.
 func (m *NativeJSONManager) beginPrepared(name string) (*NativeJSONTxn, error) {
-	return m.begin(name, nil, true)
+	return m.begin(name, nil, true, false)
 }
 
-func (m *NativeJSONManager) begin(name string, additional []string, prepared bool) (result *NativeJSONTxn, resultErr error) {
+// beginPreparedPooled opens a single-collection prepared transaction backed by
+// nativeJSONTxnPool for internal one-shot helpers that never expose the handle
+// externally and terminate with a single final releasePooled() call.
+func (m *NativeJSONManager) beginPreparedPooled(name string) (*NativeJSONTxn, error) {
+	return m.begin(name, nil, true, true)
+}
+
+func (m *NativeJSONManager) begin(name string, additional []string, prepared, pooled bool) (result *NativeJSONTxn, resultErr error) {
 	if len(additional) >= commitlog.MaxCompositeMutationMembersV1 {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -134,9 +150,20 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 	}
 	lease, err := core.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
-		return nil, errors.Join(err, core.Close())
+		return nil, errors.Join(err, releaseNativeConditionalCore(core))
 	}
-	t := &NativeJSONTxn{db: m.db, core: core, count: count, lease: lease, charge: charge}
+	var t *NativeJSONTxn
+	if count == 1 && pooled {
+		t = nativeJSONTxnPool.Get().(*NativeJSONTxn)
+		t.db = m.db
+		t.core = core
+		t.count = 1
+		t.lease = lease
+		t.charge = charge
+		t.pooled = true
+	} else {
+		t = &NativeJSONTxn{db: m.db, core: core, count: count, lease: lease, charge: charge}
+	}
 	if count == 1 {
 		t.bindings = t.singleBinding[:1]
 		t.stageLeases = t.singleStageLease[:1]
@@ -149,7 +176,7 @@ func (m *NativeJSONManager) begin(name string, additional []string, prepared boo
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = errors.Join(resultErr, t.Close())
+			resultErr = errors.Join(resultErr, t.releasePooled())
 		}
 	}()
 	base, ok := core.State().(*nativeEngineVersion)
@@ -837,12 +864,15 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 	}
 	for i := range t.bindings {
 		if t.bindings[i].typed != nil {
+			if t.custody.typedResources == nil {
+				t.custody.typedResources = new(backenddb.NativePublicationResources)
+			}
 			if err := t.custody.typedResources.Initialize(nil); err != nil {
 				return err
 			}
 			t.custody.hasTypedResources = true
 			native.Finalizer = plan
-			native.Resources = &t.custody.typedResources
+			native.Resources = t.custody.typedResources
 			break
 		}
 	}
@@ -958,6 +988,30 @@ func clearNativeCommitRetry(expired *bool, retry *nativeBSONSetRetry, projected 
 		*projected = nil
 	}
 }
+func releaseNativeConditionalCore(core backenddb.NativeConditionalTxn) error {
+	if core == nil {
+		return nil
+	}
+	if releaser, ok := core.(interface{ ReleaseNativeConditionalTxn() error }); ok {
+		return releaser.ReleaseNativeConditionalTxn()
+	}
+	return core.Close()
+}
+
+func (t *NativeJSONTxn) admitStageBinding0(n uint64) error {
+	return t.admitStage(&t.bindings[0], n)
+}
+
+func (t *NativeJSONTxn) stageAdmitFunc(g *nativeJSONTxnBinding) func(uint64) error {
+	if len(t.bindings) > 0 && g == &t.bindings[0] {
+		if t.admitStage0 == nil {
+			t.admitStage0 = t.admitStageBinding0
+		}
+		return t.admitStage0
+	}
+	return func(bytes uint64) error { return t.admitStage(g, bytes) }
+}
+
 func (t *NativeJSONTxn) Close() error {
 	if t == nil {
 		return nil
@@ -977,6 +1031,23 @@ func (t *NativeJSONTxn) Close() error {
 	}
 	return err
 }
+
+// releasePooled closes t (if still open) and returns a single-binding pooled
+// transaction to nativeJSONTxnPool. Only internal one-shot owners that created
+// t via beginPreparedPooled and hold no remaining references may call this.
+func (t *NativeJSONTxn) releasePooled() error {
+	if t == nil {
+		return nil
+	}
+	err := t.Close()
+	if t.pooled && t.count == 1 {
+		admit0 := t.admitStage0
+		*t = NativeJSONTxn{admitStage0: admit0}
+		nativeJSONTxnPool.Put(t)
+	}
+	return err
+}
+
 func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *memtable.COWExternalLease) {
 	var err error
 	for i := range t.bindings {
@@ -1016,7 +1087,7 @@ func (t *NativeJSONTxn) closeLocked() (error, []*memtable.COWExternalLease, *mem
 	if t.core != nil {
 		core := t.core
 		t.core = nil
-		err = errors.Join(err, core.Close())
+		err = errors.Join(err, releaseNativeConditionalCore(core))
 	}
 	t.db = nil
 	stages, lease := t.stageLeases, t.lease

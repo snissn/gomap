@@ -331,6 +331,28 @@ func (db *DB) newCOWBatchDeferred() *Batch {
 	return b
 }
 
+// initCOWBatchDeferredInto initializes a caller-owned cowBatchOwner (such as
+// the inline owner embedded inside nativeConditionalTxn) without allocating a
+// separate cowBatchOwner on the heap.
+func (db *DB) initCOWBatchDeferredInto(owner *cowBatchOwner) *Batch {
+	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
+	charge := cowBatchBaseBytes(guardReserved)
+	lease, err := db.cow.budget.AcquireExternal(charge)
+	if err != nil {
+		return &cowDeniedBatch
+	}
+	*owner = cowBatchOwner{
+		batch: Batch{db: db, streamBypassOff: true},
+		state: cowBatchState{
+			lease:         lease,
+			guardReserved: guardReserved,
+		},
+	}
+	b := &owner.batch
+	b.cowState = &owner.state
+	return b
+}
+
 func (b *Batch) cowAdmitStorage(bytes uint64) error {
 	if b.cowState.err != nil {
 		return b.cowState.err

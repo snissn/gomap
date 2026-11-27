@@ -27,8 +27,8 @@ type nativeJSONRow struct {
 	currentState orderedDocumentIndexState
 }
 type nativeJSONRows struct {
-	rows      []nativeJSONRow
-	singleRow [1]nativeJSONRow
+	rows       []nativeJSONRow
+	inlineRows [8]nativeJSONRow
 }
 
 func (p *nativeJSONRows) find(id []byte) *nativeJSONRow {
@@ -108,7 +108,7 @@ func (p *nativeJSONRows) insertTouchedOwnedCore(id, value []byte, idOwnedAndAdmi
 		}
 	}
 	if useInline {
-		p.rows = p.singleRow[:0]
+		p.rows = p.inlineRows[:0]
 	} else if growCapacity != 0 {
 		next := make([]nativeJSONRow, len(p.rows), growCapacity)
 		copy(next, p.rows)
@@ -810,7 +810,12 @@ func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, i
 		copy(next, t.dependencies)
 		t.dependencies = next
 	}
-	idArena := make([]byte, totalIDBytes)
+	var idArena []byte
+	if totalIDBytes <= uint64(len(t.inlinePrefetchIDs)) {
+		idArena = t.inlinePrefetchIDs[:totalIDBytes]
+	} else {
+		idArena = make([]byte, totalIDBytes)
+	}
 	ns := g.namespace()
 	idOff := 0
 	for i := range items {
@@ -825,13 +830,15 @@ func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, i
 		})
 	}
 
-	admitStage := func(bytes uint64) error { return t.admitStage(g, bytes) }
-	if cap(g.rows.rows) < n {
+	admitStage := t.stageAdmitFunc(g)
+	if cap(g.rows.rows) == 0 && n <= len(g.rows.inlineRows) {
+		g.rows.rows = g.rows.inlineRows[:0]
+	} else if cap(g.rows.rows) < n {
 		rowSize := uint64(unsafe.Sizeof(nativeJSONRow{}))
 		if uint64(n) > ^uint64(0)/rowSize {
 			return true, memtable.ErrCOWCapacity
 		}
-		if err := admitStage(memtable.COWAllocationCharge(uint64(n) * rowSize)); err != nil {
+		if err := t.admitStage(g, memtable.COWAllocationCharge(uint64(n)*rowSize)); err != nil {
 			return true, err
 		}
 		g.rows.rows = make([]nativeJSONRow, 0, n)
@@ -875,7 +882,7 @@ func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, i
 			} else {
 				value = entry.Value
 			}
-			if _, err := g.rows.insertTouchedOwnedValue(id, value, valueOwnedAndAdmitted, admitStage); err != nil {
+			if _, err := g.rows.insertTouchedOwnedWithTxn(t, g, id, value, false, valueOwnedAndAdmitted); err != nil {
 				return true, err
 			}
 			continue
@@ -921,7 +928,7 @@ func (t *NativeJSONTxn) prefetchNativeUpdateBatchRows(g *nativeJSONTxnBinding, i
 					valueOwnedAndAdmitted = value != nil
 				}
 			}
-			if _, err := g.rows.insertTouchedOwnedValue(id, value, valueOwnedAndAdmitted, admitStage); err != nil {
+			if _, err := g.rows.insertTouchedOwnedWithTxn(t, g, id, value, false, valueOwnedAndAdmitted); err != nil {
 				return true, err
 			}
 		}
@@ -971,7 +978,12 @@ func (t *NativeJSONTxn) prefetchNativeBSONSetBatchRows(g *nativeJSONTxnBinding, 
 		copy(next, t.dependencies)
 		t.dependencies = next
 	}
-	idArena := make([]byte, totalIDBytes)
+	var idArena []byte
+	if totalIDBytes <= uint64(len(t.inlinePrefetchIDs)) {
+		idArena = t.inlinePrefetchIDs[:totalIDBytes]
+	} else {
+		idArena = make([]byte, totalIDBytes)
+	}
 	ns := g.namespace()
 	idOff := 0
 	var inlineOwnedIDs [32][]byte
@@ -994,13 +1006,15 @@ func (t *NativeJSONTxn) prefetchNativeBSONSetBatchRows(g *nativeJSONTxnBinding, 
 		})
 	}
 
-	admitStage := func(bytes uint64) error { return t.admitStage(g, bytes) }
-	if cap(g.rows.rows) < n {
+	admitStage := t.stageAdmitFunc(g)
+	if cap(g.rows.rows) == 0 && n <= len(g.rows.inlineRows) {
+		g.rows.rows = g.rows.inlineRows[:0]
+	} else if cap(g.rows.rows) < n {
 		rowSize := uint64(unsafe.Sizeof(nativeJSONRow{}))
 		if uint64(n) > ^uint64(0)/rowSize {
 			return true, memtable.ErrCOWCapacity
 		}
-		if err := admitStage(memtable.COWAllocationCharge(uint64(n) * rowSize)); err != nil {
+		if err := t.admitStage(g, memtable.COWAllocationCharge(uint64(n)*rowSize)); err != nil {
 			return true, err
 		}
 		g.rows.rows = make([]nativeJSONRow, 0, n)
@@ -1041,7 +1055,7 @@ func (t *NativeJSONTxn) prefetchNativeBSONSetBatchRows(g *nativeJSONTxnBinding, 
 			} else {
 				value = entry.Value
 			}
-			if _, err := g.rows.insertTouchedOwned(id, value, true, valueOwnedAndAdmitted, admitStage); err != nil {
+			if _, err := g.rows.insertTouchedOwnedWithTxn(t, g, id, value, true, valueOwnedAndAdmitted); err != nil {
 				return true, err
 			}
 			continue
@@ -1084,7 +1098,7 @@ func (t *NativeJSONTxn) prefetchNativeBSONSetBatchRows(g *nativeJSONTxnBinding, 
 					valueOwnedAndAdmitted = value != nil
 				}
 			}
-			if _, err := g.rows.insertTouchedOwned(id, value, true, valueOwnedAndAdmitted, admitStage); err != nil {
+			if _, err := g.rows.insertTouchedOwnedWithTxn(t, g, id, value, true, valueOwnedAndAdmitted); err != nil {
 				return true, err
 			}
 		}
@@ -1295,7 +1309,7 @@ func (t *NativeJSONTxn) touchNativeRowWithOptions(g *nativeJSONTxnBinding, id []
 					}
 				}
 			} else if physicalAdmitted, ok := g.probe.capture.(nativePhysicalAdmittedEntryReader); ok {
-				entry, err = physicalAdmitted.NativeEntryAtRootAdmitted(g.probe.domain.domain.baseRoot, ownedID, func(n uint64) error { return t.admitStage(g, n) })
+				entry, err = physicalAdmitted.NativeEntryAtRootAdmitted(g.probe.domain.domain.baseRoot, ownedID, t.stageAdmitFunc(g))
 				usedAdmittedPhysical = true
 			}
 			if !usedAdmittedPhysical && err == nil {
@@ -1311,7 +1325,7 @@ func (t *NativeJSONTxn) touchNativeRowWithOptions(g *nativeJSONTxnBinding, id []
 			if entry.Flags&node.FlagTombstone != 0 {
 				err = tree.ErrKeyNotFound
 			} else if entry.Flags&node.FlagPointer != 0 {
-				value, err = g.probe.readValue(entry.ValuePtr, func(n uint64) error { return t.admitStage(g, n) })
+				value, err = g.probe.readValue(entry.ValuePtr, t.stageAdmitFunc(g))
 				if !insert && err == nil && value != nil {
 					valueOwnedAndAdmitted = true
 				}

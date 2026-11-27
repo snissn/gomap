@@ -55,7 +55,7 @@ func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte,
 }
 
 func (m *NativeJSONManager) insertPreparedTrusted(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, trustedBSON bool) (bool, bool, error) {
-	tx, err := m.beginPrepared(name)
+	tx, err := m.beginPreparedPooled(name)
 	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, nil, 0, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 }
 
@@ -76,7 +76,7 @@ func finishNativeJSONInsertWithPreimage(tx *NativeJSONTxn, err error, ids, docum
 		return false, false, err
 	}
 	defer func() {
-		cleanupErr := tx.Close()
+		cleanupErr := tx.releasePooled()
 		if cleanupErr != nil {
 			clearNativeCommitRetry(&retry, nil, projected)
 		}

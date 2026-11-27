@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -350,37 +351,89 @@ func (b *cowBackendBasis) nativeScanLiveKeysAtRoot(cache *cowCache, provider cow
 	return b.scanLiveKeysWithWorkspace(cache, w, provider, root, start, end, visit)
 }
 
+type cowNativeScanLiveKeysState struct {
+	reader      backenddb.SnapshotRootReader
+	b           *cowBackendBasis
+	cache       *cowCache
+	w           *cowReadWorkspace
+	provider    cowDictionaryReadProvider
+	independent cowCacheDictionaryRead
+	hasDict     bool
+
+	checkShapeFn      func(valuelog.COWRecordShape) bool
+	readLeafFn        func(page.LeafLogPtr, []byte) ([]byte, error)
+	admitProjectionFn func(uint64) error
+}
+
+var cowNativeScanLiveKeysStatePool = sync.Pool{
+	New: func() any {
+		s := new(cowNativeScanLiveKeysState)
+		s.checkShapeFn = s.checkShape
+		s.readLeafFn = s.readLeaf
+		s.admitProjectionFn = s.admitProjection
+		return s
+	},
+}
+
+func (s *cowNativeScanLiveKeysState) checkShape(shape valuelog.COWRecordShape) bool {
+	if shape.DictID != 0 && (!s.hasDict || s.independent.provider == nil || s.independent.cache != s.cache) {
+		return false
+	}
+	if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
+		return false
+	}
+	return true
+}
+
+func (s *cowNativeScanLiveKeysState) readLeaf(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
+	if data, hit, err := s.b.snapshot.CopyVerifiedCOWLeafCached(ptr, s.w.limits, s.checkShapeFn, leafDst); err != nil || hit {
+		return data, err
+	}
+	return s.b.readNativePhysicalLeafWithWorkspace(s.cache, s.w, s.provider, ptr, leafDst)
+}
+
+func (s *cowNativeScanLiveKeysState) admitProjection(bytes uint64) error {
+	return s.w.admitProjection(bytes)
+}
+
+func (s *cowNativeScanLiveKeysState) reset() {
+	s.reader = backenddb.SnapshotRootReader{}
+	s.b = nil
+	s.cache = nil
+	s.w = nil
+	s.provider = nil
+	s.independent = cowCacheDictionaryRead{}
+	s.hasDict = false
+}
+
 func (b *cowBackendBasis) scanLiveKeysWithWorkspace(cache *cowCache, w *cowReadWorkspace, provider cowDictionaryReadProvider, root uint64, start, end []byte, visit func(key []byte) (bool, error)) error {
-	reader, err := b.snapshot.NativeReaderAtRoot(root)
+	s := cowNativeScanLiveKeysStatePool.Get().(*cowNativeScanLiveKeysState)
+	var err error
+	s.reader, err = b.snapshot.NativeReaderAtRoot(root)
 	if err != nil {
+		s.reset()
+		cowNativeScanLiveKeysStatePool.Put(s)
 		return err
 	}
-	var independent *cowCacheDictionaryRead
+	s.b = b
+	s.cache = cache
+	s.w = w
+	s.provider = provider
 	if provider != nil {
-		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
+		s.independent = cowCacheDictionaryRead{provider: provider, cache: cache}
+		s.hasDict = true
 	}
-	checkShape := func(shape valuelog.COWRecordShape) bool {
-		if shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != cache) {
-			return false
-		}
-		if shape.Compressed && shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4 {
-			return false
-		}
-		return true
-	}
-	readLeaf := func(ptr page.LeafLogPtr, leafDst []byte) ([]byte, error) {
-		if data, hit, err := b.snapshot.CopyVerifiedCOWLeafCached(ptr, w.limits, checkShape, leafDst); err != nil || hit {
-			return data, err
-		}
-		return b.readNativePhysicalLeafWithWorkspace(cache, w, provider, ptr, leafDst)
-	}
-	it, err := reader.OwnedPointerProjectionIteratorWithWorkspace(start, end, readLeaf, &w.projection, w.admitProjection)
+	it, err := s.reader.OwnedPointerProjectionIteratorWithWorkspace(start, end, s.readLeafFn, &w.projection, s.admitProjectionFn)
 	if err != nil {
+		s.reset()
+		cowNativeScanLiveKeysStatePool.Put(s)
 		return err
 	}
 	defer func() {
 		_ = it.Close()
 		w.projection.Reset()
+		s.reset()
+		cowNativeScanLiveKeysStatePool.Put(s)
 	}()
 	for ; it.Valid(); it.Next() {
 		_, _, flags, _ := iterator.UnsafeEntryWithRevision(it)
@@ -403,6 +456,13 @@ func (c *NativeSemanticCapture) NativeScanLiveKeysAtRoot(root uint64, start, end
 		return backenddb.ErrClosed
 	}
 	return c.cut.basis.nativeScanLiveKeysAtRoot(c.cache, c.dictionary, root, start, end, visit)
+}
+
+func (c *cowReadCut) NativeScanLiveKeysAtRoot(root uint64, start, end []byte, visit func(key []byte) (bool, error)) error {
+	if c == nil || c.basis == nil || c.cache == nil {
+		return backenddb.ErrClosed
+	}
+	return c.basis.nativeScanLiveKeysAtRoot(c.cache, c.dictionaryProvider(), root, start, end, visit)
 }
 
 func (c *NativeSemanticCapture) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
