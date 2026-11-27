@@ -2983,6 +2983,8 @@ type mongoUpdateCoalescer struct {
 	lfWakeCh              chan struct{}
 	lfSpaceCh             chan struct{}
 	stickyIdleWindow      time.Duration
+	lingerMinOverride     time.Duration // test-only override; <= 0 uses durableLingerMin
+	lingerMaxOverride     time.Duration // test-only override; <= 0 uses durableLingerMax
 
 	// Lazy idle eviction timer state for maxDelay == 0 (zero goroutines while idle).
 	idleMu           sync.Mutex
@@ -3187,14 +3189,27 @@ func (c *mongoUpdateCoalescer) signalLFWake() {
 }
 
 func computeDurableLinger(lastWaveDur time.Duration, earliestDeadline time.Time) time.Duration {
+	return computeDurableLingerWithBounds(lastWaveDur, earliestDeadline, durableLingerMin, durableLingerMax)
+}
+
+func computeDurableLingerWithBounds(lastWaveDur time.Duration, earliestDeadline time.Time, minLinger, maxLinger time.Duration) time.Duration {
 	if lastWaveDur < durableLingerSlowWaveThreshold {
 		return 0
 	}
+	if minLinger <= 0 {
+		minLinger = durableLingerMin
+	}
+	if maxLinger <= 0 {
+		maxLinger = durableLingerMax
+	}
+	if maxLinger < minLinger {
+		maxLinger = minLinger
+	}
 	linger := lastWaveDur / 8
-	if linger < durableLingerMin {
-		linger = durableLingerMin
-	} else if linger > durableLingerMax {
-		linger = durableLingerMax
+	if linger < minLinger {
+		linger = minLinger
+	} else if linger > maxLinger {
+		linger = maxLinger
 	}
 	if !earliestDeadline.IsZero() {
 		remaining := time.Until(earliestDeadline)
@@ -3389,7 +3404,7 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 		if !c.lfStopped && lastWaveDur >= durableLingerSlowWaveThreshold && lingerTarget > 1 {
 			target := min(lingerTarget, maxTake)
 			if c.lfLen < target {
-				if linger := computeDurableLinger(lastWaveDur, c.lfEarliestDeadlineLocked()); linger > 0 {
+				if linger := computeDurableLingerWithBounds(lastWaveDur, c.lfEarliestDeadlineLocked(), c.lingerMinOverride, c.lingerMaxOverride); linger > 0 {
 					lingered = true
 					c.lfLingerTarget = target
 					if lingerTimer == nil {

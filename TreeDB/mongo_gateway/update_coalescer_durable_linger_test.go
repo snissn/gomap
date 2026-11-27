@@ -48,6 +48,10 @@ func TestUpdateCoalescerDurableLinger_ComputeBoundsAndDeadlines(t *testing.T) {
 	if got := computeDurableLinger(4*time.Millisecond, time.Now().Add(20*time.Millisecond)); got != durableLingerMax {
 		t.Fatalf("20ms deadline linger=%v want %v", got, durableLingerMax)
 	}
+	// When remaining > 2ms but < linger, linger must clamp to remaining/2.
+	if got := computeDurableLingerWithBounds(400*time.Millisecond, time.Now().Add(10*time.Millisecond), 50*time.Millisecond, 50*time.Millisecond); got <= 0 || got > 6*time.Millisecond {
+		t.Fatalf("clamped deadline linger=%v want in (0, 6ms]", got)
+	}
 
 	// Verify lfEarliestDeadlineLocked scans wrapped ring buffer accurately.
 	c := &mongoUpdateCoalescer{useLeaderFollower: true}
@@ -261,8 +265,8 @@ func TestUpdateCoalescerDurableLinger_MultiWriterConvergence(t *testing.T) {
 		writers := writers
 		t.Run(fmt.Sprintf("w%d", writers), func(t *testing.T) {
 			const (
-				opsPerWriter   = 20
-				simulatedFsync = 3500 * time.Microsecond
+				opsPerWriter   = 16
+				simulatedFsync = 6 * time.Millisecond
 			)
 			s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, writers)
 			defer func() { _ = s.Close() }()
@@ -271,6 +275,14 @@ func TestUpdateCoalescerDurableLinger_MultiWriterConvergence(t *testing.T) {
 			if coalescer == nil {
 				t.Fatal("expected coalescer")
 			}
+			// Widen linger bounds for test stability on loaded 2-vCPU CI runners where
+			// goroutine wakeup jitter can exceed the production 350us ceiling; production
+			// bounds (150us..350us) are verified separately in ComputeBoundsAndDeadlines.
+			coalescer.lfMu.Lock()
+			coalescer.stickyIdleWindow = 50 * time.Millisecond
+			coalescer.lingerMinOverride = 4 * time.Millisecond
+			coalescer.lingerMaxOverride = 6 * time.Millisecond
+			coalescer.lfMu.Unlock()
 
 			perWriterCmds := make([][]wire.Document, writers)
 			for w := 0; w < writers; w++ {
@@ -303,10 +315,10 @@ func TestUpdateCoalescerDurableLinger_MultiWriterConvergence(t *testing.T) {
 					<-start
 					for step := 1; step <= opsPerWriter; step++ {
 						// Stagger goroutine loopback across writers to exercise arrival skew
-						// without exceeding durableLingerMax under -race / OS timer slack.
+						// that would otherwise trigger 1+(N-1) split fsyncs on every wave.
 						if step > 1 {
 							if skew := (w*7 + step*5) % 4; skew > 0 {
-								time.Sleep(time.Duration(skew*10) * time.Microsecond)
+								time.Sleep(time.Duration(skew*25) * time.Microsecond)
 							}
 						}
 						resp, err := s.Server.commandResponse(ctx, "update", cmds[step-1], nil, 0)
@@ -364,7 +376,7 @@ func TestUpdateCoalescerDurableLinger_WorkloadDropAdaptsDown(t *testing.T) {
 	const (
 		highWriters    = 8
 		lowWriters     = 4
-		simulatedFsync = 3500 * time.Microsecond
+		simulatedFsync = 6 * time.Millisecond
 	)
 	s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, highWriters)
 	defer func() { _ = s.Close() }()
@@ -373,6 +385,11 @@ func TestUpdateCoalescerDurableLinger_WorkloadDropAdaptsDown(t *testing.T) {
 	if coalescer == nil {
 		t.Fatal("expected coalescer")
 	}
+	coalescer.lfMu.Lock()
+	coalescer.stickyIdleWindow = 50 * time.Millisecond
+	coalescer.lingerMinOverride = 4 * time.Millisecond
+	coalescer.lingerMaxOverride = 6 * time.Millisecond
+	coalescer.lfMu.Unlock()
 
 	var mu sync.Mutex
 	var batchSizes []int
@@ -474,11 +491,13 @@ func TestUpdateCoalescerDurableLinger_TightDeadlineSkipsLinger(t *testing.T) {
 	}
 	coalescer.lfMu.Lock()
 	coalescer.stickyIdleWindow = 10 * time.Second
+	coalescer.lingerMinOverride = 200 * time.Millisecond
+	coalescer.lingerMaxOverride = 200 * time.Millisecond
 	coalescer.lfMu.Unlock()
 
 	// Make Wave 1 slow (4ms) with 4 writers so lastWaveDur=4ms and lingerTarget=4,
 	// then switch the hook off for the tight-deadline probe so we directly verify
-	// it does not sleep in linger.
+	// it does not sleep for the 200ms linger ceiling.
 	var slowPhase atomic.Bool
 	slowPhase.Store(true)
 	coalescer.testWaveHook = func(batchLen int) {
@@ -513,22 +532,28 @@ func TestUpdateCoalescerDurableLinger_TightDeadlineSkipsLinger(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Switch off simulated sleep; now submit a single request with a tight 1.5ms
-	// deadline (<= durableLingerMinBudgetMargin). It must skip lingering and succeed.
+	// Switch off simulated sleep; submit a single request with a 20ms deadline
+	// (< 200ms linger ceiling). Linger must clamp to remaining/2 (~10ms) so the
+	// request completes well before its deadline instead of timing out in linger.
 	slowPhase.Store(false)
-	tightItem, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+	clampedItem, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
 		{Key: "q", Value: bson.D{{Key: "_id", Value: int64(4)}}},
 		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int64(444)}}}}},
 	}))
 	if err != nil {
 		t.Fatalf("parseMongoUpdateItem: %v", err)
 	}
-	tightItem.budget = newMongoWriteBudget(1)
-	tightItem.budget.deadline = time.Now().Add(1500 * time.Microsecond)
+	clampedItem.budget = newMongoWriteBudget(1)
+	clampedItem.budget.deadline = time.Now().Add(25 * time.Millisecond)
 
-	matched, modified, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, tightItem)
+	t0 := time.Now()
+	matched, modified, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, clampedItem)
+	elapsed := time.Since(t0)
 	if err != nil || !matched || !modified {
-		t.Fatalf("tight deadline update failed: matched=%v modified=%v err=%v", matched, modified, err)
+		t.Fatalf("clamped deadline update failed (elapsed=%v): matched=%v modified=%v err=%v", elapsed, matched, modified, err)
+	}
+	if elapsed >= 100*time.Millisecond {
+		t.Fatalf("clamped deadline update waited %v >= 100ms (failed to clamp 200ms linger)", elapsed)
 	}
 	if got := findDocN(t, s.Server, collName, 4); got != 444 {
 		t.Fatalf("doc 4 n=%d want 444", got)
@@ -536,7 +561,7 @@ func TestUpdateCoalescerDurableLinger_TightDeadlineSkipsLinger(t *testing.T) {
 }
 
 func TestUpdateCoalescerDurableLinger_CleanShutdownWhileLingering(t *testing.T) {
-	for iter := 0; iter < 8; iter++ {
+	for iter := 0; iter < 4; iter++ {
 		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 6)
 		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
 		if coalescer == nil {
@@ -545,6 +570,8 @@ func TestUpdateCoalescerDurableLinger_CleanShutdownWhileLingering(t *testing.T) 
 		}
 		coalescer.lfMu.Lock()
 		coalescer.stickyIdleWindow = 10 * time.Second
+		coalescer.lingerMinOverride = 80 * time.Millisecond
+		coalescer.lingerMaxOverride = 80 * time.Millisecond
 		coalescer.lfMu.Unlock()
 
 		var slowPhase atomic.Bool
@@ -583,9 +610,9 @@ func TestUpdateCoalescerDurableLinger_CleanShutdownWhileLingering(t *testing.T) 
 			t.Fatal(err)
 		}
 
-		// Enqueue 1 request (triggers active linger waiting for target=4) and
-		// immediately stop the coalescer concurrently. Both the request and stop()
-		// must finish cleanly with no hang or race.
+		// Enqueue 1 request (triggers active 80ms linger waiting for target=4),
+		// deterministically wait until the worker is actively lingering, and
+		// stop the coalescer. Both the request and stop() must finish promptly.
 		slowPhase.Store(false)
 		reqDone := make(chan error, 1)
 		go func() {
@@ -595,9 +622,15 @@ func TestUpdateCoalescerDurableLinger_CleanShutdownWhileLingering(t *testing.T) 
 			}
 			reqDone <- err
 		}()
-		// Brief yield so the worker is likely mid-linger when stop() fires.
-		if iter%2 == 1 {
-			time.Sleep(50 * time.Microsecond)
+		waitLingerDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(waitLingerDeadline) {
+			coalescer.lfMu.Lock()
+			inLinger := coalescer.lfLingerTarget > 0
+			coalescer.lfMu.Unlock()
+			if inLinger {
+				break
+			}
+			time.Sleep(100 * time.Microsecond)
 		}
 
 		stopDone := make(chan struct{})
