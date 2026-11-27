@@ -104,7 +104,7 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 // cloning response document IDs when the caller discards the returned slice.
 func (c *Collection) InsertBatchValidatedBSONNoResultIDs(ids, documents [][]byte) error {
 	if c != nil && c.nativeJSON != nil {
-		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false, false)
+		_, err := c.nativeInsertBatchWithJournalTrusted(ids, documents, nil, nil, false, false, true, nil)
 		return err
 	}
 	_, err := c.InsertBatchValidatedBSON(ids, documents)
@@ -127,7 +127,7 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 // Omitted-ID gateways share preparation, validation and publication with the
 // ordinary API, without allocating a response-only ID vector and byte arena.
 func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration bool) ([][]byte, error) {
-	return c.nativeInsertBatchWithJournal(ids, documents, requested, projection, returnResultIDs, retryProjectedGeneration, nil)
+	return c.nativeInsertBatchWithJournalTrusted(ids, documents, requested, projection, returnResultIDs, retryProjectedGeneration, false, nil)
 }
 
 // nativeOperationJournal belongs to this one synchronous operation. It is never
@@ -147,6 +147,10 @@ func (j *nativeOperationJournal) selectCapturedBSON(meta CollectionMeta) {
 }
 
 func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration bool, journal *nativeOperationJournal) ([][]byte, error) {
+	return c.nativeInsertBatchWithJournalTrusted(ids, documents, requested, projection, returnResultIDs, retryProjectedGeneration, false, journal)
+}
+
+func (c *Collection) nativeInsertBatchWithJournalTrusted(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration, trustedBSON bool, journal *nativeOperationJournal) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -204,7 +208,7 @@ func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, reque
 	allowBulkPreimage := true
 	for attempt := 0; ; {
 		stats = CollectionInsertStats{}
-		recordStats, retry, capacityRetry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, observeProjection, journal, allowBulkPreimage)
+		recordStats, retry, capacityRetry, err := c.nativeInsertPreparedOnceWithJournalTrusted(ids, documents, &stats, requested != nil, projection, observeProjection, journal, allowBulkPreimage, trustedBSON)
 		// The original history/projection refusal is retryable only before a
 		// physical attempt. Preserve the same original owner and bound.
 		if journal != nil && (journal.completion.AssignedLSN() != 0 || journal.completion.Attempted()) {
@@ -278,6 +282,10 @@ func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *Co
 }
 
 func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, allowBulkPreimage bool) (bool, bool, bool, error) {
+	return c.nativeInsertPreparedOnceWithJournalTrusted(ids, documents, stats, ordinaryOnly, projection, projected, journal, allowBulkPreimage, false)
+}
+
+func (c *Collection) nativeInsertPreparedOnceWithJournalTrusted(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, allowBulkPreimage, trustedBSON bool) (bool, bool, bool, error) {
 	if len(ids) > 1 && projection == nil {
 		// Bound concurrent bulk producers before prepareNativeProducerMutation so
 		// queued writers neither hold vectorDDLMutationMu while waiting nor carry
@@ -298,7 +306,7 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 				preStarted = time.Now()
 			}
 			var preErr error
-			pre, preErr = prepareNativeBulkInsertPreimage(c.nativeJSON, c.name, ids, documents, stats != nil)
+			pre, preErr = prepareNativeBulkInsertPreimage(c.nativeJSON, c.name, ids, documents, stats != nil, trustedBSON)
 			if preErr != nil {
 				preErr = mutationNotAcceptedError(preErr)
 				return false, false, isRetryableBulkCapacityRefusal(preErr, journal), preErr
@@ -307,7 +315,7 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 				preElapsed = time.Since(preStarted)
 			}
 		}
-		recordStats, retry, err := c.nativeJSON.commitBulkInsertAttempt(coord, c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal)
+		recordStats, retry, err := c.nativeJSON.commitBulkInsertAttempt(coord, c.name, ids, documents, pre, preElapsed, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 		capacityRetry := err != nil && !retry && (projected == nil || *projected == nil) && isRetryableBulkCapacityRefusal(err, journal)
 		return recordStats, retry, capacityRetry, err
 	}
@@ -316,7 +324,7 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 		return false, false, false, err
 	}
 	defer unlockVector()
-	recordStats, retry, err := c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal)
+	recordStats, retry, err := c.nativeJSON.insertPreparedTrusted(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 	return recordStats, retry, false, err
 }
 

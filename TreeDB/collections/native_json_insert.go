@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 	"weak"
@@ -50,8 +51,12 @@ func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) er
 }
 
 func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (bool, bool, error) {
+	return m.insertPreparedTrusted(name, ids, documents, stats, ordinaryOnly, projection, projected, journal, false)
+}
+
+func (m *NativeJSONManager) insertPreparedTrusted(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, trustedBSON bool) (bool, bool, error) {
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsertWithJournal(tx, err, ids, documents, stats, ordinaryOnly, projection, projected, journal)
+	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, nil, 0, stats, ordinaryOnly, projection, projected, journal, trustedBSON)
 }
 
 func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (recordStats, retry bool, resultErr error) {
@@ -59,10 +64,10 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 }
 
 func finishNativeJSONInsertWithJournal(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (recordStats, retry bool, resultErr error) {
-	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, nil, 0, stats, ordinaryOnly, projection, projected, journal)
+	return finishNativeJSONInsertWithPreimage(tx, err, ids, documents, nil, 0, stats, ordinaryOnly, projection, projected, journal, false)
 }
 
-func finishNativeJSONInsertWithPreimage(tx *NativeJSONTxn, err error, ids, documents [][]byte, pre *nativeBulkInsertPreimage, preElapsed time.Duration, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (recordStats, retry bool, resultErr error) {
+func finishNativeJSONInsertWithPreimage(tx *NativeJSONTxn, err error, ids, documents [][]byte, pre *nativeBulkInsertPreimage, preElapsed time.Duration, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal, trustedBSON bool) (recordStats, retry bool, resultErr error) {
 	var previous *nativeInsertProjectedRefusal
 	if projected != nil {
 		previous, *projected = *projected, nil
@@ -120,6 +125,7 @@ func finishNativeJSONInsertWithPreimage(tx *NativeJSONTxn, err error, ids, docum
 		}
 	}
 	if !attached {
+		binding.trustedBSON = trustedBSON
 		if err = tx.InsertBatch(ids, documents); err != nil {
 			return false, false, mutationNotAcceptedError(err)
 		}
@@ -551,6 +557,23 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				}
 			}
 		}
+		type preparedDomainInput struct {
+			name           string
+			policy         backenddb.OrderedRootStoragePolicy
+			rows           []memtable.COWMutation
+			old            *nativeDomainState
+			root           uint64
+			catalogRoot    uint64
+			interpretation uint64
+			replace        bool
+		}
+		var inputsInline [8]preparedDomainInput
+		inputs := inputsInline[:0]
+		if domainCount > len(inputsInline) {
+			inputs = make([]preparedDomainInput, 0, domainCount)
+		}
+		totalDomainRows := 0
+		distinctNames := domainCount >= 2
 		for i := 0; i < domainCount; i++ {
 			name, policy, rows := "primary", change.primaryPolicy, entries
 			if primary && i > 0 {
@@ -563,6 +586,14 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 				name, policy, rows = delta.name, delta.policy, delta.entries
 				if name == "primary" || name == nativeCatalogDomainName || name == "" {
 					return next, backenddb.ErrNativeSemanticUnsupported
+				}
+			}
+			if distinctNames {
+				for j := 0; j < len(inputs); j++ {
+					if inputs[j].name == name {
+						distinctNames = false
+						break
+					}
 				}
 			}
 			var old *nativeDomainState
@@ -603,21 +634,95 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 					old, root = nil, 0
 				}
 			}
-			domain, err := prepareNativeDomainUpdateObservedWithAdmit(old, name, root, interpretation, policy, rows, allocator, admit, reportProjection)
-			if domain != nil {
-				p.ownedDomains = append(p.ownedDomains, domain)
+			totalDomainRows += len(rows)
+			inputs = append(inputs, preparedDomainInput{
+				name:           name,
+				policy:         policy,
+				rows:           rows,
+				old:            old,
+				root:           root,
+				catalogRoot:    catalogRoot,
+				interpretation: interpretation,
+				replace:        !primary && delta.replace,
+			})
+		}
+
+		// Each domain has an independent COWWriter and distinct sorted mutation
+		// slice. For large multi-domain bulk batches (e.g. primary + index_state
+		// + secondary indexes), prepare domains concurrently to slash the serial
+		// critical section under nativeBulkInsertMu while adopting all prepared
+		// domains and checking errors in deterministic index order.
+		var preparedInline [8]*nativeDomainState
+		var preparedErrsInline [8]error
+		var preparedDomains []*nativeDomainState
+		var preparedErrs []error
+		if distinctNames && totalDomainRows >= 4096 {
+			if domainCount <= len(preparedInline) {
+				preparedDomains = preparedInline[:domainCount]
+				preparedErrs = preparedErrsInline[:domainCount]
+			} else {
+				preparedDomains = make([]*nativeDomainState, domainCount)
+				preparedErrs = make([]error, domainCount)
 			}
-			if err != nil {
-				if refusal, ok := err.(*memtable.COWProjectedGenerationRefusal); ok {
-					err = &nativeInsertProjectedRefusal{
-						pressure: backenddb.NativeProjectedGenerationPressure{Collection: c.incarnation, Domain: name, Refusal: refusal},
-						schema:   weak.Make(c.schema),
-					}
+			var wg sync.WaitGroup
+			wg.Add(domainCount - 1)
+			for i := 1; i < domainCount; i++ {
+				go func(idx int) {
+					defer wg.Done()
+					in := &inputs[idx]
+					preparedDomains[idx], preparedErrs[idx] = prepareNativeDomainUpdateObservedWithAdmit(
+						in.old, in.name, in.root, in.interpretation, in.policy, in.rows, allocator, admit, reportProjection,
+					)
+				}(i)
+			}
+			in0 := &inputs[0]
+			preparedDomains[0], preparedErrs[0] = prepareNativeDomainUpdateObservedWithAdmit(
+				in0.old, in0.name, in0.root, in0.interpretation, in0.policy, in0.rows, allocator, admit, reportProjection,
+			)
+			wg.Wait()
+			// Adopt every non-nil prepared domain before checking errors so
+			// rollback cleanly aborts and refunds every domain's COW lease.
+			for i := 0; i < domainCount; i++ {
+				if preparedDomains[i] != nil {
+					p.ownedDomains = append(p.ownedDomains, preparedDomains[i])
 				}
-				return next, err
 			}
-			if !primary && delta.replace {
-				domain.catalogRoot = catalogRoot
+			for i := 0; i < domainCount; i++ {
+				if err := preparedErrs[i]; err != nil {
+					if refusal, ok := err.(*memtable.COWProjectedGenerationRefusal); ok {
+						err = &nativeInsertProjectedRefusal{
+							pressure: backenddb.NativeProjectedGenerationPressure{Collection: c.incarnation, Domain: inputs[i].name, Refusal: refusal},
+							schema:   weak.Make(c.schema),
+						}
+					}
+					return next, err
+				}
+			}
+		}
+
+		for i := 0; i < domainCount; i++ {
+			in := &inputs[i]
+			name := in.name
+			var domain *nativeDomainState
+			if preparedDomains != nil {
+				domain = preparedDomains[i]
+			} else {
+				domain, err = prepareNativeDomainUpdateObservedWithAdmit(in.old, name, in.root, in.interpretation, in.policy, in.rows, allocator, admit, reportProjection)
+				if domain != nil {
+					p.ownedDomains = append(p.ownedDomains, domain)
+				}
+				if err != nil {
+					if refusal, ok := err.(*memtable.COWProjectedGenerationRefusal); ok {
+						err = &nativeInsertProjectedRefusal{
+							pressure: backenddb.NativeProjectedGenerationPressure{Collection: c.incarnation, Domain: name, Refusal: refusal},
+							schema:   weak.Make(c.schema),
+						}
+					}
+					return next, err
+				}
+			}
+			if in.replace {
+				domain.catalogRoot = in.catalogRoot
 				domain.sourceGeneration = namedChange.sourceGeneration
 			}
 			if primary && i == 0 && change.typed != nil {

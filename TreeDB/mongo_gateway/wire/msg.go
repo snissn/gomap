@@ -161,9 +161,15 @@ func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
 	if identifier == "" {
 		return DocumentSequence{}, nil, fmt.Errorf("%w: OP_MSG document sequence identifier cannot be empty", ErrMalformed)
 	}
+	capHint := len(rem) / 128
+	if capHint < 4 {
+		capHint = 4
+	} else if capHint > 16384 {
+		capHint = 16384
+	}
 	seq := DocumentSequence{
 		Identifier: identifier,
-		Documents:  make([]Document, 0),
+		Documents:  make([]Document, 0, capHint),
 	}
 	for len(rem) > 0 {
 		doc, next, err := readDocument(rem)

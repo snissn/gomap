@@ -935,6 +935,12 @@ func (db *DB) ensureValueLogDictTrainer() {
 			return nil
 		}
 		tr.SetOnAccept(func(_ *compression.ActiveProfile) {
+			// Avoid contending on ext4 JBD2 with an active Checkpoint() flush;
+			// Checkpoint clears checkpointing and kicks valueLogDictLoop on exit
+			// so the trained dictionary publishes immediately after the barrier.
+			if db.deferValueLogDictPublishDuringCheckpoint() {
+				return
+			}
 			// Publish accepted profiles immediately so short ingest benchmarks can
 			// start writing dict frames before teardown.
 			db.applyValueLogDictProfileForClass(class)
@@ -1092,8 +1098,55 @@ func (db *DB) applyValueLogDictProfile() {
 	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
 }
 
+// EnterCheckpointDictDeferral extends background dictionary-publication
+// deferral across multi-stage public checkpoints (cached flush, fallback
+// convergence, and command-WAL cleanup) so dictdb fsyncs do not collide on
+// ext4 JBD2 with checkpoint barriers. Pairs with LeaveCheckpointDictDeferral.
+func (db *DB) EnterCheckpointDictDeferral() {
+	if db == nil {
+		return
+	}
+	db.valueLogDictDeferDepth.Add(1)
+}
+
+// LeaveCheckpointDictDeferral releases one nesting level acquired by
+// EnterCheckpointDictDeferral and immediately kicks valueLogDictLoop if a
+// trained dictionary was deferred and no checkpoint scope remains active.
+func (db *DB) LeaveCheckpointDictDeferral() {
+	if db == nil {
+		return
+	}
+	if db.valueLogDictDeferDepth.Add(-1) <= 0 {
+		db.maybeKickDeferredValueLogDictPublish()
+	}
+}
+
+func (db *DB) maybeKickDeferredValueLogDictPublish() {
+	if db == nil || db.checkpointing.Load() || db.valueLogDictDeferDepth.Load() > 0 {
+		return
+	}
+	if db.valueLogDictPublishDeferred.Swap(false) {
+		db.valueLogDictKick()
+	}
+}
+
+func (db *DB) deferValueLogDictPublishDuringCheckpoint() bool {
+	if db == nil || (!db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0) {
+		return false
+	}
+	db.valueLogDictPublishDeferred.Store(true)
+	if !db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0 {
+		db.maybeKickDeferredValueLogDictPublish()
+		return false
+	}
+	return true
+}
+
 func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
+		return
+	}
+	if db.deferValueLogDictPublishDuringCheckpoint() {
 		return
 	}
 	// Profile application is a check-then-publish transaction: the applied hash

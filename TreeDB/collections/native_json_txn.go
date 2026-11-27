@@ -44,6 +44,7 @@ type nativeJSONTxnBinding struct {
 	allowStored        bool
 	learnTemplates     bool
 	primaryOnlyBSONSet bool
+	trustedBSON        bool
 	singlePlan         nativeJSONLogicalInsert
 	singleMutation     [1]memtable.COWMutation
 	singleEffect       [1]txnhistory.Effect

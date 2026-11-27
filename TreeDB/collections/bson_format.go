@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -27,7 +28,7 @@ func validateBSONDocument(document []byte) error {
 func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	raw := bson.Raw(document)
 	state := encoder.appendState(len(runtimes))
-	if len(runtimes) > 1 && len(runtimes) <= 8 && len(document) >= 5 {
+	if len(runtimes) >= 1 && len(runtimes) <= 8 && len(document) >= 5 && document[len(document)-1] == 0 {
 		allTopLevelSimple := true
 		for _, runtime := range runtimes {
 			if len(runtime.def.components) > 1 ||
@@ -44,26 +45,19 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 			rem := document[4 : len(document)-1]
 			parsedOK := true
 			for len(rem) > 0 && foundCount < len(runtimes) {
-				var elem bsoncore.Element
-				var ok bool
-				elem, rem, ok = bsoncore.ReadElement(rem)
+				elemType, keyBytes, valBytes, nextRem, ok := readBSONElementFast(rem)
 				if !ok {
 					parsedOK = false
 					break
 				}
-				key, err := elem.KeyErr()
-				if err != nil {
-					parsedOK = false
-					break
-				}
+				rem = nextRem
 				for i, runtime := range runtimes {
 					bit := uint8(1) << uint(i)
 					if foundMask&bit != 0 {
 						continue
 					}
-					if key == runtime.path[0] {
-						val := elem.Value()
-						values[i] = bson.RawValue{Type: bson.Type(val.Type), Value: val.Data}
+					if string(keyBytes) == runtime.path[0] {
+						values[i] = bson.RawValue{Type: bson.Type(elemType), Value: valBytes}
 						foundMask |= bit
 						foundCount++
 					}
@@ -94,6 +88,76 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 		}
 	}
 	return state, nil
+}
+
+// readBSONElementFast parses the next BSON element from rem without allocating
+// or running bsoncore's general type dispatch for common scalar/document types,
+// falling back to bsoncore.ReadElement for uncommon legacy BSON types.
+func readBSONElementFast(rem []byte) (elemType byte, key, val, next []byte, ok bool) {
+	if len(rem) < 2 {
+		return 0, nil, nil, nil, false
+	}
+	elemType = rem[0]
+	nul := bytes.IndexByte(rem[1:], 0)
+	if nul < 0 {
+		return 0, nil, nil, nil, false
+	}
+	key = rem[1 : 1+nul]
+	vStart := 2 + nul
+	var vLen int
+	switch bson.Type(elemType) {
+	case bson.TypeDouble, bson.TypeDateTime, bson.TypeTimestamp, bson.TypeInt64:
+		vLen = 8
+	case bson.TypeInt32:
+		vLen = 4
+	case bson.TypeBoolean:
+		vLen = 1
+	case bson.TypeNull, bson.TypeUndefined, bson.TypeMinKey, bson.TypeMaxKey:
+		vLen = 0
+	case bson.TypeObjectID:
+		vLen = 12
+	case bson.TypeDecimal128:
+		vLen = 16
+	case bson.TypeString, bson.TypeJavaScript, bson.TypeSymbol:
+		if vStart+4 > len(rem) {
+			return 0, nil, nil, nil, false
+		}
+		n := int(int32(binary.LittleEndian.Uint32(rem[vStart : vStart+4])))
+		if n < 1 {
+			return 0, nil, nil, nil, false
+		}
+		vLen = 4 + n
+	case bson.TypeEmbeddedDocument, bson.TypeArray:
+		if vStart+4 > len(rem) {
+			return 0, nil, nil, nil, false
+		}
+		n := int(int32(binary.LittleEndian.Uint32(rem[vStart : vStart+4])))
+		if n < 5 {
+			return 0, nil, nil, nil, false
+		}
+		vLen = n
+	case bson.TypeBinary:
+		if vStart+5 > len(rem) {
+			return 0, nil, nil, nil, false
+		}
+		n := int(int32(binary.LittleEndian.Uint32(rem[vStart : vStart+4])))
+		if n < 0 {
+			return 0, nil, nil, nil, false
+		}
+		vLen = 5 + n
+	default:
+		elem, rest, ok := bsoncore.ReadElement(rem)
+		if !ok {
+			return 0, nil, nil, nil, false
+		}
+		v := elem.Value()
+		return byte(v.Type), elem[1 : 1+nul], v.Data, rest, true
+	}
+	vEnd := vStart + vLen
+	if vEnd > len(rem) || vEnd < vStart {
+		return 0, nil, nil, nil, false
+	}
+	return elemType, key, rem[vStart:vEnd], rem[vEnd:], true
 }
 
 func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, opts collectionOptions, encoder *indexEncodeArena) error {

@@ -75,6 +75,9 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 		refDelta.outerLeafDependencyReuse = opts.outerLeavesInValueLog
 		refDelta.requiresCandidateProjection = false
 	}
+	baseInlineThreshold := group.db.InlineThreshold()
+	hasDomainInlineThresholds := len(group.db.valueLogDomainThresholds) > 0
+	const maxInlineBase = page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize
 	root, err := bulk.BuildWithScan(func(emit bulk.EntryEmitter) error {
 		var emptyBytes [0]byte
 		return input.Scan(func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error {
@@ -94,9 +97,15 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 			if len(val) == 0 {
 				val = emptyBytes[:]
 			}
-			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
+			threshold := max(0, maxInlineBase-len(key))
 			if input.CheckInlineThreshold {
-				threshold = min(threshold, group.db.InlineThresholdForKey(key))
+				inlineLimit := baseInlineThreshold
+				if hasDomainInlineThresholds {
+					inlineLimit = ResolveInlineThresholdForKey(baseInlineThreshold, key, group.db.valueLogDomainThresholds)
+				}
+				if inlineLimit < threshold {
+					threshold = inlineLimit
+				}
 			}
 			if len(val) > threshold {
 				var values [1][]byte

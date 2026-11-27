@@ -1380,6 +1380,9 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 	if err != nil {
 		return err
 	}
+	if g.trustedBSON && normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatBSON {
+		planner.options.trustedBSONDocuments = true
+	}
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
 		return err
