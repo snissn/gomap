@@ -141,14 +141,17 @@ type matrixRow struct {
 }
 
 type benchmarkResult struct {
-	Target           string        `json:"target"`
-	Documents        int           `json:"documents"`
-	SecondaryIndexes int           `json:"secondary_indexes"`
-	RangeIndex       bool          `json:"range_index"`
-	ClientMode       string        `json:"client_mode,omitempty"`
-	TreeDBProfile    string        `json:"treedb_profile,omitempty"`
-	DocumentFormat   string        `json:"treedb_document_format,omitempty"`
-	Phases           []phaseResult `json:"phases"`
+	Target            string          `json:"target"`
+	Documents         int             `json:"documents"`
+	SecondaryIndexes  int             `json:"secondary_indexes"`
+	RangeIndex        bool            `json:"range_index"`
+	ClientMode        string          `json:"client_mode,omitempty"`
+	TreeDBProfile     string          `json:"treedb_profile,omitempty"`
+	TreeDBOpenMode    string          `json:"treedb_open_mode,omitempty"`
+	WriteConcern      json.RawMessage `json:"write_concern,omitempty"`
+	MongoWriteConcern json.RawMessage `json:"mongo_write_concern,omitempty"`
+	DocumentFormat    string          `json:"treedb_document_format,omitempty"`
+	Phases            []phaseResult   `json:"phases"`
 }
 
 type phaseResult struct {
@@ -169,12 +172,15 @@ type latencySummary struct {
 }
 
 type loadModeRow struct {
-	Indexes       int
-	Target        string
-	Config        string
-	OpsPerSec     float64
-	PhysicalBytes int64
-	RawJSON       string
+	Indexes        int
+	Target         string
+	Config         string
+	OpsPerSec      float64
+	PhysicalBytes  int64
+	RawJSON        string
+	TreeDBProfile  string
+	TreeDBOpenMode string
+	WriteConcern   string
 }
 
 type gitIdentity struct {
@@ -1251,12 +1257,15 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 			continue
 		}
 		out = append(out, loadModeRow{
-			Indexes:       row.SecondaryIndexes,
-			Target:        row.Target,
-			Config:        row.Config,
-			OpsPerSec:     phase.OpsPerSecond,
-			PhysicalBytes: row.PhysicalBytes,
-			RawJSON:       row.RawJSON,
+			Indexes:        row.SecondaryIndexes,
+			Target:         row.Target,
+			Config:         row.Config,
+			OpsPerSec:      phase.OpsPerSecond,
+			PhysicalBytes:  row.PhysicalBytes,
+			RawJSON:        row.RawJSON,
+			TreeDBProfile:  result.TreeDBProfile,
+			TreeDBOpenMode: result.TreeDBOpenMode,
+			WriteConcern:   firstNonEmpty(parseWriteConcernRaw(result.MongoWriteConcern), parseWriteConcernRaw(result.WriteConcern)),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -1677,6 +1686,7 @@ func renderHTML(data reportData) string {
 		}
 		b.WriteString("</p>")
 	}
+	renderBenchmarkContextBanner(&b, data)
 	b.WriteString(reportNav(data))
 	b.WriteString("</header>\n")
 	renderRunStatus(&b, data.Commands, data.ArtifactSections)
@@ -1694,6 +1704,7 @@ func renderHTML(data reportData) string {
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
 	renderRawEngine(&b, data.RawEngine)
 	renderProfiles(&b, data.Profiles)
+	b.WriteString(reportInteractiveJS())
 	b.WriteString("</body>\n</html>\n")
 	return b.String()
 }
@@ -1850,52 +1861,90 @@ func skippedArtifactSectionCount(sections []artifactSectionStatus) int {
 
 func reportCSS() string {
 	return `<style>
-:root { color-scheme: light; --ink:#18212b; --muted:#617083; --line:#d9e1ea; --bg:#f6f8fb; --panel:#fff; --blue:#2867c7; --green:#1f8a5b; --orange:#bd6a21; --red:#b94242; --page-gutter:18px; --content-max:1680px; }
+:root { color-scheme: light; --ink:#18212b; --muted:#5a697c; --line:#d9e1ea; --bg:#f6f8fb; --panel:#fff; --blue:#2563eb; --green:#15803d; --orange:#d97706; --red:#dc2626; --page-gutter:18px; --content-max:1680px; }
 * { box-sizing: border-box; }
+html, body { max-width:100%; overflow-x:clip; }
 body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
-header { padding:28px max(var(--page-gutter), calc((100vw - var(--content-max)) / 2)) 20px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:4; }
-h1 { margin:2px 0 8px; font-size:28px; letter-spacing:0; }
-h2 { margin:0 0 12px; font-size:22px; }
-h3 { margin:18px 0 10px; font-size:16px; }
-section { width:calc(100% - 36px); max-width:var(--content-max); margin:var(--page-gutter) auto; padding:20px 24px; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+header { width:100%; max-width:100%; padding:24px max(var(--page-gutter), calc((100% - var(--content-max)) / 2)) 18px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:4; }
+h1 { margin:2px 0 8px; font-size:28px; letter-spacing:0; overflow-wrap:anywhere; }
+h2 { margin:0 0 12px; font-size:22px; overflow-wrap:anywhere; }
+h3 { margin:18px 0 10px; font-size:16px; overflow-wrap:anywhere; }
+section { width:calc(100% - 2 * var(--page-gutter)); max-width:var(--content-max); min-width:0; margin:var(--page-gutter) auto; padding:20px 24px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow-wrap:anywhere; }
+nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; max-width:100%; }
 nav a { color:var(--blue); text-decoration:none; border:1px solid var(--line); border-radius:999px; padding:5px 10px; background:#fbfdff; }
-code { background:#eef3f8; border:1px solid #dbe4ee; border-radius:4px; padding:1px 4px; }
+code { background:#eef3f8; border:1px solid #dbe4ee; border-radius:4px; padding:1px 4px; overflow-wrap:anywhere; word-break:break-word; }
 .eyebrow { margin:0; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-size:12px; font-weight:700; }
-.subtle { color:var(--muted); margin:4px 0; }
+.subtle { color:var(--muted); margin:4px 0; max-width:100%; overflow-wrap:anywhere; }
+.context-banner { margin-top:12px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#f8fafd; max-width:100%; }
+.context-heading { display:block; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:6px; }
+.context-pills { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; max-width:100%; }
+.context-pill { display:inline-flex; align-items:baseline; gap:4px; font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); background:#fff; color:var(--ink); max-width:100%; overflow-wrap:anywhere; }
+.context-label { color:var(--muted); }
+.context-pill.tone-durable { border-color:#86efac; background:#f0fdf4; color:#14532d; }
+.context-pill.tone-relaxed { border-color:#bfdbfe; background:#eff6ff; color:#1e3a8a; }
+.context-pill.tone-fast { border-color:#fcd34d; background:#fffbeb; color:#78350f; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
 .metric { border:1px solid var(--line); border-radius:8px; padding:14px; background:#fbfdff; }
 .metric .label { color:var(--muted); font-size:12px; }
 .metric .value { font-size:24px; font-weight:700; margin-top:4px; }
-.summary-strip { display:grid; margin:10px 0 18px; border:1px solid var(--line); border-radius:6px; background:#fff; overflow:hidden; }
+.summary-strip { display:grid; margin:10px 0 18px; border:1px solid var(--line); border-radius:6px; background:#fff; overflow:hidden; max-width:100%; }
 .summary-row { display:grid; grid-template-columns:minmax(100px,1.1fr) repeat(5,minmax(112px,1fr)); gap:10px; align-items:center; padding:8px 10px; border-top:1px solid var(--line); background:#fff; }
 .summary-row:first-child { border-top:0; }
 .summary-workload { color:#344256; font-weight:600; white-space:nowrap; }
 .summary-cell { min-width:0; }
 .summary-cell .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
 .summary-cell .value { color:var(--ink); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.chart-group { margin-top:24px; padding-top:18px; border-top:1px solid var(--line); }
+.chart-group { margin-top:24px; padding-top:18px; border-top:1px solid var(--line); min-width:0; max-width:100%; overflow-wrap:anywhere; }
 .chart-group:first-of-type { margin-top:14px; padding-top:0; border-top:0; }
 .chart-group h3 { margin:0 0 4px; font-size:18px; }
-.chart-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin:14px 0 22px; align-items:start; }
-.chart { border:1px solid var(--line); border-radius:8px; padding:12px; overflow:hidden; background:#fff; min-width:0; }
-.chart-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }
-.chart-title { font-weight:700; margin-bottom:8px; }
-.chart-head .chart-title { margin-bottom:0; }
+.chart-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin:14px 0 22px; align-items:start; max-width:100%; }
+.chart { border:1px solid var(--line); border-radius:8px; padding:12px; overflow:hidden; background:#fff; min-width:0; max-width:100%; }
+.chart-head { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; min-width:0; max-width:100%; }
+.chart-head-top { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px 12px; width:100%; min-width:0; }
+.chart-title { font-weight:700; margin-bottom:8px; min-width:0; max-width:100%; overflow-wrap:anywhere; }
+.chart-head .chart-title { margin-bottom:0; flex:1 1 200px; }
+.chart-controls { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.scale-toggle { display:inline-flex; border:1px solid var(--line); border-radius:999px; background:#f1f5f9; padding:2px; gap:2px; }
+.scale-btn { appearance:none; border:0; background:transparent; color:var(--muted); font:600 11px/1.2 inherit; padding:3px 9px; border-radius:999px; cursor:pointer; }
+.scale-btn.active { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(15,23,42,.12); }
 .chart svg { display:block; width:100%; height:auto; max-width:100%; }
-.table-wrap { overflow:auto; border:1px solid var(--line); border-radius:8px; margin:10px 0 18px; }
+.chart:not([data-scale="log"]) .scale-log { display:none; }
+.chart[data-scale="log"] .scale-linear { display:none; }
+.chart svg .series-hidden { display:none; }
+.chart svg .chart-item { cursor:pointer; transition:opacity .12s ease; }
+.chart svg .chart-item:hover { opacity:.84; }
+.table-wrap { overflow:auto; border:1px solid var(--line); border-radius:8px; margin:10px 0 18px; max-width:100%; }
 table { border-collapse:separate; border-spacing:0; width:100%; min-width:900px; }
+.mini-table-wrap { margin:8px 0 0; }
+.mini-table { min-width:0; font-size:12px; }
+.mini-table th, .mini-table td { padding:5px 8px; }
 th, td { padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; white-space:nowrap; }
 th { position:sticky; top:0; z-index:1; background:#f0f4f8; text-align:left; font-size:12px; color:#344256; }
 td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
 tr:hover td { background:#fafcff; }
-details { margin:12px 0; }
+details { margin:12px 0; max-width:100%; }
+details.chart-values { margin:8px 0 0; padding-top:6px; border-top:1px solid #edf2f7; }
+details.chart-values summary { font-size:12px; font-weight:600; }
 summary { cursor:pointer; color:var(--blue); font-weight:700; }
 .warn { border-color:#e6c36a; background:#fff8e1; }
-.legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); justify-content:flex-end; text-align:right; }
-.chart-head .legend { max-width:72%; }
-.swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
-@media (max-width: 980px) { :root { --page-gutter:10px; } section { width:calc(100% - 20px); } .chart-grid { grid-template-columns:1fr; } .summary-row { grid-template-columns:1fr 1fr; } .summary-workload { grid-column:1 / -1; } header { position:static; } }
+.legend { display:flex; gap:6px 8px; flex-wrap:wrap; font-size:12px; color:var(--muted); justify-content:flex-start; text-align:left; max-width:100%; width:100%; }
+.legend-item { appearance:none; display:inline-flex; align-items:center; gap:5px; border:1px solid #e2e8f0; border-radius:999px; background:#f8fafc; color:#334155; font:500 11.5px/1.2 inherit; padding:3px 8px; cursor:pointer; max-width:100%; overflow-wrap:anywhere; text-align:left; }
+.legend-item:hover { border-color:#cbd5e1; background:#f1f5f9; }
+.legend-item.is-hidden { opacity:.42; text-decoration:line-through; }
+.swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; flex-shrink:0; }
+.legend-item .swatch { margin-right:0; }
+.chart-tooltip { position:fixed; z-index:9999; pointer-events:none; opacity:0; transition:opacity .08s ease; background:rgba(15,23,42,.95); color:#f8fafc; border:1px solid rgba(148,163,184,.28); border-radius:8px; padding:9px 11px; font-size:12px; line-height:1.4; box-shadow:0 10px 24px rgba(15,23,42,.28); max-width:340px; }
+.chart-tooltip.visible { opacity:1; }
+.tt-head { font-weight:700; color:#e2e8f0; margin-bottom:5px; font-size:12px; }
+.tt-row { display:flex; justify-content:space-between; align-items:center; gap:14px; margin:2px 0; }
+.tt-primary { font-weight:700; color:#fff; }
+.tt-name { display:inline-flex; align-items:center; gap:6px; min-width:0; }
+.tt-swatch { display:inline-block; width:9px; height:9px; border-radius:2px; flex-shrink:0; }
+.tt-val { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.tt-ratio { color:#94a3b8; font-weight:500; }
+.tt-sep { border-top:1px solid rgba(148,163,184,.25); margin:5px 0; }
+@media (max-width: 980px) { :root { --page-gutter:10px; } section { width:calc(100% - 20px); padding:16px 14px; } .chart-grid { grid-template-columns:1fr; } .summary-row { grid-template-columns:1fr 1fr; } .summary-workload { grid-column:1 / -1; } header { position:static; padding:18px 12px 14px; } }
+@media (max-width: 640px) { h1 { font-size:22px; } h2 { font-size:19px; } .chart { padding:10px; } .summary-row { grid-template-columns:1fr; } }
 </style>
 `
 }
@@ -2099,10 +2148,10 @@ type rawEngineVariant struct {
 
 func rawEngineVariants() []rawEngineVariant {
 	return []rawEngineVariant{
-		{Profile: "wal_on_fast", Checkpoint: "checkpoint between tests", Label: "wal_on_fast / checkpoint between tests", Color: "#2867c7"},
-		{Profile: "wal_on_fast", Checkpoint: "no checkpoint between tests", Label: "wal_on_fast / no checkpoint between tests", Color: "#6b7fd7"},
-		{Profile: "fast", Checkpoint: "checkpoint between tests", Label: "fast / checkpoint between tests", Color: "#1f8a5b"},
-		{Profile: "fast", Checkpoint: "no checkpoint between tests", Label: "fast / no checkpoint between tests", Color: "#bd6a21"},
+		{Profile: "wal_on_fast", Checkpoint: "checkpoint between tests", Label: "wal_on_fast / checkpoint between tests", Color: colorTreeDBPrimary},
+		{Profile: "wal_on_fast", Checkpoint: "no checkpoint between tests", Label: "wal_on_fast / no checkpoint between tests", Color: colorTreeDBTemplateV1Raw},
+		{Profile: "fast", Checkpoint: "checkpoint between tests", Label: "fast / checkpoint between tests", Color: colorSQLiteNative},
+		{Profile: "fast", Checkpoint: "no checkpoint between tests", Label: "fast / no checkpoint between tests", Color: colorTreeDBJSON},
 	}
 }
 
@@ -2312,7 +2361,7 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 	for _, key := range keys {
 		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
 	}
-	return collectionChartRows{Categories: labels, Series: nonZeroSeries(series)}
+	return collectionChartRows{Categories: labels, Series: assignDistinctSeriesColors(nonZeroSeries(series))}
 }
 
 func collectionComparisonIsClaimableCompacted(comp collectionComparison) bool {
@@ -2369,7 +2418,7 @@ func writeCollectionSummary(b *strings.Builder, rows []collectionRow, comps []co
 	b.WriteString("<h4>Collection summary</h4><div class=\"summary-strip\">")
 	if hasFast {
 		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">fastest insert</div>")
-		writeSummaryCell(b, "config", displayConfig(fast.ConfigName))
+		writeSummaryCell(b, "config", displayConfigWithEngine(fast.ConfigName, fast.Engine, true))
 		writeSummaryCell(b, "indexes", indexCountLabel(fast.IndexCount))
 		writeSummaryCell(b, "docs/sec", fmtOps(fast.DocsPerSec))
 		writeSummaryCell(b, "format", displayFormat(fast.Format))
@@ -2378,7 +2427,7 @@ func writeCollectionSummary(b *strings.Builder, rows []collectionRow, comps []co
 	}
 	if hasSmall {
 		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">smallest TreeDB compacted</div>")
-		writeSummaryCell(b, "config", displayConfig(small.ConfigName))
+		writeSummaryCell(b, "config", displayConfigWithEngine(small.ConfigName, small.Engine, true))
 		writeSummaryCell(b, "indexes", indexCountLabel(small.IndexCount))
 		writeSummaryCell(b, "B/doc", fmtFloat(small.BytesPerDoc, 1))
 		writeSummaryCell(b, "phase", small.Phase)
@@ -2387,8 +2436,8 @@ func writeCollectionSummary(b *strings.Builder, rows []collectionRow, comps []co
 	}
 	if hasComp {
 		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">best SQLite/TreeDB ratio</div>")
-		writeSummaryCell(b, "TreeDB", displayConfig(bestComp.TreeDBConfig))
-		writeSummaryCell(b, "SQLite", displayConfig(bestComp.SQLiteConfig))
+		writeSummaryCell(b, "TreeDB", displayConfigWithEngine(bestComp.TreeDBConfig, "", true))
+		writeSummaryCell(b, "SQLite", displayConfigWithEngine(bestComp.SQLiteConfig, "", true))
 		writeSummaryCell(b, "ratio", fmtRatio(bestComp.SmallerRatio))
 		writeSummaryCell(b, "TreeDB B/doc", fmtFloat(bestComp.TreeDBBytesPerDoc, 1))
 		writeSummaryCell(b, "SQLite B/doc", fmtFloat(bestComp.SQLiteBytesPerDoc, 1))
@@ -2466,6 +2515,8 @@ func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
 	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_compact", "offline_rewrite", "exhaustive_compact", "full_leafgen_pack_gc", "sqlite_vacuum"}
 	phaseLabels := []string{"post insert", "online maint", "offline compact", "offline rewrite", "exhaustive", "leafgen GC", "SQLite VACUUM"}
 	values := make(map[string][]float64)
+	labels := make(map[string]string)
+	orders := make(map[string]string)
 	phasePresent := make([]bool, len(phases))
 	for _, row := range rows {
 		if row.BytesPerDoc <= 0 {
@@ -2476,9 +2527,11 @@ func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
 			continue
 		}
 		phasePresent[pos] = true
-		key := displayConfig(row.ConfigName)
+		key, label, order := collectionLifecycleSeriesIdentity(row)
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(phases))
+			labels[key] = label
+			orders[key] = order
 		}
 		values[key][pos] = row.BytesPerDoc
 	}
@@ -2486,12 +2539,17 @@ func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
 	for key := range values {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		if orders[keys[i]] != orders[keys[j]] {
+			return orders[keys[i]] < orders[keys[j]]
+		}
+		return labels[keys[i]] < labels[keys[j]]
+	})
 	var series []chartSeries
 	for _, key := range keys {
-		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
+		series = append(series, chartSeries{Name: labels[key], Values: values[key], Color: collectionSeriesColor(key)})
 	}
-	return compactCollectionChartRows(collectionChartRows{Categories: phaseLabels, Series: nonZeroSeries(series)}, phasePresent)
+	return compactCollectionChartRows(collectionChartRows{Categories: phaseLabels, Series: assignDistinctSeriesColors(nonZeroSeries(series))}, phasePresent)
 }
 
 func compactCollectionChartRows(rows collectionChartRows, present []bool) collectionChartRows {
@@ -2535,17 +2593,17 @@ func collectionMaintenanceRows(rows []collectionRow) [][]string {
 	var out [][]string
 	addBytes := func(row collectionRow, metric string, value float64) {
 		if value > 0 {
-			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, fmtBytes(value)})
+			out = append(out, []string{displayConfigWithEngine(row.ConfigName, row.Engine, false), row.Phase, metric, fmtBytes(value)})
 		}
 	}
 	addFloat := func(row collectionRow, metric string, value float64) {
 		if value > 0 {
-			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, fmtFloat(value, 1)})
+			out = append(out, []string{displayConfigWithEngine(row.ConfigName, row.Engine, false), row.Phase, metric, fmtFloat(value, 1)})
 		}
 	}
 	addText := func(row collectionRow, metric, value string) {
 		if strings.TrimSpace(value) != "" {
-			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, value})
+			out = append(out, []string{displayConfigWithEngine(row.ConfigName, row.Engine, false), row.Phase, metric, value})
 		}
 	}
 	for _, row := range rows {
@@ -2623,12 +2681,13 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		if !ok {
 			continue
 		}
-		key := family + "\x00" + canonicalFormat(row.Format)
+		format := collectionEffectiveFormat(row)
+		key := family + "\x00" + format
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(indexes))
 			priorities[key] = make([]int, len(indexes))
-			labels[key] = collectionSeriesLabel(family, row.Format, kind)
-			orders[key] = collectionSeriesOrder(family, row.Format)
+			labels[key] = collectionSeriesLabel(family, format, kind)
+			orders[key] = collectionSeriesOrder(family, format)
 		}
 		value, priority, ok := collectionChartMetric(row, kind)
 		if !ok {
@@ -2659,7 +2718,7 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 	for _, key := range keys {
 		series = append(series, chartSeries{Name: labels[key], Values: values[key], Color: collectionSeriesColor(key)})
 	}
-	return collectionChartRows{Categories: categories, Series: nonZeroSeries(series)}
+	return collectionChartRows{Categories: categories, Series: assignDistinctSeriesColors(nonZeroSeries(series))}
 }
 
 func collectionChartMetric(row collectionRow, kind string) (float64, int, bool) {
@@ -2814,6 +2873,8 @@ func displayFormat(format string) string {
 		return "native"
 	case "template-v1":
 		return "template-v1"
+	case "template-v1-raw":
+		return "template-v1 raw"
 	case "":
 		return "unknown"
 	default:
@@ -2833,43 +2894,28 @@ func collectionSeriesOrder(family, format string) string {
 		familyOrder = "1"
 	}
 	formatOrder := map[string]string{
-		"template-v1":    "00",
-		"bson":           "01",
-		"json":           "02",
-		"native-columns": "03",
-		"native":         "03",
-		"extended-json":  "04",
-		"canonical-json": "05",
+		"template-v1":     "00",
+		"template-v1-raw": "01",
+		"bson":            "02",
+		"json":            "03",
+		"native-columns":  "04",
+		"native":          "04",
+		"extended-json":   "05",
+		"canonical-json":  "06",
+	}
+	if family == "SQLite" {
+		switch canonicalFormat(format) {
+		case "native-columns", "native":
+			return familyOrder + "_00"
+		case "json":
+			return familyOrder + "_01"
+		}
 	}
 	order, ok := formatOrder[canonicalFormat(format)]
 	if !ok {
 		order = "99_" + canonicalFormat(format)
 	}
 	return familyOrder + "_" + order
-}
-
-func collectionSeriesColor(key string) string {
-	parts := strings.Split(key, "\x00")
-	if len(parts) >= 2 {
-		switch parts[0] + "\x00" + parts[1] {
-		case "TreeDB\x00template-v1":
-			return "#2867c7"
-		case "TreeDB\x00bson":
-			return "#6b7fd7"
-		case "TreeDB\x00json":
-			return "#bd6a21"
-		case "SQLite\x00native-columns":
-			return "#1f8a5b"
-		case "SQLite\x00json":
-			return "#b94242"
-		}
-	}
-	palette := []string{"#2867c7", "#6b7fd7", "#bd6a21", "#1f8a5b", "#b94242", "#7c5a2f", "#6c6f7d", "#8a4f9e"}
-	sum := 0
-	for _, r := range key {
-		sum += int(r)
-	}
-	return palette[sum%len(palette)]
 }
 
 func nonZeroSeries(series []chartSeries) []chartSeries {
@@ -2966,12 +3012,12 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	if len(loadRows) > 0 {
 		indexLabels := mongoRowIndexLabels(loadRows)
 		b.WriteString(lineChart("Insert throughput vs secondary indexes", indexLabels, "secondary indexes", "docs/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoRowOps(loadRows, "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoRowOps(loadRows, "mongo"), Color: "#1f8a5b"},
+			{Name: "TreeDB", Values: mongoRowOps(loadRows, "tree"), Color: colorTreeDBPrimary},
+			{Name: "MongoDB", Values: mongoRowOps(loadRows, "mongo"), Color: colorMongoDB},
 		}, "docs/sec"))
 		b.WriteString(lineChart("Storage footprint vs secondary indexes", indexLabels, "secondary indexes", "storage bytes", []chartSeries{
-			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
+			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: colorTreeDBPrimary},
+			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: colorMongoDB},
 		}, "bytes"))
 		b.WriteString("<p class=\"subtle\"><strong>Storage basis:</strong> " + esc(mongoStorageBasisText(loadRows)) + "</p>")
 		writeMongoIndexRetentionTable(b, loadRows)
@@ -2992,15 +3038,15 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 				continue
 			}
 			b.WriteString(lineChart(spec.Title, countLabels(readerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweep(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweep(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, spec.Prefix, "tree", readerCounts), Color: colorTreeDBPrimary},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, spec.Prefix, "mongo", readerCounts), Color: colorMongoDB},
 			}, "ops/sec"))
 		}
 		writerCounts := mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
 			b.WriteString(lineChart("_id update one: throughput vs writer clients", countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: colorTreeDBPrimary},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: colorMongoDB},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div>")
@@ -3070,8 +3116,8 @@ func renderMongoLoadScaling(b *strings.Builder, rows []mongoSummaryRow) {
 			continue
 		}
 		b.WriteString(lineChart("Insert throughput vs insert producers, "+indexCountLabel(idx), countLabels(counts), "insert producers", "docs/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "mongo"), Color: "#1f8a5b"},
+			{Name: "TreeDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "tree"), Color: colorTreeDBPrimary},
+			{Name: "MongoDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "mongo"), Color: colorMongoDB},
 		}, "docs/sec"))
 	}
 	b.WriteString("</div>")
@@ -3324,8 +3370,8 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
 			b.WriteString(lineChart("_id update one: throughput vs writer client count, "+indexLabel, countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: colorTreeDBPrimary},
+				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: colorMongoDB},
 			}, "ops/sec"))
 		}
 		for _, spec := range mongoConcurrentReadSweepSpecs() {
@@ -3334,8 +3380,8 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 				continue
 			}
 			b.WriteString(lineChart(spec.Title+", "+indexLabel, countLabels(readerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "tree", readerCounts), Color: colorTreeDBPrimary},
+				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "mongo", readerCounts), Color: colorMongoDB},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div>")
@@ -4167,44 +4213,75 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 		return ""
 	}
 	const width = 1600.0
-	const height = 560.0
-	const left = 82.0
-	const top = 28.0
+	const height = 590.0
+	const left = 90.0
+	const top = 54.0
 	const right = 26.0
 	const bottom = 148.0
 	plotW := width - left - right
 	plotH := height - top - bottom
 	axisY := top + plotH
-	maxV := 0.0
-	for _, test := range tests {
-		for _, variant := range variants {
-			if v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); ok && v > maxV {
-				maxV = v
+
+	series := make([]chartSeries, 0, len(variants))
+	for _, variant := range variants {
+		vals := make([]float64, len(tests))
+		for i, test := range tests {
+			if v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); ok && v > 0 {
+				vals[i] = v
 			}
 		}
+		series = append(series, chartSeries{Name: variant.Label, Values: vals, Color: variant.Color})
 	}
-	if maxV <= 0 {
-		maxV = 1
+	series = assignDistinctSeriesColors(series)
+
+	minPos, maxPos, hasPos := seriesPositiveRange(series)
+	axisMax, linearTicks := niceLinearAxis(maxPos, "ops/sec")
+	hasLog := hasPos && minPos > 0 && maxPos/minPos >= 4.0
+	yLinear := func(v float64) float64 {
+		return top + plotH - (v/axisMax)*plotH
 	}
-	maxV *= 1.08
-	y := func(v float64) float64 {
-		return top + plotH - (v/maxV)*plotH
-	}
+
 	groupW := plotW / float64(len(tests))
 	barGap := math.Max(1.0, groupW*0.025)
 	innerPad := math.Max(4.0, groupW*0.10)
-	barW := (groupW - innerPad*2 - barGap*float64(len(variants)-1)) / float64(len(variants))
+	barW := (groupW - innerPad*2 - barGap*float64(len(series)-1)) / float64(len(series))
 	if barW < 1 {
 		barW = 1
 	}
+
+	renderLayer := func(b *strings.Builder, className string, ticks []float64, yFn func(float64) float64) {
+		b.WriteString("<g class=\"scale-layer " + className + "\">")
+		writeYAxisTicks(b, ticks, left, plotW, "ops/sec", "12", yFn)
+		for i, test := range tests {
+			groupX := left + float64(i)*groupW
+			for vidx, s := range series {
+				v := s.Values[i]
+				if v <= 0 {
+					continue
+				}
+				yy, barH := barGeometry(v, axisY, top, plotH, yFn)
+				x := groupX + innerPad + float64(vidx)*(barW+barGap)
+				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s, %s: %s</title></rect>", vidx, i, x, yy, barW, barH, esc(s.Color), esc(test), esc(s.Name), esc(formatExactChartValue(v, "ops/sec"))))
+				writeBarValueLabel(b, x, yy, barW, top, formatBarLabelValue(v, "ops/sec"), vidx)
+			}
+		}
+		b.WriteString("</g>")
+	}
+
 	var b strings.Builder
-	b.WriteString(chartHeader(title, rawEngineVariantSeries(variants)))
-	b.WriteString("<svg width=\"1600\" height=\"560\" viewBox=\"0 0 1600 560\" role=\"img\" aria-label=\"" + esc(chartLabel(title)) + ", x axis Benchmark Test, y axis Ops/Sec\">")
-	for tick := 0; tick <= 4; tick++ {
-		value := maxV * float64(tick) / 4
-		yy := y(value)
-		b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#edf2f7\"/>", left, yy, left+plotW, yy))
-		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", left-7, yy+4, esc(shortNumber(value))))
+	b.WriteString(chartHeaderWithScale(title, series, hasLog))
+	b.WriteString("<svg width=\"1600\" height=\"590\" viewBox=\"0 0 1600 590\" role=\"img\" aria-label=\"" + esc(chartLabel(title)) + ", x axis Benchmark Test, y axis Ops/Sec\">")
+	renderLayer(&b, "scale-linear", linearTicks, yLinear)
+	if hasLog {
+		logMin, logMax, logTicks := niceLogAxis(minPos, maxPos, "ops/sec")
+		lMin, lMax := math.Log10(logMin), math.Log10(logMax)
+		yLog := func(v float64) float64 {
+			if v <= 0 {
+				return axisY
+			}
+			return top + plotH - ((math.Log10(v)-lMin)/(lMax-lMin))*plotH
+		}
+		renderLayer(&b, "scale-log", logTicks, yLog)
 	}
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, axisY, left+plotW, axisY))
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
@@ -4212,27 +4289,6 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 		groupX := left + float64(i)*groupW
 		if i > 0 {
 			b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#dbe4ee\"/>", groupX, top, groupX, axisY+8))
-		}
-		largestVariant := -1
-		largestValue := 0.0
-		for vidx, variant := range variants {
-			if v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); ok && v > largestValue {
-				largestValue = v
-				largestVariant = vidx
-			}
-		}
-		for vidx, variant := range variants {
-			v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test)
-			if !ok || v <= 0 {
-				continue
-			}
-			barH := (v / maxV) * plotH
-			x := groupX + innerPad + float64(vidx)*(barW+barGap)
-			yy := axisY - barH
-			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s, %s: %s ops/sec</title></rect>", x, yy, barW, barH, esc(variant.Color), esc(test), esc(variant.Label), esc(formatChartValue(v, "ops/sec"))))
-			if vidx == largestVariant && barW >= 10 && v > 0 {
-				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(shortNumber(v))))
-			}
 		}
 		labelX := groupX + groupW/2
 		for lineIdx, line := range chartLabelLines(test, 13, 4) {
@@ -4242,6 +4298,8 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#344256\">Benchmark Test</text>", left+plotW/2, axisY+94))
 	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#344256\">Ops/Sec</text>", top+plotH/2))
 	b.WriteString("</svg>")
+	b.WriteString(chartMetaScript("Benchmark Test", tests, series, "ops/sec"))
+	b.WriteString(chartExactValuesDetails("Benchmark Test", tests, series, "ops/sec"))
 	b.WriteString("</div>")
 	return b.String()
 }
@@ -4255,113 +4313,117 @@ func rawEngineVariantSeries(variants []rawEngineVariant) []chartSeries {
 }
 
 func lineChart(title string, labels []string, xAxisLabel, yAxisLabel string, series []chartSeries, unit string) string {
+	series = assignDistinctSeriesColors(series)
 	const width = 680.0
-	const height = 330.0
-	const left = 82.0
-	const top = 24.0
+	const height = 340.0
+	const left = 90.0
+	const top = 26.0
 	const right = 20.0
 	const bottom = 68.0
 	plotW := width - left - right
 	plotH := height - top - bottom
-	maxY := 0.0
-	for _, s := range series {
-		for _, v := range s.Values {
-			if !isFinite(v) {
-				continue
-			}
-			if v > maxY {
-				maxY = v
-			}
-		}
-	}
-	if maxY <= 0 {
-		maxY = 1
-	}
-	maxY *= 1.08
+	axisY := top + plotH
+
+	minPos, maxPos, hasPos := seriesPositiveRange(series)
+	axisMax, linearTicks := niceLinearAxis(maxPos, unit)
+	hasLog := hasPos && minPos > 0 && maxPos/minPos >= 4.0
+
 	x := func(i int) float64 {
 		if len(labels) <= 1 {
 			return left + plotW/2
 		}
 		return left + float64(i)*plotW/float64(len(labels)-1)
 	}
-	y := func(v float64) float64 {
-		return top + plotH - (v/maxY)*plotH
+	yLinear := func(v float64) float64 {
+		return top + plotH - (v/axisMax)*plotH
 	}
+
+	renderLayer := func(b *strings.Builder, className string, ticks []float64, yFn func(float64) float64, requirePositive bool) {
+		b.WriteString("<g class=\"scale-layer " + className + "\">")
+		writeYAxisTicks(b, ticks, left, plotW, unit, "12", yFn)
+		for sidx, s := range series {
+			points := make([]string, 0, len(s.Values))
+			flushPoints := func() {
+				if len(points) >= 2 {
+					b.WriteString(fmt.Sprintf("<polyline data-series=\"%d\" fill=\"none\" stroke=\"%s\" stroke-width=\"2.5\" points=\"%s\"/>", sidx, esc(s.Color), strings.Join(points, " ")))
+				}
+				points = points[:0]
+			}
+			for i, v := range s.Values {
+				if !isFinite(v) || (requirePositive && v <= 0) {
+					flushPoints()
+					continue
+				}
+				points = append(points, fmt.Sprintf("%.1f,%.1f", x(i), yFn(v)))
+			}
+			flushPoints()
+			for i, v := range s.Values {
+				if !isFinite(v) || (requirePositive && v <= 0) {
+					continue
+				}
+				cx, cy := x(i), yFn(v)
+				b.WriteString(fmt.Sprintf("<circle class=\"chart-dot\" data-series=\"%d\" cx=\"%.1f\" cy=\"%.1f\" r=\"3.8\" fill=\"%s\" stroke=\"#fff\" stroke-width=\"1.2\"/>", sidx, cx, cy, esc(s.Color)))
+				b.WriteString(fmt.Sprintf("<circle class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" cx=\"%.1f\" cy=\"%.1f\" r=\"9\" fill=\"transparent\"><title>%s %s: %s</title></circle>", sidx, i, cx, cy, esc(s.Name), esc(labels[i]), esc(formatExactChartValue(v, unit))))
+			}
+		}
+		b.WriteString("</g>")
+	}
+
 	var b strings.Builder
-	b.WriteString(chartHeader(title, series))
-	b.WriteString("<svg width=\"680\" height=\"330\" viewBox=\"0 0 680 330\" role=\"img\" aria-label=\"" + esc(chartLabel(title)) + ", x axis " + esc(chartLabel(xAxisLabel)) + ", y axis " + esc(chartLabel(yAxisLabel)) + "\">")
-	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top+plotH, left+plotW, top+plotH))
-	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, top+plotH))
+	b.WriteString(chartHeaderWithScale(title, series, hasLog))
+	b.WriteString("<svg width=\"680\" height=\"340\" viewBox=\"0 0 680 340\" role=\"img\" aria-label=\"" + esc(chartLabel(title)) + ", x axis " + esc(chartLabel(xAxisLabel)) + ", y axis " + esc(chartLabel(yAxisLabel)) + "\">")
+	renderLayer(&b, "scale-linear", linearTicks, yLinear, false)
+	if hasLog {
+		logMin, logMax, logTicks := niceLogAxis(minPos, maxPos, unit)
+		lMin, lMax := math.Log10(logMin), math.Log10(logMax)
+		yLog := func(v float64) float64 {
+			if v <= 0 {
+				return axisY
+			}
+			return top + plotH - ((math.Log10(v)-lMin)/(lMax-lMin))*plotH
+		}
+		renderLayer(&b, "scale-log", logTicks, yLog, true)
+	}
+	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, axisY, left+plotW, axisY))
+	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
 	for i, label := range labels {
 		xx := x(i)
 		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", xx, height-34, esc(chartLabel(label))))
 	}
-	for tick := 0; tick <= 4; tick++ {
-		value := maxY * float64(tick) / 4
-		yy := y(value)
-		b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#edf2f7\"/>", left, yy, left+plotW, yy))
-		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", left-7, yy+4, esc(shortNumber(value))))
-	}
-	for _, s := range series {
-		points := make([]string, 0, len(s.Values))
-		flushPoints := func() {
-			if len(points) >= 2 {
-				b.WriteString("<polyline fill=\"none\" stroke=\"" + esc(s.Color) + "\" stroke-width=\"2.5\" points=\"" + strings.Join(points, " ") + "\"/>")
-			}
-			points = points[:0]
-		}
-		for i, v := range s.Values {
-			if !isFinite(v) {
-				flushPoints()
-				continue
-			}
-			points = append(points, fmt.Sprintf("%.1f,%.1f", x(i), y(v)))
-		}
-		flushPoints()
-		for i, v := range s.Values {
-			if !isFinite(v) {
-				continue
-			}
-			b.WriteString(fmt.Sprintf("<circle cx=\"%.1f\" cy=\"%.1f\" r=\"3.2\" fill=\"%s\"><title>%s %s: %s</title></circle>", x(i), y(v), esc(s.Color), esc(s.Name), esc(labels[i]), esc(formatChartTooltipValue(v, unit))))
-		}
-	}
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#344256\">%s</text>", left+plotW/2, height-10, esc(chartLabel(xAxisLabel))))
 	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#344256\">%s</text>", top+plotH/2, esc(chartLabel(yAxisLabel))))
 	b.WriteString("</svg>")
+	b.WriteString(chartMetaScript(xAxisLabel, labels, series, unit))
+	b.WriteString(chartExactValuesDetails(xAxisLabel, labels, series, unit))
 	b.WriteString("</div>")
 	return b.String()
 }
 
 func verticalBarChart(title string, categories []string, xAxisLabel string, series []chartSeries, unit string) string {
-	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 430, 112, 11, 4)
+	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 460, 112, 11, 4)
 }
 
 func compactVerticalBarChart(title string, categories []string, xAxisLabel string, series []chartSeries, unit string) string {
-	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 330, 86, 14, 2)
+	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 362, 86, 14, 2)
 }
 
 func loadModeBarChart(title string, categories []string, tree, mongo []float64, unit, yAxisLabel string) string {
 	if len(categories) == 0 {
 		return ""
 	}
-	maxV := 0.0
-	for i := range categories {
-		if i < len(tree) && tree[i] > maxV {
-			maxV = tree[i]
-		}
-		if i < len(mongo) && mongo[i] > maxV {
-			maxV = mongo[i]
-		}
+	series := []chartSeries{
+		{Name: "TreeDB", Values: tree, Color: colorTreeDBPrimary},
+		{Name: "MongoDB", Values: mongo, Color: colorMongoDB},
 	}
-	if maxV <= 0 {
-		maxV = 1
-	}
-	maxV *= 1.08
+	minPos, maxPos, hasPos := seriesPositiveRange(series)
+	axisMax, linearTicks := niceLinearAxis(maxPos, unit)
+	hasLog := hasPos && minPos > 0 && maxPos/minPos >= 4.0
+
 	const width = 760.0
-	const height = 430.0
-	const left = 76.0
+	const height = 460.0
+	const left = 90.0
 	const right = 18.0
-	const top = 22.0
+	const top = 52.0
 	const bottom = 112.0
 	plotW := width - left - right
 	plotH := height - top - bottom
@@ -4374,59 +4436,68 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64, 
 		pairedBarW = 1
 	}
 	soloBarW := pairedBarW
-	y := func(v float64) float64 {
-		return top + plotH - (v/maxV)*plotH
+	yLinear := func(v float64) float64 {
+		return top + plotH - (v/axisMax)*plotH
 	}
+
+	renderLayer := func(b *strings.Builder, className string, ticks []float64, yFn func(float64) float64) {
+		b.WriteString("<g class=\"scale-layer " + className + "\">")
+		writeYAxisTicks(b, ticks, left, plotW, unit, "11", yFn)
+		for i, cat := range categories {
+			groupX := left + float64(i)*groupW
+			treeDBOnlyMode := isTreeDBOnlyLoadMode(cat)
+			if treeDBOnlyMode {
+				if i < len(tree) && tree[i] > 0 {
+					v := tree[i]
+					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
+					x := groupX + (groupW-soloBarW)/2
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s TreeDB-only ceiling: %s</title></rect>", i, x, yy, soloBarW, barH, esc(colorTreeDBPrimary), esc(cat), esc(formatExactChartValue(v, unit))))
+					writeBarValueLabel(b, x, yy, soloBarW, top, formatBarLabelValue(v, unit), 0)
+				}
+			} else {
+				if i < len(tree) && tree[i] > 0 {
+					v := tree[i]
+					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
+					x := groupX + innerPad
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s TreeDB: %s</title></rect>", i, x, yy, pairedBarW, barH, esc(colorTreeDBPrimary), esc(cat), esc(formatExactChartValue(v, unit))))
+					writeBarValueLabel(b, x, yy, pairedBarW, top, formatBarLabelValue(v, unit), 0)
+				}
+				if i < len(mongo) && mongo[i] > 0 {
+					v := mongo[i]
+					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
+					x := groupX + innerPad + pairedBarW + barGap
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"1\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s MongoDB: %s</title></rect>", i, x, yy, pairedBarW, barH, esc(colorMongoDB), esc(cat), esc(formatExactChartValue(v, unit))))
+					writeBarValueLabel(b, x, yy, pairedBarW, top, formatBarLabelValue(v, unit), 1)
+				}
+			}
+		}
+		b.WriteString("</g>")
+	}
+
+	displayCats := make([]string, len(categories))
+	for i, cat := range categories {
+		displayCats[i] = loadModeDisplayLabel(cat)
+	}
+
 	var b strings.Builder
-	b.WriteString(chartHeader(title, []chartSeries{
-		{Name: "TreeDB", Color: "#2867c7"},
-		{Name: "MongoDB", Color: "#1f8a5b"},
-	}))
-	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"430\" viewBox=\"0 0 760 430\" role=\"img\" aria-label=\"%s, x axis Client Mode, y axis %s\">", esc(chartLabel(title)), esc(chartLabel(yAxisLabel))))
-	for tick := 0; tick <= 4; tick++ {
-		value := maxV * float64(tick) / 4
-		yy := y(value)
-		b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#edf2f7\"/>", left, yy, left+plotW, yy))
-		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", left-7, yy+4, esc(shortNumber(value))))
+	b.WriteString(chartHeaderWithScale(title, series, hasLog))
+	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"460\" viewBox=\"0 0 760 460\" role=\"img\" aria-label=\"%s, x axis Client Mode, y axis %s\">", esc(chartLabel(title)), esc(chartLabel(yAxisLabel))))
+	renderLayer(&b, "scale-linear", linearTicks, yLinear)
+	if hasLog {
+		logMin, logMax, logTicks := niceLogAxis(minPos, maxPos, unit)
+		lMin, lMax := math.Log10(logMin), math.Log10(logMax)
+		yLog := func(v float64) float64 {
+			if v <= 0 {
+				return axisY
+			}
+			return top + plotH - ((math.Log10(v)-lMin)/(lMax-lMin))*plotH
+		}
+		renderLayer(&b, "scale-log", logTicks, yLog)
 	}
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, axisY, left+plotW, axisY))
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
 	for i, cat := range categories {
 		groupX := left + float64(i)*groupW
-		treeDBOnlyMode := isTreeDBOnlyLoadMode(cat)
-		if treeDBOnlyMode {
-			if i < len(tree) && tree[i] > 0 {
-				v := tree[i]
-				barH := (v / maxV) * plotH
-				x := groupX + (groupW-soloBarW)/2
-				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only ceiling: %s</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
-				if soloBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
-				}
-			}
-		} else {
-			if i < len(tree) && tree[i] > 0 {
-				v := tree[i]
-				barH := (v / maxV) * plotH
-				x := groupX + innerPad
-				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB: %s</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
-				if pairedBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
-				}
-			}
-			if i < len(mongo) && mongo[i] > 0 {
-				v := mongo[i]
-				barH := (v / maxV) * plotH
-				x := groupX + innerPad + pairedBarW + barGap
-				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#1f8a5b\"><title>%s MongoDB: %s</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
-				if pairedBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
-				}
-			}
-		}
 		labelX := groupX + groupW/2
 		for lineIdx, line := range chartLabelLines(loadModeDisplayLabel(cat), 11, 4) {
 			b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", labelX, axisY+20+float64(lineIdx)*14, esc(line)))
@@ -4435,72 +4506,80 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64, 
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">Client Mode</text>", left+plotW/2, height-8))
 	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", top+plotH/2, esc(chartLabel(yAxisLabel))))
 	b.WriteString("</svg>")
+	b.WriteString(chartMetaScript("Client Mode", displayCats, series, unit))
+	b.WriteString(chartExactValuesDetails("Client Mode", displayCats, series, unit))
 	b.WriteString("</div>")
 	return b.String()
 }
 
 func verticalBarChartWithSize(title string, categories []string, xAxisLabel string, series []chartSeries, unit string, height, bottom float64, labelMaxChars, labelMaxLines int) string {
-	if len(categories) == 0 {
+	if len(categories) == 0 || len(series) == 0 {
 		return ""
 	}
-	maxV := 0.0
-	for _, s := range series {
-		for _, v := range s.Values {
-			if v > maxV {
-				maxV = v
-			}
-		}
-	}
-	if maxV <= 0 {
-		maxV = 1
-	}
-	maxV *= 1.08
+	series = assignDistinctSeriesColors(series)
+	minPos, maxPos, hasPos := seriesPositiveRange(series)
+	axisMax, linearTicks := niceLinearAxis(maxPos, unit)
+	hasLog := hasPos && minPos > 0 && maxPos/minPos >= 4.0
+
 	width := 760.0
-	left := 76.0
+	left := 90.0
 	right := 18.0
-	top := 22.0
+	top := 52.0
 	plotW := width - left - right
 	plotH := height - top - bottom
 	axisY := top + plotH
 	groupW := plotW / float64(len(categories))
 	barGap := math.Max(1.0, groupW*0.04)
-	innerPad := math.Max(3.0, groupW*0.16)
+	innerPad := math.Max(3.0, groupW*0.14)
 	barW := (groupW - innerPad*2 - barGap*float64(len(series)-1)) / float64(len(series))
 	if barW < 1 {
 		barW = 1
 	}
-	y := func(v float64) float64 {
-		return top + plotH - (v/maxV)*plotH
+	yLinear := func(v float64) float64 {
+		return top + plotH - (v/axisMax)*plotH
 	}
+
+	renderLayer := func(b *strings.Builder, className string, ticks []float64, yFn func(float64) float64) {
+		b.WriteString("<g class=\"scale-layer " + className + "\">")
+		writeYAxisTicks(b, ticks, left, plotW, unit, "11", yFn)
+		for i, cat := range categories {
+			groupX := left + float64(i)*groupW
+			for sidx, s := range series {
+				if i >= len(s.Values) {
+					continue
+				}
+				v := s.Values[i]
+				if v <= 0 {
+					continue
+				}
+				yy, barH := barGeometry(v, axisY, top, plotH, yFn)
+				x := groupX + innerPad + float64(sidx)*(barW+barGap)
+				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s</title></rect>", sidx, i, x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatExactChartValue(v, unit))))
+				writeBarValueLabel(b, x, yy, barW, top, formatBarLabelValue(v, unit), sidx)
+			}
+		}
+		b.WriteString("</g>")
+	}
+
 	var b strings.Builder
-	b.WriteString(chartHeader(title, series))
+	b.WriteString(chartHeaderWithScale(title, series, hasLog))
 	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"%.0f\" viewBox=\"0 0 760 %.0f\" role=\"img\" aria-label=\"%s, x axis %s, y axis %s\">", height, height, esc(chartLabel(title)), esc(chartLabel(xAxisLabel)), esc(chartLabel(unit))))
-	for tick := 0; tick <= 4; tick++ {
-		value := maxV * float64(tick) / 4
-		yy := y(value)
-		b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#edf2f7\"/>", left, yy, left+plotW, yy))
-		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", left-7, yy+4, esc(shortNumber(value))))
+	renderLayer(&b, "scale-linear", linearTicks, yLinear)
+	if hasLog {
+		logMin, logMax, logTicks := niceLogAxis(minPos, maxPos, unit)
+		lMin, lMax := math.Log10(logMin), math.Log10(logMax)
+		yLog := func(v float64) float64 {
+			if v <= 0 {
+				return axisY
+			}
+			return top + plotH - ((math.Log10(v)-lMin)/(lMax-lMin))*plotH
+		}
+		renderLayer(&b, "scale-log", logTicks, yLog)
 	}
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, axisY, left+plotW, axisY))
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
 	for i, cat := range categories {
 		groupX := left + float64(i)*groupW
-		for sidx, s := range series {
-			if i >= len(s.Values) {
-				continue
-			}
-			v := s.Values[i]
-			if v <= 0 {
-				continue
-			}
-			barH := (v / maxV) * plotH
-			x := groupX + innerPad + float64(sidx)*(barW+barGap)
-			yy := axisY - barH
-			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s</title></rect>", x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatChartTooltipValue(v, unit))))
-			if barW >= 18 && v > 0 {
-				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
-			}
-		}
 		labelX := groupX + groupW/2
 		for lineIdx, line := range chartLabelLines(cat, labelMaxChars, labelMaxLines) {
 			b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", labelX, axisY+20+float64(lineIdx)*14, esc(line)))
@@ -4509,19 +4588,21 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", left+plotW/2, height-8, esc(chartLabel(xAxisLabel))))
 	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", top+plotH/2, esc(chartLabel(unit))))
 	b.WriteString("</svg>")
+	b.WriteString(chartMetaScript(xAxisLabel, categories, series, unit))
+	b.WriteString(chartExactValuesDetails(xAxisLabel, categories, series, unit))
 	b.WriteString("</div>")
 	return b.String()
 }
 
 func chartHeader(title string, series []chartSeries) string {
-	return "<div class=\"chart\"><div class=\"chart-head\"><div class=\"chart-title\">" + esc(chartLabel(title)) + "</div>" + legend(series) + "</div>"
+	return chartHeaderWithScale(title, series, false)
 }
 
 func legend(series []chartSeries) string {
 	var b strings.Builder
 	b.WriteString("<div class=\"legend\">")
-	for _, s := range series {
-		b.WriteString("<span><span class=\"swatch\" style=\"background:" + esc(s.Color) + "\"></span>" + esc(chartLabel(s.Name)) + "</span>")
+	for i, s := range series {
+		b.WriteString(fmt.Sprintf("<button type=\"button\" class=\"legend-item\" data-series=\"%d\" aria-pressed=\"true\" title=\"Click to toggle series; Shift+click to solo\"><span class=\"swatch\" style=\"background:%s\"></span><span>%s</span></button>", i, esc(s.Color), esc(chartLabel(s.Name))))
 	}
 	b.WriteString("</div>")
 	return b.String()
@@ -4783,6 +4864,8 @@ func chartLabelWord(s string) string {
 		core = "TreeDB"
 	case "tcp":
 		core = "TCP"
+	case "vacuum":
+		core = "VACUUM"
 	case "vlog":
 		core = "VLog"
 	case "wal":
