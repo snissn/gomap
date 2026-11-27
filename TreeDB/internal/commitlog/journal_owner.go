@@ -1649,9 +1649,10 @@ func (j *CommandJournal) appendCommand(
 			return lsn, err
 		}
 	}
-	if j.segmentSeq != previousSegment && len(j.pendingStableRotations) == 0 {
+	if j.segmentSeq != previousSegment && len(j.pendingStableRotations) == 0 &&
+		j.writer.fixed != nil && j.writer.fixed.capacity >= fixedWALDefaultCapacity {
 		total := int64(segmentHeaderSize) + int64(size)
-		if j.segmentTargetBytes <= 0 || j.writer.ActiveBytes()+total < j.segmentTargetBytes {
+		if total >= 256<<10 && (j.segmentTargetBytes <= 0 || j.writer.ActiveBytes()+total < j.segmentTargetBytes) {
 			if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
 				return lsn, j.writer.poisonCommandBuffer(err)
 			}
