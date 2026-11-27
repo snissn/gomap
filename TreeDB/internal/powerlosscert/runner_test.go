@@ -321,6 +321,12 @@ func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
 		t.Fatalf("resolved inherited PATH Git shim %q", gitBinary)
 	}
 	goBinary, err := resolveGoBinary("go")
+	if runtime.GOROOT() == "" {
+		if err == nil || !strings.Contains(err.Error(), "runtime.GOROOT is unavailable") {
+			t.Fatalf("resolveGoBinary(\"go\") under -trimpath error=%v, want fail-closed runtime.GOROOT error", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
