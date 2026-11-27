@@ -14031,15 +14031,24 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, err
 	}
 	var entries []noIndexBatchEntry
+	var presortedIDs [][]byte
 	if prepared := execOpts.prepared; prepared != nil {
 		entries = prepared.entries
 	} else {
 		entries = make([]noIndexBatchEntry, len(documents))
+		presorted := true
 		for i := range documents {
 			id := resultIDs[i]
 			entries[i] = noIndexBatchEntry{id: id, document: documents[i]}
+			if presorted && i > 0 && bytes.Compare(entries[i-1].id, id) > 0 {
+				presorted = false
+			}
 		}
-		sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
+		if presorted {
+			presortedIDs = resultIDs
+		} else {
+			sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].id, entries[j].id) < 0 })
+		}
 	}
 	phaseStart := time.Now()
 	for i := 1; i < len(entries); i++ {
@@ -14050,7 +14059,7 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	rootName := collectionPrimaryRootName(c.meta.Name)
-	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries); err != nil {
+	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries, presortedIDs); err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
@@ -14137,26 +14146,46 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	if commandWALIntent == nil && c.commandWALActive(nil) {
-		commandDocuments := collectionDocumentsFromNoIndexEntries(entries)
+		poolWALBuffers := !columnStoreWriteEnabled(c.meta) && execOpts.trustedFloat32Projection == nil
+		var docsLease *commandWALDocsLease
+		var commandDocuments []commitlog.CollectionDocument
+		if poolWALBuffers {
+			docsLease = acquireCommandWALDocs(len(entries))
+			defer releaseCommandWALDocs(docsLease)
+			commandDocuments = docsLease.docs[:len(entries)]
+			for i := range entries {
+				commandDocuments[i] = commitlog.CollectionDocument{ID: entries[i].id, Document: entries[i].document}
+			}
+			docsLease.docs = commandDocuments
+		} else {
+			commandDocuments = collectionDocumentsFromNoIndexEntries(entries)
+		}
 		if projection := execOpts.trustedFloat32Projection; projection != nil && projection.retainedJSON == nil && retainedDocuments != nil {
 			projection.preparedRetainedDocuments = commandDocuments
 			projection.preparedRetainedJSON = retainedDocuments
 		}
-		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(commandDocuments, nil, execOpts.trustedFloat32Projection)
+		var releaseCommandWALPayload func()
+		commandWALIntent, releaseCommandWALPayload, err = c.newCollectionInsertCommandWALIntentForMetaWithPool(c.meta, commandDocuments, nil, execOpts.trustedFloat32Projection, poolWALBuffers)
 		if err != nil {
 			return nil, err
+		}
+		if releaseCommandWALPayload != nil {
+			defer releaseCommandWALPayload()
 		}
 	}
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	var rowRemainderBytes int64
-	for i := range entries {
+	if err := applyCollectionRunEntries(table, len(entries), func(i int) (key, value []byte, err error) {
 		storedDocument := entries[i].document
 		if retainedDocuments != nil {
 			storedDocument = retainedDocuments[i]
 		}
 		rowRemainderBytes = saturatingAddNonNegativeInt64(rowRemainderBytes, int64(len(entries[i].id)+len(storedDocument)))
-		setCollectionRunValue(table, entries[i].id, storedDocument)
+		return entries[i].id, storedDocument, nil
+	}); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
@@ -14330,7 +14359,7 @@ func (c *Collection) insertBatchNoIndex(
 				_ = current.Close()
 				return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
 			}
-			if err := rejectNoIndexBatchDocumentConflicts(current, currentCatalog, rootName, entries); err != nil {
+			if err := rejectNoIndexBatchDocumentConflicts(current, currentCatalog, rootName, entries, presortedIDs); err != nil {
 				_ = current.Close()
 				return nil, err
 			}
@@ -14451,15 +14480,18 @@ func (c *Collection) insertBatchNoIndex(
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }
 
-func rejectNoIndexBatchDocumentConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, entries []noIndexBatchEntry) error {
+func rejectNoIndexBatchDocumentConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, entries []noIndexBatchEntry, presortedKeys [][]byte) error {
 	if len(catalog.overlayRootIDs(rootName)) == 0 {
 		rootID := catalog.rootID(rootName)
 		if rootID == 0 {
 			return nil
 		}
-		keys := make([][]byte, len(entries))
-		for i := range entries {
-			keys[i] = entries[i].id
+		keys := presortedKeys
+		if len(keys) != len(entries) {
+			keys = make([][]byte, len(entries))
+			for i := range entries {
+				keys[i] = entries[i].id
+			}
 		}
 		exists, err := snap.HasAnySortedAtRoot(rootID, keys)
 		if err != nil {

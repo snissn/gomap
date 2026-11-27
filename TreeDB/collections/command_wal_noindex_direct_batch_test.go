@@ -100,6 +100,25 @@ func TestCommandWALNoIndexLargeBatchDirectPublishAndMixedFlush(t *testing.T) {
 				t.Fatalf("large batch Documents=%d, want %d", stats.Documents, largeN)
 			}
 
+			// 4. Unsorted large batch with intra-batch duplicate must reject cleanly,
+			// and valid unsorted large batch must publish directly and survive reopen.
+			unsortedIDs := make([][]byte, largeN)
+			unsortedDocs := make([][]byte, largeN)
+			for i := 0; i < largeN; i++ {
+				unsortedIDs[i], unsortedDocs[i] = makeDoc(10000 + largeN - 1 - i)
+			}
+			unsortedIDs[largeN/2] = unsortedIDs[0]
+			if _, err := col.InsertBatch(unsortedIDs, unsortedDocs); !errors.Is(err, ErrDuplicateDocumentID) {
+				t.Fatalf("unsorted duplicate large batch err=%v, want ErrDuplicateDocumentID", err)
+			}
+			unsortedIDs[largeN/2], unsortedDocs[largeN/2] = makeDoc(10000 + largeN - 1 - largeN/2)
+			if _, err := col.InsertBatch(unsortedIDs, unsortedDocs); err != nil {
+				t.Fatalf("unsorted large direct insert batch: %v", err)
+			}
+			if got := col.LastInsertStats().BufferedIndexedBatches; got != 0 {
+				t.Fatalf("unsorted large batch BufferedIndexedBatches=%d, want 0", got)
+			}
+
 			// Verify both previously-buffered small docs and direct large docs survive Checkpoint + reopen.
 			if err := mgr.FlushAll(); err != nil {
 				t.Fatalf("flush all: %v", err)
@@ -120,7 +139,14 @@ func TestCommandWALNoIndexLargeBatchDirectPublishAndMixedFlush(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reopen collection: %v", err)
 			}
-			for _, checkID := range [][]byte{[]byte("doc-000000"), []byte("doc-000007"), []byte("doc-000100"), []byte(fmt.Sprintf("doc-%06d", 100+largeN-1))} {
+			for _, checkID := range [][]byte{
+				[]byte("doc-000000"),
+				[]byte("doc-000007"),
+				[]byte("doc-000100"),
+				[]byte(fmt.Sprintf("doc-%06d", 100+largeN-1)),
+				[]byte("doc-010000"),
+				[]byte(fmt.Sprintf("doc-%06d", 10000+largeN-1)),
+			} {
 				got, err := col2.Get(checkID)
 				if err != nil || len(got) == 0 {
 					t.Fatalf("Get(%q) after reopen: len=%d err=%v", checkID, len(got), err)
