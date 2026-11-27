@@ -366,6 +366,32 @@ func (db *DB) CaptureNativeSemanticState() (NativeSemanticCapture, error) {
 	return db.nativeSemanticBridge.CaptureNativeCut()
 }
 
+// NativeSemanticBorrowedCut borrows an already-admitted live cut directly for
+// one-shot point reads without allocating a NativeSemanticCapture wrapper or
+// acquiring a COWBudget external lease. Callers must call Release exactly once
+// and must not retain slices or state derived from it afterward.
+type NativeSemanticBorrowedCut interface {
+	State() NativeSemanticState
+	NativeEntryAtRootInto(root uint64, key, dst []byte) (node.LeafEntry, error)
+	NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error)
+	NativeValueAtPointerInto(ptr page.ValuePtr, dst []byte, admitOutput func(uint64) error) ([]byte, error)
+	NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error)
+	Release() error
+}
+
+func (db *DB) BorrowNativeSemanticCut() (NativeSemanticBorrowedCut, error) {
+	if !db.HasNativeSemanticBridge() {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	borrower, ok := db.nativeSemanticBridge.(interface {
+		BorrowNativeSemanticCut() (NativeSemanticBorrowedCut, error)
+	})
+	if !ok {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	return borrower.BorrowNativeSemanticCut()
+}
+
 func (db *DB) WithNativeSemanticStateReadOnly(fn func(NativeSemanticState) bool) bool {
 	if !db.HasNativeSemanticBridge() || fn == nil {
 		return false

@@ -3,11 +3,13 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -582,4 +584,289 @@ func writeSerializedRawBatchForManifestTest(b *Batch) error {
 	}
 	defer releaseUnassignedCommandWALIntent(intent)
 	return b.writeSerialized(true, intent, revision, nil)
+}
+
+// TestBindPublicationLeafManifestPackedProjection verifies the pack-publication
+// branch of bindPublicationLeafManifest directly on every platform (including
+// macOS where full stable-namespace promotion is unavailable):
+//   - An older GC-retired/deleted pack token still conservatively inherited from
+//     visibleBase is projected out when unreachable from the candidate roots.
+//   - A still-reachable pack omitted from the staged manifest still fails closed.
+func TestBindPublicationLeafManifestPackedProjection(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		reachable bool
+	}{
+		{name: "unreachable_retired_pack_is_projected", reachable: false},
+		{name: "reachable_omitted_pack_refuses_publication", reachable: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{
+				Dir:                        dir,
+				IndexOuterLeavesInValueLog: true,
+				DisableBackgroundPrune:     true,
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+			leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+			database.SetLeafPageLog(leafLog)
+			registry := database.valueLogIdentityPins
+			t.Cleanup(func() {
+				if database != nil {
+					_ = database.Close()
+				}
+				_ = leafLog.Close()
+				if got := registry.ActivePins(); got != 0 {
+					t.Errorf("retained stable physical pins after close: %d", got)
+				}
+				if err := registry.CleanupError(); err != nil {
+					t.Error(err)
+				}
+			})
+
+			writeLeafGenerationKeys(t, database, "packed-proj", 256, 'a')
+			livePath, liveTaggedID := currentLeafSegmentOrFatal(t, leafLog)
+			liveRawID := page.ValueLogSegmentID(liveTaggedID)
+
+			// Create an unreachable retired pack file (seq 13 = 2139095053) and a
+			// newly promoted pack file (seq 14) on disk.
+			retiredPath, retiredTaggedID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 13)
+			promotedPath, promotedTaggedID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 14)
+			if err := os.WriteFile(retiredPath, []byte("retired-pack-segment"), 0o600); err != nil {
+				t.Fatalf("write retired pack: %v", err)
+			}
+			if err := os.WriteFile(promotedPath, []byte("promoted-pack-segment"), 0o600); err != nil {
+				t.Fatalf("write promoted pack: %v", err)
+			}
+			retiredRawID := page.ValueLogSegmentID(retiredTaggedID)
+			promotedRawID := page.ValueLogSegmentID(promotedTaggedID)
+
+			// Build the candidate's StableResourceSet containing the newly promoted
+			// pack plus an omitted pack token (either unreachable seq 13, or the
+			// live reachable segment for the fail-closed case).
+			omittedPath := retiredPath
+			omittedTaggedID := retiredTaggedID
+			omittedRawID := retiredRawID
+			if scenario.reachable {
+				omittedPath = livePath
+				omittedTaggedID = liveTaggedID
+				omittedRawID = liveRawID
+			}
+
+			addPackToken := func(builder *rootpublication.StableResourceSetBuilder, path string, taggedID uint32) {
+				t.Helper()
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatalf("open %s: %v", path, err)
+				}
+				defer f.Close()
+				gen := uint64(taggedID)
+				token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+					Kind:           rootpublication.ResourceOuterLeafPack,
+					LogicalLane:    "leaf-generation-pack",
+					ResourceID:     strconv.FormatUint(gen, 10),
+					Generation:     gen,
+					DiagnosticPath: filepath.Base(path),
+					File:           f,
+					Frontier:       rootpublication.DurableFrontier{Bytes: 1},
+					Digest:         sha256.Sum256([]byte(path)),
+					Reachability:   rootpublication.ReachabilityOuterLeafPackedPointer,
+				})
+				if err != nil {
+					t.Fatalf("NewStableResourceToken(%d): %v", taggedID, err)
+				}
+				if err := builder.Add(token); err != nil {
+					token.Release()
+					t.Fatalf("builder.Add(%d): %v", taggedID, err)
+				}
+			}
+
+			builder := rootpublication.NewStableResourceSetBuilder()
+			addPackToken(builder, omittedPath, omittedTaggedID)
+			addPackToken(builder, promotedPath, promotedTaggedID)
+			resources, err := builder.Freeze()
+			if err != nil {
+				builder.Abandon()
+				t.Fatalf("builder.Freeze: %v", err)
+			}
+
+			state := database.state.Load()
+			if state == nil || state.LeafGenerations == nil || state.LeafGenerations.sourceManifest == nil {
+				resources.Release()
+				t.Fatal("missing source leaf-generation manifest")
+			}
+			packManifest := state.LeafGenerations.sourceManifest.clone()
+			if scenario.reachable {
+				// Omit the live segment from the manifest so it is uncovered yet reachable.
+				for i := range packManifest.Generations {
+					if slices.Contains(packManifest.Generations[i].FileIDs, liveRawID) {
+						packManifest.Generations[i].FileIDs = nil
+					}
+				}
+			}
+
+			// Exercise bindPublicationLeafManifest in stable mode with a cut hook
+			// right after coverage & pack projection so this runs on all platforms.
+			cut := errors.New("reached stable manifest preparation after pack projection")
+			origStore := database.leafGenerationManifestStore
+			stubStore := &leafGenerationManifestStore{
+				leafDir:            LeafLogDirPath(dir),
+				registry:           database.valueLogIdentityPins,
+				mode:               leafGenerationManifestStable,
+				stableCapability:   func() bool { return true },
+				durabilityCounters: origStore.durabilityCounters,
+				hooks: leafGenerationManifestStoreHooks{
+					BeforeTempCreate: func() error { return cut },
+				},
+			}
+			parentDir, err := os.Open(LeafLogDirPath(dir))
+			if err != nil {
+				resources.Release()
+				t.Fatalf("open leaf dir: %v", err)
+			}
+			stubStore.parent = parentDir
+			database.leafGenerationManifestStore = stubStore
+			defer func() {
+				database.leafGenerationManifestStore = origStore
+				_ = parentDir.Close()
+			}()
+
+			next := page.MetaPageBody{
+				CommitSeq:        state.CommitSeq + 1,
+				UserRootPageID:   state.RootPageID,
+				SystemRootPageID: state.SystemRootPageID,
+			}
+			opts := finalizeCommitOptions{
+				packedRootPublication: &packedRootPublication{
+					afterActivation:          func() {},
+					afterManifestPreparation: func() error { return nil },
+				},
+			}
+			_, _, err = database.bindPublicationLeafManifest(resources, database.idx.Load(), next, packManifest, []uint32{promotedRawID}, &opts)
+			if scenario.reachable {
+				want := fmt.Sprintf("publication leaf-generation manifest omits leaf file %d", omittedRawID)
+				if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !strings.Contains(err.Error(), want) {
+					t.Fatalf("reachable omitted pack err=%v, want %q", err, want)
+				}
+			} else if !errors.Is(err, cut) {
+				t.Fatalf("unreachable retired pack should have been projected before manifest prep, got err=%v", err)
+			}
+		})
+	}
+}
+
+// TestPackedLeafManifestProjectsGCRetiredPackAcrossConsecutivePacks reproduces
+// the end-to-end Linux sequence: Pack #1 -> overwrite keys -> LeafGenerationGC
+// retires Pack #1 while visibleBase still holds its ResourceOuterLeafPack token
+// -> Pack #2 runs without an intervening rotating ordinary write and must
+// project out the unreachable retired pack instead of failing with
+// "publication leaf-generation manifest omits leaf file <id>".
+func TestPackedLeafManifestProjectsGCRetiredPackAcrossConsecutivePacks(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	database, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	registry := database.valueLogIdentityPins
+	t.Cleanup(func() {
+		if database != nil {
+			closeLeafGenerationPackPublicationTestDB(t, database, leafLog)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Errorf("retained stable physical pins after close: %d", got)
+		}
+		if err := registry.CleanupError(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	const keys = 512
+	seed := prepareLeafGenerationPackTestCandidate(t, database, leafLog, keys)
+	pack1, err := database.LeafGenerationPack(ctx, LeafGenerationPackOptions{
+		GenerationIDs: []uint64{seed.generation.GenerationID},
+		Force:         true,
+		Sync:          true,
+		ReserveRIDs:   leafLog.reserveRecordRIDs,
+	})
+	if err != nil || len(pack1.CreatedFileIDs) != 1 {
+		t.Fatalf("pack1: stats=%+v err=%v", pack1, err)
+	}
+	pack1RawID := pack1.CreatedFileIDs[0]
+
+	// Rotate onto a fresh raw generation, overwrite all keys across two durable
+	// commits so both meta slots stop referencing pack1, then rotate once more
+	// to create a sealed raw generation candidate for pack2.
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatal(err)
+	}
+	writeLeafGenerationKeys(t, database, "pack-concurrent", keys, 'c')
+	if err := database.SetSync([]byte("pack-tail-0030"), []byte("advance-slot-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync([]byte("pack-tail-0031"), []byte("advance-slot-2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatal(err)
+	}
+	writeLeafGenerationKeys(t, database, "pack-concurrent", keys/2, 'd')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync([]byte("pack-tail-0032"), []byte("seal-pack2-candidate")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run GC: pack1 is unreachable from both recoverable meta slots, so GC
+	// deletes/prunes pack1 from db.leafGenerationManifest while visibleBase
+	// still retains pack1's ResourceOuterLeafPack token.
+	gcStats, err := database.LeafGenerationGC(ctx, LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if state := database.state.Load(); state == nil || state.LeafGenerations == nil || leafManifestContainsActiveFile(state.LeafGenerations.sourceManifest, pack1RawID) {
+		t.Fatalf("expected GC to retire/prune pack1 raw file %d (gcStats=%+v)", pack1RawID, gcStats)
+	}
+
+	// Immediately run Pack #2 without any intervening rotating ordinary write.
+	plan, err := database.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{Force: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationPlan: %v", err)
+	}
+	var candidateIDs []uint64
+	for _, gen := range plan.Generations {
+		if gen.Eligible && !gen.WholeGenerationGCEligible {
+			candidateIDs = append(candidateIDs, gen.GenerationID)
+		}
+	}
+	if len(candidateIDs) == 0 {
+		t.Fatalf("expected at least one sealed candidate for pack2, plan=%+v", plan)
+	}
+	pack2, err := database.LeafGenerationPack(ctx, LeafGenerationPackOptions{
+		GenerationIDs: candidateIDs,
+		Force:         true,
+		Sync:          true,
+		ReserveRIDs:   leafLog.reserveRecordRIDs,
+	})
+	if err != nil || len(pack2.CreatedFileIDs) == 0 {
+		t.Fatalf("pack2 after GC-retired pack1 failed: stats=%+v err=%v", pack2, err)
+	}
+
+	// Reopen and verify all live keys remain readable.
+	closeLeafGenerationPackPublicationTestDB(t, database, leafLog)
+	database = nil
+	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	val, err := reopened.Get([]byte("pack-tail-0032"))
+	if err != nil || string(val) != "seal-pack2-candidate" {
+		t.Fatalf("reopened pack-tail-0032=%q err=%v", val, err)
+	}
 }

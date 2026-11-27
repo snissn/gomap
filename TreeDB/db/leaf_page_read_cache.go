@@ -610,6 +610,7 @@ func (c *leafPageReadCache) lockVictimSlotLocked(bucketIndex int, nonBlocking bo
 	}
 	hand := int(bucket.clockHand % uint32(n))
 	for pass := 0; pass < 2; pass++ {
+		firstVerifiedIdx := -1
 		for step := 0; step < n; step++ {
 			idx := start + (hand+step)%n
 			slot := &c.slots[idx]
@@ -619,8 +620,21 @@ func (c *leafPageReadCache) lockVictimSlotLocked(bucketIndex int, nonBlocking bo
 			if !lockLeafPageReadCacheSlot(slot, nonBlocking) {
 				continue
 			}
-			bucket.clockHand = uint32((idx - start + 1) % n)
-			return slot, true
+			if !slot.recordChecksumVerified {
+				bucket.clockHand = uint32((idx - start + 1) % n)
+				return slot, true
+			}
+			slot.mu.Unlock()
+			if firstVerifiedIdx < 0 {
+				firstVerifiedIdx = idx
+			}
+		}
+		if firstVerifiedIdx >= 0 {
+			slot := &c.slots[firstVerifiedIdx]
+			if lockLeafPageReadCacheSlot(slot, nonBlocking) {
+				bucket.clockHand = uint32((firstVerifiedIdx - start + 1) % n)
+				return slot, true
+			}
 		}
 	}
 

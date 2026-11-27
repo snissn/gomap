@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1219,12 +1220,41 @@ func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactSto
 		return CompactStorageDebt{}, err
 	}
 	var debt CompactStorageDebt
-	populateCompactStorageIndexDebt(opts, report, &debt)
+	populateCompactStorageIndexDebtWithSlotCopies(opts, report, db.compactStorageExpectedVacuumSlotCopies(), &debt)
 	if !debt.IndexVacuumRequired && opts.Mode == CompactStorageExhaustive && db.compactStorageIndexChunkSlackReclaimable(report) {
 		debt.IndexVacuumRequired = true
 		debt.IndexVacuumReason = "chunk_slack"
 	}
 	return debt, nil
+}
+
+func (db *DB) compactStorageExpectedVacuumSlotCopies() uint64 {
+	if db == nil {
+		return 1
+	}
+	idx := db.idx.Load()
+	if idx != nil && idx.primary != nil {
+		return 2
+	}
+	if !db.commandWAL {
+		return 1
+	}
+	state := db.state.Load()
+	if state != nil && state.AppliedCommandLSN != 0 {
+		return 1
+	}
+	db.durablePublishMu.Lock()
+	s0 := db.durableRoot.slotRecord[0]
+	s1 := db.durableRoot.slotRecord[1]
+	db.durablePublishMu.Unlock()
+	if s0.CommitSeq != 0 && s1.CommitSeq != 0 &&
+		(s0.UserRootPageID != s1.UserRootPageID ||
+			s0.SystemRootPageID != s1.SystemRootPageID ||
+			s0.AppliedCommandLSN != s1.AppliedCommandLSN ||
+			s0.MaxEntryRevision != s1.MaxEntryRevision) {
+		return 2
+	}
+	return 1
 }
 
 func (db *DB) compactStorageIndexChunkSlackReclaimable(report IndexVacuumTriggerReport) bool {
@@ -1281,6 +1311,23 @@ func (db *DB) compactStorageVacuumIndexOnlineWithOwner(ctx context.Context, lock
 	}
 	if db != nil && db.compactStorageVacuumIndexOnlineHook != nil {
 		return db.compactStorageVacuumIndexOnlineHook(ctx, lockMaintenance)
+	}
+	// Best-effort convergence of both durable meta slots onto the already-durable
+	// current root before online vacuum on DATA indexes so quiet DBs emit a single
+	// compact copy (1x live pages) instead of duplicating the B-tree for slot^1.
+	// On non-command-WAL profiles with concurrent writers, non-convergence is
+	// non-fatal and falls through safely to standard 2-slot online vacuum.
+	if db != nil && runtime.GOOS != "windows" && !db.readOnly {
+		if idx := db.idx.Load(); idx != nil && idx.primary == nil {
+			if err := db.refreshDurableRootFallback(); err != nil {
+				if errors.Is(err, ErrClosed) || errors.Is(err, ErrRecoveryRequired) ||
+					errors.Is(err, ErrReadOnly) || errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					!strings.Contains(err.Error(), "did not converge") {
+					return err
+				}
+			}
+		}
 	}
 	return db.vacuumIndexOnline(ctx, lockMaintenance)
 }
@@ -1953,14 +2000,59 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 }
 
 const (
-	compactStorageIndexUserSpanRatioPPM           uint64 = 1_200_000
-	compactStorageIndexFreelistReclaimablePages   uint64 = 64
-	compactStorageIndexFreelistReclaimablePPM     uint64 = 250_000
-	compactStorageIndexCollectionRootPages        uint64 = 16
-	compactStorageIndexCollectionRootSpanRatioPPM uint64 = 1_200_000
+	compactStorageIndexUserSpanRatioPPM               uint64 = 1_200_000
+	compactStorageIndexFreelistReclaimablePages       uint64 = 64
+	compactStorageIndexFreelistReclaimablePPM         uint64 = 250_000
+	compactStorageIndexCollectionRootPages            uint64 = 16
+	compactStorageIndexCollectionRootSpanRatioPPM     uint64 = 1_200_000
+	compactStorageIndexWholeFileMinTotalPages         uint64 = 256
+	compactStorageIndexWholeFileMetaOverheadPages     uint64 = 64
+	compactStorageIndexWholeFileMinExcessPages        uint64 = 64
+	compactStorageIndexWholeFileSlackRatioPPM         uint64 = 1_250_000
+	compactStorageIndexCollectionLeafFillMinLeaves    uint64 = 256
+	compactStorageIndexCollectionEmptyLeafMinPages    uint64 = 64
+	compactStorageIndexCollectionUnderfullLeafMinPage uint64 = 256
 )
 
+func compactStorageExpectedPostVacuumPages(report IndexVacuumTriggerReport, slotCopies uint64) uint64 {
+	livePages := report.UserPages + report.CollectionRootPages + report.SystemPages
+	if livePages == 0 {
+		return 0
+	}
+	if slotCopies == 0 {
+		slotCopies = 1
+	}
+	chunkPages := report.ReplacementChunkPages
+	if chunkPages == 0 {
+		chunkPages = uint64(defaultChunkSize / page.PageSize)
+	}
+	raw := slotCopies*livePages + compactStorageIndexWholeFileMetaOverheadPages
+	return ((raw + chunkPages - 1) / chunkPages) * chunkPages
+}
+
+func compactStorageRatioAtLeastPPM(num, denom, ratioPPM uint64) bool {
+	hiL, loL := bits.Mul64(num, 1_000_000)
+	hiR, loR := bits.Mul64(denom, ratioPPM)
+	return hiL > hiR || (hiL == hiR && loL >= loR)
+}
+
+func compactStorageCollectionLeafFillUnderfullDebt(report IndexVacuumTriggerReport) bool {
+	if report.CollectionRootLeafPages < compactStorageIndexCollectionLeafFillMinLeaves {
+		return false
+	}
+	if report.CollectionRootEmptyLeafPages >= compactStorageIndexCollectionEmptyLeafMinPages &&
+		report.CollectionRootEmptyLeafPages*10 >= report.CollectionRootLeafPages {
+		return true
+	}
+	return report.CollectionRootUnderfullLeafPages >= compactStorageIndexCollectionUnderfullLeafMinPage &&
+		report.CollectionRootUnderfullLeafPages*10 >= report.CollectionRootLeafPages*4
+}
+
 func populateCompactStorageIndexDebt(opts CompactStorageOptions, report IndexVacuumTriggerReport, debt *CompactStorageDebt) {
+	populateCompactStorageIndexDebtWithSlotCopies(opts, report, 1, debt)
+}
+
+func populateCompactStorageIndexDebtWithSlotCopies(opts CompactStorageOptions, report IndexVacuumTriggerReport, slotCopies uint64, debt *CompactStorageDebt) {
 	if debt == nil {
 		return
 	}
@@ -1975,6 +2067,8 @@ func populateCompactStorageIndexDebt(opts CompactStorageOptions, report IndexVac
 	debt.IndexVacuumCollectionRootSpan = report.CollectionRootSpan
 	debt.IndexVacuumCollectionRootSpanRatioPPM = report.CollectionRootSpanRatioPPM
 
+	expectedPostVacuumPages := compactStorageExpectedPostVacuumPages(report, slotCopies)
+
 	if opts.Mode == CompactStorageExhaustive {
 		switch {
 		case report.FreelistReclaimablePages > 0:
@@ -1986,6 +2080,14 @@ func populateCompactStorageIndexDebt(opts CompactStorageOptions, report IndexVac
 		case report.CollectionRootPages > 0 && report.CollectionRootSpan > report.CollectionRootPages:
 			debt.IndexVacuumRequired = true
 			debt.IndexVacuumReason = "collection_roots"
+		case report.CollectionRootEmptyLeafPages > 0 || compactStorageCollectionLeafFillUnderfullDebt(report):
+			debt.IndexVacuumRequired = true
+			debt.IndexVacuumReason = "collection_leaf_fill"
+		case expectedPostVacuumPages > 0 &&
+			report.TotalPages >= compactStorageIndexWholeFileMinTotalPages &&
+			report.TotalPages > expectedPostVacuumPages+compactStorageIndexWholeFileMinExcessPages:
+			debt.IndexVacuumRequired = true
+			debt.IndexVacuumReason = "whole_file_slack"
 		}
 		return
 	}
@@ -2004,6 +2106,15 @@ func populateCompactStorageIndexDebt(opts CompactStorageOptions, report IndexVac
 		report.CollectionRootSpanRatioPPM >= compactStorageIndexCollectionRootSpanRatioPPM:
 		debt.IndexVacuumRequired = true
 		debt.IndexVacuumReason = "collection_roots"
+	case expectedPostVacuumPages > 0 &&
+		report.TotalPages >= compactStorageIndexWholeFileMinTotalPages &&
+		report.TotalPages >= expectedPostVacuumPages+compactStorageIndexWholeFileMinExcessPages &&
+		compactStorageRatioAtLeastPPM(report.TotalPages, expectedPostVacuumPages, compactStorageIndexWholeFileSlackRatioPPM):
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "whole_file_slack"
+	case compactStorageCollectionLeafFillUnderfullDebt(report):
+		debt.IndexVacuumRequired = true
+		debt.IndexVacuumReason = "collection_leaf_fill"
 	}
 }
 

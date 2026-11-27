@@ -62,6 +62,7 @@ func (b *COWBudget) ParkIdleBatchScratchFromLease(value any, lease *COWExternalL
 	if excess != 0 && b.maintenanceChild {
 		b.maintenanceRefunds++
 	}
+	b.updateFastHeadroomLocked()
 	b.idleBatch[b.idleBatchCount] = cowIdleBatchScratch{
 		value:  value,
 		charge: retainedPayload,
@@ -106,6 +107,7 @@ func (b *COWBudget) PutIdleBatchScratch(value any, lease *COWExternalLease, reta
 	if b.maintenanceChild {
 		b.maintenanceRefunds++
 	}
+	b.updateFastHeadroomLocked()
 	b.idleBatch[b.idleBatchCount] = cowIdleBatchScratch{
 		value:  value,
 		charge: retainedPayload,
@@ -145,6 +147,7 @@ func (b *COWBudget) TakeIdleBatchScratch(baseBytes uint64) (any, *COWExternalLea
 	b.stats.ReservedBytes += extra
 	b.stats.ExternalBytes += extra
 	b.stats.ExternalLeases++
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	return e.value, &COWExternalLease{budget: b, charge: leaseCharge}, e.charge
 }
@@ -180,6 +183,7 @@ func (b *COWBudget) refundIdleBatchLocked(e cowIdleBatchScratch) {
 	if e.charge != 0 && b.maintenanceChild {
 		b.maintenanceRefunds++
 	}
+	b.updateFastHeadroomLocked()
 }
 
 func (b *COWBudget) reclaimIdleBatchLocked() bool {

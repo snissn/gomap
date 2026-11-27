@@ -744,6 +744,7 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 		}
 
 		t.Run(witness.name, func(t *testing.T) {
+			t.Parallel()
 			// Compilation and startup share the existing parent package budget;
 			// the child test execution keeps its separate five-minute allowance.
 			deadline := time.Now().Add(30 * time.Minute)

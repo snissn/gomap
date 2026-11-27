@@ -2529,6 +2529,14 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 	}
 	if completion != nil {
 		completion.SnapshotCleanupCompleted(err)
+		if err == nil && originalManager != nil {
+			// A cleanup completion (such as cowBackendBasis) can hold identity
+			// pins on the same segments that Release() just unreferenced above.
+			// Now that the completion succeeded and released its pins, reap any
+			// newly unpinned zombies synchronously instead of waiting for the
+			// asynchronous retry backoff timer.
+			_ = originalManager.RemoveUnpinnedZombies()
+		}
 	}
 	s = nil
 	primaryOwnerCompletion.complete()

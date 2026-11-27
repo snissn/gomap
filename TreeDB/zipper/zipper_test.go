@@ -1964,3 +1964,193 @@ func BenchmarkZipperApplyOuterLeafRandomOverwrite(b *testing.B) {
 		b.ReportMetric(float64(store.readCalls)/n, "store_reads/op")
 	}
 }
+
+func TestZipperPrunesEmptyLeavesWhenBudgetExhausted(t *testing.T) {
+	t.Run("direct_coalesce_exhausted_budget_and_piggyback_disabled", func(t *testing.T) {
+		dir := t.TempDir()
+		p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+
+		alloc := &MockAllocator{p: p}
+		z := New(p, alloc)
+		z.SetPiggybackCompaction(false)
+
+		buildLeaf := func(keys []string) uint64 {
+			id, err := p.Alloc(1)
+			if err != nil {
+				t.Fatalf("alloc leaf: %v", err)
+			}
+			data, err := p.GetForWrite(id)
+			if err != nil {
+				t.Fatalf("get leaf: %v", err)
+			}
+			b := node.NewBuilder(data, page.PageTypeLeaf)
+			b.SetPageID(id)
+			for _, k := range keys {
+				if err := b.AddLeafEntry([]byte(k), []byte("val"), node.FlagInline, page.ValuePtr{}); err != nil {
+					t.Fatalf("add leaf entry %q: %v", k, err)
+				}
+			}
+			b.Finish()
+			return id
+		}
+
+		firstEmpty := buildLeaf(nil)
+		empty1 := buildLeaf(nil)
+		underfull1 := buildLeaf([]string{"c0"})
+		empty2 := buildLeaf(nil)
+		underfull2 := buildLeaf([]string{"e0"})
+
+		entries := []internalEntry{
+			{key: []byte{}, child: page.PageChildRef(firstEmpty)},
+			{key: []byte("b0"), child: page.PageChildRef(empty1)},
+			{key: []byte("c0"), child: page.PageChildRef(underfull1)},
+			{key: []byte("d0"), child: page.PageChildRef(empty2)},
+			{key: []byte("e0"), child: page.PageChildRef(underfull2)},
+		}
+
+		exhausted := &maintenanceBudget{remaining: 0}
+		out, retired, err := z.coalesceLeafChildren(entries, exhausted, &adaptive.Metrics{}, nil, nil)
+		if err != nil {
+			t.Fatalf("coalesceLeafChildren: %v", err)
+		}
+
+		// Both non-first empty leaves must be pruned, while firstEmpty and both
+		// underfull non-empty siblings stay intact (underfull merge stays budgeted).
+		wantChildren := []uint64{firstEmpty, underfull1, underfull2}
+		if len(out) != len(wantChildren) {
+			t.Fatalf("len(out)=%d want %d (out=%+v)", len(out), len(wantChildren), out)
+		}
+		for i, wantID := range wantChildren {
+			if out[i].child.Kind != page.ChildRefPage || out[i].child.Page != wantID {
+				t.Fatalf("out[%d]=%v want page %d", i, out[i].child, wantID)
+			}
+		}
+
+		wantRetired := map[uint64]bool{empty1: true, empty2: true}
+		if len(retired) != len(wantRetired) {
+			t.Fatalf("retired=%v want %v", retired, wantRetired)
+		}
+		for _, id := range retired {
+			if !wantRetired[id] {
+				t.Fatalf("unexpected retired page %d (retired=%v)", id, retired)
+			}
+		}
+	})
+
+	t.Run("apply_bulk_deletes_with_tiny_budget_and_piggyback_disabled", func(t *testing.T) {
+		dir := t.TempDir()
+		p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+
+		alloc := &MockAllocator{p: p}
+		z := New(p, alloc)
+		z.SetPiggybackCompaction(false)
+		z.SetMaintenanceOpsPerCoalesce(400_000)
+
+		rootID, err := p.Alloc(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := p.GetForWrite(rootID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := node.NewNode(data)
+		root.SetPageID(rootID)
+		root.SetType(page.PageTypeLeaf)
+		root.UpdateChecksum()
+
+		const totalKeys = 6000
+		val := bytes.Repeat([]byte("v"), 120)
+		insertBatch := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+		for i := 0; i < totalKeys; i++ {
+			k := fmt.Sprintf("k-%06d", i)
+			insertBatch.Set([]byte(k), val)
+		}
+		rootID, _, _, err = z.Apply(rootID, insertBatch)
+		insertBatch.Close()
+		if err != nil {
+			t.Fatalf("insert Apply: %v", err)
+		}
+
+		// Delete large contiguous key blocks across the tree so many non-first
+		// leaves become completely empty in one batch whose budget is tiny.
+		delBatch := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+		kept := make(map[string]bool)
+		for i := 0; i < totalKeys; i++ {
+			k := fmt.Sprintf("k-%06d", i)
+			if (i/40)%2 == 1 {
+				delBatch.Delete([]byte(k))
+			} else {
+				kept[k] = true
+			}
+		}
+		rootID, retired, _, err := z.Apply(rootID, delBatch)
+		delBatch.Close()
+		if err != nil {
+			t.Fatalf("delete Apply: %v", err)
+		}
+		if len(retired) == 0 {
+			t.Fatalf("expected non-empty retired list after bulk deletes")
+		}
+
+		// Walk the resulting B+Tree and verify zero non-first empty leaves remain
+		// and no retired page is still reachable.
+		retiredSet := make(map[uint64]struct{}, len(retired))
+		for _, id := range retired {
+			retiredSet[id] = struct{}{}
+		}
+		var nonFirstEmpty int
+		var totalLeaves int
+		var walk func(id uint64, isFirst bool)
+		walk = func(id uint64, isFirst bool) {
+			if _, isRet := retiredSet[id]; isRet {
+				t.Fatalf("reachable page %d was also returned in retired", id)
+			}
+			img, err := p.Get(id)
+			if err != nil {
+				t.Fatalf("pager.Get(%d): %v", id, err)
+			}
+			n := node.NewNode(img)
+			switch n.Type() {
+			case page.PageTypeLeaf:
+				totalLeaves++
+				if n.Count() == 0 && !isFirst {
+					nonFirstEmpty++
+				}
+			case page.PageTypeInternal:
+				for i := uint16(0); i < n.Count(); i++ {
+					_, ref, err := n.GetInternalEntryRefView(i)
+					if err != nil {
+						t.Fatalf("GetInternalEntryRefView: %v", err)
+					}
+					walk(ref.Page, i == 0)
+				}
+			}
+		}
+		walk(rootID, true)
+		if nonFirstEmpty != 0 {
+			t.Fatalf("non-first empty leaves=%d want 0 (totalLeaves=%d)", nonFirstEmpty, totalLeaves)
+		}
+
+		tr := tree.New(p, panicValueReader{}, rootID)
+		for i := 0; i < totalKeys; i++ {
+			k := fmt.Sprintf("k-%06d", i)
+			got, err := tr.Get([]byte(k))
+			if kept[k] {
+				if err != nil || !bytes.Equal(got, val) {
+					t.Fatalf("kept key %q: err=%v len=%d", k, err, len(got))
+				}
+			} else if err != tree.ErrKeyNotFound {
+				t.Fatalf("deleted key %q: err=%v want ErrKeyNotFound", k, err)
+			}
+		}
+	})
+}

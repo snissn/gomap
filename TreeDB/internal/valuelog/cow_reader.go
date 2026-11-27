@@ -329,12 +329,24 @@ func (f *File) totalMmapReadHits() uint64 {
 // Windows or fault injection), it delegates to inspectCOWLeafReadAt and returns
 // a nil slice.
 func (f *File) InspectCOWLeafRecordPinned(ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, []byte, error) {
+	shape, input, _, err := f.InspectCOWLeafRecordPinnedInto(ptr, limits, nil)
+	return shape, input, err
+}
+
+// InspectCOWLeafRecordPinnedInto is like InspectCOWLeafRecordPinned, but when
+// the segment is not memory-mapped and readScratch is large enough to hold the
+// hinted record length, it reads the entire record in one positional ReadAt so
+// the caller can verify and decode it via ReadCOWLeafPageBuffered without a
+// second ReadAt syscall. The returned fromMmap boolean distinguishes a mapped
+// slice (for ReadCOWLeafPageMapped) from a readScratch slice (for
+// ReadCOWLeafPageBuffered).
+func (f *File) InspectCOWLeafRecordPinnedInto(ptr page.ValuePtr, limits COWReadLimits, readScratch []byte) (COWRecordShape, []byte, bool, error) {
 	limits = cowLeafReadLimits(limits)
 	if f == nil || f.ID != ptr.FileID {
-		return COWRecordShape{}, nil, ErrCOWReadUnsupported
+		return COWRecordShape{}, nil, false, ErrCOWReadUnsupported
 	}
 	if err := f.cowCheckReadSource(ptr, limits, true); err != nil {
-		return COWRecordShape{}, nil, err
+		return COWRecordShape{}, nil, false, err
 	}
 	data, verifiedSize := f.cowLoadMappedData()
 	recordLen := page.ValuePtrRecordLength(ptr)
@@ -345,7 +357,7 @@ func (f *File) InspectCOWLeafRecordPinned(ptr page.ValuePtr, limits COWReadLimit
 			n, err := cowCheckReadHeader(ptr, header, limits)
 			if err != nil {
 				f.recordPinnedMmapReadHit(ptr.Offset)
-				return COWRecordShape{}, nil, err
+				return COWRecordShape{}, nil, false, err
 			}
 			recordBytes += uint64(n)
 		} else {
@@ -356,16 +368,40 @@ func (f *File) InspectCOWLeafRecordPinned(ptr page.ValuePtr, limits COWReadLimit
 		f.recordPinnedMmapReadHit(ptr.Offset)
 		shape, err := inspectCOWMetadataCore(f.File, ptr, limits, input, true, false)
 		if err != nil {
-			return COWRecordShape{}, nil, err
+			return COWRecordShape{}, nil, false, err
 		}
-		return shape, input, nil
+		return shape, input, true, nil
 	}
 	f.mmapReadFallbackReadAt.Add(1)
+	if len(readScratch) >= HeaderSize+cowMaxPrefix {
+		readN := len(readScratch)
+		if recordLen > 0 {
+			if recordBytes >= HeaderSize && recordBytes <= limits.MaxRecordBytes && recordBytes <= uint64(len(readScratch)) {
+				readN = int(recordBytes)
+			} else {
+				readN = 0
+			}
+		}
+		if readN > 0 {
+			available, readErr := f.File.ReadAt(readScratch[:readN], int64(ptr.Offset-4))
+			if readErr != nil && readErr != io.EOF {
+				return COWRecordShape{}, nil, false, readErr
+			}
+			shape, err := inspectCOWMetadataCore(f.File, ptr, limits, readScratch[:available], true, false)
+			if err != nil {
+				return COWRecordShape{}, nil, false, err
+			}
+			if uint64(available) >= shape.RecordBytes && (recordLen == 0 || shape.RecordBytes == recordBytes) {
+				return shape, readScratch[:int(shape.RecordBytes)], false, nil
+			}
+			return shape, nil, false, nil
+		}
+	}
 	shape, err := inspectCOWLeafReadAt(f.File, ptr, limits)
 	if err != nil {
-		return COWRecordShape{}, nil, err
+		return COWRecordShape{}, nil, false, err
 	}
-	return shape, nil, nil
+	return shape, nil, false, nil
 }
 
 // ValidateCachedCOWLeafShape checks whether a previously inspected, full-CRC
@@ -692,6 +728,18 @@ func (f *File) ReadCOWLeafPage(ptr page.ValuePtr, shape COWRecordShape, payloadS
 // non-digest shape validation, and copying compressed input into caller-owned
 // payloadScratch (decoderInput) before invoking decode.
 func (f *File) ReadCOWLeafPageMapped(ptr page.ValuePtr, shape COWRecordShape, mappedInput, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
+	return f.readCOWLeafPageFromInput(ptr, shape, mappedInput, true, payloadScratch, rawScratch, pageDst, decode)
+}
+
+// ReadCOWLeafPageBuffered decodes and verifies a leaf page directly from a
+// single-ReadAt buffer returned by InspectCOWLeafRecordPinnedInto. It performs
+// the exact same scratch, limit, CRC32, and shape validation as
+// ReadCOWLeafPageMapped without recording an mmap read hit.
+func (f *File) ReadCOWLeafPageBuffered(ptr page.ValuePtr, shape COWRecordShape, bufferedInput, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
+	return f.readCOWLeafPageFromInput(ptr, shape, bufferedInput, false, payloadScratch, rawScratch, pageDst, decode)
+}
+
+func (f *File) readCOWLeafPageFromInput(ptr page.ValuePtr, shape COWRecordShape, recordInput []byte, fromMmap bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
 	if !cowLeafPageFits(shape, pageDst) || !cowRecordScratchFits(ptr, shape, payloadScratch, rawScratch, true) {
 		return nil, ErrCOWReadCapacity
 	}
@@ -701,15 +749,17 @@ func (f *File) ReadCOWLeafPageMapped(ptr page.ValuePtr, shape COWRecordShape, ma
 	if err := f.cowCheckReadSource(ptr, shape.limits, true); err != nil {
 		return nil, err
 	}
-	if mappedInput == nil {
+	if recordInput == nil {
 		return f.ReadCOWLeafPage(ptr, shape, payloadScratch, rawScratch, pageDst, decode)
 	}
-	if uint64(len(mappedInput)) != shape.RecordBytes {
+	if uint64(len(recordInput)) != shape.RecordBytes {
 		return nil, ErrCorrupt
 	}
-	f.recordPinnedMmapReadHit(ptr.Offset)
+	if fromMmap {
+		f.recordPinnedMmapReadHit(ptr.Offset)
+	}
 	skipDigest := shape.metadata == (cowMetadataDigest{})
-	value, err := decodeCOWRecordInput(ptr, shape, true, true, skipDigest, mappedInput, nil, payloadScratch, rawScratch, decode)
+	value, err := decodeCOWRecordInput(ptr, shape, true, true, skipDigest, recordInput, nil, payloadScratch, rawScratch, decode)
 	if err != nil {
 		return nil, err
 	}

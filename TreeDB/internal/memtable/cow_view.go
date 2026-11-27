@@ -84,6 +84,7 @@ func (v *COWView) ReleaseWithWork(w *iterator.OrdinalScanWork) (COWRetirement, b
 	b.mu.Lock()
 	b.stats.Views--
 	b.stats.DeferredBytes += lease.charge
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	retirement.viewLease = lease
 	return retirement, true, nil
@@ -133,6 +134,7 @@ func (v *COWView) CloseAndPutIdleReadScratch3(value any, leases [3]*COWExternalL
 			b.stats.Views--
 			b.stats.TotalBytes -= charge
 			b.releaseControlLocked()
+			b.updateFastHeadroomLocked()
 		}
 		b.mu.Unlock()
 		b.releaseMaintenanceReservation()
@@ -144,6 +146,7 @@ func (v *COWView) CloseAndPutIdleReadScratch3(value any, leases [3]*COWExternalL
 	}
 	b.stats.Views--
 	b.stats.DeferredBytes += lease.charge
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	retirement.viewLease = lease
 	retirement.Drain()

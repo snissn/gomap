@@ -286,11 +286,9 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 				}
 			}
 		}
-		err = db.materializeCOWPrefixProjected(context.Background(), false, nil, cowSynchronousPressureMaterialization, projected)
-	} else if projected != nil {
-		err = db.checkpointCOWColumnCompactionProjected(context.Background(), false, nil, projected)
+		err = db.materializeCOWPrefixProjected(context.Background(), false, nil, cowSynchronousPressureMaterialization, projected, false)
 	} else {
-		err = db.Checkpoint()
+		err = db.checkpointCOWPressure(context.Background(), projected)
 	}
 	if err != nil {
 		return backenddb.NativeProducerObservation{}, err

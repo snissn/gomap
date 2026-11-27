@@ -321,20 +321,25 @@ func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {
+	value, _, found, err := c.nativeGetIntoWithFormat(id, dst)
+	return value, found, err
+}
+
+func (c *Collection) nativeGetIntoWithFormat(id, dst []byte) ([]byte, DocumentFormat, bool, error) {
 	if c.manager.isClosing() {
-		return dst[:0], false, backenddb.ErrClosed
+		return dst[:0], "", false, backenddb.ErrClosed
 	}
 	if len(id) == 0 {
-		return dst[:0], false, errors.New("collections: document id cannot be empty")
+		return dst[:0], "", false, errors.New("collections: document id cannot be empty")
 	}
-	value, err := c.nativeJSON.getInto(c.name, id, dst)
+	value, format, err := c.nativeJSON.getIntoWithFormat(c.name, id, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return dst[:0], false, nil
+		return dst[:0], format, false, nil
 	}
 	if err != nil {
-		return dst[:0], false, err
+		return dst[:0], format, false, err
 	}
-	return value, true, nil
+	return value, format, true, nil
 }
 
 func (c *Collection) openNativeReadView() (*CollectionReadView, error) {

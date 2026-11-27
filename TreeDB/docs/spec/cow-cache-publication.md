@@ -636,13 +636,33 @@ value-log sync, backend build/publication and handoff cleanup. Post-frontier
 writers are admitted only under the existing command-WAL cutover contract;
 NoWAL retains its full checkpoint drain. For explicit relaxed command-WAL
 checkpoints (`command_wal_relaxed` when `durabilitycut` and checkpoint test
-hooks are inactive), frontier capture defers active WAL segment rotation until
-after durable-root `WaitThrough(visibleCommitSeq)` proves `durableAppliedLSN >=
-frontier`; teardown then rotates the superseded active WAL segment without
-fsyncing it immediately before cleanup unlinks it, falling back to synchronous
-rotation if concurrent post-frontier writes advance `frontier >
-durableAppliedLSN`. Applied-LSN coverage and cleanup use the existing
-dependency-prefix and sealed dual-meta authorities.
+hooks are inactive), frontier capture defers active WAL segment rotation and
+WAL fsync (`FlushCommandWAL(false)`) until after durable-root
+`WaitThrough(visibleCommitSeq)` proves `durableAppliedLSN >= frontier`;
+teardown then rotates the superseded active WAL segment without fsyncing it
+immediately before cleanup unlinks it, falling back to synchronous rotation if
+concurrent post-frontier writes advance `frontier > durableAppliedLSN`.
+Applied-LSN coverage and cleanup use the existing dependency-prefix and sealed
+dual-meta authorities. After durability and WAL cleanup complete on an explicit
+non-automatic user checkpoint (outside internal foreground pressure-relief or
+exact-seal checkpoints, `durabilitycut`, and checkpoint test hooks),
+private-COW leaf-generation maintenance checks `LeafGenerationSealedDebt()` in
+O(1) and applies tiered reclaim thresholds:
+- clean/idle explicit checkpoints (zero dirty frozen cuts or WAL records
+  flushed) trigger one bounded pack, fallback-slot convergence, and
+  `LeafGenerationGC` pass under `flushMu` once sealed debt reaches `>= 2`
+  generations or `>= 32 MiB`;
+- dirty explicit checkpoints (which flushed pending writes) skip synchronous
+  leaf-pack on moderate debt so post-burst drains stay fast (including when
+  parallel leaf-log lanes produce several small sealed segments), triggering
+  synchronous pack+GC only once heavy sealed byte debt reaches `>= 96 MiB`.
+Clean single-generation loads skip immediately with zero scan or I/O, and
+internal pressure-relief checkpoints never invoke synchronous leaf-pack+GC.
+Periodic background private-COW leaf-pack slices defer during active foreground
+write bursts (default 2s quiet grace, overridable via
+`TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_WRITE_BURST_GRACE_MS`) and active
+checkpoint/frozen-cut queue pressure unless emergency sealed debt (256 MiB) is
+reached.
 
 Backend compact/vacuum, GC/rewrite and leaf-generation maintenance serialize
 through the same flush fence and refresh an equivalent backend basis while

@@ -492,6 +492,7 @@ type cowCache struct {
 	maintenance                                                                                    *memtable.COWBudget
 	prefix                                                                                         *rootpublication.Coordinator
 	prefixLease                                                                                    *memtable.COWExternalLease
+	ownerDB                                                                                        *DB
 	closed                                                                                         bool
 	lease                                                                                          *memtable.COWExternalLease
 	activeCuts                                                                                     atomic.Int64

@@ -306,3 +306,80 @@ func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
 		t.Fatalf("get reopen mismatch (len=%d)", len(got2))
 	}
 }
+
+func TestStorePublishDictAtomicSingleCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	})
+
+	ctx := context.Background()
+	inline := store.backend.InlineThreshold()
+	if inline <= 0 {
+		inline = 64
+	}
+	outerPayload := bytes.Repeat([]byte("outer-leaf-dict-"), (inline/len("outer-leaf-dict-")+1)*4)
+	seqBefore := store.backend.State().CommitSeq
+
+	id1, err := store.PublishDict(ctx, outerPayload, 8, "outer_leaf", false)
+	if err != nil {
+		t.Fatalf("PublishDict(outer_leaf): %v", err)
+	}
+	seqAfter1 := store.backend.State().CommitSeq
+	if seqAfter1 != seqBefore+1 {
+		t.Fatalf("PublishDict(outer_leaf) CommitSeq delta=%d want 1", seqAfter1-seqBefore)
+	}
+	if cur, err := store.GetCurrentForClass(ctx, "outer_leaf"); err != nil || cur != id1 {
+		t.Fatalf("GetCurrentForClass(outer_leaf)=(%d, %v) want (%d, nil)", cur, err, id1)
+	}
+	if k, err := store.GetK(ctx, id1); err != nil || k != 8 {
+		t.Fatalf("GetK(id1)=(%d, %v) want (8, nil)", k, err)
+	}
+
+	singlePayload := []byte("single-inline-dict")
+	id2, err := store.PublishDict(ctx, singlePayload, 4, "single_value", true)
+	if err != nil {
+		t.Fatalf("PublishDict(single_value): %v", err)
+	}
+	seqAfter2 := store.backend.State().CommitSeq
+	if seqAfter2 != seqAfter1+1 {
+		t.Fatalf("PublishDict(single_value) CommitSeq delta=%d want 1", seqAfter2-seqAfter1)
+	}
+	if cur, err := store.GetCurrentForClass(ctx, "single_value"); err != nil || cur != id2 {
+		t.Fatalf("GetCurrentForClass(single_value)=(%d, %v) want (%d, nil)", cur, err, id2)
+	}
+	if cur, err := store.GetCurrent(ctx); err != nil || cur != id2 {
+		t.Fatalf("GetCurrent()=(%d, %v) want (%d, nil)", cur, err, id2)
+	}
+	if k, err := store.GetK(ctx, id2); err != nil || k != 4 {
+		t.Fatalf("GetK(id2)=(%d, %v) want (4, nil)", k, err)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	store = nil
+
+	reopen, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	gotOuter, err := reopen.GetDictBytes(ctx, id1)
+	if err != nil || !bytes.Equal(gotOuter, outerPayload) {
+		t.Fatalf("reopen GetDictBytes(id1) err=%v equal=%v", err, bytes.Equal(gotOuter, outerPayload))
+	}
+	if cur, err := reopen.GetCurrentForClass(ctx, "outer_leaf"); err != nil || cur != id1 {
+		t.Fatalf("reopen GetCurrentForClass(outer_leaf)=(%d, %v) want (%d, nil)", cur, err, id1)
+	}
+	if cur, err := reopen.GetCurrent(ctx); err != nil || cur != id2 {
+		t.Fatalf("reopen GetCurrent()=(%d, %v) want (%d, nil)", cur, err, id2)
+	}
+}

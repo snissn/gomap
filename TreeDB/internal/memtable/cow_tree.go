@@ -157,6 +157,7 @@ func ForkCOWWriter(root *COWRoot) (*COWWriter, error) {
 	b.stats.HistoryBytes += charge
 	g.refs++
 	g.activeWriters++
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	w := &COWWriter{private: root.tree.ForkImmutable().SealOwned(), delta: root.delta, l1: root.l1, deltaAdded: root.deltaAdded, generation: g, maxEntries: root.Len()}
 	w.privateMaxKey, _, w.hasPrivateMax = w.private.Max()
@@ -1016,6 +1017,7 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 	}
 	g.pending += total
 	b.stats.ReservedBytes += total
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	var p *COWPrepared
 	var logicalDelta cowLogicalDelta
@@ -1167,6 +1169,7 @@ func (w *COWWriter) prepare(dst *COWPrepared, entries []COWMutation, opts COWPre
 		g.pending -= total
 		b.stats.ReservedBytes -= total
 		b.stats.TotalBytes -= total
+		b.updateFastHeadroomLocked()
 		b.mu.Unlock()
 		return nil, err
 	}
@@ -1278,6 +1281,7 @@ func (p *COWPrepared) reconcileNodes(actual uint64) error {
 	b.stats.ReservedBytes -= unused
 	b.stats.TotalBytes -= unused
 	p.charge.Nodes = actual
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	return nil
 }
@@ -1368,6 +1372,7 @@ func (p *COWPrepared) Publish() *COWRoot {
 	g.refs++
 	g.ids = append(g.ids, p.ids...)
 	g.owners = append(g.owners, p.owners...)
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	w.private = p.private
 	w.ordered = p.ordered
@@ -1425,6 +1430,7 @@ func (p *COWPrepared) Cancel() COWRetirement {
 		b.stats.RetiredBytes += deferred
 	}
 	b.stats.TotalBytes -= p.charge.Total() - deferred
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	if p.deltaTailAppended {
 		p.deltaTail[len(p.deltaTail)-1] = cowDeltaEntry{}
@@ -1470,6 +1476,7 @@ func (p *COWPrepared) drain() {
 	b.stats.DeferredBytes -= charge
 	b.stats.RetiredBytes -= charge
 	b.releaseControlLocked()
+	b.updateFastHeadroomLocked()
 	b.mu.Unlock()
 	b.releaseMaintenanceReservation()
 }

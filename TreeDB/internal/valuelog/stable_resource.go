@@ -1049,8 +1049,15 @@ func (m *Manager) retainSegmentForDeletionLocked(file *File) {
 func (m *Manager) finishDeletionAdmission(file *File) {
 	m.mu.Lock()
 	file.deletionAdmissions--
+	var done chan struct{}
+	if file.deletionAdmissions == 0 && file.deletionDone != nil {
+		done, file.deletionDone = file.deletionDone, nil
+	}
 	file.producerDeleteGuards.Add(-1)
 	m.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
 	file.refundProducerMetadata()
 }
 

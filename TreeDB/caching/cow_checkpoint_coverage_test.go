@@ -12,12 +12,16 @@ var errCOWCheckpointWALFence = errors.New("test: COW checkpoint WAL fence refuse
 
 type cowCheckpointWALBackend struct {
 	*backenddb.DB
-	failRotation, failFlush bool
-	rotations, flushes      int
+	failRotation, failFlush    bool
+	rotations, flushes         int
+	syncRotations, syncFlushes int
 }
 
 func (b *cowCheckpointWALBackend) RotateCommandWALActiveSegment(sync bool) error {
 	b.rotations++
+	if sync {
+		b.syncRotations++
+	}
 	if b.failRotation {
 		return errCOWCheckpointWALFence
 	}
@@ -25,6 +29,9 @@ func (b *cowCheckpointWALBackend) RotateCommandWALActiveSegment(sync bool) error
 }
 func (b *cowCheckpointWALBackend) FlushCommandWAL(sync bool) error {
 	b.flushes++
+	if sync {
+		b.syncFlushes++
+	}
 	if b.failFlush {
 		return errCOWCheckpointWALFence
 	}
@@ -114,5 +121,53 @@ func TestCOWCheckpointCompleteCoverageAndWALFence(t *testing.T) {
 				t.Fatalf("original native cleanup debt: %+v", stats)
 			}
 		})
+	}
+}
+
+func TestCOWCheckpointRelaxedDefersWALFlushSync(t *testing.T) {
+	registerNativeBridgeTestCommand()
+	cache, backend := nativeBridgeFixture(t, true)
+	cache.relaxedSync = true
+
+	capture, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("native", []commitlog.CollectionDocument{{ID: []byte("id-relaxed"), Document: []byte(`{"v":1}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := backend.NewCommandWALIntent(commitlog.CommandKindCollectionInsertBatchByID, commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := &backenddb.NativePreparedPublication{Basis: capture.State(), State: nativeBridgeState(t, capture), StartSequence: capture.LogicalSequence()}
+	result, err := backend.WriteNativePublication(publication, intent, false)
+	if err != nil || !result.LogicalInstalled || result.AssignedLSN != 1 {
+		t.Fatalf("write native relaxed frame=%+v err=%v", result, err)
+	}
+	if err := capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	wal := &cowCheckpointWALBackend{DB: backend}
+	cache.backend = wal
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("relaxed Checkpoint: %v", err)
+	}
+	if wal.flushes == 0 {
+		t.Fatal("expected relaxed Checkpoint to drain command WAL userspace buffer via FlushCommandWAL(false)")
+	}
+	if wal.syncFlushes != 0 {
+		t.Fatalf("relaxed Checkpoint unexpectedly synced command WAL before durable root coverage: syncFlushes=%d want 0", wal.syncFlushes)
+	}
+	if wal.syncRotations != 0 {
+		t.Fatalf("relaxed Checkpoint unexpectedly pre-rotated command WAL with sync: syncRotations=%d want 0", wal.syncRotations)
+	}
+	if backend.State().AppliedCommandLSN != 1 {
+		t.Fatalf("AppliedCommandLSN=%d want 1", backend.State().AppliedCommandLSN)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

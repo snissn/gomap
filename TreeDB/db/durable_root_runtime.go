@@ -31,6 +31,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
@@ -225,17 +226,18 @@ func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist
 }
 
 type durableRootRuntimeV1 struct {
-	primary       *primaryDurableRuntimeV5
-	meta          page.DurableMetaV1
-	record        rootpublication.DurableRootRecordV1
-	manifest      *rootpublication.DependencyManifestV1
-	slot          uint64
-	slotCommit    [2]uint64
-	slotResources [2]*rootpublication.StableResourceSet
-	slotMeta      [2]page.DurableMetaV1
-	slotRecord    [2]rootpublication.DurableRootRecordV1
-	pending       *durableRootPublishCandidateV1
-	ambiguous     []*durableRootPublishCandidateV1
+	primary        *primaryDurableRuntimeV5
+	dataCompletion primaryDataCompletionV6
+	meta           page.DurableMetaV1
+	record         rootpublication.DurableRootRecordV1
+	manifest       *rootpublication.DependencyManifestV1
+	slot           uint64
+	slotCommit     [2]uint64
+	slotResources  [2]*rootpublication.StableResourceSet
+	slotMeta       [2]page.DurableMetaV1
+	slotRecord     [2]rootpublication.DurableRootRecordV1
+	pending        *durableRootPublishCandidateV1
+	ambiguous      []*durableRootPublishCandidateV1
 }
 
 // durableRootPublishCandidateV1 owns every identity and allocator reservation
@@ -2336,14 +2338,26 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	if candidate == nil || candidate.released || candidate.metaMutated {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root candidate is not retryable"), true)
 	}
+	dependenciesCovered := false
+	if !durabilitycut.Enabled() && candidate.resources != nil && candidate.token != nil && candidate.idx != nil &&
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 && candidate.base.slot <= 1 &&
+		candidate.base.slotResources[candidate.base.slot] != nil {
+		completed := candidate.base.dataCompletion
+		if completed.pager == candidate.idx.pager && completed.incarnation == candidate.token.Generation() && completed.identity == candidate.token.Identity() {
+			if covered, covErr := candidate.resources.DependenciesCoveredBy(candidate.base.slotResources[candidate.base.slot]); covErr == nil {
+				dependenciesCovered = covered
+			}
+		}
+	}
 	metaPath := filepath.Join(db.dir, indexFileName)
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		resources:   candidate.resources,
-		materialize: func() error { return db.materializeDurableRootCandidateV1(candidate) },
-		syncIndex:   candidate.token.SyncThrough,
-		sink:        durablePagerSinkV1{pager: candidate.idx.pager},
-		target:      candidate.target,
-		meta:        candidate.meta,
+		resources:           candidate.resources,
+		dependenciesCovered: dependenciesCovered,
+		materialize:         func() error { return db.materializeDurableRootCandidateV1(candidate) },
+		syncIndex:           candidate.token.SyncThrough,
+		sink:                durablePagerSinkV1{pager: candidate.idx.pager},
+		target:              candidate.target,
+		meta:                candidate.meta,
 		syncMeta: func() error {
 			return candidate.token.WithPinnedFile(func(file *os.File) error {
 				return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
@@ -2376,6 +2390,13 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	}
 
 	current := candidate.base
+	if candidate.idx != nil && candidate.token != nil {
+		current.dataCompletion = primaryDataCompletionV6{
+			pager:       candidate.idx.pager,
+			incarnation: candidate.token.Generation(),
+			identity:    candidate.token.Identity(),
+		}
+	}
 	current.meta = candidate.meta
 	current.record = candidate.record
 	current.manifest = candidate.manifest.DiagnosticProjectionV1()
@@ -2664,10 +2685,15 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 // owns resources; this function only flushes/syncs their exact frontiers before
 // the replacement index and its sole valid meta slot become durable.
 func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.MetaPageBody, resources *rootpublication.StableResourceSet) error {
+	return writeRebuiltDurableRootV1WithFree(dir, indexPath, p, meta, resources, nil)
+}
+
+func writeRebuiltDurableRootV1WithFree(dir, indexPath string, p *pager.Pager, meta page.MetaPageBody, resources *rootpublication.StableResourceSet, initialFree []uint64) error {
 	if p == nil || meta.CommitSeq == 0 || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
 		meta.UserRootPageID >= p.PageCount() || meta.SystemRootPageID >= p.PageCount() {
 		return errors.New("invalid rebuilt durable-root input")
 	}
+	preDirectoryPages := p.PageCount()
 	allocator := freelist.New(p, 0)
 	directory, err := rebuildDependencyDirectoryV2(p, allocator, resources)
 	if err != nil {
@@ -2683,7 +2709,22 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 		defer manifest.ReleaseOwnedMetadataV1()
 		auxiliaryCount += int(manifest.PageCount())
 	}
-	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
+	var cleanFree []uint64
+	if len(initialFree) > 0 {
+		seen := make(map[uint64]struct{}, len(initialFree))
+		cleanFree = make([]uint64, 0, len(initialFree))
+		for _, id := range initialFree {
+			if id < 2 || id >= preDirectoryPages || id == meta.UserRootPageID || id == meta.SystemRootPageID {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			cleanFree = append(cleanFree, id)
+		}
+	}
+	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), cleanFree, nil)
 	if err != nil {
 		return err
 	}
@@ -2765,20 +2806,34 @@ type rebuiltDurableRootV1 struct {
 }
 
 func writeRebuiltDurableRootsV1(dir, indexPath string, p *pager.Pager, roots []rebuiltDurableRootV1) error {
+	return writeRebuiltDurableRootsV1WithFree(dir, indexPath, p, roots, nil)
+}
+
+func writeRebuiltDurableRootsV1WithFree(dir, indexPath string, p *pager.Pager, roots []rebuiltDurableRootV1, initialFree []uint64) error {
 	if len(roots) != 2 || roots[0].meta.CommitSeq == 0 || roots[1].meta.CommitSeq <= roots[0].meta.CommitSeq {
 		return errors.New("invalid rebuilt durable-root pair")
 	}
-	if err := writeRebuiltDurableRootV1(dir, indexPath, p, roots[0].meta, roots[0].resources); err != nil {
+	var filteredFree []uint64
+	if len(initialFree) > 0 {
+		filteredFree = make([]uint64, 0, len(initialFree))
+		for _, id := range initialFree {
+			if id == roots[1].meta.UserRootPageID || id == roots[1].meta.SystemRootPageID {
+				continue
+			}
+			filteredFree = append(filteredFree, id)
+		}
+	}
+	if err := writeRebuiltDurableRootV1WithFree(dir, indexPath, p, roots[0].meta, roots[0].resources, filteredFree); err != nil {
 		return err
 	}
 	selected, err := selectDurableRootV1(p, p.PageCount(), nil, dependencyDirectoryStructureValidatorV2(p))
 	if err != nil {
 		return err
 	}
-	return appendRebuiltDurableRootV1(dir, indexPath, p, selected, roots[1])
+	return appendRebuiltDurableRootV1(dir, indexPath, p, selected, roots[0], roots[1])
 }
 
-func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current durableRootSelectionV1, next rebuiltDurableRootV1) error {
+func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current durableRootSelectionV1, older rebuiltDurableRootV1, next rebuiltDurableRootV1) error {
 	meta := next.meta
 	if p == nil || current.Record.CommitSeq == 0 || meta.CommitSeq <= current.Record.CommitSeq ||
 		meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
@@ -2803,6 +2858,49 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 		defer manifest.ReleaseOwnedMetadataV1()
 		auxiliaryCount += int(manifest.PageCount())
 	}
+	// Retire every page owned exclusively by the older replacement slot
+	// (roots[0]) with LastReachableCommitSeq == current.Record.CommitSeq.
+	// While MetaPage0ID remains a recoverable slot, oldestCommit ==
+	// current.Record.CommitSeq keeps all retired pages protected from reuse;
+	// as soon as a subsequent commit or fallback refresh supersedes MetaPage0ID,
+	// PruneWithCapability automatically promotes them to FreelistFree instead
+	// of orphaning them permanently in index.db.
+	var retirements []freelist.COWRetirementV1
+	retiredSeen := make(map[uint64]struct{}, len(older.pages))
+	var olderRetirePages []uint64
+	addOlderRetire := func(id uint64) {
+		if id < 2 || id >= current.Freelist.HighWater() || id == meta.UserRootPageID || id == meta.SystemRootPageID {
+			return
+		}
+		if current.Freelist.Allocatable(id) {
+			return
+		}
+		if _, dup := retiredSeen[id]; dup {
+			return
+		}
+		retiredSeen[id] = struct{}{}
+		olderRetirePages = append(olderRetirePages, id)
+	}
+	if len(older.pages) > 0 && (older.meta.UserRootPageID != meta.UserRootPageID || older.meta.SystemRootPageID != meta.SystemRootPageID) {
+		for _, id := range older.pages {
+			addOlderRetire(id)
+		}
+	}
+	if current.Record.Directory.RootPageID != 0 && current.Record.Directory.RootPageID != directory.RootPageID {
+		dirPages, err := tree.New(p, nil, current.Record.Directory.RootPageID).CollectPageIDs()
+		if err != nil {
+			return fmt.Errorf("collect replaced dependency directory pages: %w", err)
+		}
+		for _, id := range dirPages {
+			addOlderRetire(id)
+		}
+	}
+	if len(olderRetirePages) > 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{
+			PageIDs:                olderRetirePages,
+			LastReachableCommitSeq: current.Record.CommitSeq,
+		})
+	}
 	capability, err := freelist.NewReuseCapability(current.Record.CommitSeq, current.Record.CommitSeq, 0)
 	if err != nil {
 		return err
@@ -2810,11 +2908,12 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
 	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID^uint64(MetaPage1ID))
-	prepared, err := allocator.PrepareCOWCandidateV1(
+	prepared, err := allocator.PrepareCOWCandidateRetiringV1(
 		current.Freelist.GenerationID()+1,
 		meta.CommitSeq,
 		candidateID,
 		capability,
+		retirements,
 		auxiliaryCount,
 		freelist.NewMemoryPageStoreV1(),
 	)

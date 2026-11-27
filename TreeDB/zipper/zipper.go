@@ -2465,6 +2465,16 @@ func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte, ow
 	z.leafRefCacheMu.Unlock()
 }
 
+func (z *Zipper) isLeafRefCached(ptr page.LeafLogPtr) bool {
+	if z == nil || !z.leafRefCacheActive.Load() {
+		return false
+	}
+	z.leafRefCacheMu.RLock()
+	_, ok := z.leafRefCache[ptr]
+	z.leafRefCacheMu.RUnlock()
+	return ok
+}
+
 func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive.Metrics) (uint64, error) {
 	if ref.Kind == page.ChildRefPage {
 		return ref.Page, nil
@@ -2744,22 +2754,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 	}
-	leafEntrySizeWithRevision := func(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
-		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
-		if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
-			entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
-		}
-		return entrySize, prefixLen, suffixLen
-	}
+	var (
+		oldLoaded   bool
+		oldKey      []byte
+		oldVal      []byte
+		oldPtr      page.ValuePtr
+		oldRevision page.EntryRevision
+		oldFlags    byte
+	)
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
-		var oldLoaded bool
-		var oldKey, oldVal []byte
-		var oldPtr page.ValuePtr
-		var oldRevision page.EntryRevision
-		var oldFlags byte
 
 		if oldIdx >= oldCount && opIdx >= len(ops) {
 			break
@@ -2771,21 +2777,23 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// useOld = true
 		} else {
 			// Compare
-			// Optimization: decode old entry once; reuse it below when we
-			// consume from oldNode in the same loop iteration.
-			k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
-			if err != nil {
-				return page.ChildRef{}, nil, err
+			// Optimization: decode old entry once and retain it across
+			// consecutive batch-winning iterations until oldIdx advances.
+			if !oldLoaded {
+				k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
+				if err != nil {
+					return page.ChildRef{}, nil, err
+				}
+				oldLoaded = true
+				oldKey = k
+				oldVal = v
+				oldPtr = ptr
+				oldRevision = rev
+				oldFlags = f
 			}
-			oldLoaded = true
-			oldKey = k
-			oldVal = v
-			oldPtr = ptr
-			oldRevision = rev
-			oldFlags = f
 			batchKey := ops[opIdx].Key
 
-			cmp := bytes.Compare(k, batchKey)
+			cmp := bytes.Compare(oldKey, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -2793,10 +2801,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			} else {
 				// Equal: Update (Batch wins). The old entry is being overwritten
 				// or deleted; if it was a pointer, track it as dead bytes.
-				recordRemovedEntry(f, ptr)
+				recordRemovedEntry(oldFlags, oldPtr)
 
 				useBatch = true
 				oldIdx++ // Skip old
+				oldLoaded = false
 			}
 		}
 
@@ -2850,6 +2859,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				}
 			}
 			oldIdx++
+			oldLoaded = false
 			if flags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
 			}
@@ -2860,13 +2870,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		entrySize, prefixLen, suffixLen := leafEntrySizeWithRevision(target, key, val, flags, revision)
-		var err error
-		if z.leafSoftFull(target, entrySize) {
-			err = node.ErrNodeFull
-		} else {
-			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
-		}
+		err := target.TryAddLeafEntryWithRevisionReserve(key, val, flags, valPtr, revision, z.leafReserveBytes)
 		if err == node.ErrNodeFull {
 			// SPLIT!
 			allocHint := uint64(0)
@@ -2937,9 +2941,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			targetOuterLeafDataPooled = z.outerLeavesInValueLog && reuseOuterLeafPages
 
 			// Retry insert
-			entrySize, prefixLen, suffixLen = leafEntrySizeWithRevision(target, key, val, flags, revision)
-			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
+			err = target.TryAddLeafEntryWithRevisionReserve(key, val, flags, valPtr, revision, 0)
 			if err != nil {
+				entrySize := target.LeafEntrySize(key, val, flags)
+				if revision != page.LegacyEntryRevision && !target.LeafEntryRevisionsEnabled() {
+					entrySize = target.LeafEntrySizeWithRevision(key, val, flags, revision)
+				}
 				return page.ChildRef{}, nil, fmt.Errorf("zipper: leaf split retry key_len=%d val_len=%d flags=%d entry_size=%d free=%d: %w", len(key), len(val), flags, entrySize, target.FreeSpace(), err)
 			}
 		} else if err != nil {
@@ -3656,9 +3663,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	if len(entries) < 2 {
 		return entries, nil, nil
 	}
-	if budget != nil && !budget.allow() {
-		return entries, nil, nil
-	}
 
 	var retired []uint64
 
@@ -3680,13 +3684,21 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		return n, fromPager, true, leafScratch, leafScratchRef, nil
 	}
 
-	// First pass: prune empty leaf children (except keep the first slot).
-	if budget != nil && !budget.take(1) {
-		return entries, nil, nil
-	}
+	// First pass: unconditionally prune empty non-first leaf children.
+	// Empty-leaf removal is structural reclamation, not budgeted underfull merge
+	// or piggyback relocation. When the maintenance budget is exhausted on
+	// outer-leaf-in-value-log trees with an active write cache, skip cold
+	// unmodified leaf-log siblings so we do not trigger unnecessary disk reads
+	// while still pruning every pager leaf and every freshly emptied leaf.
+	budgetExhausted := budget != nil && !budget.allow()
+	leafLogCacheOnly := budgetExhausted && z.outerLeavesInValueLog && z.leafRefCacheActive.Load()
 	out := entries[:0]
 	for i, e := range entries {
 		if i == 0 {
+			out = append(out, e)
+			continue
+		}
+		if leafLogCacheOnly && e.child.Kind == page.ChildRefLeafLog && !z.isLeafRefCached(e.child.Log) {
 			out = append(out, e)
 			continue
 		}
@@ -3694,7 +3706,17 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if err != nil {
 			return nil, nil, err
 		}
-		if ok && n.Count() == 0 {
+		if !ok {
+			// All children of a B+Tree internal node share the same level; a
+			// non-leaf child means this node is at internal height >= 2, so exit
+			// immediately instead of loading O(fanout) internal children.
+			if len(retired) == 0 {
+				return entries, nil, nil
+			}
+			out = append(out, entries[i:]...)
+			return out, retired, nil
+		}
+		if n.Count() == 0 {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
 			}
@@ -3715,6 +3737,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	}
 	entries = out
 	if len(entries) < 2 {
+		return entries, retired, nil
+	}
+	if budget != nil && !budget.allow() {
 		return entries, retired, nil
 	}
 

@@ -67,6 +67,7 @@ func (b *COWBudget) putIdleReadScratch3Locked(value any, leases [3]*COWExternalL
 	b.stats.ReservedBytes -= receipts * header
 	b.stats.ExternalBytes -= receipts * header
 	b.stats.ExternalLeases -= int(receipts)
+	b.updateFastHeadroomLocked()
 	b.idleRead[b.idleReadCount] = cowIdleReadScratch{
 		value:   value,
 		charges: [3]uint32{uint32(charges[0]), uint32(charges[1]), uint32(charges[2])},
@@ -135,6 +136,7 @@ func (b *COWBudget) reserveIdleReadLeasesLocked(e cowIdleReadScratch) (header ui
 	b.stats.ReservedBytes += extra
 	b.stats.ExternalBytes += extra
 	b.stats.ExternalLeases += receipts
+	b.updateFastHeadroomLocked()
 	return header, receipts, true
 }
 
@@ -177,12 +179,14 @@ func (l *COWExternalLease) closeLocked() {
 	if b.maintenanceChild {
 		b.maintenanceRefunds++
 	}
+	b.updateFastHeadroomLocked()
 }
 func (b *COWBudget) refundIdleReadLocked(e cowIdleReadScratch) {
 	charge := uint64(e.charges[0]) + uint64(e.charges[1]) + uint64(e.charges[2])
 	b.stats.TotalBytes -= charge
 	b.stats.ReservedBytes -= charge
 	b.stats.ExternalBytes -= charge
+	b.updateFastHeadroomLocked()
 }
 func (b *COWBudget) reclaimReadScratchLocked() bool {
 	if b.idleReadCount == 0 {
