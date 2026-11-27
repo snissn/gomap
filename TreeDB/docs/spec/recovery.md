@@ -362,8 +362,11 @@ zero-revision, or unsupported-version document. Ambiguous cleanup is
 handle-owned until close; recovery does not guess a temporary pathname to
 unlink.
 
-Because relaxed commits defer operational manifest persistence until a
-synchronous commit, `Checkpoint`, `Close`, or admitted mutating leaf-generation
+Because relaxed commits and foreground durable command-WAL ordered-root
+publications (whose foreground durability is already established by the synced
+Command WAL frame, outside explicit synchronous root finalization or recovery
+replay) defer operational manifest persistence until a non-deferred synchronous
+root finalization, `Checkpoint`, `Close`, or admitted mutating leaf-generation
 maintenance (`LeafGenerationPack` or non-dry-run `LeafGenerationGC`), and defer
 advisory `.lenidx` persistence until `Checkpoint`, `Close`, or admitted
 `LeafGenerationPlan` / `LeafGenerationPack`, a process exit before flush can
@@ -373,11 +376,13 @@ complete manifest (the selected durable-root `manifest.durable.<revision>.json`
 or, when absent, the highest persisted `manifest.durable.<revision>.json`,
 falling back to `manifest.json` on compatibility platforms), reconciles any
 unrecorded `leaf_vlog/value-l255-*.log` segments discovered on disk into the
-manifest, and persists the reconciled manifest so all reachable outer-leaf
-pointers remain readable and accounted for by subsequent maintenance. Advisory
-`.lenidx` files omitted before exit are rebuilt on demand during planning.
-Durable-root manifest authority bound into `DependencyManifestV1` is unaffected
-by relaxed operational deferral.
+manifest, persists the reconciled manifest so all reachable outer-leaf pointers
+remain readable and accounted for by subsequent maintenance, and replays any
+durable Command WAL frames past the selected root's `AppliedCommandLSN` so all
+acknowledged durable commands recover completely. Advisory `.lenidx` files
+omitted before exit are rebuilt on demand during planning. Durable-root
+manifest authority bound into `DependencyManifestV1` is unaffected by this
+operational deferral.
 
 Before `command_wal_v2`, accepted patterns include:
 

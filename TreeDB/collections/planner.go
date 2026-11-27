@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/buger/jsonparser"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -120,9 +122,10 @@ type insertBatchPlanScratch struct {
 	templatePrepared        [][]byte
 	templateConversionArena []byte
 
-	items        []insertBatchItem
-	encoder      indexEncodeArena
-	uniqueProbes []uniqueProbeCandidate
+	items         []insertBatchItem
+	encoder       indexEncodeArena
+	shardEncoders []indexEncodeArena
+	uniqueProbes  []uniqueProbeCandidate
 
 	uniquePrefixArena []byte
 	uniquePrefixes    [][]byte
@@ -221,6 +224,32 @@ func releaseInsertBatchPlanScratch(s *insertBatchPlanScratch) {
 		s.encoder.valueRefs = s.encoder.valueRefs[:0]
 	}
 	s.encoder.tplRootPlan.reset(true)
+	for i := range s.shardEncoders {
+		enc := &s.shardEncoders[i]
+		if cap(enc.buf) > insertBatchPlanScratchMaxArenaCap {
+			enc.buf = nil
+		} else {
+			enc.buf = enc.buf[:0]
+		}
+		if cap(enc.scratch) > insertBatchPlanScratchMaxArenaCap {
+			enc.scratch = nil
+		} else {
+			enc.scratch = enc.scratch[:0]
+		}
+		if cap(enc.states) > insertBatchPlanScratchMaxValueRefs {
+			enc.states = nil
+		} else if enc.states != nil {
+			clear(enc.states[:cap(enc.states)])
+			enc.states = enc.states[:0]
+		}
+		if cap(enc.valueRefs) > insertBatchPlanScratchMaxValueRefs {
+			enc.valueRefs = nil
+		} else if enc.valueRefs != nil {
+			clear(enc.valueRefs[:cap(enc.valueRefs)])
+			enc.valueRefs = enc.valueRefs[:0]
+		}
+		enc.tplRootPlan.reset(true)
+	}
 	if cap(s.uniqueProbes) > insertBatchPlanScratchMaxValueRefs {
 		s.uniqueProbes = nil
 	} else if s.uniqueProbes != nil {
@@ -307,6 +336,7 @@ type collectionRootRun struct {
 	uniqueValueTable memtable.Table
 	uniquePrefixes   [][]byte
 	storagePolicy    backenddb.OrderedRootStoragePolicy
+	emptyValuesOnly  bool
 }
 
 type directBufferedInsertPlan struct {
@@ -544,22 +574,67 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
 	if len(runtimes) > 0 {
-		if persistIndexState {
+		if persistIndexState && len(items) >= 2048 && runtime.GOMAXPROCS(0) > 1 {
+			type indexStateRunResult struct {
+				run     collectionRootRun
+				elapsed time.Duration
+				err     error
+			}
+			indexStateDone := make(chan indexStateRunResult, 1)
+			go func() {
+				start := time.Now()
+				run, buildErr := p.buildIndexStateRun(items, primaryOrder, runtimes)
+				indexStateDone <- indexStateRunResult{
+					run:     run,
+					elapsed: time.Since(start),
+					err:     buildErr,
+				}
+			}()
+			secStart := time.Now()
+			secErr := p.emitSecondaryRuns(plan, items, runtimes, primaryOrder)
+			plan.stats.SecondaryRunBuild = time.Since(secStart)
+			idxRes := <-indexStateDone
+			plan.stats.IndexStateRunBuild = idxRes.elapsed
+			if idxRes.err != nil {
+				resetCollectionRunTables(plan.runs)
+				plan.releaseScratch()
+				return nil, idxRes.err
+			}
+			if secErr != nil {
+				resetCollectionRunTable(idxRes.run.table)
+				resetCollectionRunTables(plan.runs)
+				plan.releaseScratch()
+				return nil, secErr
+			}
+			// Preserve deterministic run order: [template?, primary, indexState, secondary...].
+			insertAt := len(plan.runs)
+			for i := range plan.runs {
+				if plan.runs[i].kind == collectionRootSecondary {
+					insertAt = i
+					break
+				}
+			}
+			plan.runs = append(plan.runs, collectionRootRun{})
+			copy(plan.runs[insertAt+1:], plan.runs[insertAt:])
+			plan.runs[insertAt] = idxRes.run
+		} else {
+			if persistIndexState {
+				phaseStart = time.Now()
+				if err := p.emitIndexStateRunWithOrder(plan, items, primaryOrder, runtimes); err != nil {
+					resetCollectionRunTables(plan.runs)
+					plan.releaseScratch()
+					return nil, err
+				}
+				plan.stats.IndexStateRunBuild = time.Since(phaseStart)
+			}
 			phaseStart = time.Now()
-			if err := p.emitIndexStateRun(plan, items, runtimes); err != nil {
+			if err := p.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
 				resetCollectionRunTables(plan.runs)
 				plan.releaseScratch()
 				return nil, err
 			}
-			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
+			plan.stats.SecondaryRunBuild = time.Since(phaseStart)
 		}
-		phaseStart = time.Now()
-		if err := p.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
-			resetCollectionRunTables(plan.runs)
-			plan.releaseScratch()
-			return nil, err
-		}
-		plan.stats.SecondaryRunBuild = time.Since(phaseStart)
 	}
 	plan.stats.Runs = len(plan.runs)
 	return plan, nil
@@ -900,6 +975,12 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbesWithScratch(items []ins
 			uniqueProbes = make([]uniqueProbeCandidate, 0, len(items))
 		}
 	}
+	format := normalizedDocumentFormat(p.options.documentFormat)
+	if len(items) >= 2048 && p.options.typedProjection == nil && (format == DocumentFormatJSON || format == DocumentFormatBSON) {
+		if workers := min(runtime.GOMAXPROCS(0), 6); workers > 1 && len(items)/workers >= 512 {
+			return p.planIndexStateAndUniqueProbesParallel(items, runtimes, scratch, format, hasUnique, uniqueProbes, workers)
+		}
+	}
 	arenaBytes := estimateBatchIndexEncodeArenaBytes(items, len(runtimes))
 	valueRefsNeed := estimateBatchIndexValueRefCount(items, len(runtimes))
 	var encoder indexEncodeArena
@@ -957,6 +1038,133 @@ func (p insertBatchPlanner) planIndexStateAndUniqueProbesWithScratch(items []ins
 	}
 	if scratch != nil {
 		scratch.encoder = encoder
+		scratch.uniqueProbes = uniqueProbes
+	}
+	return uniqueProbes, nil
+}
+
+func (p insertBatchPlanner) planIndexStateAndUniqueProbesParallel(
+	items []insertBatchItem,
+	runtimes []indexRuntime,
+	scratch *insertBatchPlanScratch,
+	format DocumentFormat,
+	hasUnique bool,
+	uniqueProbes []uniqueProbeCandidate,
+	workers int,
+) ([]uniqueProbeCandidate, error) {
+	if workers > len(items) {
+		workers = len(items)
+	}
+	var encoders []indexEncodeArena
+	if scratch != nil {
+		if len(scratch.shardEncoders) < workers {
+			grown := make([]indexEncodeArena, workers)
+			copy(grown, scratch.shardEncoders)
+			scratch.shardEncoders = grown
+		}
+		encoders = scratch.shardEncoders[:workers]
+	} else {
+		encoders = make([]indexEncodeArena, workers)
+	}
+	shardProbes := make([][]uniqueProbeCandidate, workers)
+	shardErrs := make([]error, workers)
+	chunkSize := (len(items) + workers - 1) / workers
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		start := w * chunkSize
+		if start >= len(items) {
+			break
+		}
+		end := min(start+chunkSize, len(items))
+		shardItems := items[start:end]
+		enc := &encoders[w]
+		arenaBytes := estimateBatchIndexEncodeArenaBytes(shardItems, len(runtimes))
+		valueRefsNeed := estimateBatchIndexValueRefCount(shardItems, len(runtimes))
+		if cap(enc.buf) < arenaBytes {
+			enc.buf = make([]byte, 0, arenaBytes)
+		} else {
+			enc.buf = enc.buf[:0]
+		}
+		enc.scratch = enc.scratch[:0]
+		if cap(enc.states) < valueRefsNeed {
+			enc.states = make([][][]byte, 0, valueRefsNeed)
+		} else {
+			enc.states = enc.states[:0]
+		}
+		if cap(enc.valueRefs) < valueRefsNeed {
+			enc.valueRefs = make([][]byte, 0, valueRefsNeed)
+		} else {
+			enc.valueRefs = enc.valueRefs[:0]
+		}
+		wg.Add(1)
+		go func(workerIdx, start, end int, enc *indexEncodeArena) {
+			defer wg.Done()
+			var localProbes []uniqueProbeCandidate
+			if hasUnique {
+				localProbes = make([]uniqueProbeCandidate, 0, end-start)
+			}
+			var jsonRows uint64
+			for i := start; i < end; i++ {
+				var state orderedDocumentIndexState
+				var err error
+				if format == DocumentFormatJSON {
+					jsonRows++
+					state, err = orderedJSONIndexStateForDocumentWithArena(items[i].document, runtimes, p.options, enc)
+				} else {
+					state, err = bsonOrderedIndexStateForDocumentWithArena(items[i].document, runtimes, p.options, enc)
+				}
+				if err != nil {
+					if jsonRows > 0 {
+						workstats.IndexedJSON.ScalarRows.Add(jsonRows)
+					}
+					shardErrs[workerIdx] = err
+					return
+				}
+				items[i].state = state
+				if !hasUnique {
+					continue
+				}
+				for runtimeIdx, rt := range runtimes {
+					if !rt.def.unique {
+						continue
+					}
+					for _, encoded := range state.valuesAt(runtimeIdx) {
+						localProbes = append(localProbes, uniqueProbeCandidate{
+							indexName:    rt.def.name,
+							encodedValue: encoded,
+							documentID:   items[i].id,
+						})
+					}
+				}
+			}
+			if jsonRows > 0 {
+				workstats.IndexedJSON.ScalarRows.Add(jsonRows)
+			}
+			shardProbes[workerIdx] = localProbes
+		}(w, start, end, enc)
+	}
+	wg.Wait()
+	for _, err := range shardErrs {
+		if err != nil {
+			if scratch != nil {
+				scratch.uniqueProbes = uniqueProbes
+			}
+			return nil, err
+		}
+	}
+	if hasUnique {
+		totalProbes := 0
+		for _, sp := range shardProbes {
+			totalProbes += len(sp)
+		}
+		if cap(uniqueProbes) < totalProbes {
+			uniqueProbes = make([]uniqueProbeCandidate, 0, totalProbes)
+		}
+		for _, sp := range shardProbes {
+			uniqueProbes = append(uniqueProbes, sp...)
+		}
+	}
+	if scratch != nil {
 		scratch.uniqueProbes = uniqueProbes
 	}
 	return uniqueProbes, nil
@@ -1771,13 +1979,26 @@ func applyCollectionRunEntriesWithFlags(table memtable.Table, count int, emit fu
 
 func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime) error {
 	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	return p.emitIndexStateRunWithOrder(plan, items, order, runtimes)
+}
+
+func (p insertBatchPlanner) emitIndexStateRunWithOrder(plan *insertBatchPlan, items []insertBatchItem, order []int, runtimes []indexRuntime) error {
+	run, err := p.buildIndexStateRun(items, order, runtimes)
+	if err != nil {
+		return err
+	}
+	plan.runs = append(plan.runs, run)
+	return nil
+}
+
+func (p insertBatchPlanner) buildIndexStateRun(items []insertBatchItem, order []int, runtimes []indexRuntime) (collectionRootRun, error) {
 	counts := make([]int, len(items))
 	valueBytes := 0
 	for i := range items {
 		idx := orderedItemIndex(order, i)
 		count, size, err := runtimeOrderedDocumentIndexStateStats(items[idx].state, runtimes)
 		if err != nil {
-			return err
+			return collectionRootRun{}, err
 		}
 		counts[i] = count
 		valueBytes += size
@@ -1789,16 +2010,16 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 		valueArena, value = appendRuntimeOrderedDocumentIndexState(valueArena, items[idx].state, runtimes, counts[i])
 		return items[idx].id, value, nil
 	}); err != nil {
-		return err
+		resetCollectionRunTable(table)
+		return collectionRootRun{}, err
 	}
 	table.Freeze()
-	plan.runs = append(plan.runs, collectionRootRun{
+	return collectionRootRun{
 		name:          p.indexStateRoot,
 		kind:          collectionRootIndexState,
 		table:         table,
 		storagePolicy: p.options.indexStateStoragePolicy,
-	})
-	return nil
+	}, nil
 }
 
 func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []insertBatchItem, runtimes []indexRuntime, documentIDOrder []int) error {
@@ -1857,12 +2078,13 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			plan.scratch.saveSecondaryKeyArena(arenaIdx, keyArena)
 			table.Freeze()
 			run := collectionRootRun{
-				name:           p.collection + "/index/" + runtime.def.name,
-				kind:           collectionRootSecondary,
-				indexName:      runtime.def.name,
-				indexValueType: runtime.def.valueType,
-				table:          table,
-				storagePolicy:  runtime.def.storagePolicy,
+				name:            p.collection + "/index/" + runtime.def.name,
+				kind:            collectionRootSecondary,
+				indexName:       runtime.def.name,
+				indexValueType:  runtime.def.valueType,
+				table:           table,
+				storagePolicy:   runtime.def.storagePolicy,
+				emptyValuesOnly: true,
 			}
 			if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
 				resetCollectionRunTable(table)
@@ -1883,12 +2105,13 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			return err
 		} else if ok {
 			run := collectionRootRun{
-				name:           p.collection + "/index/" + runtime.def.name,
-				kind:           collectionRootSecondary,
-				indexName:      runtime.def.name,
-				indexValueType: runtime.def.valueType,
-				table:          table,
-				storagePolicy:  runtime.def.storagePolicy,
+				name:            p.collection + "/index/" + runtime.def.name,
+				kind:            collectionRootSecondary,
+				indexName:       runtime.def.name,
+				indexValueType:  runtime.def.valueType,
+				table:           table,
+				storagePolicy:   runtime.def.storagePolicy,
+				emptyValuesOnly: true,
 			}
 			if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
 				resetCollectionRunTable(table)
@@ -1940,12 +2163,13 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		table.Freeze()
 		run := collectionRootRun{
-			name:           p.collection + "/index/" + runtime.def.name,
-			kind:           collectionRootSecondary,
-			indexName:      runtime.def.name,
-			indexValueType: runtime.def.valueType,
-			table:          table,
-			storagePolicy:  runtime.def.storagePolicy,
+			name:            p.collection + "/index/" + runtime.def.name,
+			kind:            collectionRootSecondary,
+			indexName:       runtime.def.name,
+			indexValueType:  runtime.def.valueType,
+			table:           table,
+			storagePolicy:   runtime.def.storagePolicy,
+			emptyValuesOnly: true,
 		}
 		if err := p.maybePrebuildUniqueValueRun(&run, runtime.def.unique); err != nil {
 			resetCollectionRunTable(table)
@@ -2270,6 +2494,10 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 		return nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
 	workstats.IndexedJSON.ScalarRows.Add(1)
+	return orderedJSONIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
+}
+
+func orderedJSONIndexStateForDocumentWithArena(document []byte, runtimes []indexRuntime, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if state, ok, err := orderedJSONRootIndexStateForDocumentFastPath(document, runtimes, opts, encoder); ok || err != nil {
 		return state, err
 	}
@@ -2348,12 +2576,6 @@ func orderedJSONRootIndexStateForDocumentFastPath(document []byte, runtimes []in
 			return nil, false, nil
 		}
 	}
-	if !gjson.ValidBytes(document) {
-		return nil, true, errors.New("collections: index extraction requires JSON document: invalid JSON")
-	}
-	if !jsonDocumentLooksObject(document) {
-		return nil, true, errors.New("collections: index extraction requires JSON object document")
-	}
 	var stackValues [8]jsonParserIndexValue
 	var values []jsonParserIndexValue
 	if len(runtimes) <= len(stackValues) {
@@ -2361,18 +2583,30 @@ func orderedJSONRootIndexStateForDocumentFastPath(document []byte, runtimes []in
 	} else {
 		values = make([]jsonParserIndexValue, len(runtimes))
 	}
-	if err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
-		for runtimeIdx, runtime := range runtimes {
-			if runtimeRootFieldEqual(runtime, key) {
-				values[runtimeIdx] = jsonParserIndexValue{
-					raw:       value,
-					valueType: dataType,
+	handled, err := scanStrictJSONObjectRootFields(document, runtimes, values)
+	if !handled {
+		if !gjson.ValidBytes(document) {
+			return nil, true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		if !jsonDocumentLooksObject(document) {
+			return nil, true, errors.New("collections: index extraction requires JSON object document")
+		}
+		clear(values)
+		if err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+			for runtimeIdx, runtime := range runtimes {
+				if runtimeRootFieldEqual(runtime, key) {
+					values[runtimeIdx] = jsonParserIndexValue{
+						raw:       value,
+						valueType: dataType,
+					}
 				}
 			}
+			return nil
+		}); err != nil {
+			return nil, true, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
 		}
-		return nil
-	}); err != nil {
-		return nil, true, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
+	} else if err != nil {
+		return nil, true, err
 	}
 	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
@@ -2381,6 +2615,402 @@ func orderedJSONRootIndexStateForDocumentFastPath(document []byte, runtimes []in
 		}
 	}
 	return state, true, nil
+}
+
+const maxFastJSONNestingDepth = 64
+
+// scanStrictJSONObjectRootFields validates a JSON object document per RFC 8259
+// and extracts the raw slices and types for top-level keys matching runtimes in
+// a single pass. Returns handled=false when a top-level key contains escapes or
+// nesting exceeds maxFastJSONNestingDepth so the caller can fall back to the
+// generic validator/parser.
+func scanStrictJSONObjectRootFields(doc []byte, runtimes []indexRuntime, values []jsonParserIndexValue) (handled bool, err error) {
+	n := len(doc)
+	i := 0
+	for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+		i++
+	}
+	if i >= n {
+		return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+	}
+	if doc[i] != '{' {
+		if !gjson.ValidBytes(doc) {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		return true, errors.New("collections: index extraction requires JSON object document")
+	}
+	i++
+	for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+		i++
+	}
+	if i >= n {
+		return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+	}
+	if doc[i] == '}' {
+		i++
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i != n {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		return true, nil
+	}
+	for {
+		if i >= n || doc[i] != '"' {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		i++
+		keyStart := i
+		for i < n {
+			c := doc[i]
+			if c == '"' {
+				break
+			}
+			if c == '\\' {
+				return false, nil
+			}
+			if c < 0x20 {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			if c >= 0x80 {
+				r, sz := utf8.DecodeRune(doc[i:])
+				if r == utf8.RuneError && sz == 1 {
+					return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+				}
+				i += sz
+				continue
+			}
+			i++
+		}
+		if i >= n {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		keyBytes := doc[keyStart:i]
+		i++ // consume closing '"'
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i >= n || doc[i] != ':' {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		i++
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i >= n {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+
+		valStart := i
+		var valType jsonparser.ValueType
+		var valRaw []byte
+		switch doc[i] {
+		case '"':
+			end, ok := scanStrictJSONString(doc, i)
+			if !ok {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.String
+			valRaw = doc[valStart+1 : end-1]
+			i = end
+		case '{':
+			end, ok, overflow := scanStrictJSONContainer(doc, i, 1)
+			if overflow {
+				return false, nil
+			}
+			if !ok {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Object
+			valRaw = doc[valStart:end]
+			i = end
+		case '[':
+			end, ok, overflow := scanStrictJSONContainer(doc, i, 1)
+			if overflow {
+				return false, nil
+			}
+			if !ok {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Array
+			valRaw = doc[valStart:end]
+			i = end
+		case 't':
+			if i+4 > n || doc[i+1] != 'r' || doc[i+2] != 'u' || doc[i+3] != 'e' {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Boolean
+			valRaw = doc[valStart : i+4]
+			i += 4
+		case 'f':
+			if i+5 > n || doc[i+1] != 'a' || doc[i+2] != 'l' || doc[i+3] != 's' || doc[i+4] != 'e' {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Boolean
+			valRaw = doc[valStart : i+5]
+			i += 5
+		case 'n':
+			if i+4 > n || doc[i+1] != 'u' || doc[i+2] != 'l' || doc[i+3] != 'l' {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Null
+			valRaw = doc[valStart : i+4]
+			i += 4
+		default:
+			end, ok := scanStrictJSONNumber(doc, i)
+			if !ok {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			valType = jsonparser.Number
+			valRaw = doc[valStart:end]
+			i = end
+		}
+
+		for runtimeIdx := range runtimes {
+			if len(keyBytes) == len(runtimes[runtimeIdx].path[0]) && string(keyBytes) == runtimes[runtimeIdx].path[0] {
+				values[runtimeIdx] = jsonParserIndexValue{
+					raw:       valRaw,
+					valueType: valType,
+				}
+			}
+		}
+
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i >= n {
+			return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+		}
+		if doc[i] == ',' {
+			i++
+			for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+				i++
+			}
+			continue
+		}
+		if doc[i] == '}' {
+			i++
+			for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+				i++
+			}
+			if i != n {
+				return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+			}
+			return true, nil
+		}
+		return true, errors.New("collections: index extraction requires JSON document: invalid JSON")
+	}
+}
+
+func isJSONHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+func scanStrictJSONString(doc []byte, i int) (int, bool) {
+	n := len(doc)
+	if i >= n || doc[i] != '"' {
+		return 0, false
+	}
+	i++
+	for i < n {
+		c := doc[i]
+		if c == '"' {
+			return i + 1, true
+		}
+		if c < 0x20 {
+			return 0, false
+		}
+		if c == '\\' {
+			i++
+			if i >= n {
+				return 0, false
+			}
+			switch doc[i] {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+				i++
+			case 'u':
+				if i+4 >= n || !isJSONHexDigit(doc[i+1]) || !isJSONHexDigit(doc[i+2]) || !isJSONHexDigit(doc[i+3]) || !isJSONHexDigit(doc[i+4]) {
+					return 0, false
+				}
+				i += 5
+			default:
+				return 0, false
+			}
+			continue
+		}
+		if c >= 0x80 {
+			r, sz := utf8.DecodeRune(doc[i:])
+			if r == utf8.RuneError && sz == 1 {
+				return 0, false
+			}
+			i += sz
+			continue
+		}
+		i++
+	}
+	return 0, false
+}
+
+func scanStrictJSONNumber(doc []byte, i int) (int, bool) {
+	n := len(doc)
+	if i < n && doc[i] == '-' {
+		i++
+	}
+	if i >= n {
+		return 0, false
+	}
+	if doc[i] == '0' {
+		i++
+	} else if doc[i] >= '1' && doc[i] <= '9' {
+		i++
+		for i < n && doc[i] >= '0' && doc[i] <= '9' {
+			i++
+		}
+	} else {
+		return 0, false
+	}
+	if i < n && doc[i] == '.' {
+		i++
+		if i >= n || doc[i] < '0' || doc[i] > '9' {
+			return 0, false
+		}
+		for i < n && doc[i] >= '0' && doc[i] <= '9' {
+			i++
+		}
+	}
+	if i < n && (doc[i] == 'e' || doc[i] == 'E') {
+		i++
+		if i < n && (doc[i] == '+' || doc[i] == '-') {
+			i++
+		}
+		if i >= n || doc[i] < '0' || doc[i] > '9' {
+			return 0, false
+		}
+		for i < n && doc[i] >= '0' && doc[i] <= '9' {
+			i++
+		}
+	}
+	return i, true
+}
+
+func scanStrictJSONValue(doc []byte, i int, depth int) (int, bool, bool) {
+	n := len(doc)
+	if i >= n {
+		return 0, false, false
+	}
+	switch doc[i] {
+	case '"':
+		end, ok := scanStrictJSONString(doc, i)
+		return end, ok, false
+	case '{', '[':
+		return scanStrictJSONContainer(doc, i, depth+1)
+	case 't':
+		if i+4 <= n && doc[i+1] == 'r' && doc[i+2] == 'u' && doc[i+3] == 'e' {
+			return i + 4, true, false
+		}
+		return 0, false, false
+	case 'f':
+		if i+5 <= n && doc[i+1] == 'a' && doc[i+2] == 'l' && doc[i+3] == 's' && doc[i+4] == 'e' {
+			return i + 5, true, false
+		}
+		return 0, false, false
+	case 'n':
+		if i+4 <= n && doc[i+1] == 'u' && doc[i+2] == 'l' && doc[i+3] == 'l' {
+			return i + 4, true, false
+		}
+		return 0, false, false
+	default:
+		end, ok := scanStrictJSONNumber(doc, i)
+		return end, ok, false
+	}
+}
+
+func scanStrictJSONContainer(doc []byte, i int, depth int) (int, bool, bool) {
+	if depth > maxFastJSONNestingDepth {
+		return 0, false, true
+	}
+	n := len(doc)
+	openChar := doc[i]
+	i++
+	for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+		i++
+	}
+	if i >= n {
+		return 0, false, false
+	}
+	if openChar == '[' {
+		if doc[i] == ']' {
+			return i + 1, true, false
+		}
+		for {
+			end, ok, overflow := scanStrictJSONValue(doc, i, depth)
+			if overflow || !ok {
+				return 0, false, overflow
+			}
+			i = end
+			for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+				i++
+			}
+			if i >= n {
+				return 0, false, false
+			}
+			if doc[i] == ',' {
+				i++
+				for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+					i++
+				}
+				continue
+			}
+			if doc[i] == ']' {
+				return i + 1, true, false
+			}
+			return 0, false, false
+		}
+	}
+	// openChar == '{'
+	if doc[i] == '}' {
+		return i + 1, true, false
+	}
+	for {
+		end, ok := scanStrictJSONString(doc, i)
+		if !ok {
+			return 0, false, false
+		}
+		i = end
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i >= n || doc[i] != ':' {
+			return 0, false, false
+		}
+		i++
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		end, ok, overflow := scanStrictJSONValue(doc, i, depth)
+		if overflow || !ok {
+			return 0, false, overflow
+		}
+		i = end
+		for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+			i++
+		}
+		if i >= n {
+			return 0, false, false
+		}
+		if doc[i] == ',' {
+			i++
+			for i < n && (doc[i] == ' ' || doc[i] == '\t' || doc[i] == '\n' || doc[i] == '\r') {
+				i++
+			}
+			continue
+		}
+		if doc[i] == '}' {
+			return i + 1, true, false
+		}
+		return 0, false, false
+	}
 }
 
 type jsonParserIndexValue struct {
@@ -2752,20 +3382,26 @@ func runtimeOrderedDocumentIndexStateStats(state orderedDocumentIndexState, runt
 	size := 1 + 2
 	for runtimeIdx, runtime := range runtimes {
 		indexName := runtime.def.name
-		values := filterEmptyEncodedIndexValues(state.valuesAt(runtimeIdx))
-		if len(values) == 0 {
+		values := state.valuesAt(runtimeIdx)
+		nonEmpty := 0
+		valueBytes := 0
+		for _, value := range values {
+			if len(value) == 0 {
+				continue
+			}
+			if len(value) > 65535 {
+				return 0, 0, errors.New("collections: index state value too large")
+			}
+			nonEmpty++
+			valueBytes += 2 + len(value)
+		}
+		if nonEmpty == 0 {
 			continue
 		}
 		if len(indexName) > 65535 {
 			return 0, 0, errors.New("collections: index state name too long")
 		}
-		size += 2 + len(indexName) + 2
-		for _, value := range values {
-			if len(value) > 65535 {
-				return 0, 0, errors.New("collections: index state value too large")
-			}
-			size += 2 + len(value)
-		}
+		size += 2 + len(indexName) + 2 + valueBytes
 		count++
 	}
 	return count, size, nil
@@ -2777,14 +3413,23 @@ func appendRuntimeOrderedDocumentIndexState(dst []byte, state orderedDocumentInd
 	dst = binary.BigEndian.AppendUint16(dst, uint16(count))
 	for runtimeIdx, runtime := range runtimes {
 		indexName := runtime.def.name
-		values := filterEmptyEncodedIndexValues(state.valuesAt(runtimeIdx))
-		if len(values) == 0 {
+		values := state.valuesAt(runtimeIdx)
+		nonEmpty := 0
+		for _, value := range values {
+			if len(value) != 0 {
+				nonEmpty++
+			}
+		}
+		if nonEmpty == 0 {
 			continue
 		}
 		dst = binary.BigEndian.AppendUint16(dst, uint16(len(indexName)))
 		dst = append(dst, indexName...)
-		dst = binary.BigEndian.AppendUint16(dst, uint16(len(values)))
+		dst = binary.BigEndian.AppendUint16(dst, uint16(nonEmpty))
 		for _, value := range values {
+			if len(value) == 0 {
+				continue
+			}
 			dst = binary.BigEndian.AppendUint16(dst, uint16(len(value)))
 			dst = append(dst, value...)
 		}

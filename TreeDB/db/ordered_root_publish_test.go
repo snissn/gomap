@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -6011,5 +6012,103 @@ func TestOrderedRootDeltaBatchGroupApplyErrorContext(t *testing.T) {
 	}
 	if cause := errors.Unwrap(err); cause == nil || cause.Error() != "missing index" {
 		t.Fatalf("unwrapped error=%v", cause)
+	}
+}
+
+func TestCommandWALDurableOrderedRootPublishDefersLeafManifestAndLenidxSync(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		CommandWAL:                 true,
+		ResolvedProfile:            ProfileCommandWALDurable,
+		Durability:                 DurabilityDurable,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionOff,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{
+		MaxSegmentBytes: 32 << 10,
+		Compression:     ValueLogCompressionOff,
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		closeLeafLogLaneGCTestDB(t, db, leafLog)
+	}()
+
+	var walSyncs atomic.Int64
+	var manifestSyncs atomic.Int64
+	var lenidxSyncs atomic.Int64
+	uninstall := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync {
+			walSyncs.Add(1)
+		}
+		if e.Point == durabilitycut.BeforeDependencyFileSync && strings.Contains(e.Path, leafGenerationRecordLengthIndexSuffix) {
+			lenidxSyncs.Add(1)
+		}
+		if (e.Point == durabilitycut.BeforeDependencyFileSync || e.Point == durabilitycut.BeforeNewFileDirectorySync) &&
+			(strings.Contains(e.Path, leafGenerationManifestFileName) || strings.Contains(e.Path, "manifest.durable.") || strings.Contains(e.Path, "manifest.stage.tmp.")) {
+			manifestSyncs.Add(1)
+		}
+		return nil
+	})
+	defer uninstall()
+
+	var rootID uint64
+	val := bytes.Repeat([]byte("v"), 128)
+	for round := 0; round < 4; round++ {
+		delta := batch.New(nil, 256)
+		for i := 0; i < 256; i++ {
+			key := []byte("k-" + strconv.Itoa(round*1000+i))
+			if err := delta.Set(key, val); err != nil {
+				t.Fatalf("delta.Set: %v", err)
+			}
+		}
+		intent := mustRawKVCommandWALIntent(t, db, "cmd/round-"+strconv.Itoa(round), "v")
+		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+			[]OrderedRootDeltaBatchPublishInput{{
+				BaseRoot:      rootID,
+				Delta:         delta,
+				StoragePolicy: OrderedRootStorageValueLogLeaves,
+			}},
+			intent,
+			func(_ CommandWALPublishContext, ids []uint64) (iterator.UnsafeIterator, error) {
+				return mustFrozenSystemMemtable(t, "sys/root", strconv.FormatUint(ids[0], 10)).NewIterator(nil, nil), nil
+			},
+		)
+		_ = delta.Close()
+		if err != nil {
+			t.Fatalf("publish round %d: %v", round, err)
+		}
+		rootID = rootIDs[0]
+	}
+
+	if got := walSyncs.Load(); got < 4 {
+		t.Fatalf("command-WAL durable ordered-root publishes emitted %d WAL syncs, want >= 4", got)
+	}
+	if got := manifestSyncs.Load(); got != 0 {
+		t.Fatalf("command-WAL durable ordered-root publishes redundantly synced %d operational leaf-generation manifests, want 0", got)
+	}
+	if got := lenidxSyncs.Load(); got != 0 {
+		t.Fatalf("command-WAL durable ordered-root publishes redundantly synced %d advisory .lenidx files, want 0", got)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := manifestSyncs.Load(); got == 0 {
+		t.Fatalf("Checkpoint synced %d deferred operational leaf-generation manifests, want >= 1", got)
+	}
+	if got := lenidxSyncs.Load(); got == 0 {
+		t.Fatalf("Checkpoint synced %d deferred advisory .lenidx files, want >= 1", got)
 	}
 }
