@@ -907,6 +907,7 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 	}
 	known := make(map[uint32]struct{})
 	references := make(map[uint32]struct{})
+	baseReferences := make(map[uint32]struct{})
 	additionalReferences := make(map[uint32]struct{})
 	for _, item := range []struct {
 		resources  *rootpublication.StableResourceSet
@@ -927,6 +928,7 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 						additionalReferences[fileID] = struct{}{}
 					} else {
 						references[fileID] = struct{}{}
+						baseReferences[fileID] = struct{}{}
 					}
 				}
 			}
@@ -1030,6 +1032,25 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 	}
 	for fileID := range additionalReferences {
 		delete(references, fileID)
+	}
+	if db.valueLogManager != nil && len(references) > 0 {
+		for fileID := range references {
+			if _, fromBase := baseReferences[fileID]; fromBase {
+				if !db.valueLogManager.HasLiveSegment(fileID) {
+					// A predecessor-inherited raw outer-leaf or value-log segment
+					// may have reached zero live references and been retired/zombied,
+					// evicted, or closed by GC while still pinned by base. Decline
+					// base reuse so the exact candidate scanner drops unreachable
+					// retired segments while remaining strictly fail-closed if any
+					// live pointer still references a retired or missing segment.
+					return nil, false, nil
+				}
+				continue
+			}
+			if db.valueLogManager.IsTrackedZombie(fileID) {
+				return nil, false, nil
+			}
+		}
 	}
 	return references, true, nil
 }
