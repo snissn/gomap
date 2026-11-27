@@ -128,7 +128,9 @@ func requireColumnStoreWriteOperationSupportedWithSourceImportV2(meta Collection
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
-	if len(meta.Indexes) != 0 && columnStoreNeedsRetainedPayloadTransform(meta) && !columnStoreTypedScalarIndexesSupported(meta) {
+	if len(meta.Indexes) != 0 && columnStoreNeedsRetainedPayloadTransform(meta) &&
+		!columnStoreTypedScalarIndexesSupported(meta) &&
+		!columnStoreNonOverlappingRetainedScalarIndexesSupported(meta) {
 		return fmt.Errorf("%w: unsupported column-store write operation: retained payload reconstruction is not wired to secondary indexes yet collection=%q operation=%q indexes=%d",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,

@@ -3,6 +3,8 @@ package embedding
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,20 +32,28 @@ const (
 	maxOpenAICompatResponseBytes  int64 = 64 << 20
 	openAICompatBaseBackoff             = 50 * time.Millisecond
 	openAICompatMaxBackoff              = 2 * time.Second
+	openAICompatEncodingFloat           = "float"
+	openAICompatEncodingBase64          = "base64"
 )
 
 // OpenAICompatEmbedder calls an OpenAI-compatible /embeddings HTTP endpoint
 // using only the Go standard library.
+//
+// OpenAICompatEmbedder is safe for concurrent EmbedBatch calls: all
+// configuration fields are immutable after construction and the underlying
+// *http.Client is concurrency-safe.
 type OpenAICompatEmbedder struct {
-	dims           int
-	endpoint       string
-	model          string
-	apiKey         string
-	batchSize      int
-	maxRetries     int
-	normalize      bool
-	sendDimensions bool
-	client         *http.Client
+	dims             int
+	endpoint         string
+	model            string
+	apiKey           string
+	batchSize        int
+	maxRetries       int
+	normalize        bool
+	sendDimensions   bool
+	encodingFormat   string
+	maxContextTokens int
+	client           *http.Client
 }
 
 // NewOpenAICompatEmbedder validates cfg and builds an OpenAICompatEmbedder.
@@ -61,6 +71,11 @@ type OpenAICompatEmbedder struct {
 //     returned vectors and fails with ErrInvalidOutput on zero vectors.
 //   - "send_dimensions" (optional): "true" or "false" (default "false"); includes
 //     "dimensions" in the request payload when true.
+//   - "encoding_format" (optional): "float" (default; omitted on the wire) or
+//     "base64" (sends "encoding_format":"base64" and decodes little-endian
+//     IEEE-754 float32 payloads).
+//   - "max_context_tokens" (optional): positive int metadata exposed via
+//     MaxContextTokens() (0 when unset).
 func NewOpenAICompatEmbedder(cfg Config) (Embedder, error) {
 	if cfg.Provider != ProviderOpenAICompat {
 		return nil, fmt.Errorf("embedding: provider %q: want %q", cfg.Provider, ProviderOpenAICompat)
@@ -70,7 +85,7 @@ func NewOpenAICompatEmbedder(cfg Config) (Embedder, error) {
 	}
 	for k := range cfg.Options {
 		switch k {
-		case "base_url", "model", "api_key_env", "batch_size", "timeout_ms", "max_retries", "normalize", "send_dimensions":
+		case "base_url", "model", "api_key_env", "batch_size", "timeout_ms", "max_retries", "normalize", "send_dimensions", "encoding_format", "max_context_tokens":
 		default:
 			return nil, fmt.Errorf("embedding: openai_compat unsupported option %q", k)
 		}
@@ -147,15 +162,35 @@ func NewOpenAICompatEmbedder(cfg Config) (Embedder, error) {
 		return nil, err
 	}
 
+	encodingFormat := openAICompatEncodingFloat
+	if raw, ok := cfg.Options["encoding_format"]; ok {
+		v := strings.TrimSpace(raw)
+		if v != openAICompatEncodingFloat && v != openAICompatEncodingBase64 {
+			return nil, fmt.Errorf("embedding: openai_compat invalid encoding_format %q (must be %q or %q)", raw, openAICompatEncodingFloat, openAICompatEncodingBase64)
+		}
+		encodingFormat = v
+	}
+
+	maxContextTokens := 0
+	if raw, ok := cfg.Options["max_context_tokens"]; ok {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("embedding: openai_compat invalid max_context_tokens %q (must be positive)", raw)
+		}
+		maxContextTokens = n
+	}
+
 	return &OpenAICompatEmbedder{
-		dims:           cfg.Dimensions,
-		endpoint:       parsedURL.String(),
-		model:          model,
-		apiKey:         apiKey,
-		batchSize:      batchSize,
-		maxRetries:     maxRetries,
-		normalize:      normalize,
-		sendDimensions: sendDims,
+		dims:             cfg.Dimensions,
+		endpoint:         parsedURL.String(),
+		model:            model,
+		apiKey:           apiKey,
+		batchSize:        batchSize,
+		maxRetries:       maxRetries,
+		normalize:        normalize,
+		sendDimensions:   sendDims,
+		encodingFormat:   encodingFormat,
+		maxContextTokens: maxContextTokens,
 		client: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		},
@@ -177,30 +212,28 @@ func parseOptionalBool(opts map[string]string, key string) (bool, error) {
 // Dimensions reports the fixed vector width.
 func (e *OpenAICompatEmbedder) Dimensions() int { return e.dims }
 
+// MaxContextTokens reports the optional configured context window in tokens,
+// returning 0 when unset.
+func (e *OpenAICompatEmbedder) MaxContextTokens() int { return e.maxContextTokens }
+
 type openAICompatRequest struct {
-	Model      string   `json:"model"`
-	Input      []string `json:"input"`
-	Dimensions int      `json:"dimensions,omitempty"`
+	Model          string   `json:"model"`
+	Input          []string `json:"input"`
+	Dimensions     int      `json:"dimensions,omitempty"`
+	EncodingFormat string   `json:"encoding_format,omitempty"`
 }
 
-// strictFloat32Slice decodes a JSON array of non-null finite numbers, rejecting
-// JSON null (which standard []float32 unmarshaling silently converts to 0),
-// non-numeric elements, and non-finite/overflowing values.
-type strictFloat32Slice []float32
-
-func (s *strictFloat32Slice) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
-		return fmt.Errorf("embedding must be a JSON array: %w", ErrInvalidOutput)
+func decodeOpenAICompatFloatEmbeddingInto(raw []byte, dst []float32, normalize bool) (float64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return 0, fmt.Errorf("embedding must be a JSON array: %w", ErrInvalidOutput)
 	}
 	inner := bytes.TrimSpace(trimmed[1 : len(trimmed)-1])
 	if len(inner) == 0 {
-		*s = (*s)[:0]
-		return nil
+		return 0, fmt.Errorf("has 0 dims, want %d: %w", len(dst), ErrDimensionMismatch)
 	}
-	// Pre-size from comma count to avoid slice growth allocations.
-	count := bytes.Count(inner, []byte(",")) + 1
-	vals := make([]float32, 0, count)
+	count := 0
+	var normSq float64
 	pos := 0
 	for pos < len(inner) {
 		next := bytes.IndexByte(inner[pos:], ',')
@@ -212,30 +245,108 @@ func (s *strictFloat32Slice) UnmarshalJSON(data []byte) error {
 			tok = bytes.TrimSpace(inner[pos : pos+next])
 			pos += next + 1
 			if pos >= len(inner) {
-				return fmt.Errorf("trailing comma in embedding array: %w", ErrInvalidOutput)
+				return 0, fmt.Errorf("trailing comma in embedding array: %w", ErrInvalidOutput)
 			}
 		}
 		if len(tok) == 0 {
-			return fmt.Errorf("empty element in embedding array: %w", ErrInvalidOutput)
+			return 0, fmt.Errorf("empty element in embedding array: %w", ErrInvalidOutput)
 		}
 		// Reject JSON null, strings, booleans, objects, or nested arrays explicitly.
 		if tok[0] != '-' && (tok[0] < '0' || tok[0] > '9') {
-			return fmt.Errorf("non-numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
+			return 0, fmt.Errorf("non-numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
 		}
 		f, err := strconv.ParseFloat(string(tok), 64)
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > math.MaxFloat32 {
-			return fmt.Errorf("invalid numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
+			return 0, fmt.Errorf("invalid numeric embedding component %q: %w", string(tok), ErrInvalidOutput)
 		}
-		vals = append(vals, float32(f))
+		if count < len(dst) {
+			v := float32(f)
+			dst[count] = v
+			if normalize {
+				vf := float64(v)
+				normSq += vf * vf
+			}
+		}
+		count++
 	}
-	*s = vals
+	if count != len(dst) {
+		return 0, fmt.Errorf("has %d dims, want %d: %w", count, len(dst), ErrDimensionMismatch)
+	}
+	return normSq, nil
+}
+
+func decodeOpenAICompatBase64EmbeddingInto(raw []byte, dst []float32, scratch *[]byte, normalize bool) (float64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+		return 0, fmt.Errorf("base64 embedding must be a JSON string: %w", ErrInvalidOutput)
+	}
+	inner := trimmed[1 : len(trimmed)-1]
+	var b64Bytes []byte
+	if bytes.IndexByte(inner, '\\') >= 0 {
+		var unescaped string
+		if err := json.Unmarshal(trimmed, &unescaped); err != nil {
+			return 0, fmt.Errorf("invalid base64 JSON string: %w", errors.Join(ErrInvalidOutput, err))
+		}
+		b64Bytes = []byte(unescaped)
+	} else {
+		if bytes.IndexByte(inner, '"') >= 0 {
+			return 0, fmt.Errorf("invalid base64 JSON string: %w", ErrInvalidOutput)
+		}
+		b64Bytes = inner
+	}
+	maxDecoded := base64.StdEncoding.DecodedLen(len(b64Bytes))
+	if cap(*scratch) < maxDecoded {
+		*scratch = make([]byte, maxDecoded)
+	}
+	buf := (*scratch)[:maxDecoded]
+	n, err := base64.StdEncoding.Decode(buf, b64Bytes)
+	if err != nil {
+		return 0, fmt.Errorf("invalid base64 embedding: %w", errors.Join(ErrInvalidOutput, err))
+	}
+	if n%4 != 0 {
+		return 0, fmt.Errorf("base64 embedding decoded byte length %d not divisible by 4: %w", n, ErrInvalidOutput)
+	}
+	decoded := buf[:n]
+	dims := n / 4
+	if dims != len(dst) {
+		for j := 0; j < dims; j++ {
+			v := math.Float32frombits(binary.LittleEndian.Uint32(decoded[j*4 : j*4+4]))
+			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+				return 0, fmt.Errorf("non-finite base64 embedding component at dim %d: %w", j, ErrInvalidOutput)
+			}
+		}
+		return 0, fmt.Errorf("has %d dims, want %d: %w", dims, len(dst), ErrDimensionMismatch)
+	}
+	var normSq float64
+	for j := 0; j < dims; j++ {
+		v := math.Float32frombits(binary.LittleEndian.Uint32(decoded[j*4 : j*4+4]))
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, fmt.Errorf("non-finite base64 embedding component at dim %d: %w", j, ErrInvalidOutput)
+		}
+		dst[j] = v
+		if normalize {
+			normSq += f * f
+		}
+	}
+	return normSq, nil
+}
+
+// borrowedRawJSON captures the exact subslice of the input JSON buffer passed
+// to encoding/json's UnmarshalJSON without copying the raw embedding bytes.
+// Callers must only read it while the underlying response buffer remains live
+// and unmodified (within embedSubBatch).
+type borrowedRawJSON []byte
+
+func (b *borrowedRawJSON) UnmarshalJSON(data []byte) error {
+	*b = data
 	return nil
 }
 
 type openAICompatResponse struct {
 	Data []struct {
-		Index     *int               `json:"index"`
-		Embedding strictFloat32Slice `json:"embedding"`
+		Index     *int            `json:"index"`
+		Embedding borrowedRawJSON `json:"embedding"`
 	} `json:"data"`
 	Error *struct {
 		Message string `json:"message"`
@@ -288,6 +399,9 @@ func (e *OpenAICompatEmbedder) embedSubBatch(ctx context.Context, inputs []strin
 	if e.sendDimensions {
 		reqPayload.Dimensions = e.dims
 	}
+	if e.encodingFormat == openAICompatEncodingBase64 {
+		reqPayload.EncodingFormat = openAICompatEncodingBase64
+	}
 	bodyBytes, err := json.Marshal(reqPayload)
 	if err != nil {
 		return fmt.Errorf("embedding: openai_compat marshal request: %w", err)
@@ -329,7 +443,17 @@ func (e *OpenAICompatEmbedder) embedSubBatch(ctx context.Context, inputs []strin
 			continue
 		}
 
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxOpenAICompatResponseBytes+1))
+		limited := io.LimitReader(resp.Body, maxOpenAICompatResponseBytes+1)
+		var data []byte
+		var readErr error
+		if resp.ContentLength > 0 && resp.ContentLength <= maxOpenAICompatResponseBytes {
+			var buf bytes.Buffer
+			buf.Grow(int(resp.ContentLength) + 1)
+			_, readErr = buf.ReadFrom(limited)
+			data = buf.Bytes()
+		} else {
+			data, readErr = io.ReadAll(limited)
+		}
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("embedding: openai_compat read response: %w", readErr)
@@ -362,6 +486,10 @@ func (e *OpenAICompatEmbedder) embedSubBatch(ctx context.Context, inputs []strin
 	}
 
 	seen := make([]bool, len(inputs))
+	var b64Scratch []byte
+	if e.encodingFormat == openAICompatEncodingBase64 {
+		b64Scratch = make([]byte, e.dims*4+3)
+	}
 	for _, item := range parsed.Data {
 		if item.Index == nil {
 			return fmt.Errorf("embedding: openai_compat response item missing index: %w", ErrInvalidOutput)
@@ -375,21 +503,17 @@ func (e *OpenAICompatEmbedder) embedSubBatch(ctx context.Context, inputs []strin
 		}
 		seen[idx] = true
 
-		if len(item.Embedding) != e.dims {
-			return fmt.Errorf("embedding: openai_compat item %d has %d dims, want %d: %w", globalOffset+idx, len(item.Embedding), e.dims, ErrDimensionMismatch)
-		}
 		dstIdx := globalOffset + idx
 		dst := backing[dstIdx*e.dims : (dstIdx+1)*e.dims : (dstIdx+1)*e.dims]
 		var normSq float64
-		for j, v := range item.Embedding {
-			f := float64(v)
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return fmt.Errorf("embedding: openai_compat item %d dim %d non-finite value: %w", dstIdx, j, ErrInvalidOutput)
-			}
-			dst[j] = v
-			if e.normalize {
-				normSq += f * f
-			}
+		var decErr error
+		if e.encodingFormat == openAICompatEncodingBase64 {
+			normSq, decErr = decodeOpenAICompatBase64EmbeddingInto(item.Embedding, dst, &b64Scratch, e.normalize)
+		} else {
+			normSq, decErr = decodeOpenAICompatFloatEmbeddingInto(item.Embedding, dst, e.normalize)
+		}
+		if decErr != nil {
+			return fmt.Errorf("embedding: openai_compat item %d: %w", dstIdx, decErr)
 		}
 		if e.normalize {
 			if normSq == 0 {

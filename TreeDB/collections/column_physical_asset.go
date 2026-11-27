@@ -119,13 +119,15 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 	if projection.retainedJSON != nil && strings.Contains(projection.column, ".") {
 		return errors.New("collections: validated float32 projection retained JSON requires a top-level column")
 	}
-	if projection.retainedJSON != nil {
-		if len(meta.Indexes) != 0 {
-			return errors.New("collections: validated float32 projection retained JSON does not support scalar indexes")
+	if projection.retainedJSON != nil || (projection.legacyTyped && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn) {
+		for _, index := range meta.Indexes {
+			if projectionColumnOverlapsScalarIndex(projection.column, index) {
+				return fmt.Errorf("collections: validated float32 projection retained JSON column %q overlaps scalar index %q", projection.column, index.Name)
+			}
 		}
 		for _, index := range meta.TextIndexes {
 			for _, field := range index.Fields {
-				if field.Field == projection.column || strings.HasPrefix(field.Field, projection.column+".") {
+				if projectionColumnOverlapsPath(projection.column, field.Field) {
 					return fmt.Errorf("collections: validated float32 projection retained JSON column %q overlaps text index %q", projection.column, index.Name)
 				}
 			}
@@ -155,6 +157,46 @@ func validateTrustedFloat32ProjectionMeta(meta CollectionMeta, projection *trust
 		}
 	}
 	return nil
+}
+
+func projectionColumnOverlapsPath(column, field string) bool {
+	if column == "" || field == "" {
+		return false
+	}
+	return field == column || strings.HasPrefix(field, column+".") || strings.HasPrefix(column, field+".")
+}
+
+func projectionColumnOverlapsScalarIndex(column string, index IndexDefinition) bool {
+	if projectionColumnOverlapsPath(column, index.Field) {
+		return true
+	}
+	for _, component := range index.Components {
+		if projectionColumnOverlapsPath(column, component.Field) {
+			return true
+		}
+	}
+	return false
+}
+
+// columnStoreNonOverlappingRetainedScalarIndexesSupported reports whether a
+// non-column JSON collection keeps every declared scalar index field intact in
+// the retained JSON payload (none overlap any declared column path).
+func columnStoreNonOverlappingRetainedScalarIndexesSupported(meta CollectionMeta) bool {
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled ||
+		cfg.RetainedPayload != ColumnRetainedPayloadNonColumn ||
+		columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON ||
+		normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+		return false
+	}
+	for _, index := range meta.Indexes {
+		for _, col := range cfg.Columns {
+			if projectionColumnOverlapsScalarIndex(col.Path, index) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateTrustedFloat32ProjectionRetainedJSON(ids [][]byte, projection *trustedFloat32Projection) (map[string][]byte, error) {
@@ -213,6 +255,10 @@ func validateTrustedFloat32ProjectionRetainedJSONWithOwnership(ids [][]byte, pro
 				if err := validateTypedRetainedColumn(trimmed, col.Path, paths[i]); err != nil {
 					return nil, err
 				}
+			}
+		} else if strings.Contains(projection.column, ".") {
+			if err := validateTypedRetainedColumn(trimmed, projection.column, strings.Split(projection.column, ".")); err != nil {
+				return nil, err
 			}
 		} else if _, _, _, err := jsonparser.Get(trimmed, projection.column); err == nil {
 			return nil, fmt.Errorf("collections: validated float32 projection retained JSON row %d contains declared column %q", row, projection.column)

@@ -429,7 +429,7 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	var admitOutput func(uint64) error
 	if v.catalog != nil && v.catalog.nativeText != nil {
 		admitOutput = v.catalog.nativeText.admit
-		if nativeTypedMeta(v.nativeRead.meta) && v.nativeRead.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
+		if nativeColumnNeedsReconstruct(&v.nativeRead.meta) {
 			return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
 		}
 		if uint64(len(ids)) > ^uint64(0)/uint64(unsafe.Sizeof(DocumentFetchResult{})) {
