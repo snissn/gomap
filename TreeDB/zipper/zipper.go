@@ -2465,6 +2465,16 @@ func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte, ow
 	z.leafRefCacheMu.Unlock()
 }
 
+func (z *Zipper) isLeafRefCached(ptr page.LeafLogPtr) bool {
+	if z == nil || !z.leafRefCacheActive.Load() {
+		return false
+	}
+	z.leafRefCacheMu.RLock()
+	_, ok := z.leafRefCache[ptr]
+	z.leafRefCacheMu.RUnlock()
+	return ok
+}
+
 func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive.Metrics) (uint64, error) {
 	if ref.Kind == page.ChildRefPage {
 		return ref.Page, nil
@@ -3656,9 +3666,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	if len(entries) < 2 {
 		return entries, nil, nil
 	}
-	if budget != nil && !budget.allow() {
-		return entries, nil, nil
-	}
 
 	var retired []uint64
 
@@ -3680,13 +3687,21 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		return n, fromPager, true, leafScratch, leafScratchRef, nil
 	}
 
-	// First pass: prune empty leaf children (except keep the first slot).
-	if budget != nil && !budget.take(1) {
-		return entries, nil, nil
-	}
+	// First pass: unconditionally prune empty non-first leaf children.
+	// Empty-leaf removal is structural reclamation, not budgeted underfull merge
+	// or piggyback relocation. When the maintenance budget is exhausted on
+	// outer-leaf-in-value-log trees with an active write cache, skip cold
+	// unmodified leaf-log siblings so we do not trigger unnecessary disk reads
+	// while still pruning every pager leaf and every freshly emptied leaf.
+	budgetExhausted := budget != nil && !budget.allow()
+	leafLogCacheOnly := budgetExhausted && z.outerLeavesInValueLog && z.leafRefCacheActive.Load()
 	out := entries[:0]
 	for i, e := range entries {
 		if i == 0 {
+			out = append(out, e)
+			continue
+		}
+		if leafLogCacheOnly && e.child.Kind == page.ChildRefLeafLog && !z.isLeafRefCached(e.child.Log) {
 			out = append(out, e)
 			continue
 		}
@@ -3715,6 +3730,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	}
 	entries = out
 	if len(entries) < 2 {
+		return entries, retired, nil
+	}
+	if budget != nil && !budget.allow() {
 		return entries, retired, nil
 	}
 

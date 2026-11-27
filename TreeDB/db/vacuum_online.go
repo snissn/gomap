@@ -824,15 +824,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	var systemLeavesAppended bool
 	var olderReplacement *rebuiltDurableRootV1
 	var olderReplacementSource rootpublication.DurableRootRecordV1
-	if recoverableRoots != nil {
-		olderRecord := recoverableRoots.durable.slotRecord[recoverableRoots.durable.slot^1]
-		if olderRecord.CommitSeq == 0 {
-			cleanupNewPager()
-			return errors.New("vacuum: replacement requires two recoverable durable slots")
-		}
+	var olderReplacementSharedPending bool
+	buildOlderReplacement := func(olderRecord rootpublication.DurableRootRecordV1) (*rebuiltDurableRootV1, error) {
+		olderSlot := recoverableRoots.durable.slot ^ 1
 		olderReadRoot := olderRecord.UserRootPageID
-		if recoverableRoots.durable.primaryReadRoots[recoverableRoots.durable.slot^1] != 0 {
-			olderReadRoot = recoverableRoots.durable.primaryReadRoots[recoverableRoots.durable.slot^1]
+		if recoverableRoots.durable.primaryReadRoots[olderSlot] != 0 {
+			olderReadRoot = recoverableRoots.durable.primaryReadRoots[olderSlot]
 		}
 		olderRoot := RecoverableRoot{
 			CommitSeq: olderRecord.CommitSeq, UserRootPageID: olderReadRoot,
@@ -847,8 +844,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.OlderRootRebuilds++
 		runStats.OlderRootDurableResourceCaptureDuration += resourceWork.CaptureDuration
 		if rebuildErr != nil {
-			cleanupNewPager()
-			return rebuildErr
+			return nil, rebuildErr
 		}
 		runStats.OlderRootDurableResourceCaptures++
 		runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
@@ -864,8 +860,42 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
 		rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
 		rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
-		olderReplacement = &rebuilt
-		olderReplacementSource = olderRecord
+		return &rebuilt, nil
+	}
+	materializePendingOlderReplacement := func() error {
+		if !olderReplacementSharedPending || olderReplacement != nil || recoverableRoots == nil {
+			return nil
+		}
+		rebuilt, err := buildOlderReplacement(olderReplacementSource)
+		if err != nil {
+			return err
+		}
+		olderReplacement = rebuilt
+		olderReplacementSharedPending = false
+		return nil
+	}
+	if recoverableRoots != nil {
+		olderSlot := recoverableRoots.durable.slot ^ 1
+		olderRecord := recoverableRoots.durable.slotRecord[olderSlot]
+		if olderRecord.CommitSeq == 0 {
+			cleanupNewPager()
+			return errors.New("vacuum: replacement requires two recoverable durable slots")
+		}
+		canShareOlder := replacementGen.primary == nil &&
+			recoverableRoots.durable.primaryReadRoots[olderSlot] == 0 &&
+			vacuumOlderRecordMatchesStateToken(olderRecord, recoverableRoots.visible)
+		if canShareOlder {
+			olderReplacementSharedPending = true
+			olderReplacementSource = olderRecord
+		} else {
+			rebuilt, rebuildErr := buildOlderReplacement(olderRecord)
+			if rebuildErr != nil {
+				cleanupNewPager()
+				return rebuildErr
+			}
+			olderReplacement = rebuilt
+			olderReplacementSource = olderRecord
+		}
 	}
 	defer func() {
 		if olderReplacement != nil {
@@ -901,6 +931,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	if baseState == nil || basePager == nil {
 		cleanupNewPager()
 		return errors.New("vacuum: missing base snapshot state")
+	}
+	if olderReplacementSharedPending && !vacuumOlderRecordMatchesVisible(olderReplacementSource, baseState) {
+		if err := materializePendingOlderReplacement(); err != nil {
+			cleanupNewPager()
+			return err
+		}
 	}
 	reserveStarted := time.Now()
 	systemTreePages, err := vacuumCountPagerTreePages(basePager, baseState.SystemRootPageID)
@@ -1012,7 +1048,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		cleanupNewPager()
 		return err
 	}
-	builtBasis, _, err := vacuumBuildCollectionBasis(ctx, nil, baseSnap, baseToken, newAlloc, newPager, collectionVisit(vacuumCollectionClonePreclone))
+	builtBasis, _, err := vacuumBuildCollectionBasisWithOptions(ctx, nil, baseSnap, baseToken, newAlloc, newPager, db.vacuumCollectionBuildOptions(), collectionVisit(vacuumCollectionClonePreclone))
 	if err != nil {
 		cleanupNewPager()
 		return err
@@ -1026,6 +1062,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 
 	// Online catch-up: replay recorded keys in bounded passes.
 	rebuiltExternalClosureChanged := userLeavesAppended
+	userDeltaApplied := false
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
@@ -1035,6 +1072,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if len(opsMap) == 0 && len(ranges) == 0 {
 			break
 		}
+		userDeltaApplied = true
 		var retired []uint64
 		newRoot, retired, err = db.applyVacuumDelta(newRoot, opsMap, ranges, newZ, nil)
 		if err != nil {
@@ -1060,11 +1098,18 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			break
 		}
 	}
+	if userDeltaApplied && olderReplacementSharedPending {
+		if err := materializePendingOlderReplacement(); err != nil {
+			cleanupNewPager()
+			return err
+		}
+	}
 
 	applyTail := func(ops map[string]batch.Entry, ranges []batch.DeleteRange) error {
 		if len(ops) == 0 && len(ranges) == 0 {
 			return nil
 		}
+		userDeltaApplied = true
 		var retired []uint64
 		var err error
 		newRoot, retired, err = db.applyVacuumDelta(newRoot, ops, ranges, newZ, nil)
@@ -1180,6 +1225,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return lateErr
 		}
+		if userDeltaApplied && olderReplacementSharedPending {
+			if err := materializePendingOlderReplacement(); err != nil {
+				cleanupNewPager()
+				return err
+			}
+		}
 		// Publication debt must be durable before its coordinator can be retired.
 		// Drain outside writeMu so stable I/O is not charged to the writer pause;
 		// the capability check below forces a recapture when the drain advances a
@@ -1276,7 +1327,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if recoverableRoots != nil {
 			capabilityDirty = errors.Is(recoverableRoots.revalidateWithDurablePublishLockHeld(), ErrRecoverableRootSetStale)
 		}
-		needsDeferredCutover := coherentDirty || epochDirty || capabilityDirty || tailMutations > vacuumCutoverMaxKeys
+		olderSharedInvalid := olderReplacementSharedPending &&
+			(userDeltaApplied || tailMutations > 0 || basis.snapshot == nil || !vacuumOlderRecordMatchesVisible(olderReplacementSource, basis.snapshot.state))
+		needsDeferredCutover := coherentDirty || epochDirty || capabilityDirty || olderSharedInvalid || tailMutations > vacuumCutoverMaxKeys
 		if needsDeferredCutover {
 			if defers >= vacuumCutoverMaxDefers {
 				runStats.ConcurrentMutationAborts++
@@ -1330,61 +1383,54 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				runStats.RecoverableSetCaptures++
 				runStats.RecoverableSetRecaptures++
 				runStats.RecoverableRoots = uint64(len(recoverableRoots.Roots()))
-				olderRecord := recoverableRoots.durable.slotRecord[recoverableRoots.durable.slot^1]
+				olderSlot := recoverableRoots.durable.slot ^ 1
+				olderRecord := recoverableRoots.durable.slotRecord[olderSlot]
 				if olderRecord.CommitSeq == 0 {
 					successorCloseErr := successor.Close()
 					cleanupNewPager()
 					return errors.Join(errors.New("vacuum: recaptured replacement requires two recoverable durable slots"), successorCloseErr)
 				}
-				if olderRecord != olderReplacementSource {
-					olderRoot := RecoverableRoot{
-						CommitSeq: olderRecord.CommitSeq, UserRootPageID: func() uint64 {
-							if r := recoverableRoots.durable.primaryReadRoots[recoverableRoots.durable.slot^1]; r != 0 {
-								return r
-							}
-							return olderRecord.UserRootPageID
-						}(),
-						SystemRootPageID: olderRecord.SystemRootPageID, AppliedCommandLSN: olderRecord.AppliedCommandLSN,
-						MaxEntryRevision: olderRecord.MaxEntryRevision, Durable: true,
+				canShareOlder := replacementGen.primary == nil &&
+					recoverableRoots.durable.primaryReadRoots[olderSlot] == 0 &&
+					!userDeltaApplied && len(finalOps) == 0 && len(finalRanges) == 0 &&
+					vacuumOlderRecordMatchesVisible(olderRecord, successor.state)
+				if canShareOlder {
+					if olderReplacement != nil {
+						if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {
+							successorCloseErr := successor.Close()
+							cleanupNewPager()
+							return errors.Join(err, successorCloseErr)
+						}
+						if cleanupErr := db.releaseCapturedRootResources(olderReplacement.resources); cleanupErr != nil {
+							cleanupNewPager()
+							return errors.Join(cleanupErr, successor.Close())
+						}
+						olderReplacement = nil
 					}
-					recordingAlloc := newVacuumRecordingAllocator(newAlloc)
-					rebuildStarted := time.Now()
-					rebuilt, resourceWork, rebuildErr := db.rebuildRecoverableRootWithPublicationLockV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc, false, sharedBase)
-					systemLeavesAppended = systemLeavesAppended || resourceWork.SystemLeavesAppended
-					runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
-					runStats.OlderRootRebuilds++
-					runStats.OlderRootDurableResourceCaptureDuration += resourceWork.CaptureDuration
+					olderReplacementSharedPending = true
+					olderReplacementSource = olderRecord
+				} else if olderReplacement == nil || olderRecord != olderReplacementSource {
+					rebuilt, rebuildErr := buildOlderReplacement(olderRecord)
 					if rebuildErr != nil {
 						successorCloseErr := successor.Close()
 						cleanupNewPager()
 						return errors.Join(rebuildErr, successorCloseErr)
 					}
-					runStats.OlderRootDurableResourceCaptures++
-					runStats.OlderRootDurableResourceDescriptors += resourceWork.Descriptors
-					runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
-					runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
-					runStats.OlderRootProjections += resourceWork.Projections
-					runStats.OlderRootProjectionFallbacks += resourceWork.ProjectionFallbacks
-					if resourceWork.ProjectionFallbackReason != "" {
-						runStats.OlderRootProjectionFallbackReason = resourceWork.ProjectionFallbackReason
+					if olderReplacement != nil {
+						if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {
+							resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
+							successorCloseErr := successor.Close()
+							cleanupNewPager()
+							return errors.Join(err, resourceCloseErr, successorCloseErr)
+						}
+						if cleanupErr := db.releaseCapturedRootResources(olderReplacement.resources); cleanupErr != nil {
+							resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
+							cleanupNewPager()
+							return errors.Join(cleanupErr, resourceCloseErr, successor.Close())
+						}
 					}
-					runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
-					runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
-					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
-					rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
-					rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
-					if err := sharedBase.release(newAlloc, olderReplacement.pages); err != nil {
-						resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
-						successorCloseErr := successor.Close()
-						cleanupNewPager()
-						return errors.Join(err, resourceCloseErr, successorCloseErr)
-					}
-					if cleanupErr := db.releaseCapturedRootResources(olderReplacement.resources); cleanupErr != nil {
-						resourceCloseErr := db.releaseCapturedRootResources(rebuilt.resources)
-						cleanupNewPager()
-						return errors.Join(cleanupErr, resourceCloseErr, successor.Close())
-					}
-					olderReplacement = &rebuilt
+					olderReplacement = rebuilt
+					olderReplacementSharedPending = false
 					olderReplacementSource = olderRecord
 				}
 			}
@@ -1395,7 +1441,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				return errors.Join(err, successorCloseErr)
 			}
 			recloneStarted := time.Now()
-			nextBasis, dirtyDescriptors, err := vacuumBuildCollectionBasis(ctx, basis, successor, successorToken, newAlloc, newPager, collectionVisit(vacuumCollectionCloneReclone))
+			nextBasis, dirtyDescriptors, err := vacuumBuildCollectionBasisWithOptions(ctx, basis, successor, successorToken, newAlloc, newPager, db.vacuumCollectionBuildOptions(), collectionVisit(vacuumCollectionCloneReclone))
 			if err != nil {
 				successorCloseErr := successor.Close()
 				cleanupNewPager()
@@ -1557,6 +1603,36 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		recordWriterHold()
 		cutoverLocked = false
 		db.writeMu.Unlock()
+		if olderReplacementSharedPending && olderReplacement == nil {
+			var olderResources *rootpublication.StableResourceSet
+			if durableResources != nil {
+				var cloneErr error
+				olderResources, cloneErr = rootpublication.CloneStableResourceSetExcludingKinds(durableResources)
+				if cloneErr != nil {
+					db.writeMu.Lock()
+					cutoverLocked = true
+					holdStarted = time.Now()
+					holdActive = true
+					unlockCutover(false)
+					cleanupNewPager()
+					return cloneErr
+				}
+			}
+			olderReplacement = &rebuiltDurableRootV1{
+				meta: page.MetaPageBody{
+					CommitSeq:         olderReplacementSource.CommitSeq,
+					UserRootPageID:    nextMeta.UserRootPageID,
+					SystemRootPageID:  nextMeta.SystemRootPageID,
+					TotalPages:        nextMeta.TotalPages,
+					LastCommitHeight:  olderReplacementSource.LastCommitHeight,
+					AppliedCommandLSN: olderReplacementSource.AppliedCommandLSN,
+					MaxEntryRevision:  olderReplacementSource.MaxEntryRevision,
+				},
+				resources: olderResources,
+				pages:     nil,
+			}
+			olderReplacementSharedPending = false
+		}
 		if leafGenerationChanged {
 			var olderResources *rootpublication.StableResourceSet
 			if olderReplacement != nil {
@@ -1599,12 +1675,20 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				}
 			}
 		} else if olderReplacement != nil {
-			finalSyncErr = writeRebuiltDurableRootsV1(db.dir, newPath, newPager, []rebuiltDurableRootV1{
-				*olderReplacement,
-				{meta: nextMeta, resources: durableResources},
-			})
+			var initialFree []uint64
+			initialFree, finalSyncErr = drainVacuumLegacyFreelistPages(newAlloc, newPager.PageCount(), db.preferAppendAlloc)
+			if finalSyncErr == nil {
+				finalSyncErr = writeRebuiltDurableRootsV1WithFree(db.dir, newPath, newPager, []rebuiltDurableRootV1{
+					*olderReplacement,
+					{meta: nextMeta, resources: durableResources},
+				}, initialFree)
+			}
 		} else {
-			finalSyncErr = writeRebuiltDurableRootV1(db.dir, newPath, newPager, nextMeta, durableResources)
+			var initialFree []uint64
+			initialFree, finalSyncErr = drainVacuumLegacyFreelistPages(newAlloc, newPager.PageCount(), db.preferAppendAlloc)
+			if finalSyncErr == nil {
+				finalSyncErr = writeRebuiltDurableRootV1WithFree(db.dir, newPath, newPager, nextMeta, durableResources, initialFree)
+			}
 		}
 		runStats.FinalPagerSyncDuration += time.Since(finalSyncStarted)
 		db.writeMu.Lock()
@@ -2069,7 +2153,7 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
 	if err != nil {
 		return rebuiltDurableRootV1{}, work, err
 	}
-	basis, _, err := vacuumBuildCollectionBasis(ctx, nil, snapshot, token, alloc, newPager, nil)
+	basis, _, err := vacuumBuildCollectionBasisWithOptions(ctx, nil, snapshot, token, alloc, newPager, db.vacuumCollectionBuildOptions(), nil)
 	if err != nil {
 		return rebuiltDurableRootV1{}, work, err
 	}
@@ -2130,6 +2214,57 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
 	work.ReusedNonValueLogDescriptors = resourceWork.ReusedNonValueLogDescriptors
 	work.UniqueScannedExternalSegments = resourceWork.UniqueScannedExternalSegments
 	return rebuiltDurableRootV1{meta: meta, resources: resources}, work, nil
+}
+
+func vacuumOlderRecordMatchesStateToken(older rootpublication.DurableRootRecordV1, visible StateToken) bool {
+	if older.CommitSeq == 0 {
+		return false
+	}
+	return older.UserRootPageID == visible.RootPageID &&
+		older.SystemRootPageID == visible.SystemRootPageID &&
+		older.AppliedCommandLSN == visible.AppliedCommandLSN &&
+		older.MaxEntryRevision == uint64(visible.MaxEntryRevision)
+}
+
+func vacuumOlderRecordMatchesVisible(older rootpublication.DurableRootRecordV1, visible *DBState) bool {
+	if visible == nil || older.CommitSeq == 0 {
+		return false
+	}
+	return older.UserRootPageID == visible.RootPageID &&
+		older.SystemRootPageID == visible.SystemRootPageID &&
+		older.AppliedCommandLSN == visible.AppliedCommandLSN &&
+		older.MaxEntryRevision == uint64(visible.MaxEntryRevision)
+}
+
+func drainVacuumLegacyFreelistPages(alloc *freelist.Allocator, pageCount uint64, restorePreferAppend bool) ([]uint64, error) {
+	if alloc == nil || alloc.Head() == 0 {
+		return nil, nil
+	}
+	alloc.SetPreferAppend(false)
+	defer alloc.SetPreferAppend(restorePreferAppend)
+	var free []uint64
+	for alloc.Head() != 0 {
+		id, err := alloc.Alloc(0)
+		if err != nil {
+			return nil, fmt.Errorf("vacuum: drain private freelist: %w", err)
+		}
+		if id >= 2 && id < pageCount {
+			free = append(free, id)
+		}
+	}
+	return free, nil
+}
+
+func (db *DB) vacuumCollectionBuildOptions() bulk.BuildOptions {
+	if db == nil {
+		return bulk.BuildOptions{}
+	}
+	return bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
+		InternalBaseDelta:     db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog,
+	}
 }
 
 func (db *DB) collectionTokenForSnapshot(snap *Snapshot) (collectionToken, error) {
