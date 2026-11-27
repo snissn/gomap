@@ -1662,6 +1662,12 @@ func TestBenchmarkContextBannerDurabilityTiers(t *testing.T) {
 			t.Fatalf("collectionEngineFamily(%q)=%q want SQLite", eng, got)
 		}
 	}
+	if got := formatMongoWriteConcernContext("default", ""); got != "default (URI/driver default)" || strings.Contains(got, "w:1") {
+		t.Fatalf("formatMongoWriteConcernContext(default)=%q want default (URI/driver default) without assuming w:1", got)
+	}
+	if got := durabilityTone(formatMongoWriteConcernContext("default", "")); got != "neutral" {
+		t.Fatalf("durabilityTone(default write concern)=%q want neutral", got)
+	}
 	if got := formatMongoWriteConcernContext("w0", "durable"); got != "w:0 (unacknowledged)" {
 		t.Fatalf("formatMongoWriteConcernContext(w0)=%q want w:0 (unacknowledged)", got)
 	}

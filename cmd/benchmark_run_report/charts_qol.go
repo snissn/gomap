@@ -771,7 +771,7 @@ func formatMongoWriteConcernContext(raw, durabilityTier string) string {
 	case "":
 		return ""
 	case "default":
-		return "w:1 (default)"
+		return "default (URI/driver default)"
 	case "w0", "unacknowledged":
 		return "w:0 (unacknowledged)"
 	case "w1":
