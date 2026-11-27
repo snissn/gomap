@@ -860,6 +860,19 @@ func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
 	return db.commandJournal.RotateActiveSegment(sync)
 }
 
+// PrepareFixedWALCheckpointReserve asynchronously pre-initializes the default
+// checkpoint successor fixed-WAL container so explicit Checkpoint can overlap
+// reserve initialization with B-tree flush and root publication.
+func (db *DB) PrepareFixedWALCheckpointReserve() error {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	return db.commandJournal.PrepareFixedWALCheckpointReserve()
+}
+
 // CleanupCommandWALCoveredSegments removes complete command-WAL segments covered
 // by a freshly revalidated monotonic durable-root proof and outside every
 // journal/generation/pin protection. Any successful unlink is followed by a

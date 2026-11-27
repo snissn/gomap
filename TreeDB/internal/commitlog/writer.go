@@ -193,6 +193,7 @@ type Writer struct {
 	headerBuf              [segmentHeaderSize]byte
 	rawLenPrefix           [4]byte
 	size                   int64
+	segmentSeq             uint64
 	maxSegmentSize         int64
 	cleanEmptySynced       bool
 	dirSyncPending         bool
@@ -224,12 +225,12 @@ func (s *writerFileSink) Write(p []byte) (int, error) {
 	if s == nil || s.file == nil {
 		return 0, os.ErrInvalid
 	}
+	if s.owner != nil {
+		s.owner.cleanEmptySynced = false
+	}
 	if s.owner != nil && s.owner.fixed != nil {
 		s.owner.fixed.pending = append(s.owner.fixed.pending, p...)
 		return len(p), nil
-	}
-	if s.owner != nil {
-		s.owner.cleanEmptySynced = false
 	}
 	start := time.Now()
 	n, err := s.file.Write(p)
@@ -468,11 +469,15 @@ func (w *Writer) syncFile() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	return w.syncPinnedFile(w.f, w.syncFn)
+	return w.syncPinnedFileThrough(w.f, w.syncFn, w.segmentSeq, uint64(w.StableBytes()))
 }
 
 func (w *Writer) syncPinnedFile(file *os.File, syncFile func(*os.File) error) error {
-	return w.journalFileSync.run(func() error {
+	return w.syncPinnedFileThrough(file, syncFile, 0, 0)
+}
+
+func (w *Writer) syncPinnedFileThrough(file *os.File, syncFile func(*os.File) error, seq, stableBytes uint64) error {
+	return w.journalFileSync.runThrough(seq, stableBytes, func() error {
 		start := time.Now()
 		if syncFile == nil {
 			syncFile = (*os.File).Sync
@@ -771,9 +776,19 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 		if err := w.Flush(); err != nil {
 			return writerRotationOutcome{}, err
 		}
-		if syncCurrent {
-			if err := w.syncFile(); err != nil {
+		if w.dirSyncPending && w.ActiveBytes() > 0 {
+			if err := syncNewLogFileDirectory(w, w.f, w.f.Name()); err != nil {
 				return writerRotationOutcome{}, err
+			}
+			w.dirSyncPending = false
+		}
+		if syncCurrent {
+			alreadySynced := !observe && !w.dirSyncPending && isDefaultCommitlogSyncFn(w.syncFn) &&
+				w.journalFileSync != nil && w.journalFileSync.alreadySynced(w.segmentSeq, uint64(w.StableBytes()))
+			if !alreadySynced {
+				if err := w.syncFile(); err != nil {
+					return writerRotationOutcome{}, err
+				}
 			}
 		}
 		if observe {
@@ -816,7 +831,14 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	if !created {
 		preparedAhead = nil
 	}
-	state, size, selection, err := w.prepareFixedSuccessorAhead(&file, preparedParent, plan, preparedAhead)
+	// When syncCurrent is true and preparedParent != nil, syncNewLogFileDirectory
+	// below immediately persists the successor directory entry, so avoid syncing
+	// the parent directory twice back-to-back during fixed-container publication.
+	// On an explicit forced rotation with !syncCurrent && !observe (checkpoint
+	// rotation after durable root coverage), defer parent directory sync to the
+	// next Sync/CaptureSync or rotation via dirSyncPending.
+	syncPreparedParent := preparedParent == nil || (!syncCurrent && (observe || w.fixedRotationReason != fixedWALForcedRotation))
+	state, size, selection, err := w.prepareFixedSuccessorAheadWithParentSync(&file, preparedParent, plan, preparedAhead, syncPreparedParent)
 	if err != nil {
 		// Keep ownership of the old descriptor; the failed candidate is never the
 		// writer's authoritative file, and is closed even after partial reserve I/O.
@@ -839,8 +861,8 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	w.fileSink.file = file
 	w.resetBufioForContainer()
 	w.size = size
-	w.cleanEmptySynced = syncCurrent && size == 0 && state == nil
-	w.dirSyncPending = created && !syncCurrent && state == nil
+	w.cleanEmptySynced = syncCurrent && size == 0
+	w.dirSyncPending = created && !syncCurrent && (state == nil || !syncPreparedParent)
 	w.writtenFileBytes = size
 	w.writebackHintOffset = size
 	if state != nil && oldFixed == nil {
@@ -1338,6 +1360,7 @@ func (w *Writer) appendFixedCommandV2Prepared(plan commandFrameV2Encoding) error
 	header := pending[before : before+segmentHeaderSize]
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
 	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	w.cleanEmptySynced = false
 	w.fixed.pending = pending
 	w.fixed.recordPendingFrame(int64(size))
 	w.size += int64(size)
@@ -1401,6 +1424,7 @@ func (w *Writer) appendFixedRawKVPointCommandV2Direct(class CommandDurabilityCla
 	header := pending[before : before+segmentHeaderSize]
 	binary.LittleEndian.PutUint32(header[:4], uint32(len(frame)))
 	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(frame))
+	w.cleanEmptySynced = false
 	w.fixed.pending = pending
 	w.fixed.recordPendingFrame(int64(total))
 	w.size += int64(total)
@@ -2132,10 +2156,17 @@ func (w *Writer) Flush() error {
 	return w.flushFixed()
 }
 
-var defaultCommitlogSyncFilePtr = reflect.ValueOf(stableio.SyncFile).Pointer()
+var (
+	defaultCommitlogSyncFilePtr = reflect.ValueOf(stableio.SyncFile).Pointer()
+	defaultFixedWALSyncFilePtr  = reflect.ValueOf(syncWALData).Pointer()
+)
 
 func isDefaultCommitlogSyncFn(fn func(*os.File) error) bool {
-	return fn == nil || reflect.ValueOf(fn).Pointer() == defaultCommitlogSyncFilePtr
+	if fn == nil {
+		return true
+	}
+	ptr := reflect.ValueOf(fn).Pointer()
+	return ptr == defaultCommitlogSyncFilePtr || ptr == defaultFixedWALSyncFilePtr
 }
 
 func (w *Writer) Sync() error {
@@ -2156,7 +2187,7 @@ func (w *Writer) Sync() error {
 	if err := w.flushFixed(); err != nil {
 		return err
 	}
-	if w.cleanEmptySynced && !w.dirSyncPending && w.size == 0 && w.fixed == nil && !durabilitycut.Enabled() && isDefaultCommitlogSyncFn(w.syncFn) {
+	if w.cleanEmptySynced && !w.dirSyncPending && w.size == 0 && !durabilitycut.Enabled() && isDefaultCommitlogSyncFn(w.syncFn) {
 		return nil
 	}
 	if w.dirSyncPending {

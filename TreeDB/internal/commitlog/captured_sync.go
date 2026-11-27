@@ -63,6 +63,12 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	if err := j.flushDirectCommandWALLocked(false, durabilitycut.Enabled()); err != nil {
 		return nil, err
 	}
+	if j.writer.dirSyncPending {
+		if err := syncNewLogFileDirectory(j.writer, j.writer.f, j.path); err != nil {
+			return nil, err
+		}
+		j.writer.dirSyncPending = false
+	}
 	*target = CapturedSync{journal: j, writer: j.writer, root: j.root, path: j.path, walDir: j.walDir, LSN: j.activeSegmentMaxLSN, Bytes: uint64(j.writer.StableBytes())}
 	defer func() {
 		if err != nil {
@@ -151,7 +157,7 @@ func (target *CapturedSync) Sync() error {
 		}
 		// This zero-frontier handle is only a pin. A successful sync still
 		// performs physical I/O using the exact file's captured mode.
-		if err := target.writer.syncPinnedFile(file, target.active.syncFile); err != nil {
+		if err := target.writer.syncPinnedFileThrough(file, target.active.syncFile, target.active.seq, target.Bytes); err != nil {
 			return err
 		}
 		return emit(durabilitycut.AfterDependencyFileSync)

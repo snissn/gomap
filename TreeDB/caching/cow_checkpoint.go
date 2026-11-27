@@ -422,11 +422,17 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		}
 		db.writeMu.Unlock()
 	} else {
-		// Explicit Checkpoint on relaxed command-WAL defers active WAL segment
-		// rotation and WAL fsync until after index.db + leaf_vlog durably cover
-		// the frontier, avoiding a synchronous fsync of a segment about to be
-		// unlinked.
-		rotateJournal := !pressureOnly && (!db.relaxedSync || automatic || durabilitycut.Enabled() || db.testBeforeCheckpointFrontierDrain != nil || db.testAfterCheckpointFrontierCapture != nil)
+		// Explicit Checkpoint on relaxed command-WAL or public durable Checkpoint
+		// (deferCommandWALCleanup) defers active WAL segment rotation and WAL
+		// fsync until after index.db + leaf_vlog durably cover the frontier,
+		// avoiding synchronous rotation/fsync under writeMu and overlapping
+		// fixed-WAL successor initialization with B-tree flush + WaitThrough.
+		deferWALRotation := !pressureOnly && !automatic && operation == nil &&
+			!durabilitycut.Enabled() &&
+			db.testBeforeCheckpointFrontierDrain == nil &&
+			db.testAfterCheckpointFrontierCapture == nil &&
+			(db.relaxedSync || deferCommandWALCleanup)
+		rotateJournal := !pressureOnly && !deferWALRotation
 		deferRelaxedWALSync = !pressureOnly && !rotateJournal
 		err = db.rotateCOWFrontier(ctx, true, &frontier, rotateJournal)
 	}
@@ -438,6 +444,15 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	db.checkpointMu.Unlock()
 	if err != nil {
 		return err
+	}
+	if deferRelaxedWALSync && db.externalCommandWAL {
+		if prewarm, ok := db.backend.(interface {
+			PrepareFixedWALCheckpointReserve() error
+		}); ok {
+			if err = prewarm.PrepareFixedWALCheckpointReserve(); err != nil {
+				return err
+			}
+		}
 	}
 	if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
 		hook()

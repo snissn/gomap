@@ -16,9 +16,11 @@ type journalFileSyncFailure struct{ cause error }
 // authoritative segment ambiguous to recovery. This lock does not protect
 // append or flush.
 type journalFileSync struct {
-	mu      sync.Mutex
-	failure atomic.Pointer[journalFileSyncFailure]
-	onError func()
+	mu          sync.Mutex
+	failure     atomic.Pointer[journalFileSyncFailure]
+	onError     func()
+	syncedSeq   uint64
+	syncedBytes uint64
 }
 
 func (s *journalFileSync) err() error {
@@ -29,6 +31,10 @@ func (s *journalFileSync) err() error {
 }
 
 func (s *journalFileSync) run(syncFile func() error) error {
+	return s.runThrough(0, 0, syncFile)
+}
+
+func (s *journalFileSync) runThrough(seq, stableBytes uint64, syncFile func() error) error {
 	if s == nil { // A low-level Writer with no CommandJournal owner.
 		return syncFile()
 	}
@@ -40,7 +46,24 @@ func (s *journalFileSync) run(syncFile func() error) error {
 	if err := syncFile(); err != nil {
 		return s.recordFailureLocked(err)
 	}
+	if seq != 0 {
+		if seq > s.syncedSeq {
+			s.syncedSeq = seq
+			s.syncedBytes = stableBytes
+		} else if seq == s.syncedSeq && stableBytes > s.syncedBytes {
+			s.syncedBytes = stableBytes
+		}
+	}
 	return nil
+}
+
+func (s *journalFileSync) alreadySynced(seq, stableBytes uint64) bool {
+	if s == nil || seq == 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err() == nil && s.syncedSeq == seq && s.syncedBytes >= stableBytes
 }
 
 // recordFailure retains an error from an operation that already ran, even

@@ -27,6 +27,7 @@ const (
 // worker has joined.
 type fixedWALAheadSlot struct {
 	generation, sequence, namespace, parentGeneration uint64
+	reason                                            fixedWALRotationReason
 	currentInfo                                       os.FileInfo
 	identity                                          [16]byte
 	capacity, plannedCapacity, budget, target         int64
@@ -249,6 +250,12 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	if plan.capacity <= 0 || plan.capacity > fixedWALDefaultPhysicalBudget {
 		return nil
 	}
+	return j.startFixedWALAheadSlotLocked(fixedWALPressureRotation, plan.capacity)
+}
+
+func (j *CommandJournal) startFixedWALAheadSlotLocked(reason fixedWALRotationReason, plannedCapacity int64) error {
+	w := j.writer
+	current := w.fixed
 	info, err := w.f.Stat()
 	if err != nil {
 		return err
@@ -264,14 +271,56 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	j.fixedAheadGeneration++
 	slot := &fixedWALAheadSlot{
 		generation: j.fixedAheadGeneration, sequence: j.segmentSeq, namespace: j.namespaceGeneration, parentGeneration: parentGeneration,
-		currentInfo: info, identity: current.identity, capacity: current.capacity, plannedCapacity: plan.capacity, budget: w.fixedBudget, target: j.segmentTargetBytes,
-		reserve: &fixedWALAheadReserve{parent: parent, state: &fixedWAL{capacity: plan.capacity}},
+		reason:      reason,
+		currentInfo: info, identity: current.identity, capacity: current.capacity, plannedCapacity: plannedCapacity, budget: w.fixedBudget, target: j.segmentTargetBytes,
+		reserve: &fixedWALAheadReserve{parent: parent, state: &fixedWAL{capacity: plannedCapacity}},
 		signal:  make(chan struct{}), initDone: make(chan struct{}),
 	}
 	j.fixedAhead = slot
 	j.fixedAheadWorkers++
 	go j.runFixedWALAhead(slot)
 	return nil
+}
+
+// PrepareFixedWALCheckpointReserve asynchronously pre-initializes the default
+// forced-rotation fixed WAL successor so an explicit checkpoint can overlap the
+// 4 MiB reserve zero-fill + fsync with B-tree flush and root publication I/O.
+func (j *CommandJournal) PrepareFixedWALCheckpointReserve() error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.fixedAhead != nil && j.fixedAhead.done {
+		if err := j.fixedWALAheadErrorLocked(); err != nil {
+			return err
+		}
+	}
+	w := j.writer
+	if j.closing || w == nil || w.fixed == nil || w.containerSelection.ext4Stream || j.stableParent == nil || !FixedWALCreationSupported() ||
+		j.pendingStableSuccessor != nil || len(j.pendingStableRotations) != 0 || j.segmentSeq == ^uint64(0) || j.fixedAheadGeneration == ^uint64(0) ||
+		w.ActiveBytes() == 0 {
+		return nil
+	}
+	plan, err := fixedSuccessorSizePlan(w.fixed, w.fixedBudget, fixedWALForcedRotation, 0)
+	if err != nil || plan.capacity <= 0 || plan.capacity > fixedWALDefaultPhysicalBudget {
+		return err
+	}
+	if slot := j.fixedAhead; slot != nil {
+		if !slot.cancelled && !slot.claimed && !slot.done && slot.reason == fixedWALForcedRotation &&
+			slot.sequence == j.segmentSeq && slot.namespace == j.namespaceGeneration &&
+			slot.identity == w.fixed.identity && slot.plannedCapacity == plan.capacity {
+			return nil
+		}
+		j.cancelFixedWALAheadLocked()
+		j.pendingCheckpointReserveSeq = j.segmentSeq
+		return nil
+	}
+	if j.fixedAheadWorkers > 0 {
+		j.pendingCheckpointReserveSeq = j.segmentSeq
+		return nil
+	}
+	return j.startFixedWALAheadSlotLocked(fixedWALForcedRotation, plan.capacity)
 }
 
 func (j *CommandJournal) runFixedWALAhead(slot *fixedWALAheadSlot) {
@@ -312,15 +361,30 @@ func (j *CommandJournal) runFixedWALAhead(slot *fixedWALAheadSlot) {
 	}
 	slot.done = true
 	j.fixedAheadWorkers--
+	if j.fixedAheadWorkers == 0 && !j.closing && j.fixedAheadErr == nil &&
+		(j.fixedAhead == nil || j.fixedAhead == slot) &&
+		j.pendingCheckpointReserveSeq != 0 && j.pendingCheckpointReserveSeq == j.segmentSeq {
+		j.fixedAhead = nil
+		j.pendingCheckpointReserveSeq = 0
+		if w := j.writer; w != nil && w.fixed != nil && !w.containerSelection.ext4Stream && j.stableParent != nil &&
+			j.pendingStableSuccessor == nil && len(j.pendingStableRotations) == 0 &&
+			j.segmentSeq != ^uint64(0) && j.fixedAheadGeneration != ^uint64(0) && w.ActiveBytes() > 0 {
+			if plan, planErr := fixedSuccessorSizePlan(w.fixed, w.fixedBudget, fixedWALForcedRotation, 0); planErr == nil && plan.capacity > 0 && plan.capacity <= fixedWALDefaultPhysicalBudget {
+				if startErr := j.startFixedWALAheadSlotLocked(fixedWALForcedRotation, plan.capacity); startErr != nil {
+					j.fixedAheadErr = errors.Join(j.fixedAheadErr, startErr)
+				}
+			}
+		}
+	}
 	if j.syncCond != nil {
 		j.syncCond.Broadcast()
 	}
 	j.mu.Unlock()
 }
 
-// Claim a matching exact pressure plan, waiting briefly when an identical
-// ahead reserve is already finishing initialization so rotation does not cancel
-// it mid-flight and duplicate the full zero-fill + fsync synchronously.
+// Claim a matching exact plan, waiting briefly when an identical ahead reserve
+// is already finishing initialization so rotation does not cancel it mid-flight
+// and duplicate the full zero-fill + fsync synchronously.
 // Non-matching rotations or a stalled private sync cancel and fall back
 // synchronously without blocking indefinitely. Caller owns dispose after claim,
 // even if canonical creation/publication fails.
@@ -329,7 +393,7 @@ func (j *CommandJournal) takeFixedWALAheadLocked(plan fixedWALSizePlan) (*fixedW
 	if slot == nil {
 		return nil, nil
 	}
-	if slot.cancelled || slot.claimed || slot.done || j.writer.fixedRotationReason != fixedWALPressureRotation ||
+	if slot.cancelled || slot.claimed || slot.done || slot.reason != j.writer.fixedRotationReason ||
 		slot.generation != j.fixedAheadGeneration || slot.sequence != j.segmentSeq || slot.namespace != j.namespaceGeneration ||
 		slot.budget != j.writer.fixedBudget || slot.target != j.segmentTargetBytes || j.writer.fixed == nil ||
 		slot.identity != j.writer.fixed.identity || slot.capacity != j.writer.fixed.capacity || slot.plannedCapacity != plan.capacity ||
