@@ -2806,6 +2806,8 @@ type mongoUpdateCoalescer struct {
 	lfHead                int
 	lfLen                 int
 	lfWakeCh              chan struct{}
+	lfSpaceCh             chan struct{}
+	stickyIdleWindow      time.Duration
 
 	// Lazy idle eviction timer state for maxDelay == 0 (zero goroutines while idle).
 	idleMu           sync.Mutex
@@ -2869,37 +2871,70 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 }
 
 func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
-	c.lfMu.Lock()
-	if c.lfStopped {
-		c.lfMu.Unlock()
-		if err := update.budget.checkDeadline(); err != nil {
-			return false, false, err
+	for {
+		c.lfMu.Lock()
+		if c.lfStopped {
+			c.lfMu.Unlock()
+			if err := update.budget.checkDeadline(); err != nil {
+				return false, false, err
+			}
+			return runMongoUpdateOne(col, update)
 		}
-		return runMongoUpdateOne(col, update)
-	}
-	if !c.lfInlineRunning && !c.lfWorkerBusy && !c.lfSticky && c.lfLen == 0 {
-		c.lfInlineRunning = true
-		c.lfMu.Unlock()
-		return c.runInlineFastPath(col, update)
-	}
-	if c.inFlight.Load() >= 3 {
-		c.lfSticky = true
-	}
-	done := getMongoUpdateResultChan()
-	c.lfPushLocked(mongoUpdateCoalescerRequest{col: col, item: update, done: done})
-	wake := false
-	if !c.lfInlineRunning && !c.lfWorkerBusy {
-		c.lfWorkerBusy = true
-		wake = c.ensureHotWorkerLocked()
-	}
-	c.lfMu.Unlock()
-	if wake {
-		c.signalLFWake()
-	}
+		if !c.lfInlineRunning && !c.lfWorkerBusy && !c.lfSticky && c.lfLen == 0 {
+			c.lfInlineRunning = true
+			c.lfMu.Unlock()
+			return c.runInlineFastPath(col, update)
+		}
+		if c.maxQueueCap > 0 && c.lfLen >= c.maxQueueCap {
+			if c.lfSpaceCh == nil {
+				c.lfSpaceCh = make(chan struct{})
+			}
+			spaceCh := c.lfSpaceCh
+			c.lfMu.Unlock()
 
-	res := <-done
-	putMongoUpdateResultChan(done)
-	return res.matched, res.modified, res.err
+			if err := waitForLFSpaceOrDeadline(spaceCh, update.budget); err != nil {
+				return false, false, err
+			}
+			continue
+		}
+		if c.inFlight.Load() >= 3 {
+			c.lfSticky = true
+		}
+		done := getMongoUpdateResultChan()
+		c.lfPushLocked(mongoUpdateCoalescerRequest{col: col, item: update, done: done})
+		wake := false
+		if !c.lfInlineRunning && !c.lfWorkerBusy {
+			c.lfWorkerBusy = true
+			wake = c.ensureHotWorkerLocked()
+		}
+		c.lfMu.Unlock()
+		if wake {
+			c.signalLFWake()
+		}
+
+		res := <-done
+		putMongoUpdateResultChan(done)
+		return res.matched, res.modified, res.err
+	}
+}
+
+func waitForLFSpaceOrDeadline(spaceCh <-chan struct{}, budget *mongoWriteBudget) error {
+	if budget == nil || budget.deadline.IsZero() {
+		<-spaceCh
+		return nil
+	}
+	remaining := time.Until(budget.deadline)
+	if remaining <= 0 {
+		return budget.checkDeadline()
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-spaceCh:
+		return budget.checkDeadline()
+	case <-timer.C:
+		return budget.checkDeadline()
+	}
 }
 
 func (c *mongoUpdateCoalescer) runInlineFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
@@ -2986,14 +3021,17 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 		}
 		stickyC = nil
 	}
-	ensureStickyTimer := func() {
+	ensureStickyTimer := func(window time.Duration) {
 		if stickyC != nil {
 			return
 		}
+		if window <= 0 {
+			window = defaultUpdateCoalescingStickyIdleWindow
+		}
 		if stickyTimer == nil {
-			stickyTimer = time.NewTimer(defaultUpdateCoalescingStickyIdleWindow)
+			stickyTimer = time.NewTimer(window)
 		} else {
-			stickyTimer.Reset(defaultUpdateCoalescingStickyIdleWindow)
+			stickyTimer.Reset(window)
 		}
 		stickyC = stickyTimer.C
 	}
@@ -3023,13 +3061,14 @@ func (c *mongoUpdateCoalescer) runHotWorker() {
 				soloStreak = 0
 			}
 			sticky := c.lfSticky
+			stickyWindow := c.stickyIdleWindow
 			c.lfWorkerBusy = false
 			c.lfMu.Unlock()
 
 			if sticky {
 				if stickyC == nil {
 					stickyArmedAt = workerOps
-					ensureStickyTimer()
+					ensureStickyTimer(stickyWindow)
 				}
 			} else if stickyC != nil {
 				stopStickyTimer()
@@ -3151,6 +3190,13 @@ func (c *mongoUpdateCoalescer) lfPushLocked(req mongoUpdateCoalescerRequest) {
 	c.lfLen++
 }
 
+func (c *mongoUpdateCoalescer) broadcastLFSpaceLocked() {
+	if c.lfSpaceCh != nil {
+		close(c.lfSpaceCh)
+		c.lfSpaceCh = nil
+	}
+}
+
 func (c *mongoUpdateCoalescer) lfPopFrontLocked() mongoUpdateCoalescerRequest {
 	req := c.lfQueue[c.lfHead]
 	c.lfQueue[c.lfHead] = mongoUpdateCoalescerRequest{}
@@ -3166,6 +3212,7 @@ func (c *mongoUpdateCoalescer) lfPopFrontLocked() mongoUpdateCoalescerRequest {
 			c.lfHead = 0
 		}
 	}
+	c.broadcastLFSpaceLocked()
 	return req
 }
 
@@ -3194,6 +3241,7 @@ func (c *mongoUpdateCoalescer) lfDrainIntoLocked(dst []mongoUpdateCoalescerReque
 			c.lfHead -= len(c.lfQueue)
 		}
 	}
+	c.broadcastLFSpaceLocked()
 	return dst
 }
 
@@ -3477,12 +3525,53 @@ func (c *mongoUpdateCoalescer) stop() {
 }
 
 func (c *mongoUpdateCoalescer) closeRequests() bool {
+	return c.closeRequestsMode(false)
+}
+
+func (c *mongoUpdateCoalescer) tryCloseIdleRequests() bool {
+	return c.closeRequestsMode(true)
+}
+
+func (c *mongoUpdateCoalescer) closeRequestsMode(requireIdle bool) bool {
 	c.enqueueMu.Lock()
 	defer c.enqueueMu.Unlock()
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
 		return false
+	}
+	if requireIdle && c.inFlight.Load() != 0 {
+		c.mu.Unlock()
+		return false
+	}
+	if c.useLeaderFollower {
+		c.lfMu.Lock()
+		if requireIdle && (c.inFlight.Load() != 0 || c.lfInlineRunning || c.lfWorkerBusy || c.lfLen > 0) {
+			c.lfMu.Unlock()
+			c.mu.Unlock()
+			return false
+		}
+		if c.stoppedCh == nil {
+			c.stoppedCh = make(chan struct{})
+		}
+		c.stopped = true
+		c.stoppedFlag.Store(true)
+		close(c.stoppedCh)
+		if c.requests != nil {
+			close(c.requests)
+		}
+		c.lfStopped = true
+		c.broadcastLFSpaceLocked()
+		wakeWorker := c.lfWorkerStarted
+		if !c.lfWorkerStarted && !c.lfInlineRunning && c.lfLen == 0 {
+			c.closeDoneLocked()
+		}
+		c.lfMu.Unlock()
+		c.mu.Unlock()
+		if wakeWorker {
+			c.signalLFWake()
+		}
+		return true
 	}
 	if c.stoppedCh == nil {
 		c.stoppedCh = make(chan struct{})
@@ -3492,14 +3581,6 @@ func (c *mongoUpdateCoalescer) closeRequests() bool {
 	close(c.stoppedCh)
 	if c.requests != nil {
 		close(c.requests)
-	}
-	if c.useLeaderFollower {
-		c.lfMu.Lock()
-		c.lfStopped = true
-		if !c.lfWorkerStarted && !c.lfInlineRunning && c.lfLen == 0 {
-			c.closeDoneLocked()
-		}
-		c.lfMu.Unlock()
 	}
 	c.mu.Unlock()
 	return true
@@ -3516,14 +3597,14 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	if c.server != nil {
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
-			if c.inFlight.Load() == 0 && !c.hasLeaderWork() {
-				stopped = c.closeRequests()
+			if c.tryCloseIdleRequests() {
+				stopped = true
 				delete(c.server.updateCoalescers, c.name)
 			}
 		}
 		c.server.updateMu.Unlock()
-	} else if c.inFlight.Load() == 0 && !c.hasLeaderWork() {
-		stopped = c.closeRequests()
+	} else {
+		stopped = c.tryCloseIdleRequests()
 	}
 	if !stopped {
 		if c.isStopped() {
@@ -3567,6 +3648,7 @@ func (c *mongoUpdateCoalescer) markStopped() {
 	if c.useLeaderFollower {
 		c.lfMu.Lock()
 		c.lfStopped = true
+		c.broadcastLFSpaceLocked()
 		c.lfMu.Unlock()
 	}
 	c.mu.Unlock()

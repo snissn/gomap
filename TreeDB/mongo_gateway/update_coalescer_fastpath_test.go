@@ -567,6 +567,11 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 		if !coalescer.useLeaderFollower {
 			t.Fatal("expected leader-follower mode for maxDelay == 0")
 		}
+		// Use a long sticky window so CI scheduling jitter cannot prematurely
+		// expire sticky hot-worker mode before the follow-up check below.
+		coalescer.lfMu.Lock()
+		coalescer.stickyIdleWindow = 10 * time.Second
+		coalescer.lfMu.Unlock()
 		ctx := context.Background()
 
 		// While a leader holds execution, even w=4 writers must deterministically queue
@@ -616,14 +621,20 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 		if got := coalescer.workerBatches.Load(); got != 1 {
 			t.Fatalf("w4 coalesced workerBatches=%d want 1", got)
 		}
+		coalescer.lfMu.Lock()
+		stickyAfterWave := coalescer.lfSticky
+		coalescer.lfMu.Unlock()
+		if !stickyAfterWave {
+			t.Fatal("expected lfSticky=true after coalesced w=4 wave")
+		}
 		for w := 0; w < writers; w++ {
 			if got := findDocN(t, s.Server, collName, int64(w)); got != int64(100+w) {
 				t.Fatalf("doc[%d] n=%d want %d", w, got, 100+w)
 			}
 		}
 
-		// Immediately after a coalesced w=4 wave, sticky hot-worker mode keeps a
-		// follow-up update on the same hot worker (preventing cross-core stealing).
+		// With stickyIdleWindow=10s, a follow-up update stays deterministically pinned
+		// on the same hot worker (preventing cross-core stealing).
 		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 4, 404), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("post-wave sticky update: resp=%s err=%v", resp, err)
@@ -638,30 +649,76 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 			t.Fatalf("doc 4 n=%d want 404", got)
 		}
 
-		// Once the quiet sticky window expires, uncontended w=1 resumes inline execution.
+		// Verify separately with a short sticky window that quiet timer expiry
+		// cleanly clears sticky mode and resumes uncontended w=1 inline execution.
+		sExpiry, collExpiry := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = sExpiry.Close() }()
+		cExpiry := sExpiry.Server.mongoUpdateCoalescer("app." + collExpiry)
+		if cExpiry == nil {
+			t.Fatal("expected expiry coalescer")
+		}
+		cExpiry.lfMu.Lock()
+		cExpiry.stickyIdleWindow = 5 * time.Millisecond
+		cExpiry.lfMu.Unlock()
+
+		releaseExpiry := holdUpdateCoalescerLeaderForTest(t, cExpiry)
+		defer releaseExpiry()
+		var expWG sync.WaitGroup
+		expWG.Add(2)
+		expErrs := make(chan error, 2)
+		for w := 0; w < 2; w++ {
+			w := w
+			go func() {
+				defer expWG.Done()
+				r, err := sExpiry.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collExpiry, int64(w), int64(200+w)), nil, 0)
+				if err != nil || !mongoCommandResponseOK(r) {
+					expErrs <- fmt.Errorf("expiry writer %d: resp=%s err=%v", w, r, err)
+				}
+			}()
+		}
+		expQueueDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(expQueueDeadline) && cExpiry.queuedLen() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		if got := cExpiry.queuedLen(); got != 2 {
+			t.Fatalf("expiry queued=%d want 2", got)
+		}
+		releaseExpiry()
+		expWG.Wait()
+		close(expErrs)
+		for err := range expErrs {
+			t.Fatal(err)
+		}
+
 		stickyDeadline := time.Now().Add(time.Second)
 		for time.Now().Before(stickyDeadline) {
-			coalescer.lfMu.Lock()
-			sticky := coalescer.lfSticky
-			busy := coalescer.lfWorkerBusy
-			coalescer.lfMu.Unlock()
+			cExpiry.lfMu.Lock()
+			sticky := cExpiry.lfSticky
+			busy := cExpiry.lfWorkerBusy
+			cExpiry.lfMu.Unlock()
 			if !sticky && !busy {
 				break
 			}
 			time.Sleep(time.Millisecond)
 		}
-		if coalescer.hasLeaderWork() {
+		if cExpiry.hasLeaderWork() {
 			t.Fatal("leader work remained active after sticky window expired")
 		}
-		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 5, 505), nil, 0)
+		cExpiry.lfMu.Lock()
+		stillSticky := cExpiry.lfSticky
+		cExpiry.lfMu.Unlock()
+		if stillSticky {
+			t.Fatal("lfSticky remained true after sticky window expired")
+		}
+		resp, err = sExpiry.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collExpiry, 2, 505), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
 			t.Fatalf("post-sticky single update: resp=%s err=%v", resp, err)
 		}
-		if got := coalescer.inlineExecs.Load(); got != 1 {
+		if got := cExpiry.inlineExecs.Load(); got != 1 {
 			t.Fatalf("post-sticky inlineExecs=%d want 1", got)
 		}
-		if got := findDocN(t, s.Server, collName, 5); got != 505 {
-			t.Fatalf("doc 5 n=%d want 505", got)
+		if got := findDocN(t, sExpiry.Server, collExpiry, 2); got != 505 {
+			t.Fatalf("doc 2 n=%d want 505", got)
 		}
 	})
 

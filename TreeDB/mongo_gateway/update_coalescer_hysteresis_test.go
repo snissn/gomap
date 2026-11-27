@@ -173,8 +173,12 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, soloItem)
 			soloCh <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
-		for time.Now().Before(deadline) && coalescer.queuedLen() < 1 {
+		soloQueueDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(soloQueueDeadline) && coalescer.queuedLen() < 1 {
 			time.Sleep(time.Millisecond)
+		}
+		if got := coalescer.queuedLen(); got != 1 {
+			t.Fatalf("solo queued=%d want 1 before expiring deadline", got)
 		}
 		soloBudget.deadline = time.Now().Add(-time.Second)
 		releaseB()
@@ -534,28 +538,31 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		e2eRes0 := make(chan mongoUpdateCoalescerResult, 1)
 		e2eRes1 := make(chan mongoUpdateCoalescerResult, 1)
 		e2eRes2 := make(chan mongoUpdateCoalescerResult, 1)
-		deadline := time.Now().Add(5 * time.Second)
+		waitQueued := func(want int) {
+			t.Helper()
+			qDeadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(qDeadline) && coalescer.queuedLen() < want {
+				time.Sleep(time.Millisecond)
+			}
+			if got := coalescer.queuedLen(); got != want {
+				t.Fatalf("e2e queued=%d want %d before advancing", got, want)
+			}
+		}
 		go func() {
 			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(0, 20, e2ePanicBudget))
 			e2eRes0 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
-		for time.Now().Before(deadline) && coalescer.queuedLen() < 1 {
-			time.Sleep(time.Millisecond)
-		}
+		waitQueued(1)
 		go func() {
 			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(1, 21, newMongoWriteBudget(1)))
 			e2eRes1 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
-		for time.Now().Before(deadline) && coalescer.queuedLen() < 2 {
-			time.Sleep(time.Millisecond)
-		}
+		waitQueued(2)
 		go func() {
 			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(2, 22, e2eExpBudget))
 			e2eRes2 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
 		}()
-		for time.Now().Before(deadline) && coalescer.queuedLen() < 3 {
-			time.Sleep(time.Millisecond)
-		}
+		waitQueued(3)
 		e2eExpBudget.deadline = time.Now().Add(-time.Second)
 		releaseLeader()
 
@@ -655,6 +662,11 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		if coalescer == nil {
 			t.Fatal("expected cached coalescer")
 		}
+		// Disable timer-based sticky expiry during this test so only soloStreak
+		// can clear lfSticky (eliminating false passes under CI jitter).
+		coalescer.lfMu.Lock()
+		coalescer.stickyIdleWindow = 10 * time.Second
+		coalescer.lfMu.Unlock()
 
 		// Trigger a 2-writer coalesced batch to latch lfSticky = true.
 		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
@@ -677,6 +689,9 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 		for time.Now().Before(deadline) && coalescer.queuedLen() < 2 {
 			time.Sleep(time.Millisecond)
 		}
+		if got := coalescer.queuedLen(); got != 2 {
+			t.Fatalf("queued=%d want 2", got)
+		}
 		releaseLeader()
 		wg.Wait()
 		close(errCh)
@@ -684,17 +699,175 @@ func TestMongoUpdateCoalescerLeaderFollower(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Now issue continuous solo updates without waiting for the 5ms quiet timer:
-		// after defaultUpdateCoalescingStickySoloLimit solo commits, lfSticky must
-		// clear so subsequent single-writer updates run inline again.
-		for step := int64(2); step <= int64(2+defaultUpdateCoalescingStickySoloLimit+4); step++ {
+		coalescer.lfMu.Lock()
+		enteredSticky := coalescer.lfSticky
+		coalescer.lfMu.Unlock()
+		if !enteredSticky {
+			t.Fatal("expected lfSticky=true immediately after 2-writer coalesced batch")
+		}
+
+		// First solo update stays pinned on hot worker (inlineExecs remains 0).
+		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, 2), nil, 0)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("first solo update: resp=%s err=%v", resp, err)
+		}
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("first solo update inlineExecs=%d want 0 while sticky", got)
+		}
+
+		// Issue remaining solo updates through defaultUpdateCoalescingStickySoloLimit:
+		// soloStreak must clear lfSticky well before the 10s stickyIdleWindow and
+		// resume inline execution cleanly.
+		for step := int64(3); step <= int64(2+defaultUpdateCoalescingStickySoloLimit+4); step++ {
 			resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, step), nil, 0)
 			if err != nil || !mongoCommandResponseOK(resp) {
 				t.Fatalf("solo step %d: resp=%s err=%v", step, resp, err)
 			}
 		}
+		coalescer.lfMu.Lock()
+		stillSticky := coalescer.lfSticky
+		coalescer.lfMu.Unlock()
+		if stillSticky {
+			t.Fatal("lfSticky remained true after soloStreak exceeded limit")
+		}
 		if got := coalescer.inlineExecs.Load(); got == 0 {
 			t.Fatalf("expected soloStreak to clear sticky mode and resume inline execution; inlineExecs=0 workerBatches=%d", coalescer.workerBatches.Load())
+		}
+	})
+
+	t.Run("MaxQueueCapBackpressureAndDeadline", func(t *testing.T) {
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 8)
+		defer func() { _ = s.Close() }()
+
+		col, err := s.Collections.OpenCollection("app." + collName)
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
+		if coalescer == nil {
+			t.Fatal("expected cached coalescer")
+		}
+		coalescer.lfMu.Lock()
+		coalescer.maxQueueCap = 2
+		coalescer.lfMu.Unlock()
+
+		makeItem := func(id, val int64, budget *mongoWriteBudget) mongoUpdateItem {
+			item, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: val}}}}},
+			}))
+			if err != nil {
+				t.Fatalf("parseMongoUpdateItem: %v", err)
+			}
+			item.budget = budget
+			return item
+		}
+
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
+
+		res0 := make(chan mongoUpdateCoalescerResult, 1)
+		res1 := make(chan mongoUpdateCoalescerResult, 1)
+		resLive := make(chan mongoUpdateCoalescerResult, 1)
+		resExpired := make(chan mongoUpdateCoalescerResult, 1)
+
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(0, 100, newMongoWriteBudget(1)))
+			res0 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(1, 101, newMongoWriteBudget(1)))
+			res1 <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		qDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(qDeadline) && coalescer.queuedLen() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		if got := coalescer.queuedLen(); got != 2 {
+			t.Fatalf("queued=%d want 2 (full maxQueueCap)", got)
+		}
+
+		// Queue is now full (len == maxQueueCap == 2). Start a live waiter (must block
+		// outside lfMu without exceeding cap) and a short-deadline waiter (must fail
+		// with execution-time budget error while waiting).
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(2, 102, newMongoWriteBudget(1)))
+			resLive <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+		shortBudget := newMongoWriteBudget(1)
+		shortBudget.deadline = time.Now().Add(25 * time.Millisecond)
+		go func() {
+			m, mod, err := s.Server.runMongoUpdateCoalesced("app."+collName, col, makeItem(3, 103, shortBudget))
+			resExpired <- mongoUpdateCoalescerResult{matched: m, modified: mod, err: err}
+		}()
+
+		select {
+		case rExp := <-resExpired:
+			if rExp.err == nil || !strings.Contains(rExp.err.Error(), "exceeded its execution-time budget") {
+				t.Fatalf("expired backpressure waiter res=%+v want budget error", rExp)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("short-deadline waiter blocked past deadline on full queue")
+		}
+		if got := coalescer.queuedLen(); got != 2 {
+			t.Fatalf("queued=%d exceeded maxQueueCap=2 while leader held", got)
+		}
+		select {
+		case r := <-resLive:
+			t.Fatalf("live waiter bypassed full queue early: %+v", r)
+		default:
+		}
+
+		// Releasing leader drains queue, wakes live waiter, and completes all 3 live updates.
+		releaseLeader()
+		for idx, ch := range []chan mongoUpdateCoalescerResult{res0, res1, resLive} {
+			select {
+			case r := <-ch:
+				if r.err != nil || !r.matched || !r.modified {
+					t.Fatalf("live[%d] res=%+v want matched,modified,nil", idx, r)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("live[%d] did not complete after drain", idx)
+			}
+		}
+		if got := findDocN(t, s.Server, collName, 2); got != 102 {
+			t.Fatalf("doc 2 n=%d want 102", got)
+		}
+		if got := findDocN(t, s.Server, collName, 3); got != 0 {
+			t.Fatalf("expired doc 3 mutated: n=%d want 0", got)
+		}
+	})
+
+	t.Run("RetireIdleSkipsWhenLeaderActive", func(t *testing.T) {
+		server := NewServer()
+		defer func() { _ = server.Close() }()
+		coalescer := server.mongoUpdateCoalescer("app.users")
+		if coalescer == nil {
+			t.Fatal("expected coalescer")
+		}
+
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
+		// Even with inFlight == 0, retireIdle must atomically observe lfInlineRunning
+		// under lfMu, refuse to stop, and keep the coalescer registered in updateCoalescers.
+		if coalescer.retireIdle() {
+			t.Fatal("retireIdle retired coalescer while lfInlineRunning was true")
+		}
+		if coalescer.isStopped() {
+			t.Fatal("coalescer marked stopped while lfInlineRunning was true")
+		}
+		server.updateMu.RLock()
+		stillCached := server.updateCoalescers["app.users"] == coalescer
+		server.updateMu.RUnlock()
+		if !stillCached {
+			t.Fatal("retireIdle uncached active coalescer from server.updateCoalescers")
+		}
+		releaseLeader()
+		if !coalescer.retireIdle() {
+			t.Fatal("retireIdle failed after leader became idle")
+		}
+		if !coalescer.isStopped() {
+			t.Fatal("coalescer not stopped after idle retirement")
 		}
 	})
 
@@ -1395,6 +1568,17 @@ func BenchmarkMongoUpdateCoalescerScalingStandaloneCOW(b *testing.B) {
 					}
 					if !mongoCommandResponseOK(r) {
 						e := fmt.Errorf("update[%d] not ok: %s", idx, r)
+						firstErr.CompareAndSwap(nil, &e)
+						return
+					}
+					raw := bson.Raw(r)
+					if n, ok := raw.Lookup("n").Int32OK(); !ok || n != 1 {
+						e := fmt.Errorf("update[%d] n=%d ok=%v want 1: %s", idx, n, ok, r)
+						firstErr.CompareAndSwap(nil, &e)
+						return
+					}
+					if !raw.Lookup("writeErrors").IsZero() {
+						e := fmt.Errorf("update[%d] writeErrors present: %s", idx, r)
 						firstErr.CompareAndSwap(nil, &e)
 						return
 					}
