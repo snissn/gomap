@@ -1217,12 +1217,39 @@ One synchronous publication executes in this order:
 
 A COW checkpoint that republishes the same sealed basis to the alternate slot
 reuses its existing command-WAL coverage. The new publication still performs
-the dependency, index, and meta barriers for that slot.
+the index data sync (step 4), single alternate meta write (step 5), and
+meta-page sync (step 6) in strict data-before-meta order for that slot.
+
+Step 2 (external dependency sync) may be elided for a candidate only when all
+of the following live-session coverage conditions hold:
+
+- `durabilitycut` is inactive and the runtime has no pending or ambiguous
+  candidate (`pending == nil` and `len(ambiguous) == 0`),
+- the currently selected durable slot carries a live-session completion receipt
+  (`dataCompletion`, minted only by a completed in-process publication and never
+  by reopen or rebuild) matching the candidate's exact pager, incarnation
+  generation, and stable file identity, and
+- `DependenciesCoveredBy` proves every entry in the candidate's dependency
+  closure is already durably synced: either via its own producer
+  `ContentSynced` frontier certificate (with a validated stable namespace) or as
+  a mutable-append outer-leaf/value-log segment whose exact physical handle,
+  compatible stable namespace, and already-synced frontier in that live-session
+  parent slot cover the candidate frontier (`ResourceIndex` and any grown,
+  rotated, or uncertified resource always decline).
+
+Whenever any of those conditions is absent or invalidated (including after
+reopen or rebuild, with pending/ambiguous state, on pager/incarnation/identity
+mismatch, when any dependency grows or rotates, or under active
+`durabilitycut`), publication falls back to executing the full step 2
+dependency sync barrier before step 3. In both covered and fallback paths,
+steps 4 through 6 (index sync, alternate meta write, and meta sync) always
+execute.
 
 Preparation derives the dependency-manifest reference directly from its
 immutable payload and reserved page interval. It does not encode disposable
 pages to obtain that reference. Actual materialization still writes the complete
-V1 stream with the same page checksums and dependency, index, and meta barriers.
+V1 stream with the same page checksums and publication barriers (with step 2
+subject to the live-session dependency-coverage conditions above).
 
 Dependency, index, and meta syncs run outside DB, write, commit, and root-build
 locks. The narrow root-reuse admission fence remains exclusively held: it is
