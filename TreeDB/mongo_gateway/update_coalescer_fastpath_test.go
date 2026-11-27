@@ -303,6 +303,30 @@ func TestUpdateCoalescerFastPathDelayCoalescingPreserved(t *testing.T) {
 	}
 }
 
+func holdUpdateCoalescerLeaderForTest(t *testing.T, c *mongoUpdateCoalescer) func() {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.lfMu.Lock()
+		if !c.lfInlineRunning && !c.lfWorkerBusy && c.lfLen == 0 {
+			c.lfInlineRunning = true
+			c.lfMu.Unlock()
+			break
+		}
+		c.lfMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for coalescer idle to hold inline leader")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.finishInlineFastPath()
+		})
+	}
+}
+
 func TestUpdateCoalescerFastPathConcurrentCoalescingAndClose(t *testing.T) {
 	const (
 		writers       = 16
@@ -315,13 +339,14 @@ func TestUpdateCoalescerFastPathConcurrentCoalescingAndClose(t *testing.T) {
 
 	ctx := context.Background()
 	// Warm the coalescer so we can deterministically prove concurrent writers
-	// coalesce into a single worker batch even under GOMAXPROCS=1.
+	// coalesce into a single leader-follower batch even under GOMAXPROCS=1.
 	coalescer := s.Server.mongoUpdateCoalescer("app." + collName)
 	if coalescer == nil {
 		t.Fatal("expected coalescer")
 	}
 
-	coalescer.execMu.Lock()
+	releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+	defer releaseLeader()
 	wave1Errs := make(chan error, writers)
 	var wave1WG sync.WaitGroup
 	wave1WG.Add(writers)
@@ -342,19 +367,18 @@ func TestUpdateCoalescerFastPathConcurrentCoalescingAndClose(t *testing.T) {
 		}()
 	}
 	queueDeadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(queueDeadline) && len(coalescer.requests) < writers {
+	for time.Now().Before(queueDeadline) && coalescer.queuedLen() < writers {
 		time.Sleep(time.Millisecond)
 	}
-	queued := len(coalescer.requests)
-	coalescer.execMu.Unlock()
-	coalescer.signalWake()
+	queued := coalescer.queuedLen()
+	releaseLeader()
 	wave1WG.Wait()
 	close(wave1Errs)
 	for err := range wave1Errs {
 		t.Fatal(err)
 	}
 	if queued != writers {
-		t.Fatalf("wave1 queued=%d want %d while execMu held", queued, writers)
+		t.Fatalf("wave1 queued=%d want %d while leader held", queued, writers)
 	}
 	if got := coalescer.workerBatches.Load(); got != 1 {
 		t.Fatalf("wave1 workerBatches=%d want 1 coalesced batch", got)
@@ -530,7 +554,7 @@ func TestUpdateCoalescerFastPathZeroValueStructSafe(t *testing.T) {
 
 func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 	t.Run("DeterministicNonStealing", func(t *testing.T) {
-		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		s, collName := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 8)
 		defer func() { _ = s.Close() }()
 
 		if s.Server.UpdateCoalescingMaxDelay != 0 {
@@ -540,58 +564,161 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 		if coalescer == nil {
 			t.Fatal("expected coalescer")
 		}
+		if !coalescer.useLeaderFollower {
+			t.Fatal("expected leader-follower mode for maxDelay == 0")
+		}
+		// Use a long sticky window so CI scheduling jitter cannot prematurely
+		// expire sticky hot-worker mode before the follow-up check below.
+		coalescer.lfMu.Lock()
+		coalescer.stickyIdleWindow = 10 * time.Second
+		coalescer.lfMu.Unlock()
 		ctx := context.Background()
 
-		// Case 1: inFlight >= defaultUpdateCoalescingInlineMaxActive (incoming caller
-		// sees active > defaultUpdateCoalescingInlineMaxActive) must skip inline even
-		// when execMu is unlocked and the queue is empty.
-		coalescer.inFlight.Add(defaultUpdateCoalescingInlineMaxActive)
-		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 0, 101), nil, 0)
-		coalescer.inFlight.Add(-defaultUpdateCoalescingInlineMaxActive)
-		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("inFlight>=%d update: resp=%s err=%v", defaultUpdateCoalescingInlineMaxActive, resp, err)
+		// While a leader holds execution, even w=4 writers must deterministically queue
+		// as followers (zero inline stealing) and execute together in one coalesced batch
+		// upon direct handoff.
+		const writers = 4
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
+
+		errCh := make(chan error, writers)
+		var wg sync.WaitGroup
+		wg.Add(writers)
+		for w := 0; w < writers; w++ {
+			w := w
+			go func() {
+				defer wg.Done()
+				resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, int64(w), int64(100+w)), nil, 0)
+				if err != nil {
+					errCh <- fmt.Errorf("writer %d: %w", w, err)
+					return
+				}
+				if !mongoCommandResponseOK(resp) {
+					errCh <- fmt.Errorf("writer %d not ok: %s", w, resp)
+				}
+			}()
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && coalescer.queuedLen() < writers {
+			time.Sleep(time.Millisecond)
+		}
+		if got := coalescer.queuedLen(); got != writers {
+			t.Fatalf("queued=%d want %d while leader held", got, writers)
 		}
 		if got := coalescer.inlineExecs.Load(); got != 0 {
-			t.Fatalf("inFlight>=%d inlineExecs=%d want 0", defaultUpdateCoalescingInlineMaxActive, got)
+			t.Fatalf("inlineExecs=%d want 0 while leader held", got)
+		}
+		releaseLeader()
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatal(err)
+		}
+
+		if got := coalescer.inlineExecs.Load(); got != 0 {
+			t.Fatalf("w4 coalesced inlineExecs=%d want 0", got)
 		}
 		if got := coalescer.workerBatches.Load(); got != 1 {
-			t.Fatalf("inFlight>=%d workerBatches=%d want 1", defaultUpdateCoalescingInlineMaxActive, got)
+			t.Fatalf("w4 coalesced workerBatches=%d want 1", got)
 		}
-		if got := findDocN(t, s.Server, collName, 0); got != 101 {
-			t.Fatalf("doc 0 n=%d want 101", got)
+		coalescer.lfMu.Lock()
+		stickyAfterWave := coalescer.lfSticky
+		coalescer.lfMu.Unlock()
+		if !stickyAfterWave {
+			t.Fatal("expected lfSticky=true after coalesced w=4 wave")
+		}
+		for w := 0; w < writers; w++ {
+			if got := findDocN(t, s.Server, collName, int64(w)); got != int64(100+w) {
+				t.Fatalf("doc[%d] n=%d want %d", w, got, 100+w)
+			}
 		}
 
-		// Synchronize with worker unlock from Case 1, then set workerBusy=true while
-		// leaving execMu unlocked and inFlight==0 (so incoming active==1).
-		coalescer.execMu.Lock()
-		select {
-		case <-coalescer.wakeCh:
-		default:
-		}
-		coalescer.workerBusy.Store(true)
-		coalescer.execMu.Unlock()
-
-		// Case 2: workerBusy == true must skip inline even when active == 1 and execMu is unlocked.
-		resp, err = s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 1, 202), nil, 0)
+		// With stickyIdleWindow=10s, a follow-up update stays deterministically pinned
+		// on the same hot worker (preventing cross-core stealing).
+		resp, err := s.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collName, 4, 404), nil, 0)
 		if err != nil || !mongoCommandResponseOK(resp) {
-			t.Fatalf("workerBusy update: resp=%s err=%v", resp, err)
+			t.Fatalf("post-wave sticky update: resp=%s err=%v", resp, err)
 		}
 		if got := coalescer.inlineExecs.Load(); got != 0 {
-			t.Fatalf("workerBusy inlineExecs=%d want 0", got)
+			t.Fatalf("post-wave sticky inlineExecs=%d want 0", got)
 		}
 		if got := coalescer.workerBatches.Load(); got != 2 {
-			t.Fatalf("workerBusy workerBatches=%d want 2", got)
+			t.Fatalf("post-wave sticky workerBatches=%d want 2", got)
 		}
-		if got := findDocN(t, s.Server, collName, 1); got != 202 {
-			t.Fatalf("doc 1 n=%d want 202", got)
+		if got := findDocN(t, s.Server, collName, 4); got != 404 {
+			t.Fatalf("doc 4 n=%d want 404", got)
 		}
 
-		// Ensure worker cleared workerBusy before unlocking execMu.
-		coalescer.execMu.Lock()
-		busyAfter := coalescer.workerBusy.Load()
-		coalescer.execMu.Unlock()
-		if busyAfter {
-			t.Fatal("workerBusy remained true after worker unlocked execMu")
+		// Verify separately with a short sticky window that quiet timer expiry
+		// cleanly clears sticky mode and resumes uncontended w=1 inline execution.
+		sExpiry, collExpiry := openUpdateCoalescerBenchServer(t, t.TempDir(), treedb.ProfileCommandWALRelaxed, 4)
+		defer func() { _ = sExpiry.Close() }()
+		cExpiry := sExpiry.Server.mongoUpdateCoalescer("app." + collExpiry)
+		if cExpiry == nil {
+			t.Fatal("expected expiry coalescer")
+		}
+		cExpiry.lfMu.Lock()
+		cExpiry.stickyIdleWindow = 5 * time.Millisecond
+		cExpiry.lfMu.Unlock()
+
+		releaseExpiry := holdUpdateCoalescerLeaderForTest(t, cExpiry)
+		defer releaseExpiry()
+		var expWG sync.WaitGroup
+		expWG.Add(2)
+		expErrs := make(chan error, 2)
+		for w := 0; w < 2; w++ {
+			w := w
+			go func() {
+				defer expWG.Done()
+				r, err := sExpiry.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collExpiry, int64(w), int64(200+w)), nil, 0)
+				if err != nil || !mongoCommandResponseOK(r) {
+					expErrs <- fmt.Errorf("expiry writer %d: resp=%s err=%v", w, r, err)
+				}
+			}()
+		}
+		expQueueDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(expQueueDeadline) && cExpiry.queuedLen() < 2 {
+			time.Sleep(time.Millisecond)
+		}
+		if got := cExpiry.queuedLen(); got != 2 {
+			t.Fatalf("expiry queued=%d want 2", got)
+		}
+		releaseExpiry()
+		expWG.Wait()
+		close(expErrs)
+		for err := range expErrs {
+			t.Fatal(err)
+		}
+
+		stickyDeadline := time.Now().Add(time.Second)
+		for time.Now().Before(stickyDeadline) {
+			cExpiry.lfMu.Lock()
+			sticky := cExpiry.lfSticky
+			busy := cExpiry.lfWorkerBusy
+			cExpiry.lfMu.Unlock()
+			if !sticky && !busy {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if cExpiry.hasLeaderWork() {
+			t.Fatal("leader work remained active after sticky window expired")
+		}
+		cExpiry.lfMu.Lock()
+		stillSticky := cExpiry.lfSticky
+		cExpiry.lfMu.Unlock()
+		if stillSticky {
+			t.Fatal("lfSticky remained true after sticky window expired")
+		}
+		resp, err = sExpiry.Server.commandResponse(ctx, "update", buildUpdateOneCommand(t, collExpiry, 2, 505), nil, 0)
+		if err != nil || !mongoCommandResponseOK(resp) {
+			t.Fatalf("post-sticky single update: resp=%s err=%v", resp, err)
+		}
+		if got := cExpiry.inlineExecs.Load(); got != 1 {
+			t.Fatalf("post-sticky inlineExecs=%d want 1", got)
+		}
+		if got := findDocN(t, sExpiry.Server, collExpiry, 2); got != 505 {
+			t.Fatalf("doc 2 n=%d want 505", got)
 		}
 	})
 
@@ -611,7 +738,8 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		coalescer.execMu.Lock()
+		releaseLeader := holdUpdateCoalescerLeaderForTest(t, coalescer)
+		defer releaseLeader()
 		errCh := make(chan error, writers)
 		var wg sync.WaitGroup
 		wg.Add(writers)
@@ -630,25 +758,24 @@ func TestUpdateCoalescerHighConcurrencyAvoidsInlineStealing(t *testing.T) {
 			}()
 		}
 		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) && len(coalescer.requests) < writers {
+		for time.Now().Before(deadline) && coalescer.queuedLen() < writers {
 			time.Sleep(time.Millisecond)
 		}
-		queued := len(coalescer.requests)
-		coalescer.execMu.Unlock()
-		coalescer.signalWake()
+		queued := coalescer.queuedLen()
+		releaseLeader()
 		wg.Wait()
 		close(errCh)
 		for err := range errCh {
 			t.Fatal(err)
 		}
 		if queued != writers {
-			t.Fatalf("queued=%d want %d while execMu held", queued, writers)
+			t.Fatalf("queued=%d want %d while leader held", queued, writers)
 		}
 		if got := coalescer.inlineExecs.Load(); got != 0 {
 			t.Fatalf("inlineExecs=%d want 0 during queued multi-batch drain", got)
 		}
-		if got := coalescer.workerBatches.Load(); got < 3 {
-			t.Fatalf("workerBatches=%d want >= 3 for %d queued updates with maxBatch=%d", got, writers, maxBatch)
+		if got := coalescer.workerBatches.Load(); got != 3 {
+			t.Fatalf("workerBatches=%d want 3 for %d queued updates with maxBatch=%d", got, writers, maxBatch)
 		}
 		for w := 0; w < writers; w++ {
 			if got := findDocN(t, s.Server, collName, int64(w)); got != int64(300+w) {

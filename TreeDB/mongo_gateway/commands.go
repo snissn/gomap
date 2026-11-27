@@ -2763,42 +2763,72 @@ func putMongoUpdateResultChan(done chan mongoUpdateCoalescerResult) {
 }
 
 const (
-	defaultUpdateCoalescingBatchHysteresis = 25 * time.Millisecond
-	defaultUpdateCoalescingInlineMaxActive = 4
+	maxRetainedMongoUpdateLFQueueCap        = 256
+	defaultUpdateCoalescingStickyIdleWindow = 5 * time.Millisecond
+	defaultUpdateCoalescingStickySoloLimit  = 8
 )
 
+var errMongoUpdateCoalescerBatchAborted = errors.New("mongo gateway update coalescer batch aborted")
+
 type mongoUpdateCoalescer struct {
-	maxDelay        time.Duration
-	maxBatch        int
-	idleTTL         time.Duration
-	batchHysteresis time.Duration
-	requests        chan mongoUpdateCoalescerRequest
-	wakeCh          chan struct{}
-	stoppedCh       chan struct{}
-	done            chan struct{}
-	server          *Server
-	name            string
-	execMu          sync.Mutex
-	inFlight        atomic.Int32
-	workerBusy      atomic.Bool
-	stoppedFlag     atomic.Bool
-	batchModeUntil  atomic.Int64
-	inlineExecs     atomic.Uint64
-	workerBatches   atomic.Uint64
-	mu              sync.RWMutex
-	stopped         bool
-	enqueueMu       sync.RWMutex
-	nowNano         func() int64
-	batchBuf        []mongoUpdateCoalescerRequest
-	updatesBuf      []mongoUpdateItem
-	bsonItemsBuf    []collections.BSONSetUpdateBatchItem
-	dupSeen         map[string]struct{}
+	maxDelay          time.Duration
+	maxBatch          int
+	maxQueueCap       int
+	idleTTL           time.Duration
+	useLeaderFollower bool
+	requests          chan mongoUpdateCoalescerRequest
+	wakeCh            chan struct{}
+	stoppedCh         chan struct{}
+	done              chan struct{}
+	server            *Server
+	name              string
+	execMu            sync.Mutex
+	inFlight          atomic.Int32
+	stoppedFlag       atomic.Bool
+	inlineExecs       atomic.Uint64
+	workerBatches     atomic.Uint64
+	mu                sync.RWMutex
+	stopped           bool
+	enqueueMu         sync.RWMutex
+
+	// Single-mutex ring-buffer + hot-worker state for maxDelay == 0.
+	// Uncontended w=1 runs inline; contended updates run on one hot worker
+	// goroutine for L1/L2 cache affinity and zero inter-batch wakeup bubbles.
+	lfMu                  sync.Mutex
+	lfStopped             bool
+	lfInlineRunning       bool
+	lfWorkerBusy          bool
+	lfWorkerWaitingInline bool
+	lfSticky              bool
+	lfWorkerStarted       bool
+	lfDoneClosed          bool
+	lfQueue               []mongoUpdateCoalescerRequest
+	lfHead                int
+	lfLen                 int
+	lfWakeCh              chan struct{}
+	lfSpaceCh             chan struct{}
+	stickyIdleWindow      time.Duration
+
+	// Lazy idle eviction timer state for maxDelay == 0 (zero goroutines while idle).
+	idleMu           sync.Mutex
+	idleTimer        *time.Timer
+	idleLastActivity uint64
+	idleTimerPending bool
+	idleStopped      bool
+	idleWaitCh       chan struct{}
+
+	// Scratch buffers owned exclusively by the single hot worker (maxDelay == 0) or delay worker (maxDelay > 0).
+	batchBuf     []mongoUpdateCoalescerRequest
+	updatesBuf   []mongoUpdateItem
+	bsonItemsBuf []collections.BSONSetUpdateBatchItem
+	dupSeen      map[string]struct{}
 }
 
 type mongoUpdateCoalescerRequest struct {
-	col  *collections.Collection
-	item mongoUpdateItem
-	done chan mongoUpdateCoalescerResult
+	col       *collections.Collection
+	item      mongoUpdateItem
+	done      chan mongoUpdateCoalescerResult
+	completed bool
 }
 
 type mongoUpdateCoalescerResult struct {
@@ -2818,25 +2848,11 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if coalescer == nil {
 		return runMongoUpdateOne(col, update)
 	}
-	active := coalescer.inFlight.Add(1)
+	coalescer.inFlight.Add(1)
 	defer coalescer.inFlight.Add(-1)
 
-	if coalescer.maxDelay == 0 {
-		if active > defaultUpdateCoalescingInlineMaxActive {
-			coalescer.noteBatchConcurrency()
-		} else if len(coalescer.requests) == 0 &&
-			!coalescer.workerBusy.Load() &&
-			!coalescer.stoppedFlag.Load() &&
-			!coalescer.batchModeActive() &&
-			coalescer.execMu.TryLock() {
-			if !coalescer.stoppedFlag.Load() && len(coalescer.requests) == 0 {
-				return coalescer.runInline(col, update)
-			}
-			coalescer.execMu.Unlock()
-			if len(coalescer.requests) > 0 {
-				coalescer.signalWake()
-			}
-		}
+	if coalescer.useLeaderFollower {
+		return coalescer.submitFastPath(col, update)
 	}
 
 	done := getMongoUpdateResultChan()
@@ -2854,64 +2870,501 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	return result.matched, result.modified, result.err
 }
 
-func (c *mongoUpdateCoalescer) effectiveBatchHysteresis() time.Duration {
-	if c == nil || c.batchHysteresis <= 0 {
-		return 0
-	}
-	return c.batchHysteresis
-}
-
-func (c *mongoUpdateCoalescer) nowUnixNano() int64 {
-	if c != nil && c.nowNano != nil {
-		return c.nowNano()
-	}
-	return time.Now().UnixNano()
-}
-
-func (c *mongoUpdateCoalescer) noteBatchConcurrency() {
-	if h := c.effectiveBatchHysteresis(); h > 0 {
-		target := c.nowUnixNano() + int64(h)
-		for {
-			cur := c.batchModeUntil.Load()
-			if cur >= target {
-				return
+func (c *mongoUpdateCoalescer) submitFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	for {
+		c.lfMu.Lock()
+		if c.lfStopped {
+			c.lfMu.Unlock()
+			if err := update.budget.checkDeadline(); err != nil {
+				return false, false, err
 			}
-			if c.batchModeUntil.CompareAndSwap(cur, target) {
-				return
-			}
+			return runMongoUpdateOne(col, update)
 		}
+		if !c.lfInlineRunning && !c.lfWorkerBusy && !c.lfSticky && c.lfLen == 0 {
+			c.lfInlineRunning = true
+			c.lfMu.Unlock()
+			return c.runInlineFastPath(col, update)
+		}
+		if c.maxQueueCap > 0 && c.lfLen >= c.maxQueueCap {
+			if c.lfSpaceCh == nil {
+				c.lfSpaceCh = make(chan struct{})
+			}
+			spaceCh := c.lfSpaceCh
+			c.lfMu.Unlock()
+
+			if err := waitForLFSpaceOrDeadline(spaceCh, update.budget); err != nil {
+				return false, false, err
+			}
+			continue
+		}
+		if c.inFlight.Load() >= 3 {
+			c.lfSticky = true
+		}
+		done := getMongoUpdateResultChan()
+		c.lfPushLocked(mongoUpdateCoalescerRequest{col: col, item: update, done: done})
+		wake := false
+		if !c.lfInlineRunning && !c.lfWorkerBusy {
+			c.lfWorkerBusy = true
+			wake = c.ensureHotWorkerLocked()
+		}
+		c.lfMu.Unlock()
+		if wake {
+			c.signalLFWake()
+		}
+
+		res := <-done
+		putMongoUpdateResultChan(done)
+		return res.matched, res.modified, res.err
 	}
 }
 
-func (c *mongoUpdateCoalescer) batchModeActive() bool {
-	if c == nil {
-		return false
+func waitForLFSpaceOrDeadline(spaceCh <-chan struct{}, budget *mongoWriteBudget) error {
+	if budget == nil || budget.deadline.IsZero() {
+		<-spaceCh
+		return nil
 	}
-	until := c.batchModeUntil.Load()
-	if until == 0 {
-		return false
+	remaining := time.Until(budget.deadline)
+	if remaining <= 0 {
+		return budget.checkDeadline()
 	}
-	now := c.nowUnixNano()
-	if now < until {
-		return true
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-spaceCh:
+		return budget.checkDeadline()
+	case <-timer.C:
+		return budget.checkDeadline()
 	}
-	if !c.batchModeUntil.CompareAndSwap(until, 0) {
-		next := c.batchModeUntil.Load()
-		return next != 0 && now < next
-	}
-	return false
 }
 
-func (c *mongoUpdateCoalescer) runInline(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
-	defer c.finishInline()
+func (c *mongoUpdateCoalescer) runInlineFastPath(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	defer c.finishInlineFastPath()
 	c.inlineExecs.Add(1)
 	return runMongoUpdateOne(col, update)
 }
 
-func (c *mongoUpdateCoalescer) finishInline() {
-	c.execMu.Unlock()
-	if len(c.requests) > 0 {
-		c.signalWake()
+func (c *mongoUpdateCoalescer) finishInlineFastPath() {
+	c.lfMu.Lock()
+	c.lfInlineRunning = false
+	wake := c.lfWorkerWaitingInline
+	c.lfWorkerWaitingInline = false
+	if c.lfLen > 0 {
+		c.lfWorkerBusy = true
+		if c.ensureHotWorkerLocked() {
+			wake = true
+		}
+		c.lfMu.Unlock()
+		if wake {
+			c.signalLFWake()
+		}
+		return
+	}
+	if c.lfStopped {
+		if c.lfWorkerStarted {
+			wake = true
+		} else {
+			c.closeDoneLocked()
+		}
+	}
+	c.lfMu.Unlock()
+	if wake {
+		c.signalLFWake()
+	}
+}
+
+// ensureHotWorkerLocked spawns the single hot worker goroutine on first contention.
+// Returns true if the worker was already running and needs a wakeup signal.
+func (c *mongoUpdateCoalescer) ensureHotWorkerLocked() bool {
+	if c.lfWorkerStarted {
+		return true
+	}
+	if c.lfWakeCh == nil {
+		c.lfWakeCh = make(chan struct{}, 1)
+	}
+	c.lfWorkerStarted = true
+	go c.run()
+	return false
+}
+
+func (c *mongoUpdateCoalescer) signalLFWake() {
+	if c == nil || c.lfWakeCh == nil {
+		return
+	}
+	select {
+	case c.lfWakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (c *mongoUpdateCoalescer) runHotWorker() {
+	defer func() {
+		c.markStopped()
+		c.lfMu.Lock()
+		c.lfWorkerBusy = false
+		c.lfWorkerWaitingInline = false
+		c.lfSticky = false
+		c.closeDoneLocked()
+		c.lfMu.Unlock()
+	}()
+
+	var stickyTimer *time.Timer
+	var stickyC <-chan time.Time
+	stopStickyTimer := func() {
+		if stickyTimer == nil {
+			return
+		}
+		if !stickyTimer.Stop() {
+			select {
+			case <-stickyTimer.C:
+			default:
+			}
+		}
+		stickyC = nil
+	}
+	ensureStickyTimer := func(window time.Duration) {
+		if stickyC != nil {
+			return
+		}
+		if window <= 0 {
+			window = defaultUpdateCoalescingStickyIdleWindow
+		}
+		if stickyTimer == nil {
+			stickyTimer = time.NewTimer(window)
+		} else {
+			stickyTimer.Reset(window)
+		}
+		stickyC = stickyTimer.C
+	}
+	defer stopStickyTimer()
+
+	soloStreak := 0
+	var workerOps uint64
+	var stickyArmedAt uint64
+
+	for {
+		c.lfMu.Lock()
+		if c.lfInlineRunning {
+			c.lfWorkerBusy = false
+			c.lfWorkerWaitingInline = true
+			c.lfMu.Unlock()
+			<-c.lfWakeCh
+			continue
+		}
+		if c.lfLen == 0 {
+			if c.lfStopped {
+				c.lfWorkerBusy = false
+				c.lfMu.Unlock()
+				return
+			}
+			if soloStreak >= defaultUpdateCoalescingStickySoloLimit {
+				c.lfSticky = false
+				soloStreak = 0
+			}
+			sticky := c.lfSticky
+			stickyWindow := c.stickyIdleWindow
+			c.lfWorkerBusy = false
+			c.lfMu.Unlock()
+
+			if sticky {
+				if stickyC == nil {
+					stickyArmedAt = workerOps
+					ensureStickyTimer(stickyWindow)
+				}
+			} else if stickyC != nil {
+				stopStickyTimer()
+			}
+			select {
+			case <-c.lfWakeCh:
+			case <-stickyC:
+				stickyC = nil
+				if workerOps == stickyArmedAt {
+					c.lfMu.Lock()
+					if c.lfLen == 0 && !c.lfWorkerBusy {
+						c.lfSticky = false
+						soloStreak = 0
+					}
+					c.lfMu.Unlock()
+				}
+			case <-c.stoppedCh:
+			}
+			continue
+		}
+
+		c.lfWorkerBusy = true
+		workerOps++
+		maxTake := max(1, c.maxBatch)
+		need := min(c.lfLen, maxTake)
+		if need == 1 {
+			req := c.lfPopFrontLocked()
+			if c.inFlight.Load() >= 3 {
+				c.lfSticky = true
+				soloStreak = 0
+			} else {
+				soloStreak++
+			}
+			c.lfMu.Unlock()
+
+			c.runHotWorkerSolo(req)
+			continue
+		}
+
+		if cap(c.batchBuf) < need {
+			initCap := max(need, min(maxTake, 32))
+			c.batchBuf = make([]mongoUpdateCoalescerRequest, 0, initCap)
+		}
+		batch := c.lfDrainIntoLocked(c.batchBuf[:0], maxTake)
+		c.lfSticky = true
+		soloStreak = 0
+		c.lfMu.Unlock()
+
+		c.runHotWorkerBatch(batch)
+	}
+}
+
+func (c *mongoUpdateCoalescer) runHotWorkerSolo(req mongoUpdateCoalescerRequest) {
+	c.workerBatches.Add(1)
+	if err := req.item.budget.checkDeadline(); err != nil {
+		completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{err: err})
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			if !req.completed && req.done != nil {
+				req.completed = true
+				select {
+				case req.done <- mongoUpdateCoalescerResult{err: errMongoUpdateCoalescerBatchAborted}:
+				default:
+				}
+			}
+		}
+	}()
+	matched, modified, err := runMongoUpdateOne(req.col, req.item)
+	completeMongoUpdateCoalescerRequest(&req, mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
+}
+
+func (c *mongoUpdateCoalescer) runHotWorkerBatch(batch []mongoUpdateCoalescerRequest) {
+	c.workerBatches.Add(1)
+	batchDone := false
+	defer func() {
+		if r := recover(); r != nil && !batchDone {
+			abortRes := mongoUpdateCoalescerResult{err: errMongoUpdateCoalescerBatchAborted}
+			for i := range batch {
+				if !batch[i].completed && batch[i].done != nil {
+					batch[i].completed = true
+					select {
+					case batch[i].done <- abortRes:
+					default:
+					}
+				}
+			}
+		}
+		clear(batch)
+		c.batchBuf = batch[:0]
+	}()
+	c.runBatch(batch)
+	batchDone = true
+}
+
+func (c *mongoUpdateCoalescer) lfPushLocked(req mongoUpdateCoalescerRequest) {
+	if c.lfLen == len(c.lfQueue) {
+		newCap := len(c.lfQueue) * 2
+		if newCap < 16 {
+			newCap = 16
+		}
+		grown := make([]mongoUpdateCoalescerRequest, newCap)
+		if c.lfLen > 0 {
+			n := copy(grown, c.lfQueue[c.lfHead:])
+			if n < c.lfLen {
+				copy(grown[n:], c.lfQueue[:c.lfLen-n])
+			}
+		}
+		clear(c.lfQueue)
+		c.lfQueue = grown
+		c.lfHead = 0
+	}
+	tail := c.lfHead + c.lfLen
+	if tail >= len(c.lfQueue) {
+		tail -= len(c.lfQueue)
+	}
+	c.lfQueue[tail] = req
+	c.lfLen++
+}
+
+func (c *mongoUpdateCoalescer) broadcastLFSpaceLocked() {
+	if c.lfSpaceCh != nil {
+		close(c.lfSpaceCh)
+		c.lfSpaceCh = nil
+	}
+}
+
+func (c *mongoUpdateCoalescer) lfPopFrontLocked() mongoUpdateCoalescerRequest {
+	req := c.lfQueue[c.lfHead]
+	c.lfQueue[c.lfHead] = mongoUpdateCoalescerRequest{}
+	c.lfLen--
+	if c.lfLen == 0 {
+		c.lfHead = 0
+		if len(c.lfQueue) > maxRetainedMongoUpdateLFQueueCap {
+			c.lfQueue = nil
+		}
+	} else {
+		c.lfHead++
+		if c.lfHead == len(c.lfQueue) {
+			c.lfHead = 0
+		}
+	}
+	c.broadcastLFSpaceLocked()
+	return req
+}
+
+func (c *mongoUpdateCoalescer) lfDrainIntoLocked(dst []mongoUpdateCoalescerRequest, limit int) []mongoUpdateCoalescerRequest {
+	n := min(c.lfLen, limit)
+	if n <= 0 {
+		return dst
+	}
+	first := min(n, len(c.lfQueue)-c.lfHead)
+	dst = append(dst, c.lfQueue[c.lfHead:c.lfHead+first]...)
+	clear(c.lfQueue[c.lfHead : c.lfHead+first])
+	rem := n - first
+	if rem > 0 {
+		dst = append(dst, c.lfQueue[:rem]...)
+		clear(c.lfQueue[:rem])
+	}
+	c.lfLen -= n
+	if c.lfLen == 0 {
+		c.lfHead = 0
+		if len(c.lfQueue) > maxRetainedMongoUpdateLFQueueCap {
+			c.lfQueue = nil
+		}
+	} else {
+		c.lfHead += n
+		if c.lfHead >= len(c.lfQueue) {
+			c.lfHead -= len(c.lfQueue)
+		}
+	}
+	c.broadcastLFSpaceLocked()
+	return dst
+}
+
+func (c *mongoUpdateCoalescer) closeDoneLocked() {
+	if c.done != nil && !c.lfDoneClosed {
+		c.lfDoneClosed = true
+		close(c.done)
+	}
+}
+
+func (c *mongoUpdateCoalescer) queuedLen() int {
+	if c == nil {
+		return 0
+	}
+	if c.useLeaderFollower {
+		c.lfMu.Lock()
+		n := c.lfLen
+		c.lfMu.Unlock()
+		return n
+	}
+	return len(c.requests)
+}
+
+func (c *mongoUpdateCoalescer) hasLeaderWork() bool {
+	if c == nil || !c.useLeaderFollower {
+		return false
+	}
+	c.lfMu.Lock()
+	busy := c.lfInlineRunning || c.lfWorkerBusy || c.lfLen > 0
+	c.lfMu.Unlock()
+	return busy
+}
+
+func (c *mongoUpdateCoalescer) activityCount() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.inlineExecs.Load() + c.workerBatches.Load()
+}
+
+func (c *mongoUpdateCoalescer) startIdleTimer() {
+	if c == nil || c.idleTTL <= 0 {
+		return
+	}
+	c.idleMu.Lock()
+	defer c.idleMu.Unlock()
+	if c.idleStopped {
+		return
+	}
+	c.idleLastActivity = c.activityCount()
+	c.idleTimerPending = true
+	c.idleTimer = time.AfterFunc(c.idleTTL, c.onIdleTimer)
+}
+
+func (c *mongoUpdateCoalescer) closeIdleWaitLocked() {
+	if c.idleWaitCh != nil {
+		close(c.idleWaitCh)
+		c.idleWaitCh = nil
+	}
+}
+
+func (c *mongoUpdateCoalescer) onIdleTimer() {
+	c.idleMu.Lock()
+	if c.idleStopped {
+		c.idleTimer = nil
+		c.idleTimerPending = false
+		c.closeIdleWaitLocked()
+		c.idleMu.Unlock()
+		return
+	}
+	c.idleMu.Unlock()
+
+	shouldReschedule := false
+	if c.inFlight.Load() > 0 || c.hasLeaderWork() {
+		shouldReschedule = true
+	} else {
+		curActivity := c.activityCount()
+		c.idleMu.Lock()
+		changed := curActivity != c.idleLastActivity
+		if changed {
+			c.idleLastActivity = curActivity
+		}
+		c.idleMu.Unlock()
+		if changed {
+			shouldReschedule = true
+		} else if !c.retireIdle() {
+			shouldReschedule = true
+		}
+	}
+
+	c.idleMu.Lock()
+	if shouldReschedule && !c.idleStopped && c.idleTTL > 0 {
+		c.idleTimer = time.AfterFunc(c.idleTTL, c.onIdleTimer)
+	} else {
+		c.idleTimer = nil
+		c.idleTimerPending = false
+		c.closeIdleWaitLocked()
+	}
+	c.idleMu.Unlock()
+}
+
+func (c *mongoUpdateCoalescer) stopIdleTimer(waitForCallback bool) {
+	if c == nil {
+		return
+	}
+	c.idleMu.Lock()
+	c.idleStopped = true
+	timer := c.idleTimer
+	c.idleTimer = nil
+	if timer != nil && timer.Stop() {
+		c.idleTimerPending = false
+		c.closeIdleWaitLocked()
+	}
+	var waitCh chan struct{}
+	if waitForCallback && c.idleTimerPending {
+		if c.idleWaitCh == nil {
+			c.idleWaitCh = make(chan struct{})
+		}
+		waitCh = c.idleWaitCh
+	}
+	c.idleMu.Unlock()
+	if waitCh != nil {
+		<-waitCh
 	}
 }
 
@@ -2986,17 +3439,35 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 	if coalescer := s.updateCoalescers[name]; coalescer != nil {
 		return coalescer
 	}
+	maxQueueCap := maxBatch * 4
+	if maxDelay == 0 {
+		coalescer := &mongoUpdateCoalescer{
+			maxDelay:          0,
+			maxBatch:          maxBatch,
+			maxQueueCap:       maxQueueCap,
+			idleTTL:           idleTTL,
+			useLeaderFollower: true,
+			lfWakeCh:          make(chan struct{}, 1),
+			stoppedCh:         make(chan struct{}),
+			done:              make(chan struct{}),
+			server:            s,
+			name:              name,
+		}
+		s.updateCoalescers[name] = coalescer
+		coalescer.startIdleTimer()
+		return coalescer
+	}
 	coalescer := &mongoUpdateCoalescer{
-		maxDelay:        maxDelay,
-		maxBatch:        maxBatch,
-		idleTTL:         idleTTL,
-		batchHysteresis: defaultUpdateCoalescingBatchHysteresis,
-		requests:        make(chan mongoUpdateCoalescerRequest, maxBatch*4),
-		wakeCh:          make(chan struct{}, 1),
-		stoppedCh:       make(chan struct{}),
-		done:            make(chan struct{}),
-		server:          s,
-		name:            name,
+		maxDelay:    maxDelay,
+		maxBatch:    maxBatch,
+		maxQueueCap: maxQueueCap,
+		idleTTL:     idleTTL,
+		requests:    make(chan mongoUpdateCoalescerRequest, maxQueueCap),
+		wakeCh:      make(chan struct{}, 1),
+		stoppedCh:   make(chan struct{}),
+		done:        make(chan struct{}),
+		server:      s,
+		name:        name,
 	}
 	s.updateCoalescers[name] = coalescer
 	go coalescer.run()
@@ -3045,18 +3516,62 @@ func (c *mongoUpdateCoalescer) stop() {
 		return
 	}
 	_ = c.closeRequests()
+	if c.useLeaderFollower {
+		c.stopIdleTimer(true)
+	}
 	if c.done != nil {
 		<-c.done
 	}
 }
 
 func (c *mongoUpdateCoalescer) closeRequests() bool {
+	return c.closeRequestsMode(false)
+}
+
+func (c *mongoUpdateCoalescer) tryCloseIdleRequests() bool {
+	return c.closeRequestsMode(true)
+}
+
+func (c *mongoUpdateCoalescer) closeRequestsMode(requireIdle bool) bool {
 	c.enqueueMu.Lock()
 	defer c.enqueueMu.Unlock()
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
 		return false
+	}
+	if requireIdle && c.inFlight.Load() != 0 {
+		c.mu.Unlock()
+		return false
+	}
+	if c.useLeaderFollower {
+		c.lfMu.Lock()
+		if requireIdle && (c.inFlight.Load() != 0 || c.lfInlineRunning || c.lfWorkerBusy || c.lfLen > 0) {
+			c.lfMu.Unlock()
+			c.mu.Unlock()
+			return false
+		}
+		if c.stoppedCh == nil {
+			c.stoppedCh = make(chan struct{})
+		}
+		c.stopped = true
+		c.stoppedFlag.Store(true)
+		close(c.stoppedCh)
+		if c.requests != nil {
+			close(c.requests)
+		}
+		c.lfStopped = true
+		c.broadcastLFSpaceLocked()
+		wakeWorker := c.lfWorkerStarted
+		if !c.lfWorkerStarted && !c.lfInlineRunning && c.lfLen == 0 {
+			c.closeDoneLocked()
+		}
+		c.lfMu.Unlock()
+		c.mu.Unlock()
+		if wakeWorker {
+			c.signalLFWake()
+		}
+		return true
 	}
 	if c.stoppedCh == nil {
 		c.stoppedCh = make(chan struct{})
@@ -3075,30 +3590,41 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	if c == nil {
 		return false
 	}
-	if c.inFlight.Load() > 0 && !c.isStopped() {
+	if (c.inFlight.Load() > 0 || c.hasLeaderWork()) && !c.isStopped() {
 		return false
 	}
 	stopped := false
 	if c.server != nil {
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
-			if c.inFlight.Load() == 0 {
-				stopped = c.closeRequests()
+			if c.tryCloseIdleRequests() {
+				stopped = true
 				delete(c.server.updateCoalescers, c.name)
 			}
 		}
 		c.server.updateMu.Unlock()
-	} else if c.inFlight.Load() == 0 {
-		stopped = c.closeRequests()
+	} else {
+		stopped = c.tryCloseIdleRequests()
 	}
 	if !stopped {
 		if c.isStopped() {
+			if c.useLeaderFollower {
+				c.stopIdleTimer(false)
+				return true
+			}
 			c.execMu.Lock()
 			c.drainRequestsDirect()
 			c.execMu.Unlock()
 			return true
 		}
 		return false
+	}
+	if c.useLeaderFollower {
+		c.stopIdleTimer(false)
+		if c.done != nil {
+			<-c.done
+		}
+		return true
 	}
 	c.execMu.Lock()
 	c.drainRequestsDirect()
@@ -3119,6 +3645,12 @@ func (c *mongoUpdateCoalescer) markStopped() {
 	c.mu.Lock()
 	c.stopped = true
 	c.stoppedFlag.Store(true)
+	if c.useLeaderFollower {
+		c.lfMu.Lock()
+		c.lfStopped = true
+		c.broadcastLFSpaceLocked()
+		c.lfMu.Unlock()
+	}
 	c.mu.Unlock()
 }
 
@@ -3132,6 +3664,10 @@ func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 }
 
 func (c *mongoUpdateCoalescer) run() {
+	if c.useLeaderFollower {
+		c.runHotWorker()
+		return
+	}
 	defer func() {
 		c.markStopped()
 		if c.done != nil {
@@ -3165,9 +3701,7 @@ func (c *mongoUpdateCoalescer) run() {
 					return
 				}
 				c.execMu.Lock()
-				c.workerBusy.Store(true)
 				c.runBatchStartingWith(first)
-				c.workerBusy.Store(false)
 				c.execMu.Unlock()
 				resetIdle()
 			case <-idle:
@@ -3191,14 +3725,12 @@ func (c *mongoUpdateCoalescer) run() {
 		select {
 		case <-c.wakeCh:
 			c.execMu.Lock()
-			c.workerBusy.Store(true)
 			ranAny := false
 		drain:
 			for {
 				select {
 				case first, ok := <-c.requests:
 					if !ok {
-						c.workerBusy.Store(false)
 						c.execMu.Unlock()
 						return
 					}
@@ -3206,7 +3738,6 @@ func (c *mongoUpdateCoalescer) run() {
 					ranAny = true
 					if c.stoppedFlag.Load() {
 						c.drainRequestsDirect()
-						c.workerBusy.Store(false)
 						c.execMu.Unlock()
 						return
 					}
@@ -3214,7 +3745,6 @@ func (c *mongoUpdateCoalescer) run() {
 					break drain
 				}
 			}
-			c.workerBusy.Store(false)
 			c.execMu.Unlock()
 			if ranAny {
 				resetIdle()
@@ -3285,9 +3815,6 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	}
 drained:
 	c.runBatch(batch)
-	if c.maxDelay == 0 && (len(batch) > defaultUpdateCoalescingInlineMaxActive || c.inFlight.Load() > defaultUpdateCoalescingInlineMaxActive) {
-		c.noteBatchConcurrency()
-	}
 	clear(batch)
 	c.batchBuf = batch[:0]
 }
@@ -3310,8 +3837,8 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 	var journalVal standaloneOperationJournalOutcome
 	var journal *standaloneOperationJournalOutcome
-	for _, req := range batch {
-		if req.item.budget != nil && req.item.budget.journal != nil {
+	for i := range batch {
+		if batch[i].item.budget != nil && batch[i].item.budget.journal != nil {
 			journal = &journalVal
 			break
 		}
@@ -3333,10 +3860,10 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 			items = c.bsonItemsBuf[:len(batch)]
 			defer clear(items)
 		}
-		for i, req := range batch {
+		for i := range batch {
 			items[i] = collections.BSONSetUpdateBatchItem{
-				DocumentID: req.item.key,
-				Fields:     req.item.bsonSetFields,
+				DocumentID: batch[i].item.key,
+				Fields:     batch[i].item.bsonSetFields,
 			}
 		}
 		if budget := batch[0].item.budget; budget != nil {
@@ -3361,18 +3888,18 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 			c.updatesBuf = make([]mongoUpdateItem, len(batch))
 		}
 		updates := c.updatesBuf[:len(batch)]
-		for i, req := range batch {
-			updates[i] = req.item
+		for i := range batch {
+			updates[i] = batch[i].item
 		}
 		defer clear(updates)
 		results, batched, err = runMongoUpdateBatchResultsWithJournal(batch[0].col, updates, journal)
 	}
 	installed := batched && journal != nil && journal.completion.Installed()
 	if err != nil && !installed && ((journal != nil && journal.completion.Selected()) || errors.Is(err, collections.ErrCommitAmbiguous)) {
-		for _, req := range batch {
-			if journal != nil && req.item.budget != nil && req.item.budget.journal != nil {
-				req.item.budget.journal.completion = journal.completion.WithoutSuccess()
-				req.item.budget.journal.err = err
+		for i := range batch {
+			if journal != nil && batch[i].item.budget != nil && batch[i].item.budget.journal != nil {
+				batch[i].item.budget.journal.completion = journal.completion.WithoutSuccess()
+				batch[i].item.budget.journal.err = err
 			}
 		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
@@ -3385,7 +3912,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if err != nil && !installed {
 		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
 			completeMongoUpdateCoalescerBatchExcept(batch, index)
-			batch[index].done <- mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)}
+			completeMongoUpdateCoalescerRequest(&batch[index], mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)})
 			return
 		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
@@ -3394,56 +3921,68 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if len(results) != len(batch) {
 		countErr := fmt.Errorf("mongo gateway update coalescer batch results=%d want %d", len(results), len(batch))
 		if journal != nil && journal.completion.Selected() {
-			for _, req := range batch {
-				if req.item.budget != nil && req.item.budget.journal != nil {
-					req.item.budget.journal.completion = journal.completion.WithoutSuccess()
-					req.item.budget.journal.err = errors.Join(err, countErr)
+			for i := range batch {
+				if batch[i].item.budget != nil && batch[i].item.budget.journal != nil {
+					batch[i].item.budget.journal.completion = journal.completion.WithoutSuccess()
+					batch[i].item.budget.journal.err = errors.Join(err, countErr)
 				}
 			}
 		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: countErr})
 		return
 	}
-	for i, req := range batch {
+	for i := range batch {
 		result := results[i]
 		// An unchanged/missing neighbor never inherits another member's receipt.
-		if journal != nil && result.Modified && req.item.budget != nil && req.item.budget.journal != nil {
-			req.item.budget.journal.completion = journal.completion
-			req.item.budget.journal.err = journal.err
+		if journal != nil && result.Modified && batch[i].item.budget != nil && batch[i].item.budget.journal != nil {
+			batch[i].item.budget.journal.completion = journal.completion
+			batch[i].item.budget.journal.err = journal.err
 		}
-		req.done <- mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified}
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified})
 	}
+}
+
+func completeMongoUpdateCoalescerRequest(req *mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
+	if req.completed || req.done == nil {
+		return
+	}
+	req.completed = true
+	req.done <- result
 }
 
 func filterExpiredMongoUpdateCoalescerRequests(batch []mongoUpdateCoalescerRequest) []mongoUpdateCoalescerRequest {
-	kept := batch[:0]
-	for _, req := range batch {
-		if err := req.item.budget.checkDeadline(); err != nil {
-			req.done <- mongoUpdateCoalescerResult{err: err}
+	kept := 0
+	for i := range batch {
+		if err := batch[i].item.budget.checkDeadline(); err != nil {
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
-		kept = append(kept, req)
+		if kept != i {
+			batch[kept] = batch[i]
+			batch[i] = mongoUpdateCoalescerRequest{completed: true}
+		}
+		kept++
 	}
-	return kept
+	return batch[:kept]
 }
 
 func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
-	for _, req := range batch {
-		req.done <- result
+	for i := range batch {
+		completeMongoUpdateCoalescerRequest(&batch[i], result)
 	}
 }
 
 func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest, skip int) {
-	for i, req := range batch {
+	for i := range batch {
 		if i == skip {
 			continue
 		}
-		if err := req.item.budget.checkDeadline(); err != nil {
-			req.done <- mongoUpdateCoalescerResult{err: err}
+		if err := batch[i].item.budget.checkDeadline(); err != nil {
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
-		matched, modified, err := runMongoUpdateOne(req.col, req.item)
-		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		matched, modified, err := runMongoUpdateOne(batch[i].col, batch[i].item)
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
 	}
 }
 
@@ -3483,8 +4022,8 @@ func (c *mongoUpdateCoalescer) hasDuplicateKeys(batch []mongoUpdateCoalescerRequ
 	} else {
 		clear(c.dupSeen)
 	}
-	for _, req := range batch {
-		key := string(req.item.key)
+	for i := range batch {
+		key := string(batch[i].item.key)
 		if _, ok := c.dupSeen[key]; ok {
 			return true
 		}
@@ -3495,8 +4034,8 @@ func (c *mongoUpdateCoalescer) hasDuplicateKeys(batch []mongoUpdateCoalescerRequ
 
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
 	seen := make(map[string]struct{}, len(batch))
-	for _, req := range batch {
-		key := string(req.item.key)
+	for i := range batch {
+		key := string(batch[i].item.key)
 		if _, ok := seen[key]; ok {
 			return true
 		}
@@ -3513,8 +4052,8 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	if col == nil {
 		return false
 	}
-	for _, req := range batch[1:] {
-		if !col.SameCachedCatalog(req.col) {
+	for i := 1; i < len(batch); i++ {
+		if batch[i].col != col && !col.SameCachedCatalog(batch[i].col) {
 			return false
 		}
 	}
@@ -3532,8 +4071,8 @@ func mongoUpdateCoalescerBatchCapabilities(batch []mongoUpdateCoalescerRequest) 
 		if format == collections.DocumentFormatDefault {
 			format = collections.DocumentFormatJSON
 		}
-		for _, req := range batch {
-			if !mongoUpdateCanUseBatchMetaPtr(meta, req.item) {
+		for i := range batch {
+			if !mongoUpdateCanUseBatchMetaPtr(meta, batch[i].item) {
 				canBatch = false
 				return
 			}
@@ -3545,8 +4084,8 @@ func mongoUpdateCoalescerBatchCapabilities(batch []mongoUpdateCoalescerRequest) 
 	if format != collections.DocumentFormatBSON {
 		return true, false
 	}
-	for _, req := range batch {
-		if !req.item.exactID || !req.item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(req.item.bsonSetFields) {
+	for i := range batch {
+		if !batch[i].item.exactID || !batch[i].item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(batch[i].item.bsonSetFields) {
 			return true, false
 		}
 	}
@@ -3559,13 +4098,13 @@ func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) b
 }
 
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
-	for _, req := range batch {
-		if err := req.item.budget.checkDeadline(); err != nil {
-			req.done <- mongoUpdateCoalescerResult{err: err}
+	for i := range batch {
+		if err := batch[i].item.budget.checkDeadline(); err != nil {
+			completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{err: err})
 			continue
 		}
-		matched, modified, err := runMongoUpdateOne(req.col, req.item)
-		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		matched, modified, err := runMongoUpdateOne(batch[i].col, batch[i].item)
+		completeMongoUpdateCoalescerRequest(&batch[i], mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err})
 	}
 }
 

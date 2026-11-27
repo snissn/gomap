@@ -77,7 +77,7 @@ func TestStandaloneSharedCOWDefaultCoalescerDurableEightWriters(t *testing.T) {
 		s.Server.updateMu.Lock()
 		coalescer := s.Server.updateCoalescers["group.rows"]
 		if coalescer != nil {
-			queued = len(coalescer.requests)
+			queued = coalescer.queuedLen()
 		}
 		s.Server.updateMu.Unlock()
 		if queued == writers-1 {
