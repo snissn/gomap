@@ -12,7 +12,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECKER = REPO_ROOT / ".github" / "scripts" / "check_vlog_auto_incompressible.go"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "treedb-tests.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-full-sweep.yml"
 
 
 def normalized(text: str) -> str:

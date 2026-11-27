@@ -1,22 +1,6 @@
 name: "TreeDB: index-vacuum M0 evidence"
 
 on:
-  pull_request:
-    paths:
-      - "TreeDB/db/native_command_wal_completion.go"
-      - "TreeDB/db/vacuum*.go"
-      - "TreeDB/db/recoverable_root_set.go"
-      - "TreeDB/db/durable_root*.go"
-      - "TreeDB/db/root_publication*.go"
-      - "TreeDB/internal/rootpublication/**"
-      - "TreeDB/db/ordered_root_publish.go"
-      - "TreeDB/db/stable_resource.go"
-      - "TreeDB/db/db.go"
-      - "TreeDB/public.go"
-      - "scripts/treedb_vacuum_m0_capture.sh"
-      - "scripts/treedb_vacuum_m0_summarize.py"
-      - "scripts/treedb_vacuum_m0_summarize_test.py"
-      - ".github/workflows/treedb-vacuum-m0.yml"
   workflow_dispatch:
 
 concurrency:

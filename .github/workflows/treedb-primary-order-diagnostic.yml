@@ -1,11 +1,6 @@
 name: TreeDB PRIMARY order diagnostic
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/treedb-primary-order-diagnostic.yml
-      - .github/scripts/test_mvcc_primary_order_diagnostic.py
-      - scripts/mvcc_primary_order_diagnostic.py
   workflow_dispatch:
 
 permissions:
