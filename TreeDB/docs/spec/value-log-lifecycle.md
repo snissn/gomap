@@ -618,10 +618,23 @@ This uses the maintained directory reconciliation pass: its file enumeration
 and transient manifest work scale with the leaf namespace, not just the
 selected sources. It adds no append/read-path work or persistent scheduler state.
 
-The automatic private-COW pack slice adopts its replacement Snapshot and then
+The automatic private-COW pack slice (enabled by default for eligible private-COW
+stores with outer-leaf generational storage, including `ProfileCommandWALDurable`,
+`ProfileCommandWALRelaxed`, and `ProfileNoWALFast` unless background maintenance
+is opted out via `BackgroundCheckpointInterval < 0 &&
+BackgroundCheckpointIdleDuration < 0`—such as `OpenExternalRecovery`—or via
+`TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE=0` /
+`TREEDB_DISABLE_VLOG_GENERATION_LOOP=1`) adopts its replacement Snapshot and then
 attempts same-endpoint fallback convergence under the original flush owner
 before its maintained GC pass. The endpoint is captured before packing, not
-from a newer visible suffix. Convergence preserves mutable suffixes and safely
+from a newer visible suffix. In command-WAL modes, convergence uses the backend
+fallback predicate; in NoWAL private-COW modes (`AppliedCommandLSN == 0`), it
+runs after an accepted pack or at most once per distinct
+`(RootPageID, SystemRootPageID)` pair when a no-op pack slice observes
+`GenerationsRetiring > 0`, guarded by `len(cut.frozen) == 0`, matching opening
+`LogicalSequence`, `WaitAccepted` on the captured `SealedPrefix`, and
+`LogicalFrontiers().S == through`, and re-runs `LeafGenerationGC` once after
+convergence. Convergence preserves mutable suffixes and safely
 skips newer frozen suffixes; it does not create command coverage. This releases
 fallback-only retention when lawful. A packed source reachable through another
 root, or held by a reader or physical-identity pin, remains protected. Unrelated
@@ -999,17 +1012,24 @@ After each successful vacuum and its checkpoint, compaction converges the older
 durable slot onto the current root before settling GC. This uses the existing
 durable publication path, including for NoWAL, without appending a command frame
 or advancing command coverage. Held views and prepared publication members keep
-their independent resource pins. Ordinary checkpoint, rewrite, and GC retain
-their existing fallback roots; they do not perform this convergence. When a
-caller explicitly requests `LeafGenerationGCOptions{ConvergeFallback: true}` on
-a destructive writable non-native-semantic `LeafGenerationGC` call (serialized
-under `maintenanceMu`), GC performs this same durable fallback convergence when
-pass 1 leaves unpinned dead generations in `retiring` solely because of an
-older recoverable root, and refreshes conservative outer-leaf durable slot pins
-when deleted records remain unpruned before a final settle pass. Dry-run
-`LeafGenerationGC`, read-only handles, active native-semantic owners, and held
-snapshot pins (`leafGenerationPins`) are excluded and never mutate durable
-slots or drop pinned generations.
+their independent resource pins. Ordinary non-private-COW checkpoint, rewrite,
+and backend `LeafGenerationGC` (`ConvergeFallback: false`) retain their existing
+fallback roots and do not perform this convergence; for eligible private-COW
+stores (both command-WAL and NoWAL when private-COW leaf maintenance is enabled),
+the bounded cached private-COW leaf-maintenance slice (periodic or at explicit
+`Checkpoint()` debt thresholds) may converge the alternate durable slot under
+`flushMu` at its captured sealed endpoint while preserving mutable suffixes,
+newer frozen suffixes, held reader snapshots, and external recovery cuts (see
+Section 5.1). When a caller explicitly requests
+`LeafGenerationGCOptions{ConvergeFallback: true}` on a destructive writable
+non-native-semantic `LeafGenerationGC` call (serialized under `maintenanceMu`),
+GC performs this same durable fallback convergence when pass 1 leaves unpinned
+dead generations in `retiring` solely because of an older recoverable root, and
+refreshes conservative outer-leaf durable slot pins when deleted records remain
+unpruned before a final settle pass. Dry-run `LeafGenerationGC`, read-only
+handles, active native-semantic backend `LeafGenerationGC` calls, and held
+snapshot pins (`leafGenerationPins`) are excluded and never mutate durable slots
+or drop pinned generations.
 Transient stale/mutation races are `deferred`, Windows is `unsupported`, and
 permanent errors fail compaction. Deferred or unsupported required work keeps
 all completion flags false. `PolicyFullyCompacted` means selected planner debt

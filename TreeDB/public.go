@@ -1288,6 +1288,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		FlushBacklogCoalescingMinOldLeafBytesPerOp: opts.FlushBacklogCoalescingMinOldLeafBytesPerOp,
 		DisableWAL:                                 disableWAL,
 		ExternalCommandWAL:                         opts.CommandWAL,
+		DisablePrivateCOWLeafPack:                  disableWAL && !opts.CommandWAL && opts.BackgroundCheckpointInterval < 0 && opts.BackgroundCheckpointIdleDuration < 0,
 		JournalLanes:                               opts.JournalLanes,
 		WALMaxSegmentBytes:                         opts.WALMaxSegmentBytes,
 		JournalCompression:                         opts.JournalCompression,

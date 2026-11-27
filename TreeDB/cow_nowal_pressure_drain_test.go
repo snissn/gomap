@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
@@ -45,6 +50,10 @@ func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
 			_ = database.Close()
 			t.Fatal("default ProfileNoWALFast COW DB did not enable COW pressure drain worker")
 		}
+		if got := database.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "true" {
+			_ = database.Close()
+			t.Fatalf("default ProfileNoWALFast COW DB private_cow_default = %q, want %q", got, "true")
+		}
 		if err := database.Close(); err != nil {
 			t.Fatalf("Close(default ProfileNoWALFast): %v", err)
 		}
@@ -64,6 +73,9 @@ func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
 		}()
 		if disabledDB.cached.COWPressureDrainEnabled() {
 			t.Fatal("NoWAL COW DB unexpectedly enabled pressure drain when BackgroundCheckpointInterval and BackgroundCheckpointIdleDuration are disabled")
+		}
+		if got := disabledDB.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "false" {
+			t.Fatalf("disabled NoWAL COW DB private_cow_default = %q, want %q", got, "false")
 		}
 	})
 
@@ -227,5 +239,137 @@ func TestPublicProfileNoWALFastSustainedPressureDurabilityAndReopen(t *testing.T
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestPublicProfileNoWALFastLeafPackReclaimsDiskAndReopens(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsForSemantic(ProfileNoWALFast, dir)
+	opts.MemtableShards = 2
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.ValueLog.Compression = ValueLogCompressionOff
+	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
+
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(ProfileNoWALFast): %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if err := database.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		}
+	}()
+
+	if got := database.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "true" {
+		t.Fatalf("ProfileNoWALFast private_cow_default = %q, want %q", got, "true")
+	}
+
+	leafDirBytes := func() (int, int64) {
+		t.Helper()
+		entries, err := os.ReadDir(backenddb.LeafLogDirPath(filepath.Join(dir, "maindb")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		var total int64
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				t.Fatal(err)
+			}
+			count++
+			total += info.Size()
+		}
+		return count, total
+	}
+
+	// Create several sealed leaf generations via repeated full-range overwrites,
+	// holding background leaf-pack off during setup so sealed debt accumulates,
+	// then run an explicit idle Checkpoint() and verify dead sealed leaf
+	// generations are reclaimed before Close() while CurrentWritableMmap=true.
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	const (
+		numKeys = 2048
+		rounds  = 6
+	)
+	for round := 1; round <= rounds; round++ {
+		b := database.NewBatch()
+		val := bytes.Repeat([]byte{byte(round)}, 256)
+		for i := 0; i < numKeys; i++ {
+			if err := b.Set([]byte(fmt.Sprintf("k-%05d", i)), val); err != nil {
+				_ = b.Close()
+				t.Fatal(err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatal(err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Checkpoint(); err != nil {
+			t.Fatalf("round %d Checkpoint: %v", round, err)
+		}
+	}
+
+	filesBefore, bytesBefore := leafDirBytes()
+	if filesBefore < 10 {
+		t.Fatalf("expected >= 10 leaf-log segments before reclaim, got %d (%d bytes)", filesBefore, bytesBefore)
+	}
+
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "0")
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("reclaim Checkpoint: %v", err)
+	}
+
+	filesAfter, bytesAfter := leafDirBytes()
+	statsAfter := database.Stats()
+	t.Logf("ProfileNoWALFast leaf reclaim: before=(%d files, %d bytes) after=(%d files, %d bytes) attempts=%s deleted_bytes=%s last_skip=%q",
+		filesBefore, bytesBefore, filesAfter, bytesAfter,
+		statsAfter["treedb.cache.vlog_generation.leaf_pack.attempts"],
+		statsAfter["treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes"],
+		statsAfter["treedb.cache.vlog_generation.leaf_pack.last_skip_reason"])
+	if filesAfter >= filesBefore || bytesAfter >= bytesBefore {
+		t.Fatalf("ProfileNoWALFast Checkpoint did not reclaim dead sealed leaf generations: before=(%d files, %d bytes) after=(%d files, %d bytes)",
+			filesBefore, bytesBefore, filesAfter, bytesAfter)
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
+
+	reopenOpts := OptionsForSemantic(ProfileNoWALFast, dir)
+	reopenOpts.BackgroundIndexVacuumInterval = -1
+	reopenOpts.DisableBackgroundPrune = true
+	reopened, err := Open(reopenOpts)
+	if err != nil {
+		t.Fatalf("reopen Open: %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("reopen Close: %v", err)
+		}
+	}()
+
+	wantVal := bytes.Repeat([]byte{byte(rounds)}, 256)
+	for i := 0; i < numKeys; i++ {
+		key := fmt.Sprintf("k-%05d", i)
+		got, err := reopened.Get([]byte(key))
+		if err != nil || !bytes.Equal(got, wantVal) {
+			t.Fatalf("reopened Get(%q): len=%d err=%v", key, len(got), err)
+		}
 	}
 }
