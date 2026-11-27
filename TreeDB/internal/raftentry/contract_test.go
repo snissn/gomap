@@ -604,11 +604,20 @@ func readHexFixture(t *testing.T, rel string) []byte {
 
 func repoPath(t *testing.T, rel string) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			pkgDir = filepath.Dir(file)
+		}
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), rel))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	return filepath.Clean(filepath.Join(pkgDir, rel))
 }
 
 // The native entry and local command frame share kind and source identity;

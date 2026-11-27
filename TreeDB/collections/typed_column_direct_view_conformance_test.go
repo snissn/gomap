@@ -909,11 +909,20 @@ func typedColumnDirectViewHasFollowUp(row typedColumnDirectViewClassification, i
 
 func currentColumnStoreValueTypesFromSource(t *testing.T) []ColumnStoreValueType {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var dir string
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			dir = filepath.Dir(file)
+		}
 	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "column_store.go"))
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		dir = wd
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "column_store.go"))
 	if err != nil {
 		t.Fatalf("read column_store.go: %v", err)
 	}

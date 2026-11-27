@@ -151,13 +151,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
+          save-gocache: ${{ github.event_name == 'schedule' && matrix.shard == 1 }}
 
       - name: Expire cached test results
         shell: bash
@@ -197,8 +195,8 @@ jobs:
           echo "TreeDB unix shard ${shard_index}/${shard_count}:"
           cat "$tmp_dir/shard.txt"
           if [ -s "$tmp_dir/shard.txt" ]; then
-            xargs go vet < "$tmp_dir/shard.txt"
-            xargs go test -json -timeout 30m -p 1 < "$tmp_dir/shard.txt" | tee treedb-test.jsonl
+            xargs go vet -trimpath < "$tmp_dir/shard.txt"
+            xargs go test -trimpath -json -timeout 30m -p 1 < "$tmp_dir/shard.txt" | tee treedb-test.jsonl
           fi
 
       - name: Summarize test timings
@@ -243,13 +241,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: windows
+          save-gocache: ${{ github.event_name == 'schedule' && matrix.shard == 2 }}
 
       - name: Run balanced Windows TreeDB shard
         shell: bash
@@ -322,13 +318,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux-race
+          save-gocache: ${{ github.event_name == 'schedule' && matrix.shard == 8 }}
 
       - name: Expire cached test results
         shell: bash
@@ -367,35 +361,35 @@ jobs:
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
           if [ "$shard_kind" = collections ]; then
-            go test -json -race -p 1 -timeout 25m ./collections | tee treedb-race.jsonl
-            go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 25m ./collections | tee treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
             exit 0
           fi
           weights=../.github/ci/treedb_race_weighted_shards.tsv
           go list ./... | grep -Ev '^github\.com/snissn/gomap/TreeDB($|/caching$|/collections$|/db$|/nativewire$)' > "$tmp_dir/pkg_all"
-          go test -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$tmp_dir/root_all"
-          go test -race -p 1 ./caching -list 'Test.*' | grep '^Test' > "$tmp_dir/caching_all"
-          go test -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$tmp_dir/db_all"
-          go test -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$tmp_dir/nw_all"
+          go test -trimpath -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$tmp_dir/root_all"
+          go test -trimpath -race -p 1 ./caching -list 'Test.*' | grep '^Test' > "$tmp_dir/caching_all"
+          go test -trimpath -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$tmp_dir/db_all"
+          go test -trimpath -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$tmp_dir/nw_all"
           weighted_shard_file package "$shard_index" "$shard_count" "$weights" "$tmp_dir/pkg_all" "$tmp_dir/pkg"
           weighted_shard_file root "$shard_index" "$shard_count" "$weights" "$tmp_dir/root_all" "$tmp_dir/root"
           weighted_shard_file caching "$shard_index" "$shard_count" "$weights" "$tmp_dir/caching_all" "$tmp_dir/caching"
           weighted_shard_file db "$shard_index" "$shard_count" "$weights" "$tmp_dir/db_all" "$tmp_dir/db"
           weighted_shard_file nativewire "$shard_index" "$shard_count" "$weights" "$tmp_dir/nw_all" "$tmp_dir/nw"
           if [ -s "$tmp_dir/pkg" ]; then
-            xargs go test -json -race -p 1 -timeout 15m < "$tmp_dir/pkg" | tee -a treedb-race.jsonl
+            xargs go test -trimpath -json -race -p 1 -timeout 15m < "$tmp_dir/pkg" | tee -a treedb-race.jsonl
           fi
           if [ -s "$tmp_dir/root" ]; then
-            go test -json -race -p 1 -timeout 15m . -run "^($(paste -sd'|' "$tmp_dir/root"))$" | tee -a treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 15m . -run "^($(paste -sd'|' "$tmp_dir/root"))$" | tee -a treedb-race.jsonl
           fi
           if [ -s "$tmp_dir/caching" ]; then
-            go test -json -race -p 1 -timeout 15m ./caching -run "^($(paste -sd'|' "$tmp_dir/caching"))$" | tee -a treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 15m ./caching -run "^($(paste -sd'|' "$tmp_dir/caching"))$" | tee -a treedb-race.jsonl
           fi
           if [ -s "$tmp_dir/db" ]; then
-            go test -json -race -p 1 -timeout 15m ./db -run "^($(paste -sd'|' "$tmp_dir/db"))$" | tee -a treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 15m ./db -run "^($(paste -sd'|' "$tmp_dir/db"))$" | tee -a treedb-race.jsonl
           fi
           if [ -s "$tmp_dir/nw" ]; then
-            go test -json -race -p 1 -timeout 15m ./nativewire -run "^($(paste -sd'|' "$tmp_dir/nw"))$" | tee -a treedb-race.jsonl
+            go test -trimpath -json -race -p 1 -timeout 15m ./nativewire -run "^($(paste -sd'|' "$tmp_dir/nw"))$" | tee -a treedb-race.jsonl
           fi
 
       - name: Test tagged PRIMARY lifecycle race
@@ -408,7 +402,7 @@ jobs:
           GOMEMLIMIT: 4GiB
           GOMAXPROCS: 2
         run: |
-          go test -json -mod=readonly -tags=treedb_test -race -p 1 -count=1 -timeout=540s ./mvcc -run '^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$' | tee -a treedb-race.jsonl
+          go test -trimpath -json -mod=readonly -tags=treedb_test -race -p 1 -count=1 -timeout=540s ./mvcc -run '^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$' | tee -a treedb-race.jsonl
 
       - name: Summarize race timing
         if: always()
@@ -440,13 +434,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
 
       - name: Expire cached test results
         shell: bash
@@ -479,8 +470,8 @@ jobs:
           go list ./... | grep -Ev '^github\.com/snissn/gomap/(TreeDB($|/)|cmd/unified_bench$)' | \
             awk -v idx="$shard_index" -v n=2 '(NR-1)%n == idx' > "$pkg_file"
           if [ -s "$pkg_file" ]; then
-            xargs go vet < "$pkg_file"
-            xargs go test -timeout 30m -p 1 < "$pkg_file"
+            xargs go vet -trimpath < "$pkg_file"
+            xargs go test -trimpath -timeout 30m -p 1 < "$pkg_file"
           fi
 
   root-macos:
@@ -507,13 +498,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: windows
 
       - name: HashDB vet & test
         working-directory: HashDB
@@ -523,8 +511,8 @@ jobs:
         run: |
           set -euo pipefail
           go clean -testcache
-          go vet ./...
-          go test -timeout 15m ./...
+          go vet -trimpath ./...
+          go test -trimpath -timeout 15m ./...
 
   unified-bench-linux:
     name: unified_bench & suites (linux)
@@ -538,13 +526,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
 
       - name: Vet and test cmd/unified_bench
         working-directory: cmd/unified_bench
@@ -553,8 +538,8 @@ jobs:
         run: |
           set -euo pipefail
           go clean -testcache
-          go vet ./...
-          go test -timeout 15m ./...
+          go vet -trimpath ./...
+          go test -trimpath -timeout 15m ./...
 
       - name: Read-snapshot append-only guardrail
         if: ${{ needs.guard.outputs.run_perf_and_suites == 'true' }}
@@ -584,13 +569,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
 
       - name: Vet and test cmd/unified_bench
         working-directory: cmd/unified_bench
@@ -599,8 +581,8 @@ jobs:
         run: |
           set -euo pipefail
           go clean -testcache
-          go vet ./...
-          go test -timeout 15m ./...
+          go vet -trimpath ./...
+          go test -trimpath -timeout 15m ./...
 
   perf-smoke:
     name: TreeDB perf-smoke (linux)
@@ -614,13 +596,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: Aggregate perf gate self-tests
         env:
@@ -818,23 +797,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: Test snapshot iterator benchmark parser
-        run: GOWORK=off go test ./.github/scripts/snapshot_iterator_bench
+        run: GOWORK=off go test -trimpath ./.github/scripts/snapshot_iterator_bench
 
       - name: Collect CPU-pinned snapshot iterator pairs
         if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           mkdir -p artifacts/snapshot_iterator_perf
-          GOWORK=off go test -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
+          GOWORK=off go test -trimpath -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
           sha256sum artifacts/snapshot_iterator_perf/snapshot_iterator.test | tee artifacts/snapshot_iterator_perf/binary.sha256
           SNAPSHOT_ITERATOR_PAIRS=8 \
             .github/scripts/collect_snapshot_iterator_pairs.sh \
@@ -885,13 +861,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go (cached)
+        uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
+          profile: linux
 
       - name: Install redis-benchmark & run protocol bench
         env:

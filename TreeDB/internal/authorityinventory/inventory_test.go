@@ -207,11 +207,20 @@ func inventorySuffixes(prefix string) []string {
 
 func treeDBRoot(t *testing.T, rel string) string {
 	t.Helper()
-	_, current, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, current, _, ok := runtime.Caller(0); ok && filepath.IsAbs(current) {
+		if _, err := os.Stat(current); err == nil {
+			pkgDir = filepath.Dir(current)
+		}
 	}
-	return filepath.Join(filepath.Dir(current), "..", "..", rel)
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	return filepath.Join(pkgDir, "..", "..", rel)
 }
 
 func parseFile(t *testing.T, path string) *ast.File {

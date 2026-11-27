@@ -346,6 +346,13 @@ func algorithmProvenance(tb testing.TB) map[string]any {
 	if !ok {
 		tb.Fatal("source identity unavailable")
 	}
+	if !filepath.IsAbs(source) {
+		wd, err := os.Getwd()
+		if err != nil {
+			tb.Fatal(err)
+		}
+		source = filepath.Join(wd, filepath.Base(source))
+	}
 	raw, err := os.ReadFile(source)
 	if err != nil {
 		tb.Fatal(err)

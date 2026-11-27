@@ -1066,9 +1066,9 @@ def _run_package_slice(
     chunk_max_bytes = WINDOWS_SPLIT_TEST_CHUNK_MAX_BYTES if os.name == "nt" else SPLIT_TEST_CHUNK_MAX_BYTES
     with tempfile.TemporaryDirectory(prefix="ci-slice-", ignore_cleanup_errors=True) as td:
         bin_path = Path(td) / bin_name
-        compile_cmd = ["go", "test", "-vet=off", "-c", "-o", str(bin_path), pkg]
+        compile_cmd = ["go", "test", "-trimpath", "-vet=off", "-c", "-o", str(bin_path), pkg]
         if race:
-            compile_cmd.insert(2, "-race")
+            compile_cmd.insert(3, "-race")
         rc = _run_cmd(compile_cmd, cwd=repo, env=compile_env)
         if rc != 0:
             return rc
@@ -1192,10 +1192,10 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         if not pkgs:
             print("Draft PR touches no Go packages; compile/vet skipped.")
             return 0
-        rc = _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
+        rc = _run_cmd(["go", "vet", "-trimpath", *pkgs], cwd=repo, env=compile_env)
         if rc != 0:
             return rc
-        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=compile_env)
+        return _run_cmd(["go", "test", "-trimpath", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "vet":
         shards = plan.get("vet_shards")
@@ -1207,7 +1207,7 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         if not pkgs:
             print(f"No Go packages assigned to vet shard {args.shard_index}.")
             return 0
-        return _run_cmd(["go", "vet", *pkgs], cwd=repo, env=compile_env)
+        return _run_cmd(["go", "vet", "-trimpath", *pkgs], cwd=repo, env=compile_env)
 
     if args.kind == "cross-darwin":
         shards = plan.get("cross_darwin_shards")
@@ -1222,7 +1222,7 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         # Compile-only cross-OS check (-vet=off); Linux vet runs in the parallel vet job
         # and native darwin/windows vet runs in os-escalated and Tier 2 sweeps.
         xenv = dict(compile_env, CGO_ENABLED="0", GOOS="darwin", GOARCH="arm64")
-        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        return _run_cmd(["go", "test", "-trimpath", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "cross-windows":
         shards = plan.get("cross_windows_shards")
@@ -1235,7 +1235,7 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
             print(f"No Windows-supported Go packages assigned to shard {args.shard_index}.")
             return 0
         xenv = dict(compile_env, CGO_ENABLED="0", GOOS="windows", GOARCH="amd64")
-        return _run_cmd(["go", "test", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
+        return _run_cmd(["go", "test", "-trimpath", "-vet=off", "-ldflags=-s -w", "-exec=true", "-run=^$", *pkgs], cwd=repo, env=xenv)
 
     if args.kind == "test":
         shards = plan.get("test_shards", [])
@@ -1247,14 +1247,14 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
             # Pre-compile all packages in parallel using full runner vCPUs (skips redundant vet),
             # then execute sequentially (-p 1) under bounded GOMAXPROCS/GOMEMLIMIT.
             rc = _run_cmd(
-                ["go", "test", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
+                ["go", "test", "-trimpath", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
                 cwd=repo,
                 env=compile_env,
             )
             if rc != 0:
                 return rc
             rc = _run_cmd(
-                ["go", "test", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *shard["packages"]],
+                ["go", "test", "-trimpath", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *shard["packages"]],
                 cwd=repo,
                 env=env,
                 jsonl_path=jsonl_path,
@@ -1286,14 +1286,14 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
             return 0
         if shard.get("packages"):
             rc = _run_cmd(
-                ["go", "test", "-race", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
+                ["go", "test", "-trimpath", "-race", "-vet=off", "-exec=true", "-run=^$", *shard["packages"]],
                 cwd=repo,
                 env=compile_env,
             )
             if rc != 0:
                 return rc
             rc = _run_cmd(
-                ["go", "test", "-race", "-vet=off", "-json", "-count=1", "-p", "1", "-timeout", "15m", *shard["packages"]],
+                ["go", "test", "-trimpath", "-race", "-vet=off", "-json", "-count=1", "-p", "1", "-timeout", "15m", *shard["packages"]],
                 cwd=repo,
                 env=env,
                 jsonl_path=jsonl_path,
@@ -1340,12 +1340,12 @@ def cmd_run_shard(args: argparse.Namespace) -> int:
         # then execute tests with -vet=off to avoid redundant vetting.
         vet_targets = list(pkgs) + [sl["package"] for sl in slices if sl["index"] == 0]
         if vet_targets:
-            rc = _run_cmd(["go", "vet", *sorted(set(vet_targets))], cwd=repo, env=compile_env)
+            rc = _run_cmd(["go", "vet", "-trimpath", *sorted(set(vet_targets))], cwd=repo, env=compile_env)
             if rc != 0:
                 return rc
         if pkgs:
             rc = _run_cmd(
-                ["go", "test", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *pkgs],
+                ["go", "test", "-trimpath", "-vet=off", "-json", "-count=1", "-timeout", "25m", "-p", "1", *pkgs],
                 cwd=repo,
                 env=env,
                 jsonl_path=jsonl_path,

@@ -36,14 +36,16 @@ as benchprof inputs. The focused collection insert compression recipe is in the
 ## Pre-push gate & CI tiers
 
 Before every `git push` to a PR branch, run this local pre-push gate so hosted
-runners are never burned on avoidable format, lint, or doc-contract failures:
+runners are never burned on avoidable format, lint, or doc-contract failures
+(passing `-trimpath` explicitly so parallel worktrees share compiled actions in
+a persistent host `GOCACHE` without setting global `GOFLAGS`):
 
 ```sh
 unformatted="$(gofmt -l $(git ls-files '*.go'))" && test -z "$unformatted"
-go vet <affected-packages>
-go test <affected-packages>
+go vet -trimpath <affected-packages>
+go test -trimpath <affected-packages>
 # If any docs, README, or spec files changed:
-make docs-check && go test ./TreeDB/docs && go test ./TreeDB/collections -run '^TestTypedStorage'
+make docs-check && go test -trimpath ./TreeDB/docs && go test -trimpath ./TreeDB/collections -run '^TestTypedStorage'
 ```
 
 CI uses a 3-tier pre-alpha pipeline (`.github/workflows/ci.yml` + `.github/workflows/ci-full-sweep.yml`)

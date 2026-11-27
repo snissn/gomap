@@ -12,11 +12,20 @@ import (
 
 func repoRoots(t *testing.T) (treeRoot, repoRoot string) {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
+	var pkgDir string
+	if _, thisFile, _, ok := runtime.Caller(0); ok && filepath.IsAbs(thisFile) {
+		if _, err := os.Stat(thisFile); err == nil {
+			pkgDir = filepath.Dir(thisFile)
+		}
 	}
-	treeRoot = filepath.Clean(filepath.Join(filepath.Dir(thisFile), ".."))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	treeRoot = filepath.Clean(filepath.Join(pkgDir, ".."))
 	repoRoot = filepath.Clean(filepath.Join(treeRoot, ".."))
 	return treeRoot, repoRoot
 }

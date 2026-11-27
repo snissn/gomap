@@ -1,0 +1,60 @@
+name: "Setup Go with separated GOMODCACHE and rolling GOCACHE"
+description: >-
+  Installs Go from go.mod, caches GOMODCACHE immutably per go.sum, and restores
+  a rolling main-seeded GOCACHE (saving only when save-gocache is 'true' so PRs
+  never churn the 10 GiB repository cache quota).
+
+inputs:
+  profile:
+    description: "Build cache profile key (e.g. linux, linux-race, cross-darwin, cross-windows, macos, windows)"
+    required: true
+  save-gocache:
+    description: "Whether to save the updated GOCACHE post-job (set true only on main push or scheduled sweeps)"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Go toolchain
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Resolve Go cache directories
+      id: go-env
+      shell: bash
+      run: |
+        set -euo pipefail
+        gomodcache="$(go env GOMODCACHE)"
+        gocache="$(go env GOCACHE)"
+        mkdir -p "$gomodcache" "$gocache"
+        echo "gomodcache=$gomodcache" >> "$GITHUB_OUTPUT"
+        echo "gocache=$gocache" >> "$GITHUB_OUTPUT"
+
+    - name: Cache GOMODCACHE (immutable per go.sum)
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.go-env.outputs.gomodcache }}
+        key: gomod-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          gomod-v1-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Cache rolling GOCACHE (restore + save on main/schedule)
+      if: ${{ inputs.save-gocache == 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.go-env.outputs.gocache }}
+        key: gocache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          gocache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ hashFiles('go.sum') }}-
+
+    - name: Restore rolling GOCACHE (read-only on PRs)
+      if: ${{ inputs.save-gocache != 'true' }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.go-env.outputs.gocache }}
+        key: gocache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          gocache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ hashFiles('go.sum') }}-

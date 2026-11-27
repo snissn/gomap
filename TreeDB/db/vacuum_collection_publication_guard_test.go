@@ -1740,6 +1740,81 @@ func (ta *publicationGuardTaintAnalysis) retainErrorOperands(fn *types.Func, typ
 	return changed
 }
 
+var (
+	publicationGuardGOROOTOnce sync.Once
+	publicationGuardGOROOTVal  string
+
+	publicationGuardFixtureExportsMu sync.Mutex
+	publicationGuardFixtureExports   = make(map[string]string)
+)
+
+func publicationGuardGOROOT() string {
+	publicationGuardGOROOTOnce.Do(func() {
+		if root := strings.TrimSpace(runtime.GOROOT()); root != "" {
+			publicationGuardGOROOTVal = root
+			return
+		}
+		if root := strings.TrimSpace(os.Getenv("GOROOT")); root != "" {
+			publicationGuardGOROOTVal = root
+			return
+		}
+		if out, err := exec.Command("go", "env", "GOROOT").Output(); err == nil {
+			publicationGuardGOROOTVal = strings.TrimSpace(string(out))
+		}
+	})
+	return publicationGuardGOROOTVal
+}
+
+func loadPublicationGuardFixtureExports(importPaths []string) (map[string]string, error) {
+	publicationGuardFixtureExportsMu.Lock()
+	defer publicationGuardFixtureExportsMu.Unlock()
+
+	var missing []string
+	seen := make(map[string]struct{}, len(importPaths))
+	for _, p := range importPaths {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if _, ok := publicationGuardFixtureExports[p]; !ok {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		args := append([]string{"list", "-json", "-export", "-deps"}, missing...)
+		cmd := exec.Command("go", args...)
+		output, err := cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("go list -export -deps %v: %w", missing, err)
+		}
+		dec := json.NewDecoder(bytes.NewReader(output))
+		for {
+			var listed struct {
+				ImportPath string
+				Export     string
+			}
+			err := dec.Decode(&listed)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("decode go list output: %w", err)
+			}
+			if listed.Export != "" {
+				publicationGuardFixtureExports[listed.ImportPath] = listed.Export
+			}
+		}
+	}
+	snapshot := make(map[string]string, len(publicationGuardFixtureExports))
+	for k, v := range publicationGuardFixtureExports {
+		snapshot[k] = v
+	}
+	return snapshot, nil
+}
+
 // These summaries are bound to the audited toolchain source. A source change
 // fails closed until the header-only operations are audited again. TypeOf only
 // exposes type metadata; ValueOf/Elem preserve the original alias, and Set is
@@ -1748,7 +1823,14 @@ func (ta *publicationGuardTaintAnalysis) verifySource(relative, digest string) b
 	if verified, found := ta.verifiedSource[relative]; found {
 		return verified
 	}
-	content, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "src", relative))
+	goroot := publicationGuardGOROOT()
+	var content []byte
+	var err error
+	if goroot != "" {
+		content, err = os.ReadFile(filepath.Join(goroot, "src", relative))
+	} else {
+		err = os.ErrNotExist
+	}
 	verified := err == nil && fmt.Sprintf("%x", sha256.Sum256(content)) == digest
 	ta.verifiedSource[relative] = verified
 	return verified
@@ -2635,11 +2717,20 @@ func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *pub
 	if dbTestRaceEnabled {
 		t.Skip("skipping static AST publication source guard under -race; verified in normal test runs")
 	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, currentFile, _, ok := runtime.Caller(0); ok && filepath.IsAbs(currentFile) {
+		if _, err := os.Stat(currentFile); err == nil {
+			pkgDir = filepath.Dir(currentFile)
+		}
 	}
-	meta, err := loadPublicationGuardImmutableMetadata(filepath.Dir(currentFile))
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	meta, err := loadPublicationGuardImmutableMetadata(pkgDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2701,7 +2792,25 @@ func (db *DB) publishSnapshotView() {}
 		t.Fatalf("parse fixture: %v", err)
 	}
 	info := publicationGuardTypesInfo()
-	config := types.Config{Importer: importer.Default()}
+	imp := importer.Default()
+	if runtime.GOROOT() == "" && os.Getenv("GOROOT") == "" {
+		importPaths := make([]string, 0, len(file.Imports))
+		for _, spec := range file.Imports {
+			importPaths = append(importPaths, strings.Trim(spec.Path.Value, "\"`"))
+		}
+		exports, err := loadPublicationGuardFixtureExports(importPaths)
+		if err != nil {
+			t.Fatalf("load fixture exports: %v", err)
+		}
+		imp = importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+			exportPath := exports[path]
+			if exportPath == "" {
+				return nil, fmt.Errorf("publication guard fixture: no export data for %s", path)
+			}
+			return os.Open(exportPath)
+		})
+	}
+	config := types.Config{Importer: imp}
 	pkg, err := config.Check("example.test/guardfixture", fset, []*ast.File{file}, info)
 	if err != nil {
 		t.Fatalf("type-check fixture: %v", err)

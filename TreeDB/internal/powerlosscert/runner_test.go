@@ -321,6 +321,12 @@ func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
 		t.Fatalf("resolved inherited PATH Git shim %q", gitBinary)
 	}
 	goBinary, err := resolveGoBinary("go")
+	if runtime.GOROOT() == "" {
+		if err == nil || !strings.Contains(err.Error(), "runtime.GOROOT is unavailable") {
+			t.Fatalf("resolveGoBinary(\"go\") under -trimpath error=%v, want fail-closed runtime.GOROOT error", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +403,19 @@ func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
 		t.Fatalf("ignored source should demonstrate the status gap: %v", err)
 	}
 
-	goBinary, err := resolveGoBinary(filepath.Join(runtime.GOROOT(), "bin", "go"+executableSuffix()))
+	goTool := ""
+	if goroot := runtime.GOROOT(); goroot != "" {
+		goTool = filepath.Join(goroot, "bin", "go"+executableSuffix())
+	} else if goroot := os.Getenv("GOROOT"); goroot != "" {
+		goTool = filepath.Join(goroot, "bin", "go"+executableSuffix())
+	} else {
+		lookedUp, err := exec.LookPath("go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		goTool = lookedUp
+	}
+	goBinary, err := resolveGoBinary(goTool)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -883,11 +883,20 @@ func TestOperationsAfterClose(t *testing.T) {
 }
 
 func TestDBLevelDeleteRangeCallsPublicTreeDBDeleteRangeDirectly(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var pkgDir string
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			pkgDir = filepath.Dir(file)
+		}
 	}
-	sourcePath := filepath.Join(filepath.Dir(file), "adapter.go")
+	if pkgDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		pkgDir = wd
+	}
+	sourcePath := filepath.Join(pkgDir, "adapter.go")
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatalf("read adapter source: %v", err)

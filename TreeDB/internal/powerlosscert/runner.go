@@ -659,7 +659,11 @@ func resolveGoBinary(name string) (string, error) {
 		if inherited := os.Getenv("GOROOT"); inherited != "" {
 			return "", fmt.Errorf("powerlosscert: inherited GOROOT is set; exact-SHA certification requires an explicit absolute Go tool path")
 		}
-		name = filepath.Join(runtime.GOROOT(), "bin", "go"+executableSuffix())
+		goroot := runtime.GOROOT()
+		if goroot == "" {
+			return "", fmt.Errorf("powerlosscert: runtime.GOROOT is unavailable; exact-SHA certification requires an explicit absolute Go tool path")
+		}
+		name = filepath.Join(goroot, "bin", "go"+executableSuffix())
 	}
 	if !filepath.IsAbs(name) {
 		return "", fmt.Errorf("powerlosscert: Go tool %q must be an absolute path or the trusted default name %q", name, "go")

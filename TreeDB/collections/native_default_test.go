@@ -9,11 +9,19 @@ import (
 )
 
 func TestCollectionsRuntimeHasNoOracleOrTranslationSelectors(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	var dir string
+	if _, file, _, ok := runtime.Caller(0); ok && filepath.IsAbs(file) {
+		if _, err := os.Stat(file); err == nil {
+			dir = filepath.Dir(file)
+		}
 	}
-	dir := filepath.Dir(file)
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		dir = wd
+	}
 	for _, name := range []string{"api.go", "planner.go"} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
