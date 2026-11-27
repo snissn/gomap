@@ -218,15 +218,22 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 			occupiedPhysical = current.capacity
 		}
 	}
+	effectiveIncoming := max(incoming, current.maxIncoming)
+	if current.capacity >= 32<<20 && effectiveIncoming >= fixedWALBulkSteppingMinIncoming {
+		// Multi-MiB bulk frames on a >=32 MiB container should not speculatively
+		// allocate and fsync a 64 MiB zero-filled ahead-reserve: doing so both
+		// contends with foreground fdatasyncs and forces an extra wal directory
+		// fsync if a checkpoint cancels the unused reserve right after the batch.
+		return nil
+	}
 	halfReached := occupiedPhysical-fixedWALHeaderSize >= (current.capacity-fixedWALHeaderSize+1)/2
 	nextFrameOverflows := false
 	if !halfReached && incoming > 0 {
 		if projected, err := fixedWALExtentEnd(occupiedPhysical, incoming); err == nil {
 			extent := projected - occupiedPhysical
 			// Start ahead-reserve when fewer than 3 additional frames of the
-			// same size will fit after this append (4 frames for >=16 MiB
-			// containers preparing 32-64 MiB reserves), giving background
-			// zero-fill and fsync lead time without shifting small-segment tests.
+			// same size will fit after this append (4 frames for 16 MiB
+			// containers preparing 32 MiB reserves).
 			lookahead := int64(3)
 			if current.capacity >= 16<<20 {
 				lookahead = 4

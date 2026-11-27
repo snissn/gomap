@@ -61,7 +61,10 @@ func (s *journalFileSync) alreadySynced(seq, stableBytes uint64) bool {
 	if s == nil || seq == 0 {
 		return false
 	}
-	s.mu.Lock()
+	// Never block append/rotation behind an in-flight captured sync.
+	if !s.mu.TryLock() {
+		return false
+	}
 	defer s.mu.Unlock()
 	return s.err() == nil && s.syncedSeq == seq && s.syncedBytes >= stableBytes
 }

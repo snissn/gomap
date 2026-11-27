@@ -315,8 +315,10 @@ func (guard *CommandWALStagingGuardV1) AppendNativeDurablePrefixParticipant(inte
 	}
 	intent.inner.privateCOWOwner = held.privateOwner
 	intent.inner.capturedDurable = capturedDurable
+	intent.inner.deferredDurableParticipant = !capturedDurable
 	lsn, err := held.db.appendCommandWALIntent(&intent.inner, false)
 	intent.inner.privateCOWOwner = nil
+	intent.inner.deferredDurableParticipant = false
 	// Inner append may have assigned before a flush/dependency failure.
 	if assigned := intent.AssignedLSN(); assigned != 0 {
 		lsn = assigned

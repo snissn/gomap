@@ -292,7 +292,7 @@ func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([
 	workers := 1
 	if len(leafPages) >= 16 {
 		if procs := runtime.GOMAXPROCS(0); procs > 1 {
-			workers = min(4, procs)
+			workers = min(8, procs)
 			if workers > len(leafPages)/4 {
 				workers = max(1, len(leafPages)/4)
 			}
@@ -302,7 +302,7 @@ func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([
 		scratchRef = getCompactLeafLogPayloadScratchPtrRefCap(len(leafPages))
 		scratches = scratchRef.ptrs[:len(leafPages)]
 		clear(scratches)
-		var workerErrs [4]error
+		var workerErrs [8]error
 		chunk := (len(leafPages) + workers - 1) / workers
 		runRange := func(w, start, end int) {
 			for i := start; i < end; i++ {

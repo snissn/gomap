@@ -23,33 +23,37 @@ import (
 )
 
 type commandWALBatchIntent struct {
-	privateCOWOwner     *transactionowner.Owner
-	sealedReceipt       *commandWALSealReceipt
-	kind                commitlog.CommandKind
-	scope               commitlog.CommandScope
-	payloadFormat       commitlog.PayloadFormat
-	payload             []byte
-	rawKVEntries        []batchpkg.Entry
-	rawKVScan           commitlog.RawKVBatchOperationScanner
-	rawKVPlan           commitlog.RawKVBatchPayloadPlan
-	rawKVRIDCache       *rawKVCommandWALRIDCache
-	rawKVDirect         bool
-	trustedPayload      bool
-	externalRefs        bool
-	externalRefFileIDs  []uint32
-	fromReplay          bool
-	lsn                 uint64
-	maxEntryRevision    page.EntryRevision
-	replayToken         uint64
-	coveredRange        [1]CommandWALLSNRange
-	durablePrefixGroup  []*CommandWALIntent
-	syncOnPublish       bool
-	capturedDurable     bool // Durable frame class; physical barrier is completed by an owned capture.
-	staged              bool
-	dependencyResources *rootpublication.StableResourceSet
-	statsPath           commandWALAppendStatsPath
-	statsPathSet        bool
-	rawKVFinalize       RawKVCommandWALFinalize
+	privateCOWOwner            *transactionowner.Owner
+	sealedReceipt              *commandWALSealReceipt
+	kind                       commitlog.CommandKind
+	scope                      commitlog.CommandScope
+	payloadFormat              commitlog.PayloadFormat
+	payload                    []byte
+	rawKVEntries               []batchpkg.Entry
+	rawKVScan                  commitlog.RawKVBatchOperationScanner
+	rawKVPlan                  commitlog.RawKVBatchPayloadPlan
+	rawKVRIDCache              *rawKVCommandWALRIDCache
+	rawKVDirect                bool
+	trustedPayload             bool
+	payloadCRC                 uint32
+	hasPayloadCRC              bool
+	externalRefs               bool
+	externalRefFileIDs         []uint32
+	fromReplay                 bool
+	lsn                        uint64
+	maxEntryRevision           page.EntryRevision
+	replayToken                uint64
+	coveredRange               [1]CommandWALLSNRange
+	durablePrefixGroup         []*CommandWALIntent
+	syncOnPublish              bool
+	capturedDurable            bool // Durable frame class; physical barrier is completed by an owned capture.
+	deferRotationNamespaceSync bool // Captured fixed-WAL barrier defers wal dir fsync to overlap with active fdatasync.
+	deferredDurableParticipant bool // Group-commit participant whose fixed-WAL flush is completed by the group's owned capture.
+	staged                     bool
+	dependencyResources        *rootpublication.StableResourceSet
+	statsPath                  commandWALAppendStatsPath
+	statsPathSet               bool
+	rawKVFinalize              RawKVCommandWALFinalize
 }
 
 // RawKVCommandWALFinalize is the internal cached-publication validation seam.
@@ -615,12 +619,17 @@ func (db *DB) appendCommandWALPrefixBarrier(captured bool) (uint64, error) {
 }
 
 func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner, reserved *rootpublication.AcceptedTicket, frontier uint64) (uint64, error) {
+	return db.appendCommandWALPrefixBarrierForOwnerWithOptions(captured, privateOwner, reserved, frontier, false)
+}
+
+func (db *DB) appendCommandWALPrefixBarrierForOwnerWithOptions(captured bool, privateOwner *transactionowner.Owner, reserved *rootpublication.AcceptedTicket, frontier uint64, deferRotationNamespaceSync bool) (uint64, error) {
 	intent := &commandWALBatchIntent{
 		privateCOWOwner: privateOwner,
 		kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
-		capturedDurable: captured,
+		capturedDurable:            captured,
+		deferRotationNamespaceSync: deferRotationNamespaceSync,
 	}
 	owner := db.acceptedPrefix.Load()
 	var ticket rootpublication.AcceptedTicket
@@ -899,7 +908,17 @@ func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 // stale-proof, unlink, namespace-sync, poison, and admission failure still
 // propagates; explicit cleanup callers continue to receive the unavailable
 // authority error from CleanupCommandWALCoveredSegments.
-func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
+func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(sync bool) error {
+	return db.CleanupCommandWALCoveredSegmentsAtCheckpointWithPreScan(sync, nil)
+}
+
+// CleanupCommandWALCoveredSegmentsAtCheckpointWithPreScan runs checkpoint
+// command-WAL cleanup while optionally consuming a closed-segment pre-scan
+// overlapped with fallback convergence. Always closes preScan before returning.
+func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpointWithPreScan(_ bool, preScan *CommandWALClosedSegmentPreScan) error {
+	if preScan != nil {
+		defer preScan.Close()
+	}
 	if db == nil || !db.commandWAL {
 		return nil
 	}
@@ -908,7 +927,7 @@ func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
 	if db.closing.Load() {
 		return ErrClosed
 	}
-	return normalizeCommandWALCheckpointCleanupError(db.cleanupCommandWALCoveredSegmentsV1(false, true))
+	return normalizeCommandWALCheckpointCleanupError(db.cleanupCommandWALCoveredSegmentsWithPreScanV1(false, true, preScan))
 }
 
 // CleanupCommandWALCoveredPrefix consumes cleanup debt created by
@@ -992,6 +1011,10 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 // journal owner is detached. External callers must use the admission-checked
 // CleanupCommandWALCoveredSegments method above.
 func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix, allowZeroFrontierSkip bool) (retErr error) {
+	return db.cleanupCommandWALCoveredSegmentsWithPreScanV1(scanSealedPrefix, allowZeroFrontierSkip, nil)
+}
+
+func (db *DB) cleanupCommandWALCoveredSegmentsWithPreScanV1(scanSealedPrefix, allowZeroFrontierSkip bool, preScan *CommandWALClosedSegmentPreScan) (retErr error) {
 	db.commandWALCleanupMu.Lock()
 	defer db.commandWALCleanupMu.Unlock()
 	cleanupStart := time.Now()
@@ -1051,7 +1074,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix, allowZeroFron
 		}
 	}
 	scanStart := time.Now()
-	decisions, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
+	decisions, err := db.scanCommandWALCleanupProofWithPreScan(proof, scanSealedPrefix, preScan)
 	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
@@ -1247,6 +1270,10 @@ func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublicati
 }
 
 func (db *DB) syncCommandWALDependenciesWithSealedDebt(lsn uint64, extra *rootpublication.StableResourceSet, sealed commitlog.SealedRotationDebt) error {
+	return db.syncCommandWALDependenciesWithOptions(lsn, extra, sealed, false)
+}
+
+func (db *DB) syncCommandWALDependenciesWithOptions(lsn uint64, extra *rootpublication.StableResourceSet, sealed commitlog.SealedRotationDebt, deferRotationNamespaces bool) error {
 	if db == nil || lsn == 0 {
 		return nil
 	}
@@ -1278,9 +1305,11 @@ func (db *DB) syncCommandWALDependenciesWithSealedDebt(lsn uint64, extra *rootpu
 		db.commandWALDebt.noteRetryThrough(lsn)
 		return err
 	}
-	if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, lsn); err != nil {
-		db.commandWALDebt.noteRetryThrough(lsn)
-		return err
+	if !deferRotationNamespaces {
+		if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, lsn); err != nil {
+			db.commandWALDebt.noteRetryThrough(lsn)
+			return err
+		}
 	}
 	return nil
 }
@@ -1323,6 +1352,17 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 // constructed through a canonical commitlog encoder. The append path still
 // validates command identity and size, but it skips payload decoding because
 // the caller owns that construction boundary.
+// PrecomputePayloadCRC computes the IEEE CRC32 of an immutable trusted payload
+// off-lock so the serialized WAL append can combine the header and payload CRCs
+// in O(1) while holding writer/journal locks.
+func (intent *CommandWALIntent) PrecomputePayloadCRC() {
+	if intent == nil || intent.inner.hasPayloadCRC || !intent.inner.trustedPayload || len(intent.inner.payload) < 4096 {
+		return
+	}
+	intent.inner.payloadCRC = commitlog.ChecksumCommandPayload(intent.inner.payload)
+	intent.inner.hasPayloadCRC = true
+}
+
 func (db *DB) NewTrustedCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
 	intent, err := db.NewCommandWALIntent(kind, scope, payloadFormat, payload)
 	if err != nil || intent == nil {
@@ -3286,8 +3326,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	}
 	var beforeAppend func() error
 	if sync || intent.capturedDurable {
+		deferRotNS := (intent.deferRotationNamespaceSync || (intent.capturedDurable && !sync && db.commandJournal.CanShareFixedWriter())) && !durabilitycut.Enabled()
 		beforeAppend = func() error {
-			return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
+			return db.syncCommandWALDependenciesWithOptions(^uint64(0), dependencies, commitlog.SealedRotationDebt{}, deferRotNS)
 		}
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
@@ -3315,8 +3356,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if sync || intent.capturedDurable {
 		class = commitlog.CommandDurabilityDurable
 	}
+	deferCapturedFixed := !sync && (intent.capturedDurable || intent.deferredDurableParticipant)
 	appendStart := time.Now()
-	lsn, err := db.commandJournal.AppendCommandObservedWithImmutableHooks(commitlog.CommandEnvelope{
+	lsn, fixedFlushDeferred, err := db.commandJournal.AppendCommandObservedWithOptions(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
 		DurabilityClass: class,
 		Kind:            intent.kind,
@@ -3324,6 +3366,13 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		BaseAppliedLSN:  baseAppliedLSN,
 		PayloadFormat:   intent.payloadFormat,
 		Payload:         intent.payload,
+	}, commitlog.CommandAppendOptions{
+		ImmutableHooks:         true,
+		TrustedPayload:         intent.trustedPayload,
+		DeferFixedFlush:        deferCapturedFixed,
+		DeferRotationNamespace: deferCapturedFixed && !durabilitycut.Enabled() && db.commandJournal.CanShareFixedWriter(),
+		PayloadCRC:             intent.payloadCRC,
+		HasPayloadCRC:          intent.hasPayloadCRC,
 	}, beforeAppend, afterAppend)
 	appendElapsed := time.Since(appendStart)
 	postAppendStart := time.Time{}
@@ -3360,14 +3409,15 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 	}
 	flushStart := time.Time{}
+	skipPostAppendFlush := intent.capturedDurable || fixedFlushDeferred
 	if requestTiming != nil {
-		requestTiming.FlushObserved = !intent.capturedDurable
+		requestTiming.FlushObserved = !skipPostAppendFlush
 		requestTiming.Sync = actualSync
 		requestTiming.FlushSync = actualSync
 		flushStart = time.Now()
 	}
 	var flushErr error
-	if !intent.capturedDurable {
+	if !skipPostAppendFlush {
 		flushErr = db.flushCommandWALForPath(sync, true, appendPath)
 	}
 	if requestTiming != nil {

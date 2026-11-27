@@ -130,29 +130,30 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	disposalMu            sync.Mutex
-	disposalErr           error
-	disposalFailure       originalDBCleanupFailure
-	metadata              *retainedalloc.Owner
-	metadataCharge        uint64
-	primary               *primaryPublicationSealV5
-	latestSequence        uint64
-	groupLength           int
-	idx                   *indexGen
-	base                  rootPublicationSealBaseV1
-	next                  page.MetaPageBody
-	resources             *rootpublication.StableResourceSet
-	dependenciesCovered   bool
-	dependenciesPreSynced bool
-	manifest              *rootpublication.DependencyManifestV1
-	prepared              *freelist.PreparedCOWCandidateV1
-	prefix                []*freelist.PreparedCOWCandidateV1
-	token                 *rootpublication.StableResourceToken
-	record                rootpublication.DurableRootRecordV1
-	meta                  page.DurableMetaV1
-	target                uint64
-	materialized          bool
-	released              bool
+	disposalMu                    sync.Mutex
+	disposalErr                   error
+	disposalFailure               originalDBCleanupFailure
+	metadata                      *retainedalloc.Owner
+	metadataCharge                uint64
+	primary                       *primaryPublicationSealV5
+	latestSequence                uint64
+	groupLength                   int
+	idx                           *indexGen
+	base                          rootPublicationSealBaseV1
+	next                          page.MetaPageBody
+	resources                     *rootpublication.StableResourceSet
+	dependenciesCovered           bool
+	dependenciesPreSynced         bool
+	singleBarrierSameRootFallback bool
+	manifest                      *rootpublication.DependencyManifestV1
+	prepared                      *freelist.PreparedCOWCandidateV1
+	prefix                        []*freelist.PreparedCOWCandidateV1
+	token                         *rootpublication.StableResourceToken
+	record                        rootpublication.DurableRootRecordV1
+	meta                          page.DurableMetaV1
+	target                        uint64
+	materialized                  bool
+	released                      bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -1910,6 +1911,18 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			}
 		}
 	}
+	singleBarrierSameRootFallback := !durabilitycut.Enabled() &&
+		base.primary == nil &&
+		dependenciesCovered &&
+		group.Len() == 1 && len(runtime.debt) <= 1 &&
+		base.pending == nil && len(base.ambiguous) == 0 &&
+		base.slot <= 1 && base.slot != target &&
+		base.slotRecord[base.slot].CommitSeq != 0 &&
+		base.slotRecord[base.slot].CommitSeq == base.record.CommitSeq &&
+		next.UserRootPageID == base.record.UserRootPageID &&
+		next.SystemRootPageID == base.record.SystemRootPageID &&
+		next.AppliedCommandLSN == base.record.AppliedCommandLSN &&
+		next.AppliedCommandLSN != 0
 	seal := &rootPublicationSealV1{
 		metadata: runtime.metadata, metadataCharge: sealCharge,
 		latestSequence: memberNext.CommitSeq, groupLength: group.Len(),
@@ -1919,6 +1932,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		}, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, prefix: prefix, token: token, record: record, meta: meta,
 		target: target, dependenciesCovered: dependenciesCovered, dependenciesPreSynced: memberDependenciesPreSynced,
+		singleBarrierSameRootFallback: singleBarrierSameRootFallback,
 	}
 	seal.disposalFailure.payload = seal
 	runtime.debt = append(runtime.debt, prepared)
@@ -2083,11 +2097,20 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		}
 	}
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		installAuthority:      installAuthority,
-		resources:             seal.resources,
-		dependenciesCovered:   seal.dependenciesCovered || (!durabilitycut.Enabled() && seal.dependenciesPreSynced),
-		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
-		materialize:           func() error { return runtime.materializeSeal(seal) },
+		installAuthority:              installAuthority,
+		resources:                     seal.resources,
+		dependenciesCovered:           seal.dependenciesCovered || (!durabilitycut.Enabled() && seal.dependenciesPreSynced),
+		singleBarrierSameRootFallback: seal.singleBarrierSameRootFallback && installAuthority == nil && !durabilitycut.Enabled(),
+		syncPendingLeafLogDir:         db.syncPendingLeafLogDirIfNeeded,
+		hintIndexWriteback: func() {
+			if seal.token != nil {
+				_ = seal.token.WithPinnedFile(func(file *os.File) error {
+					hintStableFileWriteback(file)
+					return nil
+				})
+			}
+		},
+		materialize: func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
 			// V6 stages its opposite capsule before the sole PRIMARY fence.
 			// Other PRIMARY formats retain the original pre-authority sync.

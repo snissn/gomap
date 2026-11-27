@@ -13876,9 +13876,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		if opts.IndexOuterLeavesInValueLog {
 			// Primary leaf-log lane appends directly without vlogCh queueing;
-			// give its single-lane frame preparer up to 4 workers so bulk cold
+			// give its single-lane frame preparer up to 8 workers so bulk cold
 			// builds compress grouped leaf frames in parallel.
-			db.startVlogDictPreparerWithMaxWorkers(&db.leafLog, min(4, runtime.GOMAXPROCS(0)))
+			db.startVlogDictPreparerWithMaxWorkers(&db.leafLog, min(8, runtime.GOMAXPROCS(0)))
 		}
 	}
 
@@ -18114,7 +18114,7 @@ func (db *DB) prepareAppendFrames(
 		}
 		return prepared, time.Since(prepStart).Nanoseconds(), nil
 	}
-	wantedWorkers := frameCount/8 + 1
+	wantedWorkers := frameCount/4 + 1
 	if rawPayloadBytes >= 1<<20 {
 		wantedWorkers++
 	}

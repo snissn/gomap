@@ -2895,11 +2895,13 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		if err := db.cached.CheckpointDeferringCommandWALCleanup(); err != nil {
 			return err
 		}
+		preScan := db.backend.StartCommandWALClosedSegmentPreScan()
 		refreshErr := db.refreshPublicCommandWALCheckpointFallback()
 		if refreshErr != nil {
+			preScan.Close()
 			return refreshErr
 		}
-		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
+		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpointWithPreScan(true, preScan); err != nil {
 			return err
 		}
 	} else {

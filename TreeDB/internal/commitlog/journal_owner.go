@@ -1071,8 +1071,10 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if err != nil {
 		return nil, err
 	}
+	closedStableBytes := uint64(j.writer.StableBytes())
+	closedSynced := syncCurrent || (!observe && !j.writer.dirSyncPending && j.fileSync.alreadySynced(closedSeq, closedStableBytes))
 	closedToken, err := j.stableSegmentToken(j.writer.f, closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
-		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
+		rootpublication.DurableFrontier{Bytes: closedStableBytes, MaxLSN: j.activeSegmentMaxLSN}, nil, closedSynced)
 	if err != nil {
 		return nil, err
 	}
@@ -1104,9 +1106,14 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		preparedAhead = nil
 	}
 	// When !deferNamespace, namespace.Stabilize() below immediately syncs this
-	// exact retained parent before installation or frame append. Avoid syncing
-	// the parent directory twice back-to-back on every durable fixed rotation.
-	state, _, selection, err := j.writer.prepareFixedSuccessorAheadWithParentSync(&prepared, parent, plan, preparedAhead, deferNamespace)
+	// exact retained parent before installation or frame append.
+	// When deferNamespace && !observe, the unstabilized namespace token is
+	// retained on activeToken and transferred into command-WAL dependency debt,
+	// which syncs this exact parent before any durable frame or barrier can
+	// cover the successor. Avoid syncing maindb/wal twice back-to-back on every
+	// fixed rotation.
+	syncPreparedParent := deferNamespace && observe
+	state, _, selection, err := j.writer.prepareFixedSuccessorAheadWithParentSync(&prepared, parent, plan, preparedAhead, syncPreparedParent)
 	pending.file = prepared
 	if err != nil {
 		closedToken.Release()
@@ -1170,8 +1177,9 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if state != nil {
 		activeStableBytes = state.physical
 	}
+	activeContentSynced := !observe && state != nil && state.logical == 0 && activeStableBytes == fixedWALHeaderSize
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(activeStableBytes)}, namespace, false)
+		rootpublication.DurableFrontier{Bytes: uint64(activeStableBytes)}, namespace, activeContentSynced)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
@@ -1235,11 +1243,25 @@ func (j *CommandJournal) TakePendingStableRotations() ([]*CommandJournalStableRo
 }
 
 func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalStableRotation, error) {
+	return j.takePendingStableRotationsWithFlushModeLocked(false)
+}
+
+func (j *CommandJournal) takePendingStableRotationsWithFlushModeLocked(deferFixedFlush bool) ([]*CommandJournalStableRotation, error) {
 	if len(j.pendingStableRotations) == 0 {
 		return nil, nil
 	}
 	if j.writer == nil || j.writer.f == nil {
 		return nil, errors.New("commitlog: command journal is closed")
+	}
+	last := j.pendingStableRotations[len(j.pendingStableRotations)-1]
+	if last == nil || last.Active == nil {
+		return nil, fmt.Errorf("%w: pending command-WAL rotation has no active resource", rootpublication.ErrResourceOwnership)
+	}
+	if deferFixedFlush && j.writer.fixed != nil && j.writer.fixed.physical == fixedWALHeaderSize &&
+		last.Active.Generation() == j.segmentSeq && last.Active.Frontier().Bytes == fixedWALHeaderSize {
+		rotations := j.pendingStableRotations
+		j.pendingStableRotations = nil
+		return rotations, nil
 	}
 	if err := j.writer.Flush(); err != nil {
 		return nil, err
@@ -1247,10 +1269,6 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 	_, err := j.writer.f.Stat()
 	if err != nil {
 		return nil, err
-	}
-	last := j.pendingStableRotations[len(j.pendingStableRotations)-1]
-	if last == nil || last.Active == nil {
-		return nil, fmt.Errorf("%w: pending command-WAL rotation has no active resource", rootpublication.ErrResourceOwnership)
 	}
 	active, err := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive,
 		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
@@ -1512,19 +1530,44 @@ func (j *CommandJournal) AppendedLSN() uint64 {
 	return j.owner.nextLSN - 1
 }
 
+// CommandAppendOptions configures internal append fast paths on CommandJournal.
+type CommandAppendOptions struct {
+	// ImmutableHooks promises that env and its backing slices are private to the
+	// call and will not be mutated by beforeAppend or OnSegmentRotated hooks.
+	ImmutableHooks bool
+	// TrustedPayload promises that env.Payload was constructed by the matching
+	// canonical commitlog encoder so redundant payload re-decoding can be skipped.
+	TrustedPayload bool
+	// DeferFixedFlush keeps newly appended fixed-container frames in w.fixed.pending
+	// (including across a fresh fixed rotation whose header is already synced) so a
+	// durable group-commit barrier can flush and sync them outside writer locks.
+	DeferFixedFlush bool
+	// DeferRotationNamespace retains any newly created segment's parent-directory
+	// sync obligation in pending rotation debt when durabilitycut is inactive so a
+	// captured durable barrier can overlap fsync(maindb/wal) with fdatasync(active).
+	DeferRotationNamespace bool
+	// PayloadCRC optionally carries a precomputed ChecksumCommandPayload(env.Payload)
+	// when ImmutableHooks is true and HasPayloadCRC is set, avoiding a redundant
+	// multi-MiB CRC scan while holding the journal mutex.
+	PayloadCRC    uint32
+	HasPayloadCRC bool
+}
+
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
 // tail-only rollback, not parallel appends within one lane.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
-	return j.appendCommand(env, false, nil, nil, false)
+	lsn, _, err := j.appendCommand(env, false, nil, nil, CommandAppendOptions{})
+	return lsn, err
 }
 
 // AppendCommandObserved appends a complete command frame and emits its
 // durability boundaries while the journal lock still identifies the exact
 // active segment that owns the frame.
 func (j *CommandJournal) AppendCommandObserved(env CommandEnvelope) (uint64, error) {
-	return j.appendCommand(env, durabilitycut.Enabled(), nil, nil, false)
+	lsn, _, err := j.appendCommand(env, durabilitycut.Enabled(), nil, nil, CommandAppendOptions{})
+	return lsn, err
 }
 
 // AppendCommandObservedWithHooks runs beforeAppend after validation but before
@@ -1538,7 +1581,8 @@ func (j *CommandJournal) AppendCommandObservedWithHooks(
 	beforeAppend func() error,
 	afterAppend func(uint64, []*CommandJournalStableRotation) error,
 ) (uint64, error) {
-	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, false)
+	lsn, _, err := j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, CommandAppendOptions{})
+	return lsn, err
 }
 
 // AppendCommandObservedWithImmutableHooks behaves like
@@ -1552,7 +1596,19 @@ func (j *CommandJournal) AppendCommandObservedWithImmutableHooks(
 	beforeAppend func() error,
 	afterAppend func(uint64, []*CommandJournalStableRotation) error,
 ) (uint64, error) {
-	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, true)
+	lsn, _, err := j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, CommandAppendOptions{ImmutableHooks: true})
+	return lsn, err
+}
+
+// AppendCommandObservedWithOptions is the internal command-journal append seam
+// supporting trusted canonical payloads and deferred fixed-container flushing.
+func (j *CommandJournal) AppendCommandObservedWithOptions(
+	env CommandEnvelope,
+	opts CommandAppendOptions,
+	beforeAppend func() error,
+	afterAppend func(uint64, []*CommandJournalStableRotation) error,
+) (uint64, bool, error) {
+	return j.appendCommand(env, durabilitycut.Enabled(), beforeAppend, afterAppend, opts)
 }
 
 func (j *CommandJournal) appendCommand(
@@ -1560,11 +1616,13 @@ func (j *CommandJournal) appendCommand(
 	observe bool,
 	beforeAppend func() error,
 	afterAppend func(uint64, []*CommandJournalStableRotation) error,
-	immutableHooks bool,
-) (uint64, error) {
+	opts CommandAppendOptions,
+) (uint64, bool, error) {
 	if j == nil {
-		return 0, errors.New("commitlog: command journal is closed")
+		return 0, false, errors.New("commitlog: command journal is closed")
 	}
+	immutableHooks := opts.ImmutableHooks
+	trustedPayload := opts.TrustedPayload
 	var prePlan commandFrameV2Encoding
 	var preSize int
 	var hasPrePlan bool
@@ -1574,12 +1632,16 @@ func (j *CommandJournal) appendCommand(
 		if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
 			payload, err := EncodeRawKVBatchPayload(nil)
 			if err != nil {
-				return 0, err
+				return 0, false, err
 			}
 			probe.Payload = payload
 			env.Payload = payload
 		}
-		if prepared, err := prepareCommandFrameV2Encoding(probe); err == nil {
+		if prepared, err := prepareCommandFrameV2EncodingWithTrust(probe, trustedPayload); err == nil {
+			if opts.HasPayloadCRC {
+				prepared.payloadCRC = opts.PayloadCRC
+				prepared.hasPayloadCRC = true
+			}
 			prePlan = prepared
 			preSize = prepared.total
 			hasPrePlan = true
@@ -1588,13 +1650,13 @@ func (j *CommandJournal) appendCommand(
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
-		return 0, errors.New("commitlog: command journal is closed")
+		return 0, false, errors.New("commitlog: command journal is closed")
 	}
 	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if env.LSN != 0 {
-		return 0, errors.New("commitlog: command journal owns lsn assignment")
+		return 0, false, errors.New("commitlog: command journal owns lsn assignment")
 	}
 	// Validate shape/capacity before any rotation or reservation. A V2 plan
 	// can be reused only while its borrowed input has crossed no callback
@@ -1606,7 +1668,7 @@ func (j *CommandJournal) appendCommand(
 		// Nil means an explicit empty batch, not a malformed empty payload.
 		payload, err := EncodeRawKVBatchPayload(nil)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		probe.Payload = payload
 		env.Payload = payload
@@ -1617,7 +1679,7 @@ func (j *CommandJournal) appendCommand(
 	prepareFrame := func() error {
 		if v2 {
 			var err error
-			plan, err = prepareCommandFrameV2Encoding(probe)
+			plan, err = prepareCommandFrameV2EncodingWithTrust(probe, trustedPayload)
 			if err != nil {
 				return err
 			}
@@ -1638,46 +1700,46 @@ func (j *CommandJournal) appendCommand(
 		plan = prePlan
 		size = preSize
 		if err := j.writer.commandFrameSizeError(size); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	} else if err := prepareFrame(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if beforeAppend != nil {
 		if err := beforeAppend(); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if !immutableHooks {
 			// Both codecs borrow nested extension headers. Refresh their shape and
 			// size after the hook, before selecting a successor or reserving an LSN.
 			if err := prepareFrame(); err != nil {
-				return 0, err
+				return 0, false, err
 			}
 		}
 	}
 	syncRotation := v2 && probe.DurabilityClass == CommandDurabilityDurable
-	deferRotationNamespace := v2 && probe.DurabilityClass == CommandDurabilityRelaxed
+	deferRotationNamespace := v2 && (probe.DurabilityClass == CommandDurabilityRelaxed || (opts.DeferRotationNamespace && !observe))
 	previousSegment := j.segmentSeq
 	if err := j.maybeRotateForFrameLockedObservedWithNamespaceDebt(size, syncRotation, deferRotationNamespace, observe); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if j.segmentSeq != previousSegment {
 		if !immutableHooks {
 			// Rotation can invoke mutable observers/onSegmentRotated. Refresh both
 			// codecs and verify the installed actual capacity before assignment.
 			if err := prepareFrame(); err != nil {
-				return 0, err
+				return 0, false, err
 			}
 		}
 		if int64(size) > int64(1<<63-1)-segmentHeaderSize || !j.writer.fixedFitsAppend(int64(segmentHeaderSize)+int64(size)) {
 			// Keep already-created rotation tokens in their existing pending
 			// custody. Do not loop through callbacks or resize a pinned successor.
-			return 0, ErrRecordTooLarge
+			return 0, false, ErrRecordTooLarge
 		}
 	}
 	lsn, err := j.reserveLSNLocked()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	env.LSN = lsn
 	if v2 {
@@ -1694,18 +1756,19 @@ func (j *CommandJournal) appendCommand(
 	}
 	if err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
-			return 0, errors.Join(err, rollbackErr)
+			return 0, false, errors.Join(err, rollbackErr)
 		}
-		return 0, err
+		return 0, false, err
 	}
 	j.recordAppendedLSNLocked(lsn)
+	fixedFlushDeferred := opts.DeferFixedFlush && !observe && j.writer.fixed != nil
 	if afterAppend != nil {
-		rotations, err := j.takePendingStableRotationsLocked()
+		rotations, err := j.takePendingStableRotationsWithFlushModeLocked(fixedFlushDeferred)
 		if err != nil {
-			return lsn, err
+			return lsn, false, err
 		}
 		if err := afterAppend(lsn, rotations); err != nil {
-			return lsn, err
+			return lsn, false, err
 		}
 	}
 	if j.segmentSeq != previousSegment && len(j.pendingStableRotations) == 0 &&
@@ -1713,14 +1776,14 @@ func (j *CommandJournal) appendCommand(
 		total := int64(segmentHeaderSize) + int64(size)
 		if total >= 256<<10 && (j.segmentTargetBytes <= 0 || j.writer.ActiveBytes()+total < j.segmentTargetBytes) {
 			if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
-				return lsn, j.writer.poisonCommandBuffer(err)
+				return lsn, false, j.writer.poisonCommandBuffer(err)
 			}
 		}
 	}
 	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
-		return lsn, err
+		return lsn, false, err
 	}
-	return lsn, nil
+	return lsn, fixedFlushDeferred, nil
 }
 
 // AppendRawKVPointCommandV2ObservedAndFlush encodes and appends a single

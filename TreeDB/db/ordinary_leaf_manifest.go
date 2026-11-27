@@ -238,18 +238,27 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	// operational manifest fixed while the staged successor does its file and
 	// directory syncs. No code may reacquire build locks under that gate.
 	opts.releaseRootConstruction()
+	var syncDeps func() error
 	if !durabilitycut.Enabled() && resources != nil {
-		// Sync the candidate's external dependency files (e.g. value-l255-*.log)
-		// sequentially BEFORE staging and syncing the new immutable manifest
-		// revision in leaf_vlog. Running sequentially avoids ext4 JBD2 and
-		// leaf_vlog parent i_rwsem contention while ensuring dependency bytes
-		// are durable before the manifest naming them is linked, and lets
-		// Publish() skip redundant re-syncing.
+		// Flush external dependency buffers (e.g. value-l255-*.log) to the OS
+		// page cache BEFORE entering parallel manifest/dependency fsync so both
+		// fsync calls reach the kernel simultaneously and coalesce into one
+		// JBD2 commit instead of staggering across two commits.
 		if flushErr := resources.FlushThrough(); flushErr != nil {
 			return result, update, fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
 		}
-		if syncErr := resources.SyncThrough(); syncErr != nil {
-			return result, update, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+		if db.leafGenerationManifestStore != nil && db.leafGenerationManifestStore.mode == leafGenerationManifestStable &&
+			db.leafGenerationManifestStore.hooks.BeforeTempCreate == nil && db.leafGenerationManifestStore.hooks.BeforeRename == nil {
+			syncDeps = func() error {
+				if syncErr := resources.SyncThrough(); syncErr != nil {
+					return fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+				}
+				return nil
+			}
+		} else {
+			if syncErr := resources.SyncThrough(); syncErr != nil {
+				return result, update, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+			}
 		}
 		update.dependenciesPreSynced = true
 	}
@@ -257,7 +266,7 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	// stable manifest replacement syncs maindb/leaf_vlog. Any segment created
 	// before this load is provably durable in leaf_vlog once replacement returns.
 	leafDirSeq := db.leafLogDirUnsyncedSeq.Load()
-	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
+	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidateWithDeps(update.staged.manifest, syncDeps)
 	if err != nil {
 		return result, update, err
 	}
@@ -316,16 +325,36 @@ func (db *DB) prepareSyncOperationalLeafManifest(
 		return nil, nil, false, nil
 	}
 	opts.releaseRootConstruction()
+	var syncDeps func() error
+	overlapManifestIO := !durabilitycut.Enabled() &&
+		db.leafGenerationManifestStore != nil &&
+		db.leafGenerationManifestStore.mode == leafGenerationManifestStable &&
+		db.leafGenerationManifestStore.hooks.BeforeTempCreate == nil &&
+		db.leafGenerationManifestStore.hooks.BeforeRename == nil &&
+		db.leafGenerationManifestStore.hooks.BeforeParentSync == nil
 	if !durabilitycut.Enabled() && resources != nil {
+		// Flush external dependency buffers (e.g. value-l255-*.log) to the OS
+		// page cache BEFORE entering parallel manifest/dependency fsync so both
+		// fsync calls reach the kernel simultaneously and coalesce into one
+		// JBD2 commit instead of staggering across two commits.
 		if flushErr := resources.FlushThrough(); flushErr != nil {
 			return nil, nil, false, fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
 		}
-		if syncErr := resources.SyncThrough(); syncErr != nil {
-			return nil, nil, false, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+		if overlapManifestIO {
+			syncDeps = func() error {
+				if syncErr := resources.SyncThrough(); syncErr != nil {
+					return fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+				}
+				return nil
+			}
+		} else {
+			if syncErr := resources.SyncThrough(); syncErr != nil {
+				return nil, nil, false, fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+			}
 		}
 		dependenciesPreSynced = true
 	}
-	if err := db.replaceLeafGenerationManifest(toPersist); err != nil {
+	if err := db.replaceLeafGenerationManifestOperationalWithOptions(toPersist, syncDeps, overlapManifestIO); err != nil {
 		return nil, nil, false, err
 	}
 	db.leafGenerationManifestDirty.Store(false)

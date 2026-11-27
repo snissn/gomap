@@ -16,12 +16,13 @@ import (
 // exact active-file pin until Sync.
 // It never borrows mutable journal buffers after capture returns.
 type CommandWALCapturedPrefix struct {
-	db             *DB
-	journal        *commitlog.CapturedSync
-	journalCapture commitlog.CapturedSync
-	result         CommandWALBarrierResult
-	once           sync.Once
-	err            error
+	db                         *DB
+	journal                    *commitlog.CapturedSync
+	journalCapture             commitlog.CapturedSync
+	result                     CommandWALBarrierResult
+	deferRotationNamespaceSync bool
+	once                       sync.Once
+	err                        error
 }
 
 // CaptureCommandWALPrefix drains publishers, appends the existing durable V2
@@ -137,12 +138,15 @@ func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, targe
 	if frontier != 0 {
 		result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(frontier)
 	}
+	deferRotNS := !durabilitycut.Enabled() && db.commandJournal.CanShareFixedWriter()
 	if frontier != 0 && db.commandWALDurableLSN.Load() < frontier && db.commandWALDurableMarkerLSN.Load() < frontier {
 		// The barrier's beforeAppend hook drains all existing dependency debt
 		// under the journal mutex, before rotation, LSN assignment or marker
-		// bytes. Retain that V2 dependency-before-marker ordering in its owning
-		// append path; draining here too would sync the same retained cut twice.
-		result.LSN, err = db.appendCommandWALPrefixBarrierForOwner(true, owner, barrier, frontier)
+		// bytes. On fixed-container WALs when durabilitycut is inactive,
+		// defer only the maindb/wal directory fsync for already-synced fixed
+		// segment renames so Sync() can overlap it with fdatasync(active) outside
+		// commandWALRawPublishMu and j.mu.
+		result.LSN, err = db.appendCommandWALPrefixBarrierForOwnerWithOptions(true, owner, barrier, frontier, deferRotNS)
 		if err != nil {
 			return nil, result, err
 		}
@@ -154,12 +158,12 @@ func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, targe
 		}
 	}
 	// Every earlier rotation was stabilized before the V2 marker (including
-	// a rotation performed while appending that marker). Only the active file
-	// still needs a physical sync; resyncing retained rotations is redundant.
+	// a rotation performed while appending that marker), except any fixed-WAL
+	// rotation namespace sync intentionally deferred to overlap with active sync.
 	if target == nil {
 		target = new(CommandWALCapturedPrefix)
 	}
-	*target = CommandWALCapturedPrefix{db: db, result: result}
+	*target = CommandWALCapturedPrefix{db: db, result: result, deferRotationNamespaceSync: deferRotNS}
 	flushStarted := time.Now()
 	journal, err := db.commandJournal.CaptureSyncInto(&target.journalCapture, nil)
 	db.observeCommandWALFlush(commandWALAppendStatsBarrier, false, time.Since(flushStarted))
@@ -198,7 +202,21 @@ func (target *CommandWALCapturedPrefix) Sync() (CommandWALBarrierResult, error) 
 			retiredPhysicalDebt = db.commandWALDebt.releaseCapture()
 		}()
 		started := time.Now()
-		err := target.journal.Sync()
+		var err error
+		if target.deferRotationNamespaceSync && target.journal.LSN != 0 && db.commandWALDebt.hasPendingRotationNamespacesThrough(target.journal.LSN) {
+			nsErrCh := make(chan error, 1)
+			go func() {
+				nsErrCh <- db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, target.journal.LSN)
+			}()
+			syncErr := target.journal.Sync()
+			nsErr := <-nsErrCh
+			if nsErr != nil {
+				db.commandWALDebt.noteRetryThrough(target.journal.LSN)
+			}
+			err = errors.Join(syncErr, nsErr)
+		} else {
+			err = target.journal.Sync()
+		}
 		if err == nil && db.testFailCommandWALFlush.Load() {
 			err = errTestCommandWALFlushFailpoint
 		}

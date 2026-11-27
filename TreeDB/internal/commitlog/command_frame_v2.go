@@ -162,10 +162,20 @@ type commandFrameV2Encoding struct {
 	env                                                     CommandEnvelope
 	preconditions                                           []CommandExtension
 	externalRefsLen, preconditionsLen, assertionsLen, total int
+	payloadCRC                                              uint32
+	hasPayloadCRC                                           bool
 }
 
 func prepareCommandFrameV2Encoding(env CommandEnvelope) (commandFrameV2Encoding, error) {
-	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
+	return prepareCommandFrameV2EncodingWithTrust(env, false)
+}
+
+func prepareCommandFrameV2EncodingTrusted(env CommandEnvelope) (commandFrameV2Encoding, error) {
+	return prepareCommandFrameV2EncodingWithTrust(env, true)
+}
+
+func prepareCommandFrameV2EncodingWithTrust(env CommandEnvelope, trustedPayload bool) (commandFrameV2Encoding, error) {
+	env, preconditions, err := prepareCommandFrameV2ForEncodeWithTrust(env, trustedPayload)
 	if err != nil {
 		return commandFrameV2Encoding{}, err
 	}
@@ -198,13 +208,7 @@ func (plan commandFrameV2Encoding) encodeTo(dst []byte) []byte {
 	return frame
 }
 
-func (plan commandFrameV2Encoding) encodeHeaderAndPayloadTo(dst []byte) []byte {
-	if cap(dst) < plan.total {
-		dst = make([]byte, plan.total)
-	} else {
-		dst = dst[:plan.total]
-	}
-	frame := dst
+func (plan commandFrameV2Encoding) encodeHeaderTo(frame []byte) {
 	copy(frame[0:4], commandFrameMagic[:])
 	binary.LittleEndian.PutUint16(frame[4:6], CommandFrameVersionV2)
 	binary.LittleEndian.PutUint16(frame[6:8], CommandFrameVersionV2)
@@ -221,6 +225,16 @@ func (plan commandFrameV2Encoding) encodeHeaderAndPayloadTo(dst []byte) []byte {
 	binary.LittleEndian.PutUint32(frame[60:64], uint32(plan.externalRefsLen))
 	binary.LittleEndian.PutUint32(frame[64:68], uint32(plan.preconditionsLen))
 	binary.LittleEndian.PutUint32(frame[68:72], uint32(plan.assertionsLen))
+}
+
+func (plan commandFrameV2Encoding) encodeHeaderAndPayloadTo(dst []byte) []byte {
+	if cap(dst) < plan.total {
+		dst = make([]byte, plan.total)
+	} else {
+		dst = dst[:plan.total]
+	}
+	frame := dst
+	plan.encodeHeaderTo(frame[:commandFrameHeaderSize])
 	copy(frame[commandFrameHeaderSize:], plan.env.Payload)
 	return frame
 }
@@ -237,6 +251,10 @@ func (plan commandFrameV2Encoding) putSections(dst []byte) {
 }
 
 func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []CommandExtension, error) {
+	return prepareCommandFrameV2ForEncodeWithTrust(env, false)
+}
+
+func prepareCommandFrameV2ForEncodeWithTrust(env CommandEnvelope, trustedPayload bool) (CommandEnvelope, []CommandExtension, error) {
 	if !validCommandDurabilityClass(env.DurabilityClass) {
 		return CommandEnvelope{}, nil, ErrCorrupt
 	}
@@ -262,8 +280,13 @@ func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []Com
 	if err := validateExternalRefs(env.ExternalRefs); err != nil {
 		return CommandEnvelope{}, nil, err
 	}
-	if err := validateCommandEnvelopePayloadV2(env); err != nil {
-		return CommandEnvelope{}, nil, err
+	skipPayloadValidation := trustedPayload &&
+		len(env.Payload) > 0 &&
+		env.Kind != CommandKindRawKVBatch
+	if !skipPayloadValidation {
+		if err := validateCommandEnvelopePayloadV2(env); err != nil {
+			return CommandEnvelope{}, nil, err
+		}
 	}
 	preconditions, err := canonicalCommandPreconditionsV2(env)
 	if err != nil {

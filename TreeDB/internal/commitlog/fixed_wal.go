@@ -258,6 +258,9 @@ type fixedWAL struct {
 	pending                     []byte
 	pendingLogical              int64
 	pendingPhysical             int64
+	pendingTrustedEnd           int
+	pendingTrustedLastLSN       uint64
+	maxIncoming                 int64
 	lastLSN                     uint64
 	reconstructedFooters        uint64
 	incomplete                  map[int64]*CommandWALIncompleteFrame
@@ -354,19 +357,21 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 		if err != nil {
 			return fixedWALSizePlan{}, err
 		}
-		if reason == fixedWALPressureRotation && current != nil && plan.incoming >= fixedWALBulkSteppingMinIncoming {
-			// Multi-MiB bulk frames quickly churn through 4 -> 8 -> 16 MiB
-			// containers (causing repeated directory fsyncs, zero-fills, and
-			// cleanup scans). Step in quantized doublings (matching both
-			// ahead-reserve and synchronous rotation across slightly varying
-			// frame sizes) until the successor holds at least 8 frames or
-			// reaches the normal budget cap.
-			for normal < budget && normal/required < fixedWALBulkSteppingMinFrames {
-				if normal >= budget-normal {
-					normal = budget
-					break
+		if reason == fixedWALPressureRotation && current != nil {
+			if plan.incoming >= fixedWALBulkSteppingMinIncoming {
+				// Multi-MiB bulk frames quickly churn through 4 -> 8 -> 16 MiB
+				// containers (causing repeated directory fsyncs, zero-fills, and
+				// cleanup scans). Step in quantized doublings (matching both
+				// ahead-reserve and synchronous rotation across slightly varying
+				// frame sizes) until the successor holds at least 8 frames or
+				// reaches the normal budget cap.
+				for normal < budget && normal/required < fixedWALBulkSteppingMinFrames {
+					if normal >= budget-normal {
+						normal = budget
+						break
+					}
+					normal += normal
 				}
-				normal += normal
 			}
 		}
 		normal = max(normal, required)
@@ -520,8 +525,9 @@ func writeInitializedFixedWALCancelable(file *os.File, capacity int64, cancelled
 	if err := fixedWALInitializeWrite(file, header, 0); err != nil {
 		return nil, err
 	}
-	const initWritebackChunk = 4 << 20
-	writebackStart := int64(0)
+	const writebackHintChunk = 4 << 20
+	hintWriteback := !durabilitycut.Enabled() && capacity >= writebackHintChunk
+	var hintedEnd int64
 	for off := int64(len(header)); off < capacity; {
 		if cancelled != nil && cancelled() {
 			return nil, errFixedWALAheadCancelled
@@ -531,13 +537,16 @@ func writeInitializedFixedWALCancelable(file *os.File, capacity int64, cancelled
 			return nil, err
 		}
 		off += n
-		if off-writebackStart >= initWritebackChunk {
-			hintWALInitWriteback(file, writebackStart, off-writebackStart)
-			writebackStart = off
+		if hintWriteback && off-hintedEnd >= writebackHintChunk {
+			hintFixedWALWriteback(file, hintedEnd, off-hintedEnd)
+			hintedEnd = off
 		}
 	}
 	if cancelled != nil && cancelled() {
 		return nil, errFixedWALAheadCancelled
+	}
+	if hintWriteback && hintedEnd < capacity {
+		hintFixedWALWriteback(file, hintedEnd, capacity-hintedEnd)
 	}
 	root := filepath.Dir(file.Name())
 	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, file.Name(), file); err != nil {
@@ -843,6 +852,33 @@ func validateFixedWALFramesWithSummary(data []byte, logicalBase int64, dst []fix
 	return first, last, extentCRC, frames, nil
 }
 
+func validateTrustedFixedWALFrames(data []byte) error {
+	var last uint64
+	for len(data) > 0 {
+		if len(data) < segmentHeaderSize {
+			return ErrCommandWALTerminalTail
+		}
+		length := int(binary.LittleEndian.Uint32(data[:4]))
+		if length < commandFrameHeaderSize || length > len(data)-segmentHeaderSize {
+			return ErrCommandWALTerminalTail
+		}
+		payload := data[segmentHeaderSize : segmentHeaderSize+length]
+		if crc.Checksum(payload) != binary.LittleEndian.Uint32(data[4:8]) {
+			return ErrCorrupt
+		}
+		lsn := binary.LittleEndian.Uint64(payload[20:28])
+		if lsn == 0 {
+			return ErrCorrupt
+		}
+		if last != 0 && lsn <= last {
+			return ErrCommandWALDuplicateLSN
+		}
+		last = lsn
+		data = data[segmentHeaderSize+length:]
+	}
+	return nil
+}
+
 // flushExtent emits exactly one frame from flush's fully validated, exclusively
 // owned pending buffer. Its caller supplies the validated frame's common V1/V2
 // LSN; no borrowed decoder state or mutable scratch escapes the synchronous write.
@@ -854,10 +890,50 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 	if end > state.capacity {
 		return fmt.Errorf("commitlog: initialized WAL capacity exhausted")
 	}
+	var frameCRC uint32
+	if len(frame) >= segmentHeaderSize {
+		// flush() already validated frame[4:8] == crc.Checksum(frame[segmentHeaderSize:]),
+		// so combine the 8-byte header CRC with the validated payload CRC in O(1).
+		frameCRC = crc32IEEECombine(crc.Checksum(frame[:segmentHeaderSize]), binary.LittleEndian.Uint32(frame[4:8]), len(frame)-segmentHeaderSize)
+	} else {
+		frameCRC = crc.Checksum(frame)
+	}
+	imageSize := int(end - state.physical)
+	if fixedWALSupportsPwritev && len(frame) >= 4096 {
+		var header [fixedWALWitnessSize]byte
+		copy(header[:], fixedWALExtentMagic[:])
+		copy(header[8:24], state.identity[:])
+		binary.LittleEndian.PutUint64(header[24:32], uint64(state.physical))
+		binary.LittleEndian.PutUint64(header[32:40], uint64(state.logical))
+		binary.LittleEndian.PutUint64(header[40:48], uint64(len(frame)))
+		binary.LittleEndian.PutUint64(header[48:56], uint64(end))
+		binary.LittleEndian.PutUint64(header[56:64], lsn)
+		binary.LittleEndian.PutUint64(header[64:72], lsn)
+		binary.LittleEndian.PutUint32(header[72:76], frameCRC)
+		binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
+		padLen := imageSize - 2*fixedWALWitnessSize - len(frame)
+		var tail [fixedWALAlignment - 1 + fixedWALWitnessSize]byte
+		footer := tail[padLen : padLen+fixedWALWitnessSize]
+		copy(footer, header[:])
+		copy(footer, fixedWALEndMagic[:])
+		binary.LittleEndian.PutUint32(footer[92:96], crc.Checksum(footer[:92]))
+		started := time.Now()
+		syscalls, err := writeFixedAtParts(w.f, state.physical, header[:], frame, tail[:padLen+fixedWALWitnessSize])
+		if syscalls == 0 {
+			syscalls = 1
+		}
+		w.observeWriteSyscalls(syscalls, uint64(imageSize), time.Since(started), err)
+		if err != nil {
+			return err
+		}
+		state.logical += int64(len(frame))
+		state.physical = end
+		state.lastLSN = lsn
+		return nil
+	}
 	// Flush has already copied the writer's buffered frames into pending.
 	// Reuse its encode storage until synchronous WriteAt completes; captured
 	// syncs retain the file and physical prefix, never this mutable scratch.
-	imageSize := int(end - state.physical)
 	var (
 		image []byte
 		lease *fixedWALExtentBufLease
@@ -883,14 +959,6 @@ func (state *fixedWAL) flushExtent(w *Writer, frame []byte, lsn uint64) error {
 	binary.LittleEndian.PutUint64(header[48:56], uint64(end))
 	binary.LittleEndian.PutUint64(header[56:64], lsn)
 	binary.LittleEndian.PutUint64(header[64:72], lsn)
-	var frameCRC uint32
-	if len(frame) >= segmentHeaderSize {
-		// flush() already validated frame[4:8] == crc.Checksum(frame[segmentHeaderSize:]),
-		// so combine the 8-byte header CRC with the validated payload CRC in O(1).
-		frameCRC = crc32IEEECombine(crc.Checksum(frame[:segmentHeaderSize]), binary.LittleEndian.Uint32(frame[4:8]), len(frame)-segmentHeaderSize)
-	} else {
-		frameCRC = crc.Checksum(frame)
-	}
 	binary.LittleEndian.PutUint32(header[72:76], frameCRC)
 	binary.LittleEndian.PutUint32(header[92:96], crc.Checksum(header[:92]))
 	copy(image[fixedWALWitnessSize:], frame)
@@ -1093,12 +1161,20 @@ func (state *fixedWAL) flush(w *Writer) error {
 	state.extents = nil
 	state.validatedFrames = nil
 	if len(state.pending) == 0 {
+		state.pendingTrustedEnd = 0
+		state.pendingTrustedLastLSN = 0
 		return nil
 	}
 	// Validate every frame before emitting any extent: malformed later bytes
-	// must not leave a physically written prefix. This pass retains all outer
-	// checksums, strict envelope/payload validation and monotone LSN checks.
-	if _, _, err := validateFixedWALFrames(state.pending); err != nil {
+	// must not leave a physically written prefix. Frames emitted exclusively via
+	// direct V2 prepared encoders already passed envelope/payload validation, so
+	// verify outer checksums, length bounds, and monotone LSNs without repeating
+	// full payload decode/comparison walks.
+	if state.pendingTrustedEnd == len(state.pending) {
+		if err := validateTrustedFixedWALFrames(state.pending); err != nil {
+			return err
+		}
+	} else if _, _, err := validateFixedWALFrames(state.pending); err != nil {
 		return err
 	}
 	base := state.pending
@@ -1113,6 +1189,8 @@ func (state *fixedWAL) flush(w *Writer) error {
 			state.pending = pending
 			state.pendingLogical = 0
 			state.pendingPhysical = 0
+			state.pendingTrustedEnd = 0
+			state.pendingTrustedLastLSN = 0
 			return err
 		}
 		pending = pending[size:]
@@ -1120,6 +1198,8 @@ func (state *fixedWAL) flush(w *Writer) error {
 	state.pending = base[:0]
 	state.pendingLogical = 0
 	state.pendingPhysical = 0
+	state.pendingTrustedEnd = 0
+	state.pendingTrustedLastLSN = 0
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
@@ -597,6 +598,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 			}
 		}
 	}
+	intent.PrecomputePayloadCRC()
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.registerFn)
 	cancelUnconsumedSpare()
 	if r.completion != nil {
@@ -654,6 +656,10 @@ var cowNativeCommandWALRequestPool = sync.Pool{
 	},
 }
 
+func noopCOWPrepare() error {
+	return nil
+}
+
 func (r *cowNativeCommandWALRequest) register() error {
 	if r.batch != nil && r.batch.cowState != nil && r.batch.cowState.native != nil {
 		r.batch.cowState.native.barrierSpareSlot = nil
@@ -668,6 +674,20 @@ func (r *cowNativeCommandWALRequest) register() error {
 		}
 		_, err := r.append(r.durable)
 		return err
+	}
+	// Pre-prepare native-only COW publication while c.writerMu is held, before
+	// acquiring the public/raw command-WAL publication gates so the group-commit
+	// leader can capture and launch fdatasync without stalling behind
+	// COWWriter.Prepare / txnhistory validation.
+	if r.batch != nil && len(r.batch.entries) == 0 && !durabilitycut.Enabled() {
+		if err := r.batch.PrepareExternalCommandWALPublication(); err != nil {
+			if spare.Valid() {
+				if cancelErr := spare.CancelAccepted(); cancelErr != nil {
+					return joinCOWCleanupError(err, cancelErr)
+				}
+			}
+			return err
+		}
 	}
 	if spare.Valid() {
 		if spareReg, ok := r.completion.(backenddb.NativeCommandWALSpareCompletion); ok {
@@ -691,12 +711,16 @@ func (r *cowNativeCommandWALRequest) append(sync bool) (uint64, error) {
 	}
 	guard := b.COWAppendGuard()
 	var replay func(func(batch.Entry) error) error
+	prepare := b.PrepareExternalCommandWALPublication
 	if len(b.entries) == 0 {
 		replay = emptyCOWBatchReplay
+		if b.cowState != nil && b.cowState.prepared != nil {
+			prepare = noopCOWPrepare
+		}
 	} else {
 		replay = b.Replay
 	}
-	if err := backend.FinalizeNativeRawUnderGuard(guard, intent, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, replay, len(b.entries)); err != nil {
+	if err := backend.FinalizeNativeRawUnderGuard(guard, intent, prepare, b.finalizeCOWPublication, replay, len(b.entries)); err != nil {
 		return intent.AssignedLSN(), err
 	}
 	if err := b.cowState.accepted.BindPreassignedCustody(b.cowState.native); err != nil {

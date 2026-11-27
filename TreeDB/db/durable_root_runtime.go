@@ -2148,20 +2148,22 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 }
 
 type durableRootStorageTransactionV1 struct {
-	dependenciesCovered   bool                 // exact completed parent proof, prepared by coordinator
-	installAuthority      func() (bool, error) // Selected complete capsule authority replaces DATA META.
-	resources             *rootpublication.StableResourceSet
-	syncPendingLeafLogDir func() error
-	materialize           func() error
-	syncIndex             func() error
-	sink                  freelist.AppendPageSink
-	target                uint64
-	meta                  page.DurableMetaV1
-	syncMeta              func() error
-	dir                   string
-	indexPath             string
-	beforeMetaWrite       func() error
-	beforeMetaSync        func() error
+	dependenciesCovered           bool                 // exact completed parent proof, prepared by coordinator
+	singleBarrierSameRootFallback bool                 // safe 1-barrier sync when opposite slot is already durable at identical roots/LSN
+	installAuthority              func() (bool, error) // Selected complete capsule authority replaces DATA META.
+	resources                     *rootpublication.StableResourceSet
+	syncPendingLeafLogDir         func() error
+	hintIndexWriteback            func()
+	materialize                   func() error
+	syncIndex                     func() error
+	sink                          freelist.AppendPageSink
+	target                        uint64
+	meta                          page.DurableMetaV1
+	syncMeta                      func() error
+	dir                           string
+	indexPath                     string
+	beforeMetaWrite               func() error
+	beforeMetaSync                func() error
 }
 
 type stableResourceDependencySyncPhaseV1 uint8
@@ -2200,18 +2202,83 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 			}
 		}
 	}
-	if tx.syncPendingLeafLogDir != nil {
-		if err := tx.syncPendingLeafLogDir(); err != nil {
-			return false, fmt.Errorf("sync durable-root leaf-log directory: %w", err)
+	if tx.singleBarrierSameRootFallback && tx.installAuthority == nil && !durabilitycut.Enabled() {
+		// The opposite durable slot is already persisted on disk at identical
+		// UserRootPageID, SystemRootPageID, AppliedCommandLSN, and external
+		// dependencies. Materialize only the disjoint successor COW/record
+		// pages, write the alternate meta slot, and persist both together in
+		// one full index sync. Any crash before sync completes either leaves
+		// the opposite slot selected or fails checksum/digest validation on
+		// the new slot and falls back cleanly to the already-durable opposite slot.
+		if tx.syncPendingLeafLogDir != nil {
+			if err := tx.syncPendingLeafLogDir(); err != nil {
+				return false, fmt.Errorf("sync durable-root leaf-log directory: %w", err)
+			}
 		}
-	}
-	if tx.materialize != nil {
-		if err := tx.materialize(); err != nil {
-			return false, err
+		if tx.materialize != nil {
+			if err := tx.materialize(); err != nil {
+				return false, err
+			}
 		}
+		if tx.beforeMetaWrite != nil {
+			if err := tx.beforeMetaWrite(); err != nil {
+				return false, err
+			}
+		}
+		metaMutated = true
+		if err := writeDurableMetaSlotV1(tx.sink, tx.target, tx.meta); err != nil {
+			return true, err
+		}
+		if tx.beforeMetaSync != nil {
+			if err := tx.beforeMetaSync(); err != nil {
+				return true, err
+			}
+		}
+		if err := tx.syncIndex(); err != nil {
+			return true, fmt.Errorf("sync durable-root fallback index: %w", err)
+		}
+		return true, nil
 	}
-	if err := tx.syncIndex(); err != nil {
-		return false, fmt.Errorf("sync durable-root index: %w", err)
+	if !durabilitycut.Enabled() && tx.syncPendingLeafLogDir != nil {
+		// Materialize index.db pages (including any GrowTo/size metadata updates)
+		// BEFORE launching fsync(leaf_vlog) and fdatasync(index.db) concurrently
+		// so both metadata/data updates belong to the same ext4 JBD2 transaction
+		// and coalesce into one commit. Both barriers join strictly before writing
+		// the alternate durable meta slot.
+		if tx.materialize != nil {
+			if err := tx.materialize(); err != nil {
+				return false, err
+			}
+		}
+		if tx.hintIndexWriteback != nil {
+			tx.hintIndexWriteback()
+		}
+		dirErrCh := make(chan error, 1)
+		go func() {
+			dirErrCh <- tx.syncPendingLeafLogDir()
+		}()
+		idxErr := tx.syncIndex()
+		dirErr := <-dirErrCh
+		if dirErr != nil {
+			return false, fmt.Errorf("sync durable-root leaf-log directory: %w", dirErr)
+		}
+		if idxErr != nil {
+			return false, fmt.Errorf("sync durable-root index: %w", idxErr)
+		}
+	} else {
+		if tx.syncPendingLeafLogDir != nil {
+			if err := tx.syncPendingLeafLogDir(); err != nil {
+				return false, fmt.Errorf("sync durable-root leaf-log directory: %w", err)
+			}
+		}
+		if tx.materialize != nil {
+			if err := tx.materialize(); err != nil {
+				return false, err
+			}
+		}
+		if err := tx.syncIndex(); err != nil {
+			return false, fmt.Errorf("sync durable-root index: %w", err)
+		}
 	}
 
 	if tx.installAuthority != nil {
