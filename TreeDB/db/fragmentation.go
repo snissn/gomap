@@ -94,7 +94,9 @@ type IndexVacuumTriggerReport struct {
 	UserSpan         uint64
 	UserSpanRatioPPM uint64
 
-	TotalPages uint64
+	SystemPages           uint64
+	TotalPages            uint64
+	ReplacementChunkPages uint64
 
 	FreelistHead                  uint64
 	FreelistPages                 uint64
@@ -107,17 +109,19 @@ type IndexVacuumTriggerReport struct {
 	FreelistReuseAllocPagesTotal  uint64
 	FreelistFreePagesTotal        uint64
 
-	CollectionRootCount             uint64
-	CollectionRootPagerRoots        uint64
-	CollectionRootPages             uint64
-	CollectionRootMinPageID         uint64
-	CollectionRootMaxPageID         uint64
-	CollectionRootSpan              uint64
-	CollectionRootSpanRatioPPM      uint64
-	CollectionRootSpanRatioValid    bool
-	CollectionRootDuplicatePageRefs uint64
-	CollectionRootLeafPages         uint64
-	CollectionRootInternalPages     uint64
+	CollectionRootCount              uint64
+	CollectionRootPagerRoots         uint64
+	CollectionRootPages              uint64
+	CollectionRootMinPageID          uint64
+	CollectionRootMaxPageID          uint64
+	CollectionRootSpan               uint64
+	CollectionRootSpanRatioPPM       uint64
+	CollectionRootSpanRatioValid     bool
+	CollectionRootDuplicatePageRefs  uint64
+	CollectionRootLeafPages          uint64
+	CollectionRootInternalPages      uint64
+	CollectionRootEmptyLeafPages     uint64
+	CollectionRootUnderfullLeafPages uint64
 }
 
 // DATA debt describes the DATA file only. A PRIMARY immutable read root is
@@ -265,6 +269,9 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 	if snap.idx.pager != nil {
 		out.TotalPages = snap.idx.pager.PageCount()
 	}
+	if replacementChunk := vacuumReplacementChunkSize(db.chunkSize, snap.idx); replacementChunk > 0 {
+		out.ReplacementChunkPages = uint64(replacementChunk / page.PageSize)
+	}
 
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerUserTreeWalk)
 	err := snap.tree.WalkPages(func(pageID uint64, _ node.Node) error {
@@ -322,12 +329,15 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 
 	emitFragmentationProbeEvent(FragmentationProbeEventTriggerCollectionRootWalk)
 	if collection, err := collectionRootFragmentationStatsWithContext(ctx, snap.idx, snap.state); err == nil {
+		out.SystemPages = collection.systemPages
 		out.CollectionRootCount = collection.roots
 		out.CollectionRootPagerRoots = collection.pagerRoots
 		out.CollectionRootPages = collection.pages
 		out.CollectionRootDuplicatePageRefs = collection.duplicatePages
 		out.CollectionRootLeafPages = collection.leafPages
 		out.CollectionRootInternalPages = collection.internalPages
+		out.CollectionRootEmptyLeafPages = collection.emptyLeafPages
+		out.CollectionRootUnderfullLeafPages = collection.underfullLeafPages
 		if collection.hasPagerBackedID {
 			out.CollectionRootMinPageID = collection.minPageID
 			out.CollectionRootMaxPageID = collection.maxPageID
@@ -532,19 +542,22 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 }
 
 type collectionRootFragmentation struct {
-	roots            uint64
-	leafRefRoots     uint64
-	pagerRoots       uint64
-	pages            uint64
-	leafPages        uint64
-	internalPages    uint64
-	uniquePageIDs    map[uint64]struct{}
-	duplicatePages   uint64
-	minPageID        uint64
-	maxPageID        uint64
-	hasPagerBackedID bool
-	primaryPages     fragmentationPhysicalCensus
-	readRoots        uint64
+	systemPages        uint64
+	roots              uint64
+	leafRefRoots       uint64
+	pagerRoots         uint64
+	pages              uint64
+	leafPages          uint64
+	internalPages      uint64
+	emptyLeafPages     uint64
+	underfullLeafPages uint64
+	uniquePageIDs      map[uint64]struct{}
+	duplicatePages     uint64
+	minPageID          uint64
+	maxPageID          uint64
+	hasPagerBackedID   bool
+	primaryPages       fragmentationPhysicalCensus
+	readRoots          uint64
 }
 
 func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collectionRootFragmentation, error) {
@@ -563,6 +576,22 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 		return out, nil
 	}
 	reader := newValueReader(state.ValueLogSet)
+	sysTree := tree.New(idx.pager, reader, state.SystemRootPageID)
+	if err := sysTree.WalkPages(func(pageID uint64, _ node.Node) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		domain, _, err := fragmentationPhysicalDomain(idx.pager, pageID)
+		if err != nil {
+			return err
+		}
+		if domain == fragmentationDATA {
+			out.systemPages++
+		}
+		return nil
+	}); err != nil {
+		return out, err
+	}
 	descriptors, err := vacuumCollectCollectionRootDescriptorsWithContext(ctx, idx.pager, reader, state.SystemRootPageID)
 	if err != nil {
 		return out, err
@@ -577,6 +606,11 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 			continue
 		}
 		out.pagerRoots++
+		var (
+			rootEmptyLeaves     uint64
+			rootUnderfullLeaves uint64
+			rootHasNonPurePager bool
+		)
 		tr := tree.New(idx.pager, reader, rootID)
 		if err := tr.WalkPages(func(pageID uint64, n node.Node) error {
 			if err := ctx.Err(); err != nil {
@@ -594,9 +628,11 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 			switch domain {
 			case fragmentationPRIMARY:
 				out.primaryPages.add(local)
+				rootHasNonPurePager = true
 				return nil
 			case fragmentationReadRoot:
 				out.readRoots++
+				rootHasNonPurePager = true
 				return nil
 			}
 			out.pages++
@@ -615,12 +651,50 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 			switch n.Type() {
 			case page.PageTypeLeaf:
 				out.leafPages++
+				if pageID != rootID {
+					if n.Count() == 0 {
+						rootEmptyLeaves++
+					}
+					usedBytes := page.PageSize - n.FreeSpace()
+					if usedBytes*4 < page.PageSize {
+						rootUnderfullLeaves++
+					}
+				}
 			case page.PageTypeInternal:
 				out.internalPages++
+				if !rootHasNonPurePager {
+					count := n.Count()
+					for i := uint16(0); i < count; i++ {
+						_, ref, err := n.GetInternalEntryRefView(i)
+						if err != nil {
+							return err
+						}
+						if ref.Kind == page.ChildRefLeafLog {
+							rootHasNonPurePager = true
+							break
+						}
+					}
+				}
+			case page.PageTypePrimaryDirectory:
+				rootHasNonPurePager = true
+			default:
+				rootHasNonPurePager = true
 			}
 			return nil
 		}); err != nil {
 			return out, err
+		}
+		if !rootHasNonPurePager {
+			out.emptyLeafPages += rootEmptyLeaves
+			// Every multi-leaf bulk-built root can legitimately retain up to one
+			// non-empty trailing leaf below 25% fill; exclude that single
+			// irreducible trailing leaf per root so many small multi-leaf
+			// collections converge cleanly after vacuum while keeping empty
+			// leaves fully counted.
+			if rootUnderfullLeaves > rootEmptyLeaves {
+				rootUnderfullLeaves--
+			}
+			out.underfullLeafPages += rootUnderfullLeaves
 		}
 	}
 	return out, nil
