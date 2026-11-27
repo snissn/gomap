@@ -1913,6 +1913,7 @@ code { background:#eef3f8; border:1px solid #dbe4ee; border-radius:4px; padding:
 .chart svg .series-hidden { display:none; }
 .chart svg .chart-item { cursor:pointer; transition:opacity .12s ease; }
 .chart svg .chart-item:hover { opacity:.84; }
+.chart svg .chart-item:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
 .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:8px; margin:10px 0 18px; max-width:100%; }
 table { border-collapse:separate; border-spacing:0; width:100%; min-width:900px; }
 .mini-table-wrap { margin:8px 0 0; }
@@ -4261,7 +4262,8 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 				}
 				yy, barH := barGeometry(v, axisY, top, plotH, yFn)
 				x := groupX + innerPad + float64(vidx)*(barW+barGap)
-				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s, %s: %s</title></rect>", vidx, i, x, yy, barW, barH, esc(s.Color), esc(test), esc(s.Name), esc(formatExactChartValue(v, "ops/sec"))))
+				itemLabel := fmt.Sprintf("%s, %s: %s", test, s.Name, formatExactChartValue(v, "ops/sec"))
+				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s</title></rect>", esc(itemLabel), vidx, i, x, yy, barW, barH, esc(s.Color), esc(itemLabel)))
 				writeBarValueLabel(b, x, yy, barW, top, formatBarLabelValue(v, "ops/sec"), vidx)
 			}
 		}
@@ -4362,8 +4364,9 @@ func lineChart(title string, labels []string, xAxisLabel, yAxisLabel string, ser
 					continue
 				}
 				cx, cy := x(i), yFn(v)
+				itemLabel := fmt.Sprintf("%s %s: %s", s.Name, labels[i], formatExactChartValue(v, unit))
 				b.WriteString(fmt.Sprintf("<circle class=\"chart-dot\" data-series=\"%d\" cx=\"%.1f\" cy=\"%.1f\" r=\"3.8\" fill=\"%s\" stroke=\"#fff\" stroke-width=\"1.2\"/>", sidx, cx, cy, esc(s.Color)))
-				b.WriteString(fmt.Sprintf("<circle class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" cx=\"%.1f\" cy=\"%.1f\" r=\"9\" fill=\"transparent\"><title>%s %s: %s</title></circle>", sidx, i, cx, cy, esc(s.Name), esc(labels[i]), esc(formatExactChartValue(v, unit))))
+				b.WriteString(fmt.Sprintf("<circle class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"%d\" data-cat=\"%d\" cx=\"%.1f\" cy=\"%.1f\" r=\"9\" fill=\"transparent\"><title>%s</title></circle>", esc(itemLabel), sidx, i, cx, cy, esc(itemLabel)))
 			}
 		}
 		b.WriteString("</g>")
@@ -4451,7 +4454,8 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64, 
 					v := tree[i]
 					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
 					x := groupX + (groupW-soloBarW)/2
-					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s TreeDB-only ceiling: %s</title></rect>", i, x, yy, soloBarW, barH, esc(colorTreeDBPrimary), esc(cat), esc(formatExactChartValue(v, unit))))
+					itemLabel := fmt.Sprintf("%s TreeDB-only ceiling: %s", cat, formatExactChartValue(v, unit))
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s</title></rect>", esc(itemLabel), i, x, yy, soloBarW, barH, esc(colorTreeDBPrimary), esc(itemLabel)))
 					writeBarValueLabel(b, x, yy, soloBarW, top, formatBarLabelValue(v, unit), 0)
 				}
 			} else {
@@ -4459,14 +4463,16 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64, 
 					v := tree[i]
 					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
 					x := groupX + innerPad
-					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s TreeDB: %s</title></rect>", i, x, yy, pairedBarW, barH, esc(colorTreeDBPrimary), esc(cat), esc(formatExactChartValue(v, unit))))
+					itemLabel := fmt.Sprintf("%s TreeDB: %s", cat, formatExactChartValue(v, unit))
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"0\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s</title></rect>", esc(itemLabel), i, x, yy, pairedBarW, barH, esc(colorTreeDBPrimary), esc(itemLabel)))
 					writeBarValueLabel(b, x, yy, pairedBarW, top, formatBarLabelValue(v, unit), 0)
 				}
 				if i < len(mongo) && mongo[i] > 0 {
 					v := mongo[i]
 					yy, barH := barGeometry(v, axisY, top, plotH, yFn)
 					x := groupX + innerPad + pairedBarW + barGap
-					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"1\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s MongoDB: %s</title></rect>", i, x, yy, pairedBarW, barH, esc(colorMongoDB), esc(cat), esc(formatExactChartValue(v, unit))))
+					itemLabel := fmt.Sprintf("%s MongoDB: %s", cat, formatExactChartValue(v, unit))
+					b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"1\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s</title></rect>", esc(itemLabel), i, x, yy, pairedBarW, barH, esc(colorMongoDB), esc(itemLabel)))
 					writeBarValueLabel(b, x, yy, pairedBarW, top, formatBarLabelValue(v, unit), 1)
 				}
 			}
@@ -4554,7 +4560,8 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 				}
 				yy, barH := barGeometry(v, axisY, top, plotH, yFn)
 				x := groupX + innerPad + float64(sidx)*(barW+barGap)
-				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s</title></rect>", sidx, i, x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatExactChartValue(v, unit))))
+				itemLabel := fmt.Sprintf("%s %s: %s", cat, s.Name, formatExactChartValue(v, unit))
+				b.WriteString(fmt.Sprintf("<rect class=\"chart-item\" tabindex=\"0\" role=\"graphics-symbol\" aria-label=\"%s\" data-series=\"%d\" data-cat=\"%d\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s</title></rect>", esc(itemLabel), sidx, i, x, yy, barW, barH, esc(s.Color), esc(itemLabel)))
 				writeBarValueLabel(b, x, yy, barW, top, formatBarLabelValue(v, unit), sidx)
 			}
 		}

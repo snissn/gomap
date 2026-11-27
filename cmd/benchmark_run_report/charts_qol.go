@@ -463,7 +463,11 @@ func formatExactChartValue(v float64, unit string) string {
 	}
 	switch unit {
 	case "bytes":
-		return fmtBytes(v)
+		exactBytes := int64(math.Round(v))
+		if exactBytes < 1024 {
+			return commaInt(exactBytes) + " B"
+		}
+		return commaInt(exactBytes) + " B (" + fmtBytes(float64(exactBytes)) + ")"
 	case "ratio":
 		return fmt.Sprintf("%.2fx", v)
 	case "B/doc":
@@ -931,17 +935,41 @@ func reportInteractiveJS() string {
     return r.toFixed(2) + 'x';
   }
 
-  function positionTip(ev) {
+  var activeItem = null;
+
+  function positionTipAt(x, y) {
     var pad = 14;
     var vw = window.innerWidth || document.documentElement.clientWidth;
     var vh = window.innerHeight || document.documentElement.clientHeight;
     var rect = tip.getBoundingClientRect();
-    var left = ev.clientX + pad;
-    var top = ev.clientY + pad;
-    if (left + rect.width > vw - 8) left = Math.max(8, ev.clientX - rect.width - pad);
-    if (top + rect.height > vh - 8) top = Math.max(8, ev.clientY - rect.height - pad);
+    var left = x + pad;
+    var top = y + pad;
+    if (left + rect.width > vw - 8) left = Math.max(8, x - rect.width - pad);
+    if (top + rect.height > vh - 8) top = Math.max(8, y - rect.height - pad);
     tip.style.left = left + 'px';
     tip.style.top = top + 'px';
+  }
+
+  function positionTipForElement(item) {
+    var box = item.getBoundingClientRect();
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var rect = tip.getBoundingClientRect();
+    var left = box.left + box.width / 2 - rect.width / 2;
+    var top = box.top - rect.height - 10;
+    if (top < 8) top = box.bottom + 10;
+    if (left + rect.width > vw - 8) left = vw - rect.width - 8;
+    if (left < 8) left = 8;
+    if (top + rect.height > vh - 8) top = Math.max(8, vh - rect.height - 8);
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  }
+
+  function clearDescribedBy() {
+    if (activeItem) {
+      activeItem.removeAttribute('aria-describedby');
+      activeItem = null;
+    }
   }
 
   function showTip(item, ev) {
@@ -981,13 +1009,21 @@ func reportInteractiveJS() string {
     if (others.length > 0) {
       html += '<div class="tt-sep"></div>' + others.join('');
     }
+    clearDescribedBy();
+    activeItem = item;
+    item.setAttribute('aria-describedby', 'chart-tooltip');
     tip.innerHTML = html;
     tip.classList.add('visible');
     tip.setAttribute('aria-hidden', 'false');
-    positionTip(ev);
+    if (ev && typeof ev.clientX === 'number' && typeof ev.clientY === 'number') {
+      positionTipAt(ev.clientX, ev.clientY);
+    } else {
+      positionTipForElement(item);
+    }
   }
 
   function hideTip() {
+    clearDescribedBy();
     tip.classList.remove('visible');
     tip.setAttribute('aria-hidden', 'true');
   }
@@ -997,11 +1033,26 @@ func reportInteractiveJS() string {
     if (item) showTip(item, ev);
   });
   document.addEventListener('pointermove', function(ev) {
-    if (tip.classList.contains('visible')) positionTip(ev);
+    if (tip.classList.contains('visible') && (!activeItem || document.activeElement !== activeItem)) {
+      positionTipAt(ev.clientX, ev.clientY);
+    }
   });
   document.addEventListener('pointerout', function(ev) {
     var item = ev.target && ev.target.closest ? ev.target.closest('.chart-item') : null;
+    if (item && document.activeElement !== item) hideTip();
+  });
+  document.addEventListener('focusin', function(ev) {
+    var item = ev.target && ev.target.closest ? ev.target.closest('.chart-item') : null;
+    if (item) showTip(item, null);
+  });
+  document.addEventListener('focusout', function(ev) {
+    var item = ev.target && ev.target.closest ? ev.target.closest('.chart-item') : null;
     if (item) hideTip();
+  });
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape' && tip.classList.contains('visible')) {
+      hideTip();
+    }
   });
 
   // Scale toggle (Linear / Log)

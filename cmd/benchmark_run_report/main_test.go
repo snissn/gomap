@@ -1579,3 +1579,65 @@ func TestBenchmarkContextBannerRendersAndOmitsGracefully(t *testing.T) {
 		t.Fatalf("minimal report without durability metadata should omit context banner\n%s", minimalHTML)
 	}
 }
+
+func TestFormatExactChartValueBytesPreservesExactIntegerCount(t *testing.T) {
+	if got, want := formatExactChartValue(512, "bytes"), "512 B"; got != want {
+		t.Fatalf("512 bytes = %q, want %q", got, want)
+	}
+	got1024 := formatExactChartValue(1024, "bytes")
+	got1025 := formatExactChartValue(1025, "bytes")
+	if got1024 != "1,024 B (1.00 KiB)" {
+		t.Fatalf("1024 bytes = %q, want %q", got1024, "1,024 B (1.00 KiB)")
+	}
+	if got1025 != "1,025 B (1.00 KiB)" {
+		t.Fatalf("1025 bytes = %q, want %q", got1025, "1,025 B (1.00 KiB)")
+	}
+	if got1024 == got1025 {
+		t.Fatalf("1024 and 1025 bytes should remain distinguishable in exact value formatting")
+	}
+	// Axis ticks and bar labels stay compact.
+	if got, want := formatAxisTick(1024*1024, "bytes"), "1 MiB"; got != want {
+		t.Fatalf("axis tick 1 MiB = %q, want %q", got, want)
+	}
+	if got, want := formatBarLabelValue(1024*1024, "bytes"), "1M"; got != want {
+		t.Fatalf("bar label 1 MiB = %q, want %q", got, want)
+	}
+}
+
+func TestChartItemsKeyboardAccessibleWithFocusAndEscapeHandlers(t *testing.T) {
+	barHTML := compactVerticalBarChart("Bytes/doc", []string{"post insert"}, "phase", []chartSeries{
+		{Name: "TreeDB BSON", Values: []float64{1025}, Color: "#7c3aed"},
+	}, "bytes")
+	lineHTML := lineChart("Footprint", []string{"0", "1"}, "indexes", "bytes", []chartSeries{
+		{Name: "TreeDB", Values: []float64{1024, 1025}, Color: "#2563eb"},
+	}, "bytes")
+	loadHTML := loadModeBarChart("Load", []string{"BSON driver", "BSON direct"}, []float64{1024, 2048}, []float64{1025, 0}, "bytes", "Bytes")
+	rawHTML := rawEngineGroupedBarChart("Raw", []rawEngineRun{{Profile: "fast", Checkpoint: "no checkpoint between tests", Results: map[string]float64{"random_read": 5000}}}, []string{"random_read"}, []rawEngineVariant{{Profile: "fast", Checkpoint: "no checkpoint between tests", Label: "fast / no checkpoint between tests", Color: "#d97706"}})
+
+	for name, doc := range map[string]string{"bar": barHTML, "line": lineHTML, "load": loadHTML, "raw": rawHTML} {
+		for _, want := range []string{
+			`class="chart-item" tabindex="0" role="graphics-symbol" aria-label="`,
+		} {
+			if !strings.Contains(doc, want) {
+				t.Fatalf("%s chart missing keyboard-accessible chart-item attributes %q\n%s", name, want, doc)
+			}
+		}
+	}
+	if !strings.Contains(barHTML, "1,025 B (1.00 KiB)") {
+		t.Fatalf("bar chart exact values missing exact integer byte count\n%s", barHTML)
+	}
+
+	js := reportInteractiveJS()
+	for _, want := range []string{
+		"addEventListener('focusin'",
+		"addEventListener('focusout'",
+		"addEventListener('keydown'",
+		"ev.key === 'Escape'",
+		"aria-describedby",
+		"positionTipForElement",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("reportInteractiveJS missing keyboard tooltip handler %q", want)
+		}
+	}
+}
