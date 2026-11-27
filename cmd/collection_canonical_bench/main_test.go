@@ -1004,3 +1004,58 @@ func knownExampleRun() *canonicalRun {
 	finalizeRunMetadata(canon)
 	return canon
 }
+
+func TestParseConfigDurabilityFlagsAndEnv(t *testing.T) {
+	// Setting -profile alone syncs TreeEngine to match so timed matrix + fixtures use the same profile.
+	cfg, err := parseConfig([]string{"-profile", "no_wal_fast", "-sqlite-journal-mode", "wal", "-sqlite-synchronous", "off"})
+	if err != nil {
+		t.Fatalf("parseConfig(-profile no_wal_fast): %v", err)
+	}
+	if cfg.Profile != "no_wal_fast" || cfg.TreeEngine != "no_wal_fast" {
+		t.Fatalf("profile/engine=(%q, %q) want no_wal_fast", cfg.Profile, cfg.TreeEngine)
+	}
+	if cfg.SQLiteJournalMode != "WAL" || cfg.SQLiteSynchronous != "OFF" {
+		t.Fatalf("sqlite=(%q, %q) want (WAL, OFF)", cfg.SQLiteJournalMode, cfg.SQLiteSynchronous)
+	}
+
+	// Explicit -tree-engine overrides -profile sync.
+	cfg, err = parseConfig([]string{"-profile", "command_wal_durable", "-tree-engine", "command_wal_relaxed"})
+	if err != nil {
+		t.Fatalf("parseConfig explicit engine: %v", err)
+	}
+	if cfg.Profile != "command_wal_durable" || cfg.TreeEngine != "command_wal_relaxed" {
+		t.Fatalf("profile/engine=(%q, %q) want (command_wal_durable, command_wal_relaxed)", cfg.Profile, cfg.TreeEngine)
+	}
+
+	// Environment variable defaults work and CLI flags override them.
+	t.Setenv("TREEDB_COLLECTION_PROFILE", "command_wal_durable")
+	t.Setenv("TREEDB_SQLITE_JOURNAL_MODE", "DELETE")
+	t.Setenv("TREEDB_SQLITE_SYNCHRONOUS", "FULL")
+	envCfg, err := parseConfig(nil)
+	if err != nil {
+		t.Fatalf("parseConfig with env defaults: %v", err)
+	}
+	if envCfg.Profile != "command_wal_durable" || envCfg.TreeEngine != "command_wal_durable" ||
+		envCfg.SQLiteJournalMode != "DELETE" || envCfg.SQLiteSynchronous != "FULL" {
+		t.Fatalf("unexpected env cfg: %+v", envCfg)
+	}
+	overrideCfg, err := parseConfig([]string{"-profile", "command_wal_relaxed", "-sqlite-synchronous", "NORMAL"})
+	if err != nil {
+		t.Fatalf("parseConfig flag overrides env: %v", err)
+	}
+	if overrideCfg.Profile != "command_wal_relaxed" || overrideCfg.TreeEngine != "command_wal_relaxed" || overrideCfg.SQLiteSynchronous != "NORMAL" {
+		t.Fatalf("unexpected override cfg: %+v", overrideCfg)
+	}
+
+	// Invalid durability flags fail fast.
+	for _, args := range [][]string{
+		{"-profile", "invalid_profile"},
+		{"-tree-engine", "invalid_engine"},
+		{"-sqlite-journal-mode", "BAD"},
+		{"-sqlite-synchronous", "BAD"},
+	} {
+		if _, err := parseConfig(args); err == nil {
+			t.Fatalf("parseConfig(%v) succeeded, want error", args)
+		}
+	}
+}

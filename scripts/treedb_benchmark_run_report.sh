@@ -8,6 +8,11 @@ TMP_BASE="${TMPDIR:-/tmp}"
 TMP_BASE="${TMP_BASE%/}"
 RUN_ROOT="${RUN_ROOT:-}"
 TIER="${TIER:-pr}"
+DURABILITY_TIER="${DURABILITY_TIER:-}"
+DURABILITY_NOTE="${DURABILITY_NOTE:-}"
+COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-}"
+SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-}"
+SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-}"
 INDEXES_LIST="${INDEXES_LIST:-0 1 2}"
 RAW_KEYS="${RAW_KEYS:-}"
 COLLECTION_DOCS="${COLLECTION_DOCS:-}"
@@ -25,6 +30,7 @@ MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
 MONGO_COMPACT="${MONGO_COMPACT:-}"
+MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 MONGO_READERS="${MONGO_READERS:-1,2,4,8,16,32}"
@@ -62,6 +68,19 @@ Options:
   --out DIR              Output run root. Default: /tmp/gomap_full_benchmark_report_<timestamp>.
   --run-root DIR         Alias for --out.
   --tier smoke|pr|large  Size preset. Default: pr.
+  --durability-tier fast|relaxed|durable
+                         Apples-to-apples durability preset across TreeDB, MongoDB, and SQLite
+                         (sets defaults for collection/mongo TreeDB profiles, Mongo write concern,
+                         and SQLite journal/sync; individually overridable).
+  --collection-treedb-profile NAME
+                         TreeDB profile for Collections vs SQLite: no_wal_fast, command_wal_relaxed,
+                         command_wal_durable, or bench_unsafe. Default: command_wal_relaxed.
+  --sqlite-journal-mode MODE
+                         SQLite journal_mode for Collections vs SQLite: WAL, OFF, MEMORY, or DELETE.
+                         Default: WAL.
+  --sqlite-synchronous MODE
+                         SQLite synchronous mode for Collections vs SQLite: OFF, NORMAL, FULL, or EXTRA.
+                         Default: NORMAL.
   --indexes LIST         Space- or comma-separated secondary index counts. Default: "0 1 2".
   --raw-keys N           Override raw engine key count.
   --collection-docs N    Override collection/SQLite document count.
@@ -83,6 +102,8 @@ Options:
   --mongo-compact BOOL   Compact the MongoDB collection before final stats collection.
                          Set to true/false, 1/0, or yes/no.
                          Default: true for docker mode; false for external mode unless explicitly set.
+  --mongo-write-concern MODE
+                         MongoDB write concern for -target mongo: default, w1, w1_j (or journal), or majority_j.
   --timeout DURATION     Per-cell timeout for Mongo gateway commands. Default: 120m.
   --title TITLE          HTML report title.
   --skip-raw             Skip raw TreeDB engine profile matrix.
@@ -98,10 +119,12 @@ Options:
   --help                 Show this help.
 
 Environment overrides use the uppercase variable names in the script, including
-RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
+RUN_ROOT, TIER, DURABILITY_TIER, COLLECTION_TREEDB_PROFILE, SQLITE_JOURNAL_MODE, SQLITE_SYNCHRONOUS,
+INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
 MONGO_LOAD_SCALING_DOCS, MONGO_LOAD_SCALING_BATCH_SIZE, MONGO_LOAD_PRODUCERS,
-MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
+MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_WRITE_CONCERN,
+MONGO_TREEDB_PROFILE, MONGO_TREEDB_OPEN_MODE, MONGO_TREEDB_MEMTABLE_MODE, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
 EOF
 }
 
@@ -149,6 +172,26 @@ while [[ $# -gt 0 ]]; do
     --tier)
       require_value "$1" "${2-}"
       TIER="$2"
+      shift 2
+      ;;
+    --durability-tier)
+      require_value "$1" "${2-}"
+      DURABILITY_TIER="$2"
+      shift 2
+      ;;
+    --collection-treedb-profile)
+      require_value "$1" "${2-}"
+      COLLECTION_TREEDB_PROFILE="$2"
+      shift 2
+      ;;
+    --sqlite-journal-mode)
+      require_value "$1" "${2-}"
+      SQLITE_JOURNAL_MODE="$2"
+      shift 2
+      ;;
+    --sqlite-synchronous)
+      require_value "$1" "${2-}"
+      SQLITE_SYNCHRONOUS="$2"
       shift 2
       ;;
     --indexes)
@@ -223,6 +266,11 @@ while [[ $# -gt 0 ]]; do
     --mongo-compact)
       require_value "$1" "${2-}"
       MONGO_COMPACT="$2"
+      shift 2
+      ;;
+    --mongo-write-concern)
+      require_value "$1" "${2-}"
+      MONGO_WRITE_CONCERN="$2"
       shift 2
       ;;
     --timeout)
@@ -315,6 +363,77 @@ case "$TIER" in
     exit 2
     ;;
 esac
+
+if [[ -n "$DURABILITY_TIER" ]]; then
+  DURABILITY_TIER=$(printf '%s' "$DURABILITY_TIER" | tr '[:upper:]' '[:lower:]')
+  case "$DURABILITY_TIER" in
+    fast)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-no_wal_fast}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-no_wal_fast}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-OFF}"
+      if [[ -z "$DURABILITY_NOTE" ]]; then
+        DURABILITY_NOTE="fast tier: TreeDB no_wal_fast, SQLite WAL+OFF; MongoDB 8 removed --nojournal, so w:1 (j:false) is MongoDB 8 fastest acknowledged write mode"
+      fi
+      ;;
+    relaxed)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_relaxed}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_relaxed}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-NORMAL}"
+      DURABILITY_NOTE="${DURABILITY_NOTE:-relaxed tier: TreeDB command_wal_relaxed, MongoDB w:1 (j:false, default WiredTiger journaling), SQLite WAL+NORMAL}"
+      ;;
+    durable)
+      COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_durable}"
+      MONGO_TREEDB_PROFILE="${MONGO_TREEDB_PROFILE:-command_wal_durable}"
+      MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-w1_j}"
+      SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-WAL}"
+      SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-FULL}"
+      DURABILITY_NOTE="${DURABILITY_NOTE:-durable tier: TreeDB command_wal_durable, MongoDB w:1+j:true (fsync WiredTiger journal before every write ack), SQLite WAL+FULL}"
+      ;;
+    *)
+      echo "invalid --durability-tier $DURABILITY_TIER (want fast, relaxed, or durable)" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-command_wal_relaxed}"
+SQLITE_JOURNAL_MODE=$(printf '%s' "${SQLITE_JOURNAL_MODE:-WAL}" | tr '[:lower:]' '[:upper:]')
+SQLITE_SYNCHRONOUS=$(printf '%s' "${SQLITE_SYNCHRONOUS:-NORMAL}" | tr '[:lower:]' '[:upper:]')
+
+case "$COLLECTION_TREEDB_PROFILE" in
+  no_wal_fast|command_wal_relaxed|command_wal_durable|bench_unsafe) ;;
+  *)
+    echo "invalid --collection-treedb-profile $COLLECTION_TREEDB_PROFILE (want no_wal_fast, command_wal_relaxed, command_wal_durable, or bench_unsafe)" >&2
+    exit 2
+    ;;
+esac
+case "$SQLITE_JOURNAL_MODE" in
+  WAL|OFF|MEMORY|DELETE) ;;
+  *)
+    echo "invalid --sqlite-journal-mode $SQLITE_JOURNAL_MODE (want WAL, OFF, MEMORY, or DELETE)" >&2
+    exit 2
+    ;;
+esac
+case "$SQLITE_SYNCHRONOUS" in
+  OFF|NORMAL|FULL|EXTRA) ;;
+  *)
+    echo "invalid --sqlite-synchronous $SQLITE_SYNCHRONOUS (want OFF, NORMAL, FULL, or EXTRA)" >&2
+    exit 2
+    ;;
+esac
+if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+  case "$(printf '%s' "$MONGO_WRITE_CONCERN" | tr '[:upper:]' '[:lower:]')" in
+    default|w1|w1_j|journal|majority_j) ;;
+    *)
+      echo "invalid --mongo-write-concern $MONGO_WRITE_CONCERN (want default, w1, w1_j, journal, or majority_j)" >&2
+      exit 2
+      ;;
+  esac
+fi
 MONGO_LOAD_SCALING_DOCS="${MONGO_LOAD_SCALING_DOCS:-$MONGO_DOCS}"
 raw_skip_mongo=$SKIP_MONGO
 SKIP_MONGO=$(normalize_bool_text "$SKIP_MONGO") || {
@@ -399,6 +518,10 @@ write_metadata() {
     echo "- worktree: $ROOT"
     echo "- run_root: $RUN_ROOT"
     echo "- tier: $TIER"
+    echo "- durability_tier: ${DURABILITY_TIER:-default}"
+    echo "- collection_treedb_profile: $COLLECTION_TREEDB_PROFILE"
+    echo "- sqlite_journal_mode: $SQLITE_JOURNAL_MODE"
+    echo "- sqlite_synchronous: $SQLITE_SYNCHRONOUS"
     echo "- indexes: $INDEXES_LIST"
     echo "- raw_keys: $RAW_KEYS"
     echo "- collection_docs: $COLLECTION_DOCS"
@@ -412,10 +535,14 @@ write_metadata() {
     echo "- mongo_mode: $MONGO_MODE"
     echo "- mongo_image: $MONGO_IMAGE"
     echo "- mongo_compact: $MONGO_COMPACT"
+    echo "- mongo_write_concern: ${MONGO_WRITE_CONCERN:-default}"
     echo "- mongo_uri: $MONGO_URI"
     echo "- mongo_treedb_open_mode: $MONGO_TREEDB_OPEN_MODE"
     echo "- mongo_treedb_profile: ${MONGO_TREEDB_PROFILE:-default}"
     echo "- mongo_treedb_memtable_mode: ${MONGO_TREEDB_MEMTABLE_MODE:-auto}"
+    if [[ -n "$DURABILITY_NOTE" ]]; then
+      echo "- durability_note: $DURABILITY_NOTE"
+    fi
     echo "- timeout: $TIMEOUT"
     echo "- mongo_readers: $MONGO_READERS"
     echo "- mongo_writers: $MONGO_WRITERS"
@@ -443,6 +570,18 @@ write_metadata() {
     printf 'scripts/treedb_benchmark_run_report.sh'
     printf ' --out %q' "$RUN_ROOT"
     printf ' --tier %q' "$TIER"
+    if [[ -n "$DURABILITY_TIER" ]]; then
+      printf ' --durability-tier %q' "$DURABILITY_TIER"
+    fi
+    printf ' --collection-treedb-profile %q' "$COLLECTION_TREEDB_PROFILE"
+    printf ' --sqlite-journal-mode %q' "$SQLITE_JOURNAL_MODE"
+    printf ' --sqlite-synchronous %q' "$SQLITE_SYNCHRONOUS"
+    if [[ -n "$MONGO_TREEDB_PROFILE" ]]; then
+      printf ' --mongo-treedb-profile %q' "$MONGO_TREEDB_PROFILE"
+    fi
+    if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+      printf ' --mongo-write-concern %q' "$MONGO_WRITE_CONCERN"
+    fi
     printf ' --indexes %q' "$INDEXES_LIST"
     printf ' --mongo-mode %q' "$MONGO_MODE"
     printf ' --mongo-image %q' "$MONGO_IMAGE"
@@ -504,10 +643,13 @@ run_collections() {
       -docs "$COLLECTION_DOCS" \
       -batch-size "$COLLECTION_BATCH_SIZE" \
       -indexes "$indexes" \
+      -profile "$COLLECTION_TREEDB_PROFILE" \
+      -sqlite-journal-mode "$SQLITE_JOURNAL_MODE" \
+      -sqlite-synchronous "$SQLITE_SYNCHRONOUS" \
       -formats template-v1,bson,json \
       -benchtime "${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}" \
       -count "${COLLECTION_COUNT:-1}" \
-      "${profile_args[@]:-}"
+      ${profile_args[@]+"${profile_args[@]}"}
   done
 }
 
@@ -518,6 +660,9 @@ mongo_treedb_env_args() {
   )
   if [[ -n "$MONGO_TREEDB_PROFILE" ]]; then
     MONGO_TREEDB_ENV_ARGS+=(TREEDB_PROFILE="$MONGO_TREEDB_PROFILE")
+  fi
+  if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+    MONGO_TREEDB_ENV_ARGS+=(MONGO_WRITE_CONCERN="$MONGO_WRITE_CONCERN")
   fi
 }
 

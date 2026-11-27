@@ -465,3 +465,70 @@ func containsEnv(env []string, want string) bool {
 	}
 	return false
 }
+
+func TestBuildMatrixCellsSQLiteDurabilityModes(t *testing.T) {
+	for _, tc := range []struct {
+		journalMode string
+		synchronous string
+		wantEngine  string
+	}{
+		{"WAL", "OFF", "sqlite_wal_off"},
+		{"WAL", "NORMAL", "sqlite_wal_normal"},
+		{"WAL", "FULL", "sqlite_wal_full"},
+		{"DELETE", "FULL", "sqlite_delete_full"},
+	} {
+		t.Run(tc.wantEngine, func(t *testing.T) {
+			cfg, err := parseFlags([]string{
+				"-out-dir", t.TempDir(),
+				"-engine", "command_wal_durable",
+				"-formats", "bson",
+				"-storage-cells", "index-vlog",
+				"-sqlite-journal-mode", tc.journalMode,
+				"-sqlite-synchronous", tc.synchronous,
+			})
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
+			}
+			cells, err := buildMatrixCells(cfg)
+			if err != nil {
+				t.Fatalf("buildMatrixCells: %v", err)
+			}
+			var sqliteCell *matrixCell
+			for i := range cells {
+				if cells[i].ExecutionPath == "sqlite" {
+					sqliteCell = &cells[i]
+				}
+			}
+			if sqliteCell == nil {
+				t.Fatalf("missing sqlite cell in %+v", cells)
+			}
+			if sqliteCell.Name != tc.wantEngine || sqliteCell.Engine != tc.wantEngine || sqliteCell.StoragePolicy != tc.wantEngine {
+				t.Fatalf("sqlite cell labels = (%q, %q, %q), want %q", sqliteCell.Name, sqliteCell.Engine, sqliteCell.StoragePolicy, tc.wantEngine)
+			}
+			if !containsEnv(sqliteCell.Env, "TREEDB_SQLITE_JOURNAL_MODE="+tc.journalMode) {
+				t.Fatalf("sqlite env missing journal mode: %v", sqliteCell.Env)
+			}
+			if !containsEnv(sqliteCell.Env, "TREEDB_SQLITE_SYNCHRONOUS="+tc.synchronous) {
+				t.Fatalf("sqlite env missing synchronous mode: %v", sqliteCell.Env)
+			}
+		})
+	}
+
+	t.Setenv("TREEDB_COLLECTION_PROFILE", "no_wal_fast")
+	t.Setenv("TREEDB_SQLITE_JOURNAL_MODE", "wal")
+	t.Setenv("TREEDB_SQLITE_SYNCHRONOUS", "off")
+	envCfg, err := parseFlags([]string{"-out-dir", t.TempDir()})
+	if err != nil {
+		t.Fatalf("parseFlags with env overrides: %v", err)
+	}
+	if envCfg.engine != "no_wal_fast" || envCfg.sqliteJournalMode != "WAL" || envCfg.sqliteSynchronous != "OFF" {
+		t.Fatalf("unexpected env cfg: %+v", envCfg)
+	}
+
+	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-sqlite-journal-mode", "BAD"}); err == nil {
+		t.Fatal("parseFlags accepted invalid -sqlite-journal-mode")
+	}
+	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-sqlite-synchronous", "BAD"}); err == nil {
+		t.Fatal("parseFlags accepted invalid -sqlite-synchronous")
+	}
+}

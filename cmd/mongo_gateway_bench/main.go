@@ -61,6 +61,7 @@ type config struct {
 	Target                                        string
 	MongoURI                                      string
 	MongoCompact                                  bool
+	MongoWriteConcern                             string
 	RouteMode                                     string
 	RouteGroupCount                               int
 	RoutePartitionCount                           int
@@ -130,6 +131,8 @@ type benchmarkResult struct {
 	Target                         string                   `json:"target"`
 	MongoURI                       string                   `json:"mongo_uri,omitempty"`
 	MongoCompact                   bool                     `json:"mongo_compact,omitempty"`
+	MongoWriteConcern              string                   `json:"mongo_write_concern,omitempty"`
+	MongoLoadWriteConcern          string                   `json:"mongo_load_write_concern,omitempty"`
 	RouteMode                      string                   `json:"route_mode"`
 	RouteGroupCount                int                      `json:"route_group_count,omitempty"`
 	RoutePartitionCount            int                      `json:"route_partition_count,omitempty"`
@@ -501,6 +504,12 @@ const (
 
 	pointReadProjectionFull = "full"
 	pointReadProjectionYCSB = "ycsb"
+
+	mongoWriteConcernDefault   = ""
+	mongoWriteConcernUnack     = "w0"
+	mongoWriteConcernW1        = "w1"
+	mongoWriteConcernW1J       = "w1_j"
+	mongoWriteConcernMajorityJ = "majority_j"
 )
 
 func main() {
@@ -600,6 +609,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
+	fs.StringVar(&cfg.MongoWriteConcern, "mongo-write-concern", "", "MongoDB write concern for -target mongo: default, w1, w1_j (or journal), or majority_j")
 	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "route evidence mode: off, ring, or production")
 	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for the internal route topology; public token/ring production writes remain fail closed until owner-bound catalog and index proof exists")
 	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for route evidence; must be >= route-groups")
@@ -695,6 +705,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
 	}
+	mongoWriteConcern, err := parseMongoWriteConcern(cfg.MongoWriteConcern)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.MongoWriteConcern = mongoWriteConcern
 	routeMode, err := parseRouteMode(cfg.RouteMode)
 	if err != nil {
 		return config{}, err
@@ -1875,10 +1890,93 @@ func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	}, nil
 }
 
+func parseMongoWriteConcern(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "default":
+		return mongoWriteConcernDefault, nil
+	case mongoWriteConcernW1:
+		return mongoWriteConcernW1, nil
+	case mongoWriteConcernW1J, "journal":
+		return mongoWriteConcernW1J, nil
+	case mongoWriteConcernMajorityJ:
+		return mongoWriteConcernMajorityJ, nil
+	default:
+		return "", fmt.Errorf("unknown mongo-write-concern %q (want default, w1, w1_j, journal, or majority_j)", raw)
+	}
+}
+
+func resolveMongoWriteConcerns(cfg config) (clientWC, loadWC string) {
+	if cfg.Target != "mongo" {
+		return "", ""
+	}
+	clientWC = cfg.MongoWriteConcern
+	if cfg.ClientMode == clientModeDriverUnack {
+		return clientWC, mongoWriteConcernUnack
+	}
+	return clientWC, clientWC
+}
+
+func mongoWriteConcernForConfig(name string) *writeconcern.WriteConcern {
+	switch name {
+	case mongoWriteConcernW1:
+		return &writeconcern.WriteConcern{W: 1}
+	case mongoWriteConcernW1J:
+		j := true
+		return &writeconcern.WriteConcern{W: 1, Journal: &j}
+	case mongoWriteConcernMajorityJ:
+		j := true
+		return &writeconcern.WriteConcern{W: writeconcern.WCMajority, Journal: &j}
+	default:
+		return nil
+	}
+}
+
+func mongoWriteConcernCommandDoc(cfg config) bson.D {
+	if cfg.Target != "mongo" {
+		return nil
+	}
+	switch cfg.MongoWriteConcern {
+	case mongoWriteConcernW1:
+		return bson.D{{Key: "w", Value: 1}}
+	case mongoWriteConcernW1J:
+		return bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}
+	case mongoWriteConcernMajorityJ:
+		return bson.D{{Key: "w", Value: writeconcern.WCMajority}, {Key: "j", Value: true}}
+	default:
+		return nil
+	}
+}
+
+func appendRawWriteConcernElement(doc []byte, writeConcern string) ([]byte, error) {
+	switch writeConcern {
+	case mongoWriteConcernW1:
+		wcIdx, dst := bsoncore.AppendDocumentElementStart(doc, "writeConcern")
+		dst = bsoncore.AppendInt32Element(dst, "w", 1)
+		return bsoncore.AppendDocumentEnd(dst, wcIdx)
+	case mongoWriteConcernW1J:
+		wcIdx, dst := bsoncore.AppendDocumentElementStart(doc, "writeConcern")
+		dst = bsoncore.AppendInt32Element(dst, "w", 1)
+		dst = bsoncore.AppendBooleanElement(dst, "j", true)
+		return bsoncore.AppendDocumentEnd(dst, wcIdx)
+	case mongoWriteConcernMajorityJ:
+		wcIdx, dst := bsoncore.AppendDocumentElementStart(doc, "writeConcern")
+		dst = bsoncore.AppendStringElement(dst, "w", writeconcern.WCMajority)
+		dst = bsoncore.AppendBooleanElement(dst, "j", true)
+		return bsoncore.AppendDocumentEnd(dst, wcIdx)
+	default:
+		return doc, nil
+	}
+}
+
 func mongoClientOptions(uri string, cfg config, poolStats *mongoPoolStats) *options.ClientOptions {
 	opts := options.Client().
 		ApplyURI(uri).
 		SetServerSelectionTimeout(5 * time.Second)
+	if cfg.Target == "mongo" {
+		if wc := mongoWriteConcernForConfig(cfg.MongoWriteConcern); wc != nil {
+			opts.SetWriteConcern(wc)
+		}
+	}
 	if cfg.MongoMaxPoolSize > 0 {
 		opts.SetMaxPoolSize(uint64(cfg.MongoMaxPoolSize))
 	}
@@ -1994,6 +2092,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 		result.MongoCompact = cfg.MongoCompact
+		result.MongoWriteConcern, result.MongoLoadWriteConcern = resolveMongoWriteConcerns(cfg)
 	}
 	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, cfg.Target == "treedb"); err != nil {
 		return nil, err
@@ -4646,17 +4745,25 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
 			}
 		}
-		return db.RunCommand(batchCtx, bson.D{
+		command := bson.D{
 			{Key: "insert", Value: cfg.Collection},
 			{Key: "documents", Value: docs},
 			{Key: "ordered", Value: true},
-		}).Err()
+		}
+		if wcDoc := mongoWriteConcernCommandDoc(cfg); len(wcDoc) > 0 {
+			command = append(command, bson.E{Key: "writeConcern", Value: wcDoc})
+		}
+		return db.RunCommand(batchCtx, command).Err()
 	})
 }
 
 func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	writeConcern := ""
+	if cfg.Target == "mongo" {
+		writeConcern = cfg.MongoWriteConcern
+	}
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		command, err := rawInsertCommand(cfg.Collection, start, end, cfg.DocumentShape, prebuilt, prebuiltRaw)
+		command, err := rawInsertCommandWithWriteConcern(cfg.Collection, start, end, cfg.DocumentShape, prebuilt, prebuiltRaw, writeConcern)
 		if err != nil {
 			return err
 		}
@@ -4665,6 +4772,10 @@ func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Dat
 }
 
 func rawInsertCommand(collection string, start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
+	return rawInsertCommandWithWriteConcern(collection, start, end, shape, prebuilt, prebuiltRaw, "")
+}
+
+func rawInsertCommandWithWriteConcern(collection string, start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw, writeConcern string) (bson.Raw, error) {
 	arrIdx, arr := bsoncore.AppendArrayStart(nil)
 	for i := start; i < end; i++ {
 		var raw bson.Raw
@@ -4693,6 +4804,12 @@ func rawInsertCommand(collection string, start, end int, shape string, prebuilt 
 	doc = bsoncore.AppendStringElement(doc, "insert", collection)
 	doc = bsoncore.AppendArrayElement(doc, "documents", arr)
 	doc = bsoncore.AppendBooleanElement(doc, "ordered", true)
+	if writeConcern != "" {
+		doc, err = appendRawWriteConcernElement(doc, writeConcern)
+		if err != nil {
+			return nil, err
+		}
+	}
 	doc, err = bsoncore.AppendDocumentEnd(doc, docIdx)
 	if err != nil {
 		return nil, err
@@ -7812,6 +7929,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.Target == "mongo" {
 			fmt.Fprintf(out, "mongo_compact=%t\n", result.MongoCompact)
+			if result.MongoWriteConcern != "" {
+				fmt.Fprintf(out, "mongo_write_concern=%s\n", result.MongoWriteConcern)
+			}
+			if result.MongoLoadWriteConcern != "" && result.MongoLoadWriteConcern != result.MongoWriteConcern {
+				fmt.Fprintf(out, "mongo_load_write_concern=%s\n", result.MongoLoadWriteConcern)
+			}
 		}
 		if result.ProfileDir != "" {
 			fmt.Fprintf(out, "profile_dir=%s profile_manifest=%s profile_result=%s\n",

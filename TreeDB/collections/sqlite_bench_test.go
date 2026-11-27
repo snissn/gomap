@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,14 +104,56 @@ func sqliteShapeIndexStatements(indexCount int) []string {
 	}
 }
 
+func parseSQLiteJournalMode(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "WAL", nil
+	}
+	switch v {
+	case "WAL", "OFF", "MEMORY", "DELETE":
+		return v, nil
+	default:
+		return "", fmt.Errorf("unsupported TREEDB_SQLITE_JOURNAL_MODE=%q (want WAL, OFF, MEMORY, or DELETE)", raw)
+	}
+}
+
+func parseSQLiteSynchronous(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "NORMAL", nil
+	}
+	switch v {
+	case "OFF", "NORMAL", "FULL", "EXTRA":
+		return v, nil
+	default:
+		return "", fmt.Errorf("unsupported TREEDB_SQLITE_SYNCHRONOUS=%q (want OFF, NORMAL, FULL, or EXTRA)", raw)
+	}
+}
+
+func benchmarkSQLiteDurabilitySettings(tb testing.TB) (journalMode, synchronous string) {
+	tb.Helper()
+
+	var err error
+	journalMode, err = parseSQLiteJournalMode(os.Getenv("TREEDB_SQLITE_JOURNAL_MODE"))
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+	synchronous, err = parseSQLiteSynchronous(os.Getenv("TREEDB_SQLITE_SYNCHRONOUS"))
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+	return journalMode, synchronous
+}
+
 func openBenchmarkSQLiteBaseDB(tb testing.TB, name string) *sql.DB {
 	tb.Helper()
 
+	journalMode, synchronous := benchmarkSQLiteDurabilitySettings(tb)
 	dbPath := filepath.Join(tb.TempDir(), name+".db")
 	dsn := (&url.URL{
 		Scheme: "file",
 		Path:   dbPath,
-	}).String() + "?_busy_timeout=5000&_foreign_keys=off&_journal_mode=WAL&_synchronous=NORMAL&_txlock=immediate"
+	}).String() + "?_busy_timeout=5000&_foreign_keys=off&_journal_mode=" + journalMode + "&_synchronous=" + synchronous + "&_txlock=immediate"
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -124,16 +167,20 @@ func openBenchmarkSQLiteBaseDB(tb testing.TB, name string) *sql.DB {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	for _, stmt := range []string{
+	stmts := []string{
 		`PRAGMA page_size = 4096`,
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA journal_mode = ` + journalMode,
+		`PRAGMA synchronous = ` + synchronous,
 		`PRAGMA temp_store = MEMORY`,
 		`PRAGMA cache_size = -262144`,
 		`PRAGMA mmap_size = 268435456`,
-		`PRAGMA wal_autocheckpoint = 0`,
-		`PRAGMA foreign_keys = OFF`,
-	} {
+	}
+	if journalMode == "WAL" {
+		stmts = append(stmts, `PRAGMA wal_autocheckpoint = 0`)
+	}
+	stmts = append(stmts, `PRAGMA foreign_keys = OFF`)
+
+	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
 			tb.Fatalf("sqlite base setup %q: %v", stmt, err)
 		}
@@ -270,6 +317,10 @@ func insertSQLiteNativeColumnsDocumentBatch(tb testing.TB, db *sql.DB, docs []be
 func checkpointSQLiteWAL(tb testing.TB, db *sql.DB) {
 	tb.Helper()
 
+	journalMode, _ := benchmarkSQLiteDurabilitySettings(tb)
+	if journalMode != "WAL" {
+		return
+	}
 	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		tb.Fatalf("sqlite wal checkpoint: %v", err)
 	}
@@ -411,6 +462,96 @@ func TestSQLiteNativeColumnsBenchmarkSchemaStoresIndexedFields(t *testing.T) {
 	}
 	if id != docs[0].id {
 		t.Fatalf("email index id=%q want %q", id, docs[0].id)
+	}
+}
+
+func TestParseSQLiteDurabilitySettings(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"", "WAL"},
+		{"wal", "WAL"},
+		{" OFF ", "OFF"},
+		{"memory", "MEMORY"},
+		{"DELETE", "DELETE"},
+	} {
+		got, err := parseSQLiteJournalMode(tc.raw)
+		if err != nil || got != tc.want {
+			t.Fatalf("parseSQLiteJournalMode(%q) = (%q, %v), want (%q, nil)", tc.raw, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"PERSIST", "TRUNCATE", "WAL; DROP TABLE documents;--"} {
+		if got, err := parseSQLiteJournalMode(bad); err == nil {
+			t.Fatalf("parseSQLiteJournalMode(%q) = %q, want error", bad, got)
+		}
+	}
+
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"", "NORMAL"},
+		{"off", "OFF"},
+		{" NORMAL ", "NORMAL"},
+		{"full", "FULL"},
+		{"EXTRA", "EXTRA"},
+	} {
+		got, err := parseSQLiteSynchronous(tc.raw)
+		if err != nil || got != tc.want {
+			t.Fatalf("parseSQLiteSynchronous(%q) = (%q, %v), want (%q, nil)", tc.raw, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"0", "2", "FAST", "NORMAL; DROP TABLE documents;--"} {
+		if got, err := parseSQLiteSynchronous(bad); err == nil {
+			t.Fatalf("parseSQLiteSynchronous(%q) = %q, want error", bad, got)
+		}
+	}
+}
+
+func TestSQLiteDurabilityModesOpenAndWrite(t *testing.T) {
+	for _, tc := range []struct {
+		journalMode string
+		synchronous string
+		wantSyncInt int
+	}{
+		{"WAL", "OFF", 0},
+		{"WAL", "NORMAL", 1},
+		{"WAL", "FULL", 2},
+		{"DELETE", "FULL", 2},
+	} {
+		t.Run(tc.journalMode+"_"+tc.synchronous, func(t *testing.T) {
+			t.Setenv("TREEDB_SQLITE_JOURNAL_MODE", tc.journalMode)
+			t.Setenv("TREEDB_SQLITE_SYNCHRONOUS", tc.synchronous)
+
+			db := openBenchmarkSQLiteJSONShapeDB(t, "durability_"+tc.journalMode+"_"+tc.synchronous, 1)
+			var gotJournal string
+			if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&gotJournal); err != nil {
+				t.Fatalf("query journal_mode: %v", err)
+			}
+			if !strings.EqualFold(gotJournal, tc.journalMode) {
+				t.Fatalf("journal_mode=%q want %q", gotJournal, tc.journalMode)
+			}
+			var gotSync int
+			if err := db.QueryRow(`PRAGMA synchronous`).Scan(&gotSync); err != nil {
+				t.Fatalf("query synchronous: %v", err)
+			}
+			if gotSync != tc.wantSyncInt {
+				t.Fatalf("synchronous=%d want %d", gotSync, tc.wantSyncInt)
+			}
+
+			ids, docs := benchmarkSQLiteDocumentBatch(t, 0, 4)
+			insertSQLiteDocumentBatch(t, db, ids, docs)
+			checkpointSQLiteWAL(t, db)
+
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&count); err != nil {
+				t.Fatalf("count documents: %v", err)
+			}
+			if count != 4 {
+				t.Fatalf("count=%d want 4", count)
+			}
+		})
 	}
 }
 

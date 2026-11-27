@@ -31,6 +31,8 @@ type config struct {
 	count                  int
 	batchSize              int
 	engine                 string
+	sqliteJournalMode      string
+	sqliteSynchronous      string
 	formats                []string
 	storageCells           []string
 	treeBenchmarkPattern   string
@@ -134,13 +136,27 @@ func reproducibleCommandLine(args []string) []string {
 func parseFlags(args []string) (config, error) {
 	var rawFormats string
 	var rawStorageCells string
+	defaultEngine := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_PROFILE"))
+	if defaultEngine == "" {
+		defaultEngine = "command_wal_relaxed"
+	}
+	defaultSQLiteJournalMode := strings.TrimSpace(os.Getenv("TREEDB_SQLITE_JOURNAL_MODE"))
+	if defaultSQLiteJournalMode == "" {
+		defaultSQLiteJournalMode = "WAL"
+	}
+	defaultSQLiteSynchronous := strings.TrimSpace(os.Getenv("TREEDB_SQLITE_SYNCHRONOUS"))
+	if defaultSQLiteSynchronous == "" {
+		defaultSQLiteSynchronous = "NORMAL"
+	}
 	cfg := config{
 		goBinary:               "go",
 		goTestTimeout:          "0",
 		benchtime:              "100000x",
 		count:                  1,
 		batchSize:              16000,
-		engine:                 "command_wal_relaxed",
+		engine:                 defaultEngine,
+		sqliteJournalMode:      defaultSQLiteJournalMode,
+		sqliteSynchronous:      defaultSQLiteSynchronous,
 		treeBenchmarkPattern:   defaultTreeBenchmarkPattern,
 		sqliteBenchmarkPattern: defaultSQLiteBenchmarkPattern,
 		reportVLogRewrite:      true,
@@ -163,6 +179,8 @@ func parseFlags(args []string) (config, error) {
 	fs.IntVar(&cfg.count, "count", cfg.count, "go test -count value")
 	fs.IntVar(&cfg.batchSize, "batch-size", cfg.batchSize, "TREEDB_COLLECTION_BENCH_BATCH_SIZE")
 	fs.StringVar(&cfg.engine, "engine", cfg.engine, "TREEDB_COLLECTION_BENCH_ENGINE for TreeDB cells")
+	fs.StringVar(&cfg.sqliteJournalMode, "sqlite-journal-mode", cfg.sqliteJournalMode, "TREEDB_SQLITE_JOURNAL_MODE for SQLite cells: WAL, OFF, MEMORY, or DELETE")
+	fs.StringVar(&cfg.sqliteSynchronous, "sqlite-synchronous", cfg.sqliteSynchronous, "TREEDB_SQLITE_SYNCHRONOUS for SQLite cells: OFF, NORMAL, FULL, or EXTRA")
 	fs.StringVar(&rawFormats, "formats", "json,template-v1", "Comma-separated TreeDB document formats")
 	fs.StringVar(&rawStorageCells, "storage-cells", "mainline,index-vlog", "Comma-separated storage cells: mainline,index-vlog,inline")
 	fs.StringVar(&cfg.treeBenchmarkPattern, "tree-bench-pattern", cfg.treeBenchmarkPattern, "go test -bench regex for TreeDB collection cells")
@@ -231,7 +249,53 @@ func parseFlags(args []string) (config, error) {
 	if strings.TrimSpace(cfg.profileBenchtime) == "" {
 		cfg.profileBenchtime = cfg.benchtime
 	}
+	cfg.sqliteJournalMode, err = parseSQLiteJournalMode(cfg.sqliteJournalMode)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.sqliteSynchronous, err = parseSQLiteSynchronous(cfg.sqliteSynchronous)
+	if err != nil {
+		return config{}, err
+	}
 	return cfg, nil
+}
+
+func parseSQLiteJournalMode(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "WAL", nil
+	}
+	switch v {
+	case "WAL", "OFF", "MEMORY", "DELETE":
+		return v, nil
+	default:
+		return "", fmt.Errorf("-sqlite-journal-mode must be WAL, OFF, MEMORY, or DELETE; got %q", raw)
+	}
+}
+
+func parseSQLiteSynchronous(raw string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "NORMAL", nil
+	}
+	switch v {
+	case "OFF", "NORMAL", "FULL", "EXTRA":
+		return v, nil
+	default:
+		return "", fmt.Errorf("-sqlite-synchronous must be OFF, NORMAL, FULL, or EXTRA; got %q", raw)
+	}
+}
+
+func sqliteEngineLabel(journalMode, synchronous string) string {
+	jm, err := parseSQLiteJournalMode(journalMode)
+	if err != nil {
+		jm = "WAL"
+	}
+	sm, err := parseSQLiteSynchronous(synchronous)
+	if err != nil {
+		sm = "NORMAL"
+	}
+	return "sqlite_" + strings.ToLower(jm) + "_" + strings.ToLower(sm)
 }
 
 func splitList(raw, name string) ([]string, error) {
@@ -416,21 +480,32 @@ func buildMatrixCells(cfg config) ([]matrixCell, error) {
 		}
 	}
 	if !cfg.skipSQLite {
+		sqliteJournalMode, err := parseSQLiteJournalMode(cfg.sqliteJournalMode)
+		if err != nil {
+			return nil, err
+		}
+		sqliteSynchronous, err := parseSQLiteSynchronous(cfg.sqliteSynchronous)
+		if err != nil {
+			return nil, err
+		}
+		sqliteEngine := sqliteEngineLabel(sqliteJournalMode, sqliteSynchronous)
 		cell := matrixCell{
-			Name:                   "sqlite_wal_normal",
+			Name:                   sqliteEngine,
 			ExecutionPath:          "sqlite",
-			Engine:                 "sqlite_wal_normal",
+			Engine:                 sqliteEngine,
 			DocumentFormat:         "json",
 			DataOuterLeavesInVLog:  "-",
 			IndexOuterLeavesInVLog: "-",
 			PagerChunkSize:         "-",
 			PagerSyncConcurrency:   "-",
-			StoragePolicy:          "sqlite_wal_normal",
+			StoragePolicy:          sqliteEngine,
 			BenchmarkPattern:       cfg.sqliteBenchmarkPattern,
 			Tags:                   []string{"sqlite_bench"},
 			Env: []string{
 				"TREEDB_COLLECTION_BENCH_BATCH_SIZE=" + strconv.Itoa(cfg.batchSize),
 				"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=" + strconv.FormatBool(cfg.reportSQLiteVacuum),
+				"TREEDB_SQLITE_JOURNAL_MODE=" + sqliteJournalMode,
+				"TREEDB_SQLITE_SYNCHRONOUS=" + sqliteSynchronous,
 			},
 		}
 		if _, ok := seenCellNames[cell.Name]; ok {
@@ -847,6 +922,10 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	writeMarkdownCodeLine(&sb, "benchtime", cfg.benchtime)
 	writeMarkdownCodeLine(&sb, "count", strconv.Itoa(cfg.count))
 	writeMarkdownCodeLine(&sb, "collection batch size", strconv.Itoa(cfg.batchSize))
+	if cfg.sqliteJournalMode != "" || cfg.sqliteSynchronous != "" {
+		writeMarkdownCodeLine(&sb, "sqlite journal mode", cfg.sqliteJournalMode)
+		writeMarkdownCodeLine(&sb, "sqlite synchronous", cfg.sqliteSynchronous)
+	}
 	if cfg.profileCells {
 		writeMarkdownCodeLine(&sb, "profile cells", "true")
 		writeMarkdownCodeLine(&sb, "profile benchtime", cfg.profileBenchtime)

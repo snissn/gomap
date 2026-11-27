@@ -15,6 +15,7 @@ MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
 MONGO_COMPACT="${MONGO_COMPACT:-}"
+MONGO_WRITE_CONCERN="${MONGO_WRITE_CONCERN:-}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 TIMEOUT="${TIMEOUT:-120m}"
@@ -46,6 +47,8 @@ Options:
   --mongo-uri URI        MongoDB URI for external runs. Default: mongodb://127.0.0.1:27017.
   --mongo-image IMAGE    Docker image for docker mode. Default: mongo:8.
   --mongo-compact BOOL   Compact MongoDB before final stats collection.
+  --mongo-write-concern MODE
+                         MongoDB write concern for -target mongo: default, w1, w1_j (or journal), or majority_j.
   --timeout DURATION     Per-cell timeout. Default: 120m.
   --title TITLE          Bundle title.
   --treedb-profile NAME  TreeDB profile. Default: bench_unsafe.
@@ -143,6 +146,11 @@ while [[ $# -gt 0 ]]; do
       MONGO_COMPACT="$2"
       shift 2
       ;;
+    --mongo-write-concern)
+      require_value "$1" "${2-}"
+      MONGO_WRITE_CONCERN="$2"
+      shift 2
+      ;;
     --timeout)
       require_value "$1" "${2-}"
       TIMEOUT="$2"
@@ -210,6 +218,15 @@ case "$MONGO_MODE" in
     exit 2
     ;;
 esac
+if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+  case "$(printf '%s' "$MONGO_WRITE_CONCERN" | tr '[:upper:]' '[:lower:]')" in
+    default|w1|w1_j|journal|majority_j) ;;
+    *)
+      echo "invalid --mongo-write-concern $MONGO_WRITE_CONCERN (want default, w1, w1_j, journal, or majority_j)" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 OUT_DIR=$(mkdir -p "$(dirname "$OUT_DIR")" && cd "$(dirname "$OUT_DIR")" && pwd -P)/$(basename "$OUT_DIR")
 mkdir -p "$OUT_DIR"
@@ -228,6 +245,10 @@ for producers in $PRODUCERS_LIST; do
   mongo_compact_args=()
   if [[ -n "$MONGO_COMPACT" ]]; then
     mongo_compact_args=(--mongo-compact "$MONGO_COMPACT")
+  fi
+  mongo_write_concern_args=()
+  if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+    mongo_write_concern_args=(--mongo-write-concern "$MONGO_WRITE_CONCERN")
   fi
   env \
     TREEDB_PROFILE="$TREEDB_PROFILE" \
@@ -262,7 +283,8 @@ for producers in $PRODUCERS_LIST; do
       --indexes "$INDEXES_LIST" \
       --mongo-mode "$MONGO_MODE" \
       --mongo-image "$MONGO_IMAGE" \
-      "${mongo_compact_args[@]}" \
+      ${mongo_compact_args[@]+"${mongo_compact_args[@]}"} \
+      ${mongo_write_concern_args[@]+"${mongo_write_concern_args[@]}"} \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "$TITLE, producers=${producers}"
@@ -333,6 +355,7 @@ cat > "$OUT_DIR/README.md" <<EOF
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB URI: \`$MONGO_URI\`
 - MongoDB compact: \`${MONGO_COMPACT:-mode default}\`
+- MongoDB write concern: \`${MONGO_WRITE_CONCERN:-default}\`
 - MongoDB Go driver pool options: \`maxPoolSize=$MONGO_MAX_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING\`
 - timeout: \`$TIMEOUT\`
 
