@@ -1367,6 +1367,12 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	backend.SetPostValueLogGCHook(func() error {
+		return cached.ReconcileRetiredValueLogReader()
+	})
+	backend.SetValueLogSegmentRetiredHook(func(fileID uint32) {
+		cached.NotifyRetiredValueLogSegment(fileID)
+	})
 	if cached.COWMode() {
 		// Bind the original public writer once. Each transaction still owns
 		// its own batch and goes through the same publish/acknowledgement path.
@@ -1996,6 +2002,13 @@ func (db *DB) Close() error {
 
 	db.lifecycleMu.Lock()
 	defer db.lifecycleMu.Unlock()
+
+	// Unhook backend post-GC reconciliation before closing cached resources so
+	// shutdown never races cached.Close().
+	if db.backend != nil {
+		db.backend.SetPostValueLogGCHook(nil)
+		db.backend.SetValueLogSegmentRetiredHook(nil)
+	}
 
 	// Close cached layer first if present
 	if db.cached != nil {

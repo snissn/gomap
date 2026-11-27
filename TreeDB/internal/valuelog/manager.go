@@ -56,6 +56,9 @@ type File struct {
 	stableIdentity     rootpublication.StableIdentity
 	stableNamespace    string
 	stableObserved     bool
+	// pendingRetiredReconcile packs into the 7-byte alignment hole after
+	// stableObserved so File keeps its exact 3104-byte layout.
+	pendingRetiredReconcile atomic.Bool
 	// Registered parent authority is immutable and independent of pin observation.
 	// Registration closes its short-lived handle; retirement retains its own.
 	registeredParentIdentity rootpublication.StableIdentity
@@ -1553,6 +1556,9 @@ type Manager struct {
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
+	onSegmentRetiredMu          sync.Mutex
+	onSegmentRetired            func(fileID uint32)
+	onRetiredBorrowReleased     func(fileID uint32)
 }
 
 // PreparedReadProfile reports the configuration that bounds value-log reads
@@ -1581,10 +1587,11 @@ func (m *Manager) PreparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) 
 	if m == nil {
 		return 0, errors.New("valuelog: nil manager")
 	}
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return 0, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.preparedRecordDictionaryID(ptr)
 }
 
@@ -2059,8 +2066,21 @@ func (m *Manager) RefreshScanCount() uint64 {
 	return m.refreshScans.Load()
 }
 
-// Refresh scans the directory and registers any new segments.
+// Refresh scans the directory, registers any new segments, and reconciles
+// unpinned non-zombie segment observations whose identities are already retired
+// in the shared pin registry.
 func (m *Manager) Refresh() error {
+	if err := m.refreshDiscover(); err != nil {
+		return err
+	}
+	return m.ReconcileRetiredSegments()
+}
+
+// refreshDiscover scans configured segment directories and registers new live
+// segments without running unrelated secondary retired-segment reconciliation.
+// Lazy read lookup (fileFor) uses this so a conflict on an unrelated retired
+// segment cannot block reading a newly discovered live segment.
+func (m *Manager) refreshDiscover() error {
 	m.refreshScans.Add(1)
 	m.mu.RLock()
 	if m.closing {
@@ -2208,12 +2228,25 @@ func (m *Manager) registerSegmentLocked(path string, id uint32, discovery bool) 
 		if filepath.Clean(existing.Path) != filepath.Clean(path) {
 			return fmt.Errorf("%w: value-log file id %d already names %q, not %q", rootpublication.ErrResourceConflict, id, existing.Path, path)
 		}
+		if discovery && existing.deletionAdmissions > 0 {
+			return nil
+		}
 		openInfo, openErr := existing.File.Stat()
 		pathInfo, pathErr := os.Stat(path)
-		if openErr != nil || pathErr != nil {
+		if openErr != nil {
 			return errors.Join(openErr, pathErr)
 		}
+		retired := existing.stableObserved && m.stableResourcePins != nil && m.stableResourcePins.IsRetired(existing.stableIdentity)
+		if pathErr != nil {
+			if discovery && isPendingDeleteSegmentPath(existing, path, pathErr, retired) {
+				return nil
+			}
+			return pathErr
+		}
 		if !os.SameFile(openInfo, pathInfo) {
+			if discovery && isPendingDeleteOrSameSegmentPath(existing, path, retired) {
+				return nil
+			}
 			return fmt.Errorf("%w: value-log file id %d path was rebound", rootpublication.ErrResourceConflict, id)
 		}
 		return nil
@@ -2588,42 +2621,55 @@ func (m *Manager) currentSetLocked() *Set {
 }
 
 func (m *Manager) Read(ptr page.ValuePtr) ([]byte, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.Read(ptr, !m.disableReadChecksum)
 }
 
+// ReadUnsafe borrows the segment for the duration of the lookup/read/decode.
+// Callers that require a zero-copy mmap slice to remain valid concurrently with
+// background retirement reconciliation must pin a Set via CurrentSetNoRefresh
+// (or use Read / ReadAppend instead).
 func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.ReadUnsafe(ptr, !m.disableReadChecksum)
 }
 
+// ReadUnsafeTo borrows the segment for the duration of the lookup/read/decode.
+// Callers that require a zero-copy mmap slice (usedDst == false) to remain
+// valid concurrently with background retirement reconciliation must pin a Set
+// via CurrentSetNoRefresh (or use ReadAppend instead).
 func (m *Manager) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return nil, false, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.ReadUnsafeTo(ptr, !m.disableReadChecksum, dst)
 }
 
 func (m *Manager) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.ReadAppend(ptr, !m.disableReadChecksum, dst)
 }
 
 func (m *Manager) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst)
 }
 
@@ -2641,10 +2687,19 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 		f         *File
 		verifyCRC = !m.disableReadChecksum
 	)
+	defer func() {
+		if f != nil {
+			m.releaseFileBorrow(f)
+		}
+	}()
 	for i := 0; i < len(ptrs); {
 		ptr := ptrs[i]
-		if i == 0 || ptr.FileID != fileID {
-			next, err := m.fileFor(ptr.FileID)
+		if f == nil || ptr.FileID != fileID {
+			if f != nil {
+				m.releaseFileBorrow(f)
+				f = nil
+			}
+			next, err := m.borrowFileFor(ptr.FileID)
 			if err != nil {
 				return nil, err
 			}
@@ -2675,13 +2730,119 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 // ReadRIDUnverified reads only record id metadata through the manager's
 // registered segment handle, avoiding per-lookup file opens on hot paths.
 func (m *Manager) ReadRIDUnverified(ptr page.ValuePtr) (uint64, error) {
-	f, err := m.fileFor(ptr.FileID)
+	f, err := m.borrowFileFor(ptr.FileID)
 	if err != nil {
 		return 0, err
 	}
+	defer m.releaseFileBorrow(f)
 	return f.ReadRIDUnverified(ptr)
 }
 
+// borrowFileFor resolves id and pins f.RefCount under m.mu.RLock so concurrent
+// retirement reconciliation, zombie deletion, or Close cannot close/unmap f
+// while a manager read is active. Every successful call must be paired with
+// releaseFileBorrow.
+func (m *Manager) borrowFileFor(id uint32) (*File, error) {
+	m.mu.RLock()
+	if m.closing {
+		m.mu.RUnlock()
+		return nil, &fileNotFoundError{id: id}
+	}
+	if f, ok := m.files[id]; ok {
+		if f != nil && !f.closed.Load() && f.deletionAdmissions == 0 {
+			f.RefCount.Add(1)
+			m.mu.RUnlock()
+			return f, nil
+		}
+		m.mu.RUnlock()
+		return nil, &fileNotFoundError{id: id}
+	}
+	m.mu.RUnlock()
+	if err := m.refreshDiscover(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	if !m.closing {
+		if f, ok := m.files[id]; ok && f != nil && !f.closed.Load() && f.deletionAdmissions == 0 {
+			f.RefCount.Add(1)
+			m.mu.RUnlock()
+			return f, nil
+		}
+	}
+	m.mu.RUnlock()
+	return nil, &fileNotFoundError{id: id}
+}
+
+// releaseFileBorrow releases a read borrow acquired via borrowFileFor. It holds
+// only m.mu.RLock on the common path so concurrent readers never serialize, while
+// remaining strictly linearized with exclusive m.mu.Lock transitions in Close,
+// MarkZombie, and ReconcileRetiredSegments.
+func (m *Manager) releaseFileBorrow(f *File) {
+	if m == nil || f == nil {
+		return
+	}
+	m.mu.RLock()
+	refs := f.RefCount.Add(-1)
+	if refs != 0 {
+		m.mu.RUnlock()
+		return
+	}
+	closing := m.closing
+	zombie := f.IsZombie.Load()
+	pendingRetired := !closing && !zombie && f.pendingRetiredReconcile.Load()
+	m.mu.RUnlock()
+	if closing {
+		_ = m.finishTerminalFile(f)
+		f.refundProducerMetadata()
+		m.mu.Lock()
+		owner, charge := m.detachTerminalMetadataLocked()
+		m.mu.Unlock()
+		if owner != nil {
+			owner.RemovePending(charge)
+		}
+		return
+	}
+	if zombie {
+		if err := m.deleteZombieFile(f); err != nil {
+			m.recordReleaseDeleteError(err)
+		}
+		f.refundProducerMetadata()
+		m.mu.Lock()
+		owner, charge := m.detachTerminalMetadataLocked()
+		m.mu.Unlock()
+		if owner != nil {
+			owner.RemovePending(charge)
+		}
+		return
+	}
+	if pendingRetired && f.pendingRetiredReconcile.CompareAndSwap(true, false) {
+		if onReleased := m.onRetiredBorrowReleasedSnapshot(); onReleased != nil {
+			onReleased(f.ID)
+		}
+	}
+}
+
+func (m *Manager) recordReleaseDeleteError(err error) {
+	if m == nil || err == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closeErr == nil {
+		m.closeReceipt.manager, m.closeReceipt.cause = m, err
+		m.closeErr = &m.closeReceipt
+		if m.producerMetadata != nil {
+			m.producerMetadata.CleanupFailed()
+		}
+	}
+	existing := m.closeErr
+	m.mu.Unlock()
+	if existing != nil && !errors.Is(existing, err) {
+		log.Printf("valuelog: deferred zombie deletion after read borrow release failed: %v", err)
+	}
+}
+
+// fileFor returns the tracked File without pinning a RefCount borrow. It is
+// retained only for whitebox tests; manager read methods use borrowFileFor.
 func (m *Manager) fileFor(id uint32) (*File, error) {
 	m.mu.RLock()
 	f, ok := m.files[id]
@@ -2689,7 +2850,7 @@ func (m *Manager) fileFor(id uint32) (*File, error) {
 	if ok {
 		return f, nil
 	}
-	if err := m.Refresh(); err != nil {
+	if err := m.refreshDiscover(); err != nil {
 		return nil, err
 	}
 	m.mu.RLock()
@@ -2762,6 +2923,10 @@ func (m *Manager) releaseOriginalFileBorrow(f *File) error {
 		err = m.finishTerminalFile(f)
 	} else if f.IsZombie.Load() {
 		err = m.deleteZombieFile(f)
+	} else if f.pendingRetiredReconcile.Load() && f.pendingRetiredReconcile.CompareAndSwap(true, false) {
+		if onReleased := m.onRetiredBorrowReleasedSnapshot(); onReleased != nil {
+			onReleased(f.ID)
+		}
 	}
 	// This method itself checks actual physical completion and live operands;
 	// consumption of a reference is not a successful last physical Close.
@@ -2882,6 +3047,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 			m.finishDeletionAdmission(f)
 			if finishErr := m.finishOriginalDeletion(f, errors.Join(removeErr, syncErr, unobserveErr), parent); finishErr != nil {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
+			}
+			if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
+				onRetired(f.ID)
 			}
 			return
 		} else if !isWindowsSharingViolationError(removeErr) {

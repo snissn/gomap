@@ -184,6 +184,9 @@ type DB struct {
 	// immediately before its destructive revalidation.
 	testValueLogGCBeforeRevalidateHook func()
 
+	postValueLogGCHookMu sync.Mutex
+	postValueLogGCHook   func() error
+
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
 
@@ -5584,6 +5587,59 @@ func (db *DB) Zipper() *zipper.Zipper {
 		return nil
 	}
 	return idx.zipper
+}
+
+// SetPostValueLogGCHook registers an optional callback invoked after every
+// non-dry-run ValueLogGC pass and at the end of non-dry-run CompactStorage
+// after its final value-log retirement phases (such as zero-byte segment
+// pruning and deferred snapshot release). The callback runs strictly outside
+// publishPrepareMu and valueLogPublicationMu, while maintenanceMu may still be
+// held; callbacks must not invoke APIs that acquire maintenanceMu (such as
+// CaptureRecoverableRootSet or nested maintenance operations). Any non-nil
+// error is propagated outward separately from primary deletion/sync
+// ErrRecoveryRequired errors.
+func (db *DB) SetPostValueLogGCHook(fn func() error) {
+	if db == nil {
+		return
+	}
+	db.postValueLogGCHookMu.Lock()
+	db.postValueLogGCHook = fn
+	db.postValueLogGCHookMu.Unlock()
+}
+
+func (db *DB) postValueLogGCHookSnapshot() func() error {
+	if db == nil {
+		return nil
+	}
+	db.postValueLogGCHookMu.Lock()
+	fn := db.postValueLogGCHook
+	db.postValueLogGCHookMu.Unlock()
+	return fn
+}
+
+func (db *DB) runPostValueLogGCHook() error {
+	if hook := db.postValueLogGCHookSnapshot(); hook != nil {
+		return hook()
+	}
+	return nil
+}
+
+// SetValueLogSegmentRetiredHook registers an optional non-blocking notification
+// callback invoked by the backend value-log manager after physical deletion and
+// registry retirement complete for a segment (including deferred snapshot
+// release, leaf-log GC, and retry completion). Callbacks must not acquire
+// cross-layer locks or block.
+func (db *DB) SetValueLogSegmentRetiredHook(fn func(fileID uint32)) {
+	if db == nil {
+		return
+	}
+	db.mu.RLock()
+	vm := db.valueLogManager
+	db.mu.RUnlock()
+	if vm == nil {
+		return
+	}
+	vm.SetOnSegmentRetired(fn)
 }
 
 // SetZipperParallelMergePressureSource installs an optional pressure signal for

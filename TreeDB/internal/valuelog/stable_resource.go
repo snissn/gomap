@@ -787,6 +787,157 @@ func (m *Manager) reconcileRetiredSegmentLocked(file *File, admissionErr error) 
 	}, nil
 }
 
+// ReconcileRetiredSegments closes and detaches unpinned non-zombie segment
+// observations whose exact physical identities are already positively marked
+// retired in the shared stable-resource pin registry by another manager.
+//
+// Each candidate captures or reuses its registered physical parent and proves
+// the original canonical child absent before releasing its observation and
+// closing handles outside m.mu. Never unlinks any child; a replacement child,
+// rebound parent, live reference, or failed close preserves refusal and
+// original cleanup accounting.
+func (m *Manager) ReconcileRetiredSegments() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	if m.closing || m.stableResourcePins == nil || len(m.files) == 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	var completions []func() error
+	var parentsToClose []*os.File
+	var errs []error
+	for _, file := range m.files {
+		if file == nil || file.IsZombie.Load() || file.closed.Load() {
+			continue
+		}
+		if !m.ownsUnpinnedRetiredSegmentLocked(file) {
+			if file.stableObserved && file.RefCount.Load() > 0 && file.deletionAdmissions == 0 &&
+				m.stableResourcePins.IsRetired(file.stableIdentity) {
+				file.pendingRetiredReconcile.Store(true)
+			}
+			continue
+		}
+		if _, parentToClose, err := m.prepareRetirementIdentityLocked(file); err != nil {
+			if parentToClose != nil {
+				parentsToClose = append(parentsToClose, parentToClose)
+			}
+			errs = append(errs, err)
+			continue
+		}
+		complete, err := m.reconcileRetiredSegmentLocked(file, rootpublication.ErrResourceConflict)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if complete != nil {
+			completions = append(completions, complete)
+		}
+	}
+	m.mu.Unlock()
+	for _, parent := range parentsToClose {
+		if err := closeRetirementParent(parent); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, complete := range completions {
+		if err := complete(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ReconcileRetiredSegment closes and detaches a single unpinned non-zombie
+// segment observation if its exact physical identity is already positively
+// marked retired in the shared stable-resource pin registry.
+func (m *Manager) ReconcileRetiredSegment(id uint32) error {
+	if m == nil || id == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	if m.closing || m.stableResourcePins == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	file := m.files[id]
+	if file == nil || file.IsZombie.Load() || file.closed.Load() {
+		m.mu.Unlock()
+		return nil
+	}
+	if !m.ownsUnpinnedRetiredSegmentLocked(file) {
+		if file.stableObserved && file.RefCount.Load() > 0 && file.deletionAdmissions == 0 &&
+			m.stableResourcePins.IsRetired(file.stableIdentity) {
+			file.pendingRetiredReconcile.Store(true)
+		}
+		m.mu.Unlock()
+		return nil
+	}
+	if _, parentToClose, err := m.prepareRetirementIdentityLocked(file); err != nil {
+		m.mu.Unlock()
+		return errors.Join(err, closeRetirementParent(parentToClose))
+	}
+	complete, err := m.reconcileRetiredSegmentLocked(file, rootpublication.ErrResourceConflict)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if complete != nil {
+		return complete()
+	}
+	return nil
+}
+
+// SetOnSegmentRetired registers an optional non-blocking notification callback
+// invoked outside m.mu after this manager completes physical deletion and
+// commits registry retirement for a segment. Callbacks must not acquire locks
+// across DB layers or perform blocking I/O; secondary reconciliation must run
+// asynchronously outside primary locks and never pollute primary deletion
+// outcomes.
+func (m *Manager) SetOnSegmentRetired(fn func(fileID uint32)) {
+	if m == nil {
+		return
+	}
+	m.onSegmentRetiredMu.Lock()
+	m.onSegmentRetired = fn
+	m.onSegmentRetiredMu.Unlock()
+}
+
+func (m *Manager) onSegmentRetiredSnapshot() func(fileID uint32) {
+	if m == nil {
+		return nil
+	}
+	m.onSegmentRetiredMu.Lock()
+	fn := m.onSegmentRetired
+	m.onSegmentRetiredMu.Unlock()
+	return fn
+}
+
+// SetOnRetiredBorrowReleased registers an optional non-blocking notification
+// callback invoked outside m.mu when the last active Set borrow releases a
+// non-zombie segment that was previously observed as retired while pinned.
+// Normal non-retired releases perform only a single atomic load and never
+// query the pin registry.
+func (m *Manager) SetOnRetiredBorrowReleased(fn func(fileID uint32)) {
+	if m == nil {
+		return
+	}
+	m.onSegmentRetiredMu.Lock()
+	m.onRetiredBorrowReleased = fn
+	m.onSegmentRetiredMu.Unlock()
+}
+
+func (m *Manager) onRetiredBorrowReleasedSnapshot() func(fileID uint32) {
+	if m == nil {
+		return nil
+	}
+	m.onSegmentRetiredMu.Lock()
+	fn := m.onRetiredBorrowReleased
+	m.onSegmentRetiredMu.Unlock()
+	return fn
+}
+
 func stableDeleteNamespace(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%w: empty value-log path", rootpublication.ErrUnresolvedResource)
@@ -937,7 +1088,11 @@ func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublicati
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return m.finishOriginalDeletion(file, errors.Join(removeErr, unobserveErr), parent)
+	finishErr := m.finishOriginalDeletion(file, errors.Join(removeErr, unobserveErr), parent)
+	if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
+		onRetired(file.ID)
+	}
+	return finishErr
 }
 
 // forgetSegmentLocked balances retirement ownership at every removal site.
@@ -1661,7 +1816,11 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return m.finishOriginalDeletion(file, errors.Join(unlinkErr, syncErr, unobserveErr), parent)
+	finishErr := m.finishOriginalDeletion(file, errors.Join(unlinkErr, syncErr, unobserveErr), parent)
+	if onRetired := m.onSegmentRetiredSnapshot(); onRetired != nil {
+		onRetired(file.ID)
+	}
+	return finishErr
 }
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {

@@ -4806,7 +4806,10 @@ func (db *DB) readValueLogUnsafe(key []byte, ptr page.ValuePtr) ([]byte, error) 
 			return nil, err
 		}
 	}
-	return db.valueLogReader.ReadUnsafe(ptr)
+	// Cached value-log reads do not hold a Set pin after returning, so return an
+	// owned copy instead of a raw mmap view that could be unmapped concurrently
+	// by retired-segment reconciliation.
+	return db.valueLogReader.Read(ptr)
 }
 
 func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -5308,7 +5311,39 @@ func (db *DB) forgetValueLogRetain(path string) {
 	if db.valueLogRetain != nil {
 		delete(db.valueLogRetain, path)
 	}
+	db.untrackExternalValueLogSegmentValueLogMuHeld(path)
 	db.valueLogMu.Unlock()
+}
+
+func (db *DB) untrackExternalValueLogSegment(path string) {
+	if db == nil || path == "" {
+		return
+	}
+	db.valueLogMu.Lock()
+	db.untrackExternalValueLogSegmentValueLogMuHeld(path)
+	db.valueLogMu.Unlock()
+}
+
+func (db *DB) untrackExternalValueLogSegmentValueLogMuHeld(path string) {
+	if db.externalVlogClosedSizes == nil || path == "" {
+		return
+	}
+	size, ok := db.externalVlogClosedSizes[path]
+	if !ok {
+		return
+	}
+	delete(db.externalVlogClosedSizes, path)
+	db.valueLogRetainedClosedBytes.Add(-size)
+	for {
+		cur := db.externalVlogClosedBytes.Load()
+		next := cur - size
+		if next < 0 {
+			next = 0
+		}
+		if db.externalVlogClosedBytes.CompareAndSwap(cur, next) {
+			break
+		}
+	}
 }
 
 func (db *DB) cleanupMissingRetainedValueLog(path string) bool {
@@ -5423,11 +5458,22 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 	for path := range db.valueLogRetain {
 		paths = append(paths, path)
 	}
+	var externalSizes map[string]int64
+	if len(db.externalVlogClosedSizes) > 0 {
+		externalSizes = make(map[string]int64, len(db.externalVlogClosedSizes))
+		for path, size := range db.externalVlogClosedSizes {
+			externalSizes[path] = size
+		}
+	}
 	db.valueLogMu.Unlock()
 
 	pathSizes := make(map[string]int64)
 	currentSizes := make(map[string]int64)
 	pathClasses := make(map[string]uint8)
+	for path, size := range externalSizes {
+		pathSizes[path] = size
+		pathClasses[path] = vlogGenerationClassHot
+	}
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			l := &db.lanes[i]
@@ -6579,14 +6625,11 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeafWithContext(ctx context.C
 		} else {
 			dst = dst[:0]
 		}
-		var usedDst bool
-		raw, usedDst, err = db.valueLogReader.ReadUnsafeTo(ptr, dst)
+		raw, err = db.valueLogReader.ReadAppend(ptr, dst)
 		if err != nil {
 			return err
 		}
-		if usedDst {
-			*readScratch = raw[:0]
-		}
+		*readScratch = raw[:0]
 	} else {
 		raw, err = db.valueLogReader.Read(ptr)
 		if err != nil {
@@ -7024,7 +7067,10 @@ func (db *DB) valueLogClosedSegmentSize(path string) int64 {
 	}
 	l := db.valueLogLaneByID(laneID)
 	if l == nil {
-		return 0
+		db.valueLogMu.Lock()
+		size := db.externalVlogClosedSizes[path]
+		db.valueLogMu.Unlock()
+		return size
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
@@ -8150,14 +8196,175 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	return db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false)
 }
 
+// NotifyRetiredValueLogSegment schedules an asynchronous, coalesced
+// reconciliation of retired segments on the cached value-log reader.
+//
+// It is strictly non-blocking and acquires no locks so primary backend
+// retirement paths (including deferred Snapshot.Close / Release and retry
+// completion) never block or invert locks across DB layers.
+func (db *DB) NotifyRetiredValueLogSegment(_ uint32) {
+	if db == nil || db.closing.Load() || db.retiredVlogReconcileCh == nil {
+		return
+	}
+	select {
+	case db.retiredVlogReconcileCh <- struct{}{}:
+	default:
+	}
+}
+
+func appendUniqueError(dst []error, err error) []error {
+	if err == nil {
+		return dst
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, sub := range multi.Unwrap() {
+			dst = appendUniqueError(dst, sub)
+		}
+		return dst
+	}
+	for _, existing := range dst {
+		if errors.Is(existing, err) {
+			return dst
+		}
+	}
+	return append(dst, err)
+}
+
+func joinUniqueErrors(errs []error) error {
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		return errors.Join(errs...)
+	}
+}
+
+func (db *DB) recordRetiredVlogReconcileError(err error) {
+	if db == nil || err == nil {
+		return
+	}
+	db.retiredVlogReconcileErrMu.Lock()
+	db.retiredVlogReconcileErrs = appendUniqueError(db.retiredVlogReconcileErrs, err)
+	db.retiredVlogReconcileErrMu.Unlock()
+}
+
+func (db *DB) consumeRetiredVlogReconcileErrors() []error {
+	if db == nil {
+		return nil
+	}
+	db.retiredVlogReconcileErrMu.Lock()
+	errs := db.retiredVlogReconcileErrs
+	db.retiredVlogReconcileErrs = nil
+	db.retiredVlogReconcileErrMu.Unlock()
+	return errs
+}
+
+func (db *DB) reportRetiredVlogReconcileError(err error) {
+	if db == nil || err == nil {
+		return
+	}
+	original := rootpublication.IsOriginalCleanupError(err)
+	if !original && (errors.Is(err, errDBClosing) || db.closing.Load()) {
+		return
+	}
+	// Retain original cleanup custody once even if callback entry is refused or
+	// Close started concurrently. A NotifyError callback on this wg-tracked
+	// worker must never join the worker through Close.
+	db.retainOriginalCleanupError(err)
+	if db.notifyError == nil {
+		return
+	}
+	guard := db.ownedCloseGuard
+	if enterErr := guard.EnterCheckpointNotification(); enterErr != nil {
+		return
+	}
+	defer guard.LeaveCheckpointNotification()
+	db.notifyError(err)
+}
+
+func (db *DB) retiredVlogReconcileLoop() {
+	defer db.wg.Done()
+	for {
+		if db.closing.Load() {
+			return
+		}
+		select {
+		case <-db.closeCh:
+			return
+		case <-db.retiredVlogReconcileCh:
+			if db.closing.Load() {
+				return
+			}
+			if err := db.runRetiredValueLogReaderReconcile(true); err != nil {
+				db.reportRetiredVlogReconcileError(err)
+			}
+		}
+	}
+}
+
+func (db *DB) runRetiredValueLogReaderReconcile(async bool) error {
+	if db == nil || db.closing.Load() {
+		return nil
+	}
+	db.retiredVlogReconcileRunMu.Lock()
+	defer db.retiredVlogReconcileRunMu.Unlock()
+	if db.closing.Load() {
+		return nil
+	}
+	db.valueLogReaderMu.RLock()
+	if db.closing.Load() {
+		db.valueLogReaderMu.RUnlock()
+		return nil
+	}
+	reader := db.valueLogReader
+	db.valueLogReaderMu.RUnlock()
+	if reader == nil {
+		if async {
+			return nil
+		}
+		return joinUniqueErrors(db.consumeRetiredVlogReconcileErrors())
+	}
+	reconcileErr := reader.ReconcileRetiredSegments()
+	if async {
+		db.recordRetiredVlogReconcileError(reconcileErr)
+		return reconcileErr
+	}
+	cleanupErr := reader.CleanupError()
+	asyncErrs := db.consumeRetiredVlogReconcileErrors()
+	var errs []error
+	errs = appendUniqueError(errs, reconcileErr)
+	errs = appendUniqueError(errs, cleanupErr)
+	for _, subErr := range asyncErrs {
+		errs = appendUniqueError(errs, subErr)
+	}
+	return joinUniqueErrors(errs)
+}
+
+// ReconcileRetiredValueLogReader closes and detaches unpinned value-log segment
+// handles held by the cached reader whose physical identities have already been
+// retired by another manager sharing the same pin registry. It serializes with
+// the background retired-segment reconciler and surfaces any live reconciliation
+// error, sticky reader cleanup failure, or unconsumed async reconciliation error.
+func (db *DB) ReconcileRetiredValueLogReader() error {
+	return db.runRetiredValueLogReaderReconcile(false)
+}
+
 // admittedCompletion is valid only while the original maintenance flushMu lease
 // keeps Close from disposing readers, append lanes, or the captured basis.
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admittedCompletion bool) error {
 	if db == nil || (db.closing.Load() && !admittedCompletion) {
 		return nil
 	}
-	if db.valueLogReader != nil {
-		if err := db.valueLogReader.Refresh(); err != nil {
+	db.valueLogReaderMu.RLock()
+	reader := db.valueLogReader
+	db.valueLogReaderMu.RUnlock()
+	if reader != nil {
+		if err := reader.Refresh(); err != nil {
+			return err
+		}
+		if err := db.ReconcileRetiredValueLogReader(); err != nil {
 			return err
 		}
 	}
@@ -9296,13 +9503,20 @@ type DB struct {
 	valueLogRewriteTriggerBytes    int64
 	valueLogRewriteTriggerChurn    int64
 	valueLogRewriteMinSegmentAge   time.Duration
+	valueLogReaderMu               sync.RWMutex
 	valueLogReader                 *valuelog.Manager
+	retiredVlogReconcileCh         chan struct{}
+	retiredVlogReconcileRunMu      sync.Mutex
+	retiredVlogReconcileErrMu      sync.Mutex
+	retiredVlogReconcileErrs       []error
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
 	valueLogColdLanes              []int
 	valueLogMu                     sync.Mutex
 	valueLogRetain                 map[string]struct{}
+	externalVlogClosedSizes        map[string]int64
+	externalVlogClosedBytes        atomic.Int64
 	backendReadVlogDirtySeq        atomic.Uint64
 	backendReadVlogFlushedSeq      atomic.Uint64
 	valueLogWarned                 atomic.Bool
@@ -12825,7 +13039,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	maxLaneID := -1
+	maxWALLaneID := -1
 	maxLeafVlogSeq := 0
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
@@ -12840,16 +13054,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				}
 				continue
 			}
-			if seg.lane > maxLaneID {
-				maxLaneID = seg.lane
-			}
 			if seg.seq > maxVlogSeq[seg.lane] {
 				maxVlogSeq[seg.lane] = seg.seq
 			}
 			continue
 		}
-		if seg.lane > maxLaneID {
-			maxLaneID = seg.lane
+		if opts.ExternalCommandWAL && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+			continue
+		}
+		if seg.lane > maxWALLaneID {
+			maxWALLaneID = seg.lane
 		}
 		if seg.seq > maxWALSeq[seg.lane] {
 			maxWALSeq[seg.lane] = seg.seq
@@ -12878,9 +13092,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCountDefaulted && valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
 		laneCount = 3
 	}
-	// Temporarily remove the logic that increases laneCount based on maxLaneID
-	if maxLaneID+1 > laneCount {
-		laneCount = maxLaneID + 1
+	// Only recovered non-command redo WAL segments expand laneCount so WAL
+	// recovery and walClosedSizes keep matching db.lanes[seg.lane]. Value-log
+	// segments (such as high-numbered rewrite output lanes like 254) are served
+	// by valuelog.Manager and must never inflate active writer lanes.
+	if maxWALLaneID+1 > laneCount {
+		laneCount = maxWALLaneID + 1
 	}
 	if reserveLeafLogLane && laneCount > leafLogLaneID {
 		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; recovered WAL/value lanes require rebuild before reopen", leafLogLaneID)
@@ -13377,6 +13594,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutableShardMask:                           uint64(shardCount - 1),
 		hashSortedIndexer:                          indexer,
 		closeCh:                                    make(chan struct{}),
+		retiredVlogReconcileCh:                     make(chan struct{}, 1),
 		flushCh:                                    make(chan struct{}, 1),
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
@@ -13487,6 +13705,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			l := db.valueLogLaneByID(seg.lane)
 			if l == nil {
 				if seg.valueLog {
+					if db.splitValueLog {
+						if db.externalVlogClosedSizes == nil {
+							db.externalVlogClosedSizes = make(map[string]int64)
+						}
+						db.externalVlogClosedSizes[seg.path] = seg.size
+						db.externalVlogClosedBytes.Add(seg.size)
+						if _, retained := db.valueLogRetain[seg.path]; retained {
+							db.valueLogRetainedClosedBytes.Add(seg.size)
+						}
+					}
 					continue
 				}
 				if seg.lane < 0 || seg.lane >= len(db.lanes) {
@@ -13575,6 +13803,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.valueLogReader.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
 			return db.flushValueLogForFileIDWithSize(fileID)
 		})
+		db.valueLogReader.SetOnRetiredBorrowReleased(db.NotifyRetiredValueLogSegment)
 	}
 	db.installBackendValueLogReadBarrier()
 
@@ -13598,13 +13827,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.unregisterForegroundReadObserver = registrar.RegisterForegroundReadObserver(db.noteRead, db.beginRawForegroundRead)
 	}
 
-	// Start background flusher
-	db.wg.Add(1)
+	// Start background flusher and retired value-log reader reconciler
+	db.wg.Add(2)
 	if db.cow != nil {
 		db.cow.flushWake = db.flushCh
 		db.cow.ownerDB = db
 	}
 	go db.flushLoop()
+	go db.retiredVlogReconcileLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
 	registerTreeDBExpvarStatsDB(db)
@@ -27099,11 +27329,15 @@ func (db *DB) Close() error {
 		db.hashSortedIndexer.Close()
 		db.hashSortedIndexer = nil
 	}
-	if db.valueLogReader != nil {
-		if err := db.valueLogReader.Close(); err != nil {
+	db.valueLogReaderMu.Lock()
+	reader := db.valueLogReader
+	db.valueLogReader = nil
+	db.valueLogReaderMu.Unlock()
+	if reader != nil {
+		reader.SetOnRetiredBorrowReleased(nil)
+		if err := reader.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		db.valueLogReader = nil
 	}
 
 	var walBytes int64
@@ -27210,6 +27444,9 @@ func (db *DB) Close() error {
 	}
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
+	}
+	for _, subErr := range db.consumeRetiredVlogReconcileErrors() {
+		errs = appendUniqueError(errs, subErr)
 	}
 	return errors.Join(errs...)
 }
@@ -29792,6 +30029,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 	}
 	l := db.valueLogLaneByID(laneID)
 	if l == nil {
+		db.untrackExternalValueLogSegment(path)
 		return
 	}
 	db.untrackValueLogSegmentFromLane(l, path)
@@ -31343,6 +31581,7 @@ func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [
 
 	backendIdx := make([]int, 0, len(unique))
 	backendKeys := make([][]byte, 0, len(unique))
+	var vlogScratch []byte
 	for i, res := range results {
 		groupEnd := len(refs)
 		if i+1 < len(groupStarts) {
@@ -31361,10 +31600,11 @@ func (db *DB) getManyViewFromPublishedRootPointShards(view *memtableView, keys [
 			val := res.val
 			if val == nil {
 				var err error
-				val, err = db.readValueLogUnsafe(unique[i].key, res.ptr)
+				val, err = db.readValueLogAppend(unique[i].key, res.ptr, vlogScratch[:0])
 				if err != nil {
 					return err
 				}
+				vlogScratch = val[:0]
 			}
 			if err := visitGetManyValueRefs(groupRefs, val, true, fn); err != nil {
 				return err
@@ -32651,6 +32891,15 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	if splitValueLog && valueLogOn {
+		db.valueLogMu.Lock()
+		extSegments := int64(len(db.externalVlogClosedSizes))
+		db.valueLogMu.Unlock()
+		extBytes := db.externalVlogClosedBytes.Load()
+		if extBytes < 0 {
+			extBytes = 0
+		}
+		vlogShapeSegmentsTotal += extSegments
+		vlogShapeBytesTotal += extBytes
 		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)
 		stats["treedb.cache.vlog_shape.bytes_total"] = fmt.Sprintf("%d", vlogShapeBytesTotal)
 		stats["treedb.cache.vlog_shape.l0.segments_total"] = fmt.Sprintf("%d", vlogShapeL0Segments)
