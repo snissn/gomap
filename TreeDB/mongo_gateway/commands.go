@@ -174,9 +174,9 @@ func (s *Server) runMongoInsertCommandWithJournal(name string, col *collections.
 			}
 			return marshalInsertResponseWithWriteErrors(0, []mongoWriteError{{index: 0, err: err}})
 		}
-		if batchErr := runMongoInsertBatchValidatedBSON(col, ids, stored, budget); batchErr == nil {
+		if batchErr := runMongoInsertBatchValidatedBSONWithJournal(col, ids, stored, budget, journal); batchErr == nil {
 			return marshalInsertResponseWithWriteErrors(int32(len(ids)), nil)
-		} else if errors.Is(batchErr, collections.ErrCommitAmbiguous) || backenddb.CommitPublicationAccepted(batchErr) {
+		} else if (journal != nil && journal.completion.Selected()) || errors.Is(batchErr, collections.ErrCommitAmbiguous) || backenddb.CommitPublicationAccepted(batchErr) {
 			return mongoInsertCommandError(batchErr)
 		} else {
 			// A non-ambiguous native batch failure is pre-publication. This includes
@@ -253,6 +253,21 @@ func runMongoInsertBatchValidatedBSON(col *collections.Collection, ids, stored [
 		return budget.insertBatchValidatedBSONHook(ids, stored)
 	}
 	return col.InsertBatchValidatedBSONNoResultIDs(ids, stored)
+}
+
+func runMongoInsertBatchValidatedBSONWithJournal(col *collections.Collection, ids, stored [][]byte, budget *mongoWriteBudget, journal *standaloneOperationJournalOutcome) error {
+	if journal == nil || (budget != nil && budget.insertBatchValidatedBSONHook != nil) {
+		return runMongoInsertBatchValidatedBSON(col, ids, stored, budget)
+	}
+	completion, err := col.InsertBatchValidatedBSONNoResultIDsWithJournalReceipt(ids, stored)
+	if completion.Selected() && (err == nil || completion.Installed() || completion.Attempted() || completion.AssignedLSN() != 0) {
+		journal.completion, journal.err = completion, err
+		if completion.Installed() {
+			return nil
+		}
+		return err
+	}
+	return err
 }
 
 // runMongoInsertChunkedBSON handles pre-publication COW capacity refusals for

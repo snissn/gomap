@@ -345,3 +345,30 @@ func (db *DB) hasZeroFrontierReclaimableCommandWALCandidate(proof durableWALClea
 	})
 	return hasCandidate, err
 }
+
+// hasClosedNonActiveCommandWALSegment reports whether the WAL directory
+// contains at least one closed non-active command-WAL segment under the cleanup
+// scan lock. Opportunistic checkpoint cleanup can never unlink an active
+// segment, so returning (false, nil) avoids scanning the active segment on
+// no-op checkpoints when nothing is reclaimable.
+func (db *DB) hasClosedNonActiveCommandWALSegment(proof durableWALCleanupProofV1) (bool, error) {
+	var hasClosed bool
+	err := proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+		segments, err := listSegments(resolveStorageLayout(db.dir).walDir, true)
+		if err != nil {
+			return err
+		}
+		activeByLane := commandWALActiveSeqByLane(segments)
+		for _, seg := range segments {
+			if seg.valueLog || !isCommandWALLaneSegment(seg) {
+				continue
+			}
+			if seg.seq != activeByLane[seg.lane] {
+				hasClosed = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return hasClosed, err
+}

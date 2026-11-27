@@ -498,7 +498,10 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		}
 		return result, err
 	}
-	defer func() { native.ObserveAssigned = nil }()
+	defer func() {
+		native.ObserveAssigned = nil
+		native.BeforeDurableWait = nil
+	}()
 	if !db.externalCommandWAL {
 		return result, ErrCOWUnsupported
 	}
@@ -593,6 +596,11 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.registerFn)
 	cancelUnconsumedSpare()
 	if r.completion != nil {
+		if err == nil && effectiveDurable && native.BeforeDurableWait != nil {
+			fn := native.BeforeDurableWait
+			native.BeforeDurableWait = nil
+			fn()
+		}
 		r.result, err = r.completion.CompleteNativeCommandWAL(err)
 		r.completion = nil
 	}

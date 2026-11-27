@@ -13866,8 +13866,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		if opts.IndexOuterLeavesInValueLog {
 			// Primary leaf-log lane appends directly without vlogCh queueing;
-			// only start its frame preparer for large single-lane leaf batches.
-			db.startVlogDictPreparer(&db.leafLog)
+			// give its single-lane frame preparer up to 4 workers so bulk cold
+			// builds compress grouped leaf frames in parallel.
+			db.startVlogDictPreparerWithMaxWorkers(&db.leafLog, min(4, runtime.GOMAXPROCS(0)))
 		}
 	}
 
@@ -16355,10 +16356,13 @@ func (db *DB) vlogDictPrepWorkerCount() int {
 }
 
 func (db *DB) startVlogDictPreparer(l *lane) {
+	db.startVlogDictPreparerWithMaxWorkers(l, db.vlogDictPrepWorkerCount())
+}
+
+func (db *DB) startVlogDictPreparerWithMaxWorkers(l *lane, maxWorkers int) {
 	if l == nil {
 		return
 	}
-	maxWorkers := db.vlogDictPrepWorkerCount()
 	if maxWorkers <= 1 {
 		return
 	}
@@ -18535,9 +18539,10 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	// Prepared block frames are appended through the same ordered writer path as
 	// dictionary frames. Physical append and segment ownership stay serialized.
 	prepareWriteMode := finalWriteMode
-	if prepareWriteMode == vlogWriteBlock && leafLogAppend && db.flushApplyConcurrency <= 1 {
+	if prepareWriteMode == vlogWriteBlock && leafLogAppend && db.flushApplyConcurrency <= 1 && db.cow == nil {
 		// Preserve the single-concurrency leaf-log generation/rewrite accounting.
-		// Ordinary value batches still use the bounded preparers below.
+		// Ordinary value batches and standalone COW leaf-log batches still use
+		// the bounded preparers below.
 		prepareWriteMode = vlogWriteOff
 	}
 	rawLimit := db.valueLogBlockRawLimit(l, finalWriteMode, retainedStorageFirstBatch || valueLogRecordsLookRetainedJSONLike(records))

@@ -272,8 +272,18 @@ type leafPageLogRecordLengthProvider interface {
 }
 
 type leafPageLogWithRecordLengthHints struct {
-	db    *DB
-	inner LeafPageLog
+	db            *DB
+	inner         LeafPageLog
+	skipReadCache bool
+}
+
+func (l *leafPageLogWithRecordLengthHints) withoutReadCache() *leafPageLogWithRecordLengthHints {
+	if l == nil || l.skipReadCache {
+		return l
+	}
+	cp := *l
+	cp.skipReadCache = true
+	return &cp
 }
 
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
@@ -291,7 +301,9 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 		return page.LeafLogPtr{}, err
 	}
 	if l.db != nil {
-		l.db.storeLeafPageReadCache(ptr, leafPage)
+		if !l.skipReadCache {
+			l.db.storeLeafPageReadCache(ptr, leafPage)
+		}
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
 		}
@@ -685,10 +697,12 @@ func (l *leafPageLogWithRecordLengthHints) noteLeafPageBatchPointers(leafPages [
 	if l.db == nil {
 		return nil
 	}
-	for i, ptr := range ptrs {
-		// Batch logs guarantee returned pointers are positional: ptrs[i]
-		// references leafPages[i].
-		l.db.storeLeafPageReadCache(ptr, leafPages[i])
+	if !l.skipReadCache {
+		for i, ptr := range ptrs {
+			// Batch logs guarantee returned pointers are positional: ptrs[i]
+			// references leafPages[i].
+			l.db.storeLeafPageReadCache(ptr, leafPages[i])
+		}
 	}
 	var fallbackRecordLen uint32
 	if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
@@ -707,7 +721,9 @@ func (l *leafPageLogWithRecordLengthHints) noteLeafPagePointer(leafPage []byte, 
 	if l.db == nil {
 		return
 	}
-	l.db.storeLeafPageReadCache(ptr, leafPage)
+	if !l.skipReadCache {
+		l.db.storeLeafPageReadCache(ptr, leafPage)
+	}
 	recordLen := ptr.RecordLength()
 	if recordLen == 0 {
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -209,5 +210,128 @@ func BenchmarkMongoGatewayInsertMany10kBSONSettled(b *testing.B) {
 			b.ReportMetric(float64(totalInsertNs)/float64(b.N)/1e6, "insert_ms/op")
 			b.ReportMetric(float64(totalCheckpointNs)/float64(b.N)/1e6, "checkpoint_ms/op")
 		})
+	}
+}
+
+func TestMongoGatewayInsertManyDurableUsesSharedJournalReceipt(t *testing.T) {
+	const (
+		producers  = 8
+		numBatches = 24
+		batchSize  = 200
+	)
+	s, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:                      t.TempDir(),
+		Profile:                  treedb.ProfileCommandWALDurable,
+		DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	})
+	if err != nil {
+		t.Fatalf("OpenStandaloneServer: %v", err)
+	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	if _, err := s.Collections.CreateCollection(&collections.CollectionMeta{
+		Name:    "bench.users",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+		Indexes: []collections.IndexDefinition{
+			{Name: "age_1", Field: "age", ValueType: collections.IndexValueBSONOrderedV2},
+			{Name: "email_1", Field: "email", Unique: true, ValueType: collections.IndexValueBSONOrderedV2},
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	frames := make([][]byte, numBatches)
+	for batchIdx := 0; batchIdx < numBatches; batchIdx++ {
+		docs := make([]wire.Document, batchSize)
+		for j := 0; j < batchSize; j++ {
+			id := batchIdx*batchSize + j
+			raw, err := bson.Marshal(bson.D{
+				{Key: "_id", Value: fmt.Sprintf("user-%06d", id)},
+				{Key: "email", Value: fmt.Sprintf("user-%06d@example.com", id)},
+				{Key: "age", Value: int32(18 + (id % 65))},
+			})
+			if err != nil {
+				t.Fatalf("marshal doc %d: %v", id, err)
+			}
+			docs[j] = wire.Document(raw)
+		}
+		body, err := bson.Marshal(bson.D{
+			{Key: "insert", Value: "users"},
+			{Key: "$db", Value: "bench"},
+			{Key: "ordered", Value: false},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: int32(1)}, {Key: "j", Value: true}}},
+		})
+		if err != nil {
+			t.Fatalf("marshal insert cmd: %v", err)
+		}
+		msg, err := wire.AppendMsgMessageWithSequences(nil, int32(batchIdx+100), 0, 0, wire.Document(body), []wire.DocumentSequence{
+			{Identifier: "documents", Documents: docs},
+		})
+		if err != nil {
+			t.Fatalf("AppendMsgMessageWithSequences: %v", err)
+		}
+		frames[batchIdx] = msg
+	}
+
+	parseStat := func(key string) uint64 {
+		raw := s.ownerStats()[key]
+		v, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			t.Fatalf("parse stat %q=%q: %v", key, raw, err)
+		}
+		return v
+	}
+	syncsBefore := parseStat("treedb.command_wal.group_commit.syncs_total")
+	forcedBefore := parseStat("treedb.command_wal.group_commit.forced_total")
+
+	batchCh := make(chan int, numBatches)
+	for i := 0; i < numBatches; i++ {
+		batchCh <- i
+	}
+	close(batchCh)
+	var wg sync.WaitGroup
+	errCh := make(chan error, producers)
+	for p := 0; p < producers; p++ {
+		wg.Add(1)
+		go func(pid int) {
+			defer wg.Done()
+			var input bytes.Reader
+			rw := &readWriter{r: &input}
+			var readBuf, writeBuf []byte
+			for batchIdx := range batchCh {
+				input.Reset(frames[batchIdx])
+				rw.w.Reset()
+				var err error
+				readBuf, writeBuf, err = s.Server.serveOneWithOwner(context.Background(), rw, int64(pid+1), readBuf, writeBuf)
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("durable insert wire batch: %v", err)
+		}
+	}
+
+	syncDelta := parseStat("treedb.command_wal.group_commit.syncs_total") - syncsBefore
+	forcedDelta := parseStat("treedb.command_wal.group_commit.forced_total") - forcedBefore
+	maxGroup := parseStat("treedb.command_wal.group_commit.group_size_max")
+	wcStats := s.Server.StandaloneWriteConcernStats()
+	if forcedDelta != 0 {
+		t.Fatalf("expected multi-doc InsertMany w1_j to use shared journal receipt with 0 forced syncs, got forced=%d", forcedDelta)
+	}
+	if syncDelta >= numBatches || maxGroup < 2 {
+		t.Fatalf("expected concurrent durable gateway InsertMany to group-commit: batches=%d syncs=%d max_group=%d", numBatches, syncDelta, maxGroup)
+	}
+	if wcStats.JournalAcknowledgements != numBatches || wcStats.SyncFailures != 0 || wcStats.UncertainOutcomes != 0 {
+		t.Fatalf("unexpected writeConcern stats: %+v", wcStats)
 	}
 }

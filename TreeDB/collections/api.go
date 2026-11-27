@@ -12285,6 +12285,31 @@ func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [
 	return
 }
 
+// InsertBatchValidatedBSONNoResultIDsWithJournalReceipt is the zero-result-ID
+// sibling of InsertBatchValidatedBSONWithJournalReceipt for wire-protocol
+// gateways that discard returned document IDs while participating in shared
+// standalone durable journal completion.
+func (c *Collection) InsertBatchValidatedBSONNoResultIDsWithJournalReceipt(ids, documents [][]byte) (completion backenddb.NativeJournalCompletion, err error) {
+	if c == nil {
+		return completion, errCollectionNil
+	}
+	if c.nativeJSON == nil || c.manager == nil || !c.manager.CanShareStandaloneJournalBoundary() || len(ids) == 0 {
+		err = c.InsertBatchValidatedBSONNoResultIDs(ids, documents)
+		return
+	}
+	journal := nativeOperationJournal{requested: true}
+	_, err = c.nativeInsertBatchWithJournalTrusted(ids, documents, nil, nil, false, false, true, &journal)
+	// The original transaction Close and outer producer unlock have both ended.
+	completion = journal.completion
+	if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
+		completion = backenddb.NativeJournalCompletion{}
+	}
+	if err != nil {
+		completion = completion.WithoutSuccess()
+	}
+	return
+}
+
 // PreflightCommandWALMutation checks collection-local command-WAL support for
 // an already-classified deterministic apply mutation before R3a appends its
 // local command-WAL frame.
