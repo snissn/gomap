@@ -248,6 +248,8 @@ type fixedWAL struct {
 	identity                    [16]byte
 	capacity, physical, logical int64
 	pending                     []byte
+	pendingLogical              int64
+	pendingPhysical             int64
 	lastLSN                     uint64
 	reconstructedFooters        uint64
 	incomplete                  map[int64]*CommandWALIncompleteFrame
@@ -359,6 +361,10 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 // corruption exception in loadFixedWAL. Published containers are never resized.
 // The replacement handle must reach every later resource/namespace token.
 func initializeFixedWAL(file **os.File, capacity int64, parent *os.File) (*fixedWAL, error) {
+	return initializeFixedWALWithParentSync(file, capacity, parent, true)
+}
+
+func initializeFixedWALWithParentSync(file **os.File, capacity int64, parent *os.File, syncParent bool) (*fixedWAL, error) {
 	if !FixedWALCreationSupported() {
 		return nil, rootpublication.ErrNamespacePersistenceUnsupported
 	}
@@ -385,6 +391,7 @@ func initializeFixedWAL(file **os.File, capacity int64, parent *os.File) (*fixed
 			return nil, err
 		}
 		defer parent.Close()
+		syncParent = true
 	}
 	name := filepath.Base(previous.Name())
 	if err = rootpublication.ValidateStableChildLink(parent, previous, name); err != nil {
@@ -412,13 +419,17 @@ func initializeFixedWAL(file **os.File, capacity int64, parent *os.File) (*fixed
 	if err != nil {
 		return nil, err
 	}
-	return publishFixedWALReplacement(file, parent, private, privateName, state)
+	return publishFixedWALReplacementWithParentSync(file, parent, private, privateName, state, syncParent)
 }
 
 // publishFixedWALReplacement is shared by synchronous initialization and the
 // journal's ahead reserve. Only the append owner calls it; private is already
 // fully initialized and must not be written again.
 func publishFixedWALReplacement(file **os.File, parent, private *os.File, privateName string, state *fixedWAL) (*fixedWAL, error) {
+	return publishFixedWALReplacementWithParentSync(file, parent, private, privateName, state, true)
+}
+
+func publishFixedWALReplacementWithParentSync(file **os.File, parent, private *os.File, privateName string, state *fixedWAL, syncParent bool) (*fixedWAL, error) {
 	previous := *file
 	name := filepath.Base(previous.Name())
 	if err := rootpublication.ValidateStableChildLink(parent, private, privateName); err != nil {
@@ -436,7 +447,7 @@ func publishFixedWALReplacement(file **os.File, parent, private *os.File, privat
 	}
 	// Retain custody of the old empty handle until the replacement is open.
 	// A failed reopen must not leave the caller holding a closed descriptor.
-	publishErr := publishInitializedFixedWAL(parent, privateName, name)
+	publishErr := publishInitializedFixedWALWithSync(parent, privateName, name, syncParent)
 	replacement, openErr := rootpublication.OpenStableChildFile(parent, name, os.O_RDWR, 0)
 	if openErr != nil {
 		return nil, errors.Join(publishErr, openErr)
@@ -456,13 +467,22 @@ func publishFixedWALReplacement(file **os.File, parent, private *os.File, privat
 	return state, nil
 }
 
+var errFixedWALAheadCancelled = errors.New("commitlog: fixed WAL ahead reserve cancelled")
+
 // writeInitializedFixedWAL writes only an unpublished private file. Every
 // reserved byte reaches stable storage before the canonical name can see it.
 func writeInitializedFixedWAL(file *os.File, capacity int64) (*fixedWAL, error) {
+	return writeInitializedFixedWALCancelable(file, capacity, nil)
+}
+
+func writeInitializedFixedWALCancelable(file *os.File, capacity int64, cancelled func() bool) (*fixedWAL, error) {
 	// Validate before creating buffers or writing the unpublished file.
 	capacity, err := fixedWALCapacity(capacity)
 	if err != nil {
 		return nil, err
+	}
+	if cancelled != nil && cancelled() {
+		return nil, errFixedWALAheadCancelled
 	}
 	state := &fixedWAL{capacity: capacity, physical: fixedWALHeaderSize}
 	if _, err := rand.Read(state.identity[:]); err != nil {
@@ -476,12 +496,24 @@ func writeInitializedFixedWAL(file *os.File, capacity int64) (*fixedWAL, error) 
 	if err := fixedWALInitializeWrite(file, header, 0); err != nil {
 		return nil, err
 	}
+	const initWritebackChunk = 4 << 20
+	writebackStart := int64(0)
 	for off := int64(len(header)); off < capacity; {
+		if cancelled != nil && cancelled() {
+			return nil, errFixedWALAheadCancelled
+		}
 		n := min(int64(len(fixedWALZeroBlock)), capacity-off)
 		if err := fixedWALInitializeWrite(file, fixedWALZeroBlock[:n], off); err != nil {
 			return nil, err
 		}
 		off += n
+		if off-writebackStart >= initWritebackChunk {
+			hintWALInitWriteback(file, writebackStart, off-writebackStart)
+			writebackStart = off
+		}
+	}
+	if cancelled != nil && cancelled() {
+		return nil, errFixedWALAheadCancelled
 	}
 	root := filepath.Dir(file.Name())
 	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, file.Name(), file); err != nil {
@@ -857,6 +889,10 @@ func (w *Writer) prepareFixedSuccessor(file **os.File, parent *os.File, plan fix
 }
 
 func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, plan fixedWALSizePlan, ahead *fixedWALAheadReserve) (*fixedWAL, int64, walContainerSelection, error) {
+	return w.prepareFixedSuccessorAheadWithParentSync(file, parent, plan, ahead, true)
+}
+
+func (w *Writer) prepareFixedSuccessorAheadWithParentSync(file **os.File, parent *os.File, plan fixedWALSizePlan, ahead *fixedWALAheadReserve, syncParent bool) (*fixedWAL, int64, walContainerSelection, error) {
 	state, _, err := loadFixedWAL(*file)
 	if err != nil {
 		return nil, 0, walContainerSelection{}, err
@@ -872,9 +908,9 @@ func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, pla
 	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(plan.incoming)
 	if (state == nil && selection.fixed) || needsCapacity {
 		if ahead != nil && state == nil && info.Size() == 0 && plan.capacity == ahead.state.capacity {
-			state, err = publishFixedWALReplacement(file, parent, ahead.file, ahead.name, ahead.state)
+			state, err = publishFixedWALReplacementWithParentSync(file, parent, ahead.file, ahead.name, ahead.state, syncParent)
 		} else {
-			state, err = initializeFixedWAL(file, plan.capacity, parent)
+			state, err = initializeFixedWALWithParentSync(file, plan.capacity, parent, syncParent)
 		}
 		if err != nil {
 			return nil, 0, selection, err
@@ -893,27 +929,63 @@ func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, pla
 	return nil, info.Size(), selection, nil
 }
 
-func (state *fixedWAL) fitsEmptyFrame(frameBytes int64) bool {
+func fixedWALCapacityFitsEmptyFrame(capacity, frameBytes int64) bool {
 	required, err := fixedWALExtentEnd(fixedWALHeaderSize, frameBytes)
-	return err == nil && required <= state.capacity
+	return err == nil && required <= capacity
 }
 
-// fixedFitsAppend includes accepted but unflushed logical bytes. Each minimum
-// frame needs at most four physical bytes per logical byte, so this bound
-// avoids walking/copying buffered frames and remains independent of the current
-// configured logical target (which may exceed this reopened file's capacity).
+func (state *fixedWAL) fitsEmptyFrame(frameBytes int64) bool {
+	return fixedWALCapacityFitsEmptyFrame(state.capacity, frameBytes)
+}
+
+func (state *fixedWAL) recordPendingFrame(frameBytes int64) {
+	if state == nil || frameBytes <= 0 {
+		return
+	}
+	if int64(len(state.pending)) != state.pendingLogical+frameBytes {
+		state.pendingLogical = 0
+		state.pendingPhysical = 0
+		return
+	}
+	end, err := fixedWALExtentEnd(state.physical+state.pendingPhysical, frameBytes)
+	if err != nil {
+		state.pendingLogical = 0
+		state.pendingPhysical = 0
+		return
+	}
+	state.pendingLogical += frameBytes
+	state.pendingPhysical = end - state.physical
+}
+
+// fixedFitsAppend includes accepted but unflushed logical bytes. Direct V2
+// frames buffered in w.fixed.pending carry exact extent accounting so multi-frame
+// group-commit waves fill the container rather than rotating early at 25%.
+// Any remaining buffered bytes retain the conservative 4x upper bound without
+// walking/copying buffered frames.
 func (w *Writer) fixedFitsAppend(frameBytes int64) bool {
 	if w.fixed == nil {
 		return true
 	}
-	remaining := w.fixed.capacity - w.fixed.physical
-	end, err := fixedWALExtentEnd(w.fixed.physical, frameBytes)
-	if err != nil {
+	buffered := w.ActiveBytes() - w.fixed.logical
+	if buffered < 0 {
 		return false
 	}
-	incoming := end - w.fixed.physical
-	buffered := w.ActiveBytes() - w.fixed.logical
-	return incoming <= remaining && buffered >= 0 && buffered <= (remaining-incoming)/4
+	pendingLogical := w.fixed.pendingLogical
+	pendingPhysical := w.fixed.pendingPhysical
+	if pendingLogical != int64(len(w.fixed.pending)) || pendingLogical > buffered || pendingPhysical < pendingLogical {
+		pendingLogical = 0
+		pendingPhysical = 0
+	}
+	basePhysical := w.fixed.physical + pendingPhysical
+	if basePhysical > w.fixed.capacity {
+		return false
+	}
+	end, err := fixedWALExtentEnd(basePhysical, frameBytes)
+	if err != nil || end > w.fixed.capacity {
+		return false
+	}
+	unaccounted := buffered - pendingLogical
+	return unaccounted <= (w.fixed.capacity-end)/4
 }
 
 // StableBytes is a physical immutable extent boundary; Size is logical stream
@@ -965,11 +1037,15 @@ func (state *fixedWAL) flush(w *Writer) error {
 		lsn := binary.LittleEndian.Uint64(pending[segmentHeaderSize+20 : segmentHeaderSize+28])
 		if err := state.flushExtent(w, pending[:size], lsn); err != nil {
 			state.pending = pending
+			state.pendingLogical = 0
+			state.pendingPhysical = 0
 			return err
 		}
 		pending = pending[size:]
 	}
 	state.pending = base[:0]
+	state.pendingLogical = 0
+	state.pendingPhysical = 0
 	return nil
 }
 

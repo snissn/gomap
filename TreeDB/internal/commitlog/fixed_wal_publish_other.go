@@ -14,6 +14,10 @@ func publishInitializedFixedWAL(*os.File, string, string) error {
 	return rootpublication.ErrNamespacePersistenceUnsupported
 }
 
+func publishInitializedFixedWALWithSync(*os.File, string, string, bool) error {
+	return rootpublication.ErrNamespacePersistenceUnsupported
+}
+
 func removePrivateFixedWAL(parent *os.File, name string) {
 	_ = rootpublication.RemoveStableChildFile(parent, name)
 }

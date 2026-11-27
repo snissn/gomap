@@ -1871,3 +1871,78 @@ func copyPublicCommandWALCrashImage(source, destination string) error {
 		return errors.Join(copyErr, closeOutputErr, closeInputErr)
 	})
 }
+
+func TestPublicCommandWALGroupCommitDefaultMaxBytesAllowsMultiMiBCoalescing(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Keep the production default maxBytes (do not override db.commandWALGroupCommit.maxBytes)
+	// and verify that multi-MiB concurrent durable batches coalesce without
+	// prematurely tripping trigger.byte_limit_total at the old 1 MiB threshold.
+	db.commandWALGroupCommit.delay = time.Hour
+	db.commandWALGroupCommit.maxCommits = 2
+	firstRegistered := make(chan struct{})
+	var groupSize atomic.Int32
+	db.commandWALGroupCommit.testAfterRegister = func(ticket uint64, durable bool) {
+		if ticket == 1 && durable {
+			close(firstRegistered)
+		}
+	}
+	db.commandWALGroupCommit.testBeforeSync = func(size int) {
+		groupSize.Store(int32(size))
+	}
+
+	payload := bytes.Repeat([]byte("m"), 2<<20)
+	writeBatch := func(key string) error {
+		b := db.NewBatch()
+		defer b.Close()
+		if err := b.Set([]byte(key), payload); err != nil {
+			return err
+		}
+		return b.WriteSync()
+	}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- writeBatch("multi-mib/first") }()
+	select {
+	case <-firstRegistered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first multi-MiB durable batch did not register")
+	}
+
+	// Because the first 2 MiB batch did not trip defaultPublicCommandWALGroupMaxBytes,
+	// it must still be awaiting the second batch in the same group-commit wave.
+	select {
+	case err := <-firstDone:
+		t.Fatalf("first 2 MiB batch flushed solo before second batch arrived: err=%v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- writeBatch("multi-mib/second") }()
+	for _, done := range []chan error{firstDone, secondDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("multi-MiB WriteSync: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("coalesced multi-MiB group commit timed out")
+		}
+	}
+
+	if got := groupSize.Load(); got != 2 {
+		t.Fatalf("coalesced multi-MiB group size=%d want 2", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.group_commit.trigger.byte_limit_total"]; got != "0" {
+		t.Fatalf("trigger.byte_limit_total=%q want 0 for 4 MiB coalesced group", got)
+	}
+	if got := stats["treedb.command_wal.group_commit.trigger.commit_limit_total"]; got != "1" {
+		t.Fatalf("trigger.commit_limit_total=%q want 1", got)
+	}
+}

@@ -222,6 +222,7 @@ type CommandJournal struct {
 	closed                 bool
 	closeErr               error
 	fixedAhead             *fixedWALAheadSlot
+	fixedAheadWorkers      int
 	fixedAheadGeneration   uint64
 	fixedAheadErr          error
 	syncPins               int
@@ -1091,7 +1092,10 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if !fresh {
 		preparedAhead = nil
 	}
-	state, _, selection, err := j.writer.prepareFixedSuccessorAhead(&prepared, parent, plan, preparedAhead)
+	// When !deferNamespace, namespace.Stabilize() below immediately syncs this
+	// exact retained parent before installation or frame append. Avoid syncing
+	// the parent directory twice back-to-back on every durable fixed rotation.
+	state, _, selection, err := j.writer.prepareFixedSuccessorAheadWithParentSync(&prepared, parent, plan, preparedAhead, deferNamespace)
 	pending.file = prepared
 	if err != nil {
 		closedToken.Release()
@@ -1132,7 +1136,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	// not introduce a stable namespace sync.
 	if !deferNamespace {
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath), parent); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
@@ -1144,7 +1148,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 			return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 		}
 		if observe {
-			if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath)); err != nil {
+			if err := durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, j.root, filepath.Dir(nextPath), parent); err != nil {
 				namespace.Release()
 				closedToken.Release()
 				return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
@@ -1643,6 +1647,15 @@ func (j *CommandJournal) appendCommand(
 		}
 		if err := afterAppend(lsn, rotations); err != nil {
 			return lsn, err
+		}
+	}
+	if j.segmentSeq != previousSegment && len(j.pendingStableRotations) == 0 &&
+		j.writer.fixed != nil && j.writer.fixed.capacity >= fixedWALDefaultCapacity {
+		total := int64(segmentHeaderSize) + int64(size)
+		if total >= 256<<10 && (j.segmentTargetBytes <= 0 || j.writer.ActiveBytes()+total < j.segmentTargetBytes) {
+			if err := j.maybeStartFixedWALAheadLocked(total); err != nil {
+				return lsn, j.writer.poisonCommandBuffer(err)
+			}
 		}
 	}
 	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
@@ -2404,7 +2417,7 @@ func (j *CommandJournal) Close() error {
 	j.closing = true
 	j.rotationDebt = rotationDebtRegistration{}
 	j.cancelFixedWALAheadLocked()
-	for j.fixedAhead != nil && !j.fixedAhead.done {
+	for (j.fixedAhead != nil && !j.fixedAhead.done) || j.fixedAheadWorkers > 0 {
 		j.syncCond.Wait()
 	}
 	for j.syncPins != 0 {

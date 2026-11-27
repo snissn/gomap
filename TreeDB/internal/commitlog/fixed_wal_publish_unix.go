@@ -13,12 +13,19 @@ import (
 const fixedWALCreationSupported = true
 
 func publishInitializedFixedWAL(parent *os.File, private, canonical string) error {
+	return publishInitializedFixedWALWithSync(parent, private, canonical, true)
+}
+
+func publishInitializedFixedWALWithSync(parent *os.File, private, canonical string, syncParent bool) error {
 	if err := rootpublication.RenameStableChildFile(parent, private, canonical); err != nil {
 		return err
 	}
 	root := parent.Name()
 	if err := durabilitycut.EmitStableNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceCommandWAL, root, filepath.Join(root, private), filepath.Join(root, canonical), parent, nil, private, canonical); err != nil {
 		return err
+	}
+	if !syncParent {
+		return nil
 	}
 	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, root, root, parent); err != nil {
 		return err

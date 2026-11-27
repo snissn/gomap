@@ -20,3 +20,14 @@ func syncWALData(file *os.File) error {
 		}
 	}
 }
+
+// hintWALInitWriteback starts best-effort asynchronous kernel writeback for a
+// chunk of an unpublished fixed-WAL reserve so multi-MiB zero-fill pipelines
+// with NVMe writeback instead of dumping the entire file into fsync at once.
+// Durability remains solely guaranteed by the subsequent full SyncFile.
+func hintWALInitWriteback(file *os.File, offset, length int64) {
+	if file == nil || length <= 0 {
+		return
+	}
+	_ = unix.SyncFileRange(int(file.Fd()), offset, length, unix.SYNC_FILE_RANGE_WRITE)
+}

@@ -15,7 +15,7 @@ import (
 const (
 	defaultPublicCommandWALGroupDelay      = 200 * time.Microsecond
 	defaultPublicCommandWALGroupMaxCommits = 64
-	defaultPublicCommandWALGroupMaxBytes   = 1 << 20
+	defaultPublicCommandWALGroupMaxBytes   = 32 << 20
 )
 
 type publicCommandWALGroupCommit struct {
