@@ -224,11 +224,6 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	alloc = &pagerAllocator{p: newPager}
 	reader := newValueReader(state.ValueLogSet)
 
-	collectionRootReplacements, err := vacuumRewriteCollectionRoots(d.Pager(), reader, state.SystemRootPageID, alloc, newPager)
-	if err != nil {
-		return err
-	}
-
 	effectiveInternalBaseDelta := opts.IndexInternalBaseDelta && !opts.IndexOuterLeavesInValueLog
 
 	buildOpts := bulk.BuildOptions{
@@ -236,6 +231,11 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		LeafColumnar:          opts.IndexColumnarLeaves,
 		PackedValuePtr:        opts.IndexPackedValuePtr,
 		InternalBaseDelta:     effectiveInternalBaseDelta,
+	}
+
+	collectionRootReplacements, err := vacuumRewriteCollectionRootsWithOptions(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts)
+	if err != nil {
+		return err
 	}
 	sysRoot, systemLeafAppended, err := d.vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
 	if err != nil {

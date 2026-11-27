@@ -586,6 +586,10 @@ func (basis *collectionBasis) replacements() ([]vacuumCollectionRootReplacement,
 }
 
 func vacuumBuildCollectionBasis(ctx context.Context, old *collectionBasis, snap *Snapshot, token collectionToken, alloc vacuumCollectionAllocator, newPager *pager.Pager, visitSourcePage func(uint64)) (*collectionBasis, int, error) {
+	return vacuumBuildCollectionBasisWithOptions(ctx, old, snap, token, alloc, newPager, bulk.BuildOptions{}, visitSourcePage)
+}
+
+func vacuumBuildCollectionBasisWithOptions(ctx context.Context, old *collectionBasis, snap *Snapshot, token collectionToken, alloc vacuumCollectionAllocator, newPager *pager.Pager, buildOpts bulk.BuildOptions, visitSourcePage func(uint64)) (*collectionBasis, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -613,7 +617,7 @@ func vacuumBuildCollectionBasis(ctx context.Context, old *collectionBasis, snap 
 			return 0, nil, err
 		}
 		recordingAlloc := newVacuumRecordingAllocator(alloc)
-		destRootID, err := vacuumCopyCollectionRootWithObserver(snap.idx.pager, sourceRootID, recordingAlloc, newPager, visitSourcePage)
+		destRootID, err := vacuumCopyCollectionRootWithOptionsAndObserver(snap.idx.pager, sourceRootID, recordingAlloc, newPager, buildOpts, visitSourcePage)
 		if err != nil {
 			return 0, nil, errors.Join(err, reclaim(0, recordingAlloc.pages))
 		}
@@ -679,13 +683,17 @@ func vacuumCollectionRootDescriptorValue(reader tree.SlabReader, key []byte, val
 }
 
 func vacuumRewriteCollectionRoots(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager) ([]vacuumCollectionRootReplacement, error) {
+	return vacuumRewriteCollectionRootsWithOptions(oldPager, reader, systemRootID, alloc, newPager, bulk.BuildOptions{})
+}
+
+func vacuumRewriteCollectionRootsWithOptions(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, buildOpts bulk.BuildOptions) ([]vacuumCollectionRootReplacement, error) {
 	descriptors, err := vacuumCollectCollectionRootDescriptors(oldPager, reader, systemRootID)
 	if err != nil || len(descriptors) == 0 {
 		return nil, err
 	}
 
 	return vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
-		return vacuumCopyCollectionRoot(oldPager, descriptor.rootID, alloc, newPager)
+		return vacuumCopyCollectionRootWithOptionsAndObserver(oldPager, descriptor.rootID, alloc, newPager, buildOpts, nil)
 	}, "vacuum: copy collection root")
 }
 
@@ -772,11 +780,117 @@ func encodeCollectionRootDescriptorRootIDs(rootIDs []uint64) []byte {
 	return encoded
 }
 
+type vacuumCollectionRootKind uint8
+
+const (
+	vacuumCollectionRootCloneFallback vacuumCollectionRootKind = iota
+	vacuumCollectionRootAllLeafRefs
+	vacuumCollectionRootPurePager
+)
+
+type vacuumCollectionRootInspection struct {
+	kind           vacuumCollectionRootKind
+	entryRevisions bool
+}
+
+// vacuumInspectCollectionRootWithObserver classifies a source collection root
+// while invoking visitSourcePage on every visited source page. A root qualifies
+// for pure-pager bulk repacking only when every visited page is PageTypeLeaf or
+// PageTypeInternal, zero ChildRefLeafLog references exist, and zero
+// PageTypePrimaryDirectory pages exist. Any leaf with EntryRevisions enabled
+// propagates EntryRevisions=true to the repacked build options.
+func vacuumInspectCollectionRootWithObserver(p *pager.Pager, rootID uint64, visitSourcePage func(uint64)) (vacuumCollectionRootInspection, error) {
+	if p == nil {
+		return vacuumCollectionRootInspection{}, errors.New("vacuum: missing pager")
+	}
+	if rootID == 0 {
+		return vacuumCollectionRootInspection{}, errors.New("vacuum: missing root id")
+	}
+
+	var (
+		leafRefs            int
+		pagerLeaves         int
+		hasPrimaryDirectory bool
+		entryRevisions      bool
+		visited             = make(map[uint64]struct{}, 64)
+	)
+	var walk func(uint64) error
+	walk = func(id uint64) error {
+		if _, seen := visited[id]; seen {
+			return nil
+		}
+		visited[id] = struct{}{}
+		if visitSourcePage != nil {
+			visitSourcePage(id)
+		}
+		data, err := p.Get(id)
+		if err != nil {
+			return err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return err
+				}
+				if childRef.Kind == page.ChildRefLeafLog {
+					leafRefs++
+					continue
+				}
+				if childRef.Kind != page.ChildRefPage {
+					return fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
+				}
+				if err := walk(childRef.Page); err != nil {
+					return err
+				}
+			}
+			return nil
+		case page.PageTypePrimaryDirectory:
+			if _, err := node.DecodePrimaryDirectory(data); err != nil {
+				return err
+			}
+			hasPrimaryDirectory = true
+			return nil
+		case page.PageTypeLeaf:
+			pagerLeaves++
+			if n.LeafEntryRevisionsEnabled() {
+				entryRevisions = true
+			}
+			return nil
+		default:
+			return fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	if err := walk(rootID); err != nil {
+		return vacuumCollectionRootInspection{}, err
+	}
+	if hasPrimaryDirectory {
+		return vacuumCollectionRootInspection{kind: vacuumCollectionRootCloneFallback}, nil
+	}
+	if leafRefs > 0 && pagerLeaves == 0 {
+		return vacuumCollectionRootInspection{kind: vacuumCollectionRootAllLeafRefs}, nil
+	}
+	if pagerLeaves > 0 && leafRefs == 0 {
+		return vacuumCollectionRootInspection{
+			kind:           vacuumCollectionRootPurePager,
+			entryRevisions: entryRevisions,
+		}, nil
+	}
+	return vacuumCollectionRootInspection{kind: vacuumCollectionRootCloneFallback}, nil
+}
+
 func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager) (uint64, error) {
-	return vacuumCopyCollectionRootWithObserver(oldPager, rootID, alloc, newPager, nil)
+	return vacuumCopyCollectionRootWithOptionsAndObserver(oldPager, rootID, alloc, newPager, bulk.BuildOptions{}, nil)
 }
 
 func vacuumCopyCollectionRootWithObserver(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager, visitSourcePage func(uint64)) (uint64, error) {
+	return vacuumCopyCollectionRootWithOptionsAndObserver(oldPager, rootID, alloc, newPager, bulk.BuildOptions{}, visitSourcePage)
+}
+
+func vacuumCopyCollectionRootWithOptionsAndObserver(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager, buildOpts bulk.BuildOptions, visitSourcePage func(uint64)) (uint64, error) {
 	if rootID == 0 {
 		return 0, nil
 	}
@@ -784,14 +898,36 @@ func vacuumCopyCollectionRootWithObserver(oldPager *pager.Pager, rootID uint64, 
 		return 0, errors.New("vacuum: missing pager/allocator")
 	}
 
-	allLeafRefs, err := vacuumTreeAllLeafRefsIfCompleteWithObserver(oldPager, rootID, visitSourcePage)
+	inspected, err := vacuumInspectCollectionRootWithObserver(oldPager, rootID, visitSourcePage)
 	if err != nil {
 		return 0, err
 	}
-	if allLeafRefs {
-		return vacuumBuildInternalTreeFromLeafRefsWithObserver(oldPager, rootID, newPager, alloc, false, visitSourcePage)
+	switch inspected.kind {
+	case vacuumCollectionRootAllLeafRefs:
+		// vacuumInspectCollectionRootWithObserver already invoked visitSourcePage
+		// once per source page; pass nil here to avoid double observer calls.
+		return vacuumBuildInternalTreeFromLeafRefsWithObserver(oldPager, rootID, newPager, alloc, false, nil)
+	case vacuumCollectionRootPurePager:
+		opts := buildOpts
+		opts.LeafPageLog = nil
+		opts.EntryRevisions = inspected.entryRevisions
+		// Preserve tombstones verbatim so overlay/delta collection roots (e.g.
+		// BufferedIndexedOverlayRoots) continue masking deleted entries in older
+		// base roots after repacking.
+		iter := tree.New(oldPager, nil, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
+			Mode:              tree.IteratorModePointerProjection,
+			IncludeTombstones: true,
+		})
+		destRootID, buildErr := bulk.BuildWithOptions(iter, alloc, newPager, opts)
+		err := errors.Join(buildErr, iter.Error(), iter.Close())
+		if err != nil {
+			return 0, err
+		}
+		return destRootID, nil
+	default:
+		// Source pages were already observed during inspection above.
+		return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, false, nil)
 	}
-	return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, false, visitSourcePage)
 }
 
 func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, bool, error) {
