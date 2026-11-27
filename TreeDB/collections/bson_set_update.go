@@ -812,6 +812,32 @@ func callBSONSetUpdateAppendReplacement(update bsonSetUpdate, dst, current []byt
 	return update.appendReplacement(dst, current)
 }
 
+// callBSONSetUpdateAppendReplacementWithCapHint applies update without
+// pre-allocating a full growCapHint buffer when the document is unchanged or
+// modified in place (same-shape). On the growing path, it allocates at most
+// growCapHint (already admitted by the caller) only once a change is observed.
+func callBSONSetUpdateAppendReplacementWithCapHint(update bsonSetUpdate, current []byte, growCapHint int) (replacement []byte, changed bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
+	if len(update.fields) == 0 {
+		return current, false, nil
+	}
+	if _, repl, mod, ok, fastErr := update.appendSameShapeReplacement(nil, current); ok || fastErr != nil {
+		return repl, mod, fastErr
+	}
+	var dst []byte
+	if growCapHint > 0 {
+		dst = make([]byte, 0, growCapHint)
+	}
+	_, repl, mod, applyErr := update.appendReplacement(dst, current)
+	return repl, mod, applyErr
+}
+
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {
 	return left.Type == bsoncore.Type(right.Type) && bytes.Equal(left.Data, right.Value)
 }

@@ -403,7 +403,7 @@ func prepareNativeBulkInsertPreimage(m *NativeJSONManager, name string, ids, doc
 	if err = p.admit(planCharge); err != nil {
 		return nil, err
 	}
-	direct, err := buildNativeCRUDFinalPlan(name, planner.options, runtimes, changed, stateEntries, roots)
+	direct, err := buildNativeCRUDFinalPlanWithRootNames(name, planner.primaryRoot, planner.indexStateRoot, planner.options, runtimes, changed, stateEntries, roots)
 	if err != nil {
 		return nil, err
 	}

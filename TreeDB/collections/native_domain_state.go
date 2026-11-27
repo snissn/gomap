@@ -49,7 +49,11 @@ func newNativeDomainState(name string, baseRoot, interpretation uint64, policy b
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
-	d := &nativeDomainState{name: strings.Clone(name), baseRoot: baseRoot, catalogRoot: baseRoot, interpretation: interpretation, storagePolicy: policy, pending: pending, refund: refund}
+	ownedName := "primary"
+	if name != "primary" {
+		ownedName = strings.Clone(name)
+	}
+	d := &nativeDomainState{name: ownedName, baseRoot: baseRoot, catalogRoot: baseRoot, interpretation: interpretation, storagePolicy: policy, pending: pending, refund: refund}
 	d.refs.Store(1)
 	return d, nil
 }

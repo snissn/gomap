@@ -134,21 +134,21 @@ func (db *DB) drainSemanticCleanupWithGID(workerGID uint64) {
 			guard.LeaveCleanup()
 		}
 	}()
-	for {
-		c.semanticMu.Lock()
-		record := c.semanticHead
-		if record == nil {
-			c.semanticWakePending.Store(false)
-			c.semanticMu.Unlock()
-			return
-		}
-		c.semanticHead = record.Next
-		if c.semanticHead == nil {
-			c.semanticTail = nil
-		}
-		record.Next = nil
-		c.semanticRunning = true
+	c.semanticMu.Lock()
+	record := c.semanticHead
+	if record == nil {
+		c.semanticWakePending.Store(false)
 		c.semanticMu.Unlock()
+		return
+	}
+	c.semanticHead = record.Next
+	if c.semanticHead == nil {
+		c.semanticTail = nil
+	}
+	record.Next = nil
+	c.semanticRunning = true
+	c.semanticMu.Unlock()
+	for {
 		// Guard actual destruction AND the synchronous NotifyError callback. Close
 		// from this caller must refuse before public/cache waits on this worker.
 		var completion rootpublication.SemanticCleanupCompletion
@@ -182,8 +182,8 @@ func (db *DB) drainSemanticCleanupWithGID(workerGID uint64) {
 			c.semanticMu.Unlock()
 			db.retainOriginalCleanupError(err)
 		}
-		c.semanticMu.Lock()
 		if err != nil {
+			c.semanticMu.Lock()
 			// Parking retains this SAME record, Work, failure and charge. Future
 			// wakes drain eligible siblings; this record is never runnable again.
 			if record.Err == nil {
@@ -191,16 +191,29 @@ func (db *DB) drainSemanticCleanupWithGID(workerGID uint64) {
 			}
 			record.Next = c.semanticFailed
 			c.semanticFailed = record
+			c.semanticMu.Unlock()
 		}
-		c.semanticMu.Unlock()
 		// The record can be embedded in the refunded EngineVersion. No record
 		// or Work access may follow completion of the independent receipt.
 		record = nil
 		completion.Complete()
 		c.semanticMu.Lock()
-		c.semanticRunning = false
 		c.semanticCompleted++
-		c.semanticCond.Broadcast()
+		if c.semanticWaiters > 0 {
+			c.semanticCond.Broadcast()
+		}
+		record = c.semanticHead
+		if record == nil {
+			c.semanticRunning = false
+			c.semanticWakePending.Store(false)
+			c.semanticMu.Unlock()
+			return
+		}
+		c.semanticHead = record.Next
+		if c.semanticHead == nil {
+			c.semanticTail = nil
+		}
+		record.Next = nil
 		c.semanticMu.Unlock()
 	}
 }
@@ -212,8 +225,12 @@ func (db *DB) joinSemanticCleanupFrontier() error {
 	c := db.cow
 	c.semanticMu.Lock()
 	target := c.semanticEnqueued
+	c.semanticWaiters++
 	wakeSemanticCleanup(c.flushWake)
-	defer c.semanticMu.Unlock()
+	defer func() {
+		c.semanticWaiters--
+		c.semanticMu.Unlock()
+	}()
 	for {
 		if c.semanticFailed != nil {
 			return c.semanticFailed.Err

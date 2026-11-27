@@ -817,12 +817,20 @@ func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
 	return nil
 }
 
+var emptyIndexRuntimes = []indexRuntime{}
+
 func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
 	if p.cachedIndexRuntimes != nil || p.cachedIndexRuntimesErr != nil {
 		return p.cachedIndexRuntimes, p.cachedIndexRuntimesErr
 	}
+	if len(p.indexes) == 0 {
+		return emptyIndexRuntimes, nil
+	}
 	runtimes := make([]indexRuntime, len(p.indexes))
-	seen := make(map[string]struct{}, len(p.indexes))
+	var seen map[string]struct{}
+	if len(p.indexes) > 32 {
+		seen = make(map[string]struct{}, len(p.indexes))
+	}
 	for i, idx := range p.indexes {
 		if idx.name == "" {
 			return nil, errors.New("collections: index name cannot be empty")
@@ -835,10 +843,18 @@ func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
 			return nil, fmt.Errorf("collections: index %q value_type: %w", idx.name, err)
 		}
 		idx.valueType = valueType
-		if _, exists := seen[idx.name]; exists {
-			return nil, fmt.Errorf("collections: duplicate index %q", idx.name)
+		if seen != nil {
+			if _, exists := seen[idx.name]; exists {
+				return nil, fmt.Errorf("collections: duplicate index %q", idx.name)
+			}
+			seen[idx.name] = struct{}{}
+		} else {
+			for j := 0; j < i; j++ {
+				if p.indexes[j].name == idx.name {
+					return nil, fmt.Errorf("collections: duplicate index %q", idx.name)
+				}
+			}
 		}
-		seen[idx.name] = struct{}{}
 		secondaryRootName := ""
 		if p.collection != "" {
 			secondaryRootName = collectionSecondaryRootName(p.collection, idx.name)

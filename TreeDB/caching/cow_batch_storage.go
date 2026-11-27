@@ -128,6 +128,7 @@ type cowBatchState struct {
 	copiedBytes                  int
 	err                          error
 	prepared                     *cowBatchPreparation
+	inlinePrep                   cowBatchPreparation
 	producer                     *cowFrameCapture
 	predictionGroups             [][]memtable.COWMutation
 	predictionStorage            []memtable.COWMutation
@@ -304,6 +305,29 @@ func (db *DB) newCOWBatchAdaptive() *Batch {
 	if entryHint <= batchDefaultEntriesCap {
 		b.cowReserve(batchDefaultEntriesCap)
 	}
+	return b
+}
+
+// newCOWBatchDeferred creates a COW batch without eagerly allocating raw entry
+// staging slices. Native-only conditional transactions publish zero raw entries
+// and avoid paying the 16-entry slice and lease-resize cost unless raw entries
+// are actually staged.
+func (db *DB) newCOWBatchDeferred() *Batch {
+	guardReserved := db.externalCommandWAL && db.cow.txnOwner != nil
+	charge := cowBatchBaseBytes(guardReserved)
+	lease, err := db.cow.budget.AcquireExternal(charge)
+	if err != nil {
+		return &cowDeniedBatch
+	}
+	owner := &cowBatchOwner{
+		batch: Batch{db: db, streamBypassOff: true},
+		state: cowBatchState{
+			lease:         lease,
+			guardReserved: guardReserved,
+		},
+	}
+	b := &owner.batch
+	b.cowState = &owner.state
 	return b
 }
 
@@ -686,6 +710,18 @@ func (b *Batch) cowClose() error {
 // the writer sequencer. Failed attempts remain charged until the batch resets.
 func (b *Batch) cowPrepareWriteStorage() error {
 	n, shards := len(b.entries), len(b.db.mutableShards)
+	if n == 0 && b.cowState.native != nil {
+		// Zero-raw-entry native publications skip shard prediction and raw
+		// staging vectors completely; only the canonical dispatch/unlock
+		// callback environments remain charged on this attempt.
+		bytes := 3*memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0)))) +
+			memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
+		if err := b.cowAdmitStorage(bytes); err != nil {
+			return err
+		}
+		b.cowState.shardAssignmentsReady = false
+		return nil
+	}
 	needShardAdds := cap(b.shardAdds) < shards
 	needShardCnts := cap(b.shardCnts) < shards
 	needShardIdxs := cap(b.shardIdxs) < n

@@ -18,21 +18,136 @@ type nativeSchemaState struct {
 	meta          *CollectionMeta
 	refund        *cowbtree.OwnedMapRefund
 	canonicalBSON bool
+	plannerOK     bool
+	planner       insertBatchPlanner
+}
+
+func nativeSchemaDerivedPlannerCharge(meta *CollectionMeta) (uint64, error) {
+	if meta == nil {
+		return 0, nil
+	}
+	var total uint64
+	addAlloc := func(bytes uint64) bool {
+		charge := memtable.COWAllocationCharge(bytes)
+		if charge > ^uint64(0)-total {
+			return false
+		}
+		total += charge
+		return true
+	}
+	addLen := func(a, b uint64) (uint64, bool) {
+		if b > ^uint64(0)-a {
+			return 0, false
+		}
+		return a + b, true
+	}
+	nameLen := uint64(len(meta.Name))
+	for _, suffix := range [...]uint64{uint64(len("/primary")), uint64(len("/templates")), uint64(len("/index-state"))} {
+		n, ok := addLen(nameLen, suffix)
+		if !ok || !addAlloc(n) {
+			return 0, memtable.ErrCOWCapacity
+		}
+	}
+	indexCount := uint64(len(meta.Indexes))
+	if indexCount == 0 {
+		return total, nil
+	}
+	if indexCount > ^uint64(0)/uint64(unsafe.Sizeof(indexDefinition{})) ||
+		indexCount > ^uint64(0)/uint64(unsafe.Sizeof(indexRuntime{})) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if !addAlloc(indexCount*uint64(unsafe.Sizeof(indexDefinition{}))) ||
+		!addAlloc(indexCount*uint64(unsafe.Sizeof(indexRuntime{}))) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if indexCount > 32 {
+		// Transient duplicate-detection map backing in indexRuntimes().
+		if indexCount > ^uint64(0)/64 || !addAlloc(indexCount*64+256) {
+			return 0, memtable.ErrCOWCapacity
+		}
+	}
+	strSize := uint64(unsafe.Sizeof(""))
+	compSize := uint64(unsafe.Sizeof(IndexComponent{}))
+	strSliceSize := uint64(unsafe.Sizeof([]string{}))
+	for _, idx := range meta.Indexes {
+		secLen, ok := addLen(nameLen, uint64(len("/index/")))
+		if !ok {
+			return 0, memtable.ErrCOWCapacity
+		}
+		secLen, ok = addLen(secLen, uint64(len(idx.Name)))
+		if !ok || !addAlloc(secLen) {
+			return 0, memtable.ErrCOWCapacity
+		}
+		if idx.Field != "" {
+			depth := uint64(strings.Count(idx.Field, ".")) + 1
+			if depth > ^uint64(0)/strSize || !addAlloc(depth*strSize) {
+				return 0, memtable.ErrCOWCapacity
+			}
+		}
+		if len(idx.Components) > 0 {
+			compCount := uint64(len(idx.Components))
+			if compCount > ^uint64(0)/compSize || compCount > ^uint64(0)/strSliceSize {
+				return 0, memtable.ErrCOWCapacity
+			}
+			if !addAlloc(compCount*compSize) || !addAlloc(compCount*strSliceSize) {
+				return 0, memtable.ErrCOWCapacity
+			}
+			for _, comp := range idx.Components {
+				if comp.Field != "" {
+					depth := uint64(strings.Count(comp.Field, ".")) + 1
+					if depth > ^uint64(0)/strSize || !addAlloc(depth*strSize) {
+						return 0, memtable.ErrCOWCapacity
+					}
+				}
+			}
+		}
+	}
+	return total, nil
+}
+
+func nativeSchemaTotalCharge(meta *CollectionMeta) (uint64, error) {
+	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(meta), 0)
+	if err != nil {
+		return 0, err
+	}
+	derived, err := nativeSchemaDerivedPlannerCharge(meta)
+	if err != nil {
+		return 0, err
+	}
+	base := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeSchemaState{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
+	if backing > ^uint64(0)-base {
+		return 0, memtable.ErrCOWCapacity
+	}
+	total := base + backing
+	if derived > ^uint64(0)-total {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return total + derived, nil
+}
+
+func nativeJSONInsertPlannerForSchema(schema *nativeSchemaState, meta CollectionMeta) (insertBatchPlanner, error) {
+	if schema != nil && schema.plannerOK && schema.meta != nil && schema.meta.Name == meta.Name {
+		return schema.planner, nil
+	}
+	return nativeJSONInsertPlanner(meta)
+}
+
+func nativeSchemaRootNames(schema *nativeSchemaState, name string) (primaryRoot, indexStateRoot string) {
+	if schema != nil && schema.plannerOK && schema.meta != nil && schema.meta.Name == name {
+		return schema.planner.primaryRoot, schema.planner.indexStateRoot
+	}
+	return "", ""
 }
 
 func newNativeSchemaState(meta *CollectionMeta, admit cowbtree.OwnedMapAdmit) (*nativeSchemaState, error) {
 	if meta == nil || meta.Name == "" || admit == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	backing, err := nativeSchemaBackingCharge(reflect.ValueOf(meta), 0)
+	total, err := nativeSchemaTotalCharge(meta)
 	if err != nil {
 		return nil, err
 	}
-	base := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeSchemaState{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
-	if backing > ^uint64(0)-base {
-		return nil, memtable.ErrCOWCapacity
-	}
-	lease, err := admit(base + backing)
+	lease, err := admit(total)
 	if err != nil {
 		return nil, err
 	}
@@ -44,6 +159,17 @@ func newNativeSchemaState(meta *CollectionMeta, admit cowbtree.OwnedMapAdmit) (*
 	copied := meta.copy()
 	nativeSchemaOwnStrings(reflect.ValueOf(copied))
 	s := &nativeSchemaState{meta: copied, refund: refund, canonicalBSON: isCanonicalNativeBSONMeta(copied)}
+	if planner, err := nativeJSONInsertPlanner(*copied); err == nil {
+		if len(planner.indexes) == 0 {
+			planner.cachedIndexRuntimes = emptyIndexRuntimes
+			s.planner = planner
+			s.plannerOK = true
+		} else if runtimes, err := planner.indexRuntimes(); err == nil {
+			planner.cachedIndexRuntimes = runtimes
+			s.planner = planner
+			s.plannerOK = true
+		}
+	}
 	s.refs.Store(1)
 	return s, nil
 }
@@ -166,6 +292,8 @@ func (s *nativeSchemaState) release() cowbtree.OwnedMapCompletion {
 		return cowbtree.OwnedMapCompletion{}
 	}
 	s.meta = nil
+	s.planner = insertBatchPlanner{}
+	s.plannerOK = false
 	refund := s.refund
 	s.refund = nil
 	return refund.Completion()

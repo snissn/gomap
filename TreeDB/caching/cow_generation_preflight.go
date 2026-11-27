@@ -17,36 +17,39 @@ import (
 // caller must preserve that finite attempt across every unlocked loop re-entry.
 func (b *Batch) cowGenerationRollover(allowPressureRollover bool) (_ *cowRollover, pressure bool, pressureRollover bool, _ error) {
 	c := b.db.cow
-	groups := b.cowState.predictionGroups
-	storage := b.cowState.predictionStorage
-	start := 0
-	for i, count := range b.shardCnts {
-		groups[i] = storage[start : start : start+count]
-		start += count
-	}
-	allowPointers := b.db.valueLogEnabled() && b.db.allowValueLogPointers() &&
-		(!b.db.disableJournal || b.db.memtableValueLogPointers)
-	for index, entry := range b.entries {
-		m := memtable.COWMutation{Key: entry.Key, Value: entry.Value, Flags: node.FlagInline}
-		if entry.Type == batch.OpDelete {
-			m.Flags, m.Value = node.FlagTombstone, nil
-		} else {
-			if entry.Type == batch.OpPut {
-				m.Timestamp, m.MVCC = entry.MVCCInput.LogicalTimestamp(entry.Key)
-			}
-			if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
-				m.Flags, m.Value = node.FlagPointer, nil
-			}
+	var groups [][]memtable.COWMutation
+	if len(b.entries) != 0 || b.cowState.native == nil {
+		groups = b.cowState.predictionGroups
+		storage := b.cowState.predictionStorage
+		start := 0
+		for i, count := range b.shardCnts {
+			groups[i] = storage[start : start : start+count]
+			start += count
 		}
-		i := b.shardIdxs[index]
-		groups[i] = append(groups[i], m)
+		allowPointers := b.db.valueLogEnabled() && b.db.allowValueLogPointers() &&
+			(!b.db.disableJournal || b.db.memtableValueLogPointers)
+		for index, entry := range b.entries {
+			m := memtable.COWMutation{Key: entry.Key, Value: entry.Value, Flags: node.FlagInline}
+			if entry.Type == batch.OpDelete {
+				m.Flags, m.Value = node.FlagTombstone, nil
+			} else {
+				if entry.Type == batch.OpPut {
+					m.Timestamp, m.MVCC = entry.MVCCInput.LogicalTimestamp(entry.Key)
+				}
+				if allowPointers && b.db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
+					m.Flags, m.Value = node.FlagPointer, nil
+				}
+			}
+			i := b.shardIdxs[index]
+			groups[i] = append(groups[i], m)
+		}
+		c.orderQualifiedMutationGroups(groups)
 	}
-	c.orderQualifiedMutationGroups(groups)
 	control, err := b.cowKnownControlCharge(groups)
 	if err != nil {
 		return nil, false, false, err
 	}
-	if b.cowPredictionCanSkipEstimateWithControl(groups, control) {
+	if len(groups) != 0 && b.cowPredictionCanSkipEstimateWithControl(groups, control) {
 		return nil, false, false, nil
 	}
 	max := c.budget.Limits().MaxGenerationBytes

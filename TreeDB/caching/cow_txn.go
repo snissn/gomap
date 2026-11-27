@@ -97,7 +97,12 @@ func (db *DB) initOwnedCOWTxnWithOptions(tx *ConditionalTxn, owner *transactiono
 		lease.Close()
 		return err
 	}
-	b := db.NewBatch()
+	var b *Batch
+	if deferRawDomains {
+		b = db.newCOWBatchDeferred()
+	} else {
+		b = db.NewBatch()
+	}
 	if b.cowState.err != nil {
 		batchErr := b.cowState.err
 		closeErr := errors.Join(b.Close(), snap.Close())

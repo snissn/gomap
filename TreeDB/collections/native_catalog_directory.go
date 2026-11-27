@@ -23,7 +23,7 @@ func newNativeEmptyEngine(allocator, maintenance backenddb.NativeSemanticAllocat
 	if err != nil {
 		return nil, err
 	}
-	e := &nativeEngineVersion{nextIncarnation: 1, allocator: allocator, maintenance: maintenance, refund: &nativeEngineRefund{lease: lease}, preparation: &nativeEnginePreparation{}}
+	e := &nativeEngineVersion{nextIncarnation: 1, allocator: allocator, maintenance: maintenance, refund: &nativeEngineRefund{lease: lease}, preparation: &nativeEnginePreparation{}, noPendingTyped: true}
 	e.refs.Store(1)
 	e.cleanup.Work = e
 	p := e.preparation

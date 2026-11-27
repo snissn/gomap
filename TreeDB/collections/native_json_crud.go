@@ -36,6 +36,10 @@ func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode
 }
 
 func (c *Collection) nativeUpdateBatchModeWithJournal(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal) ([]UpdateBatchResult, bool, error) {
+	return c.nativeUpdateBatchModeWithJournalDst(items, mode, bsonItems, retry, journal, nil)
+}
+
+func (c *Collection) nativeUpdateBatchModeWithJournalDst(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal, resultDst []UpdateBatchResult) ([]UpdateBatchResult, bool, error) {
 	if retry != nil {
 		retry.rowConflict = false
 	}
@@ -47,21 +51,25 @@ func (c *Collection) nativeUpdateBatchModeWithJournal(items []UpdateBatchItem, m
 	if bsonItems == nil && len(items) == 0 {
 		return nil, true, nil
 	}
-	unlockVector, _, err := c.prepareNativeProducerMutation()
+	lockVector, _, err := c.prepareNativeProducerMutationLock()
 	if err != nil {
 		return nil, false, err
 	}
-	defer unlockVector()
+	defer lockVector.unlock()
 	tx, err := c.nativeJSON.beginPrepared(c.name)
 	if err != nil {
 		return nil, false, err
 	}
-	return c.finishPreparedNativeUpdateBatchWithJournal(tx, items, mode, bsonItems, retry, journal)
+	return c.finishPreparedNativeUpdateBatchWithJournalDst(tx, items, mode, bsonItems, retry, journal, resultDst)
 }
 
 // The caller owns the producer admission; this finisher owns the original
 // prepared transaction through its checked Close and completion invalidation.
 func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTxn, items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal) (results []UpdateBatchResult, complete bool, resultErr error) {
+	return c.finishPreparedNativeUpdateBatchWithJournalDst(tx, items, mode, bsonItems, retry, journal, nil)
+}
+
+func (c *Collection) finishPreparedNativeUpdateBatchWithJournalDst(tx *NativeJSONTxn, items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal, resultDst []UpdateBatchResult) (results []UpdateBatchResult, complete bool, resultErr error) {
 	var err error
 	defer func() {
 		closeErr := tx.Close()
@@ -78,7 +86,9 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 		count = len(bsonItems)
 	}
 	g := tx.binding(c.name)
-	journal.selectCapturedBSON(g.probe.meta)
+	if journal != nil {
+		journal.selectCapturedBSON(g.probe.meta)
+	}
 	if retry != nil {
 		if retry.incarnation == 0 {
 			retry.incarnation, retry.start = g.incarnation, tx.core.LogicalSequence()
@@ -98,12 +108,12 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 		g.typed == nil &&
 		g.projection == nil &&
 		len(g.templateRecords) == 0 &&
-		!bsonSetFieldsMayTouchAnyIndex(g.probe.meta, bsonItems)
-	if primaryOnlyBSONSet && !(mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta)) {
+		!bsonSetFieldsMayTouchAnyIndexPtr(&g.probe.meta, bsonItems)
+	if primaryOnlyBSONSet && !(mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaPtrHasSecondaryUniqueIndex(&g.probe.meta)) {
 		if len(bsonItems) == 0 {
 			return nil, true, nil
 		}
-		results, err = tx.updatePrimaryOnlyBSONSetBatchInto("", bsonItems)
+		results, err = tx.updatePrimaryOnlyBSONSetBatchIntoDst("", bsonItems, resultDst)
 	} else {
 		if bsonItems != nil {
 			items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
@@ -114,7 +124,7 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 		if len(items) == 0 {
 			return nil, true, nil
 		}
-		if mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) {
+		if mode == updateBatchModeNoSecondaryUniqueIndexes && collectionMetaPtrHasSecondaryUniqueIndex(&g.probe.meta) {
 			if err = tx.admitRowControls(g, count); err != nil {
 				return nil, false, err
 			}
@@ -133,7 +143,7 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 	if err != nil {
 		return nil, false, err
 	}
-	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaHasSecondaryUniqueIndex(g.probe.meta) && len(tx.members) != 0 &&
+	if !primaryOnlyBSONSet && mode == updateBatchModeNoSecondaryUniqueIndexChanges && collectionMetaPtrHasSecondaryUniqueIndex(&g.probe.meta) && len(tx.members) != 0 &&
 		(bsonItems == nil || g.typed != nil || bsonSetFieldsMayTouchSecondaryUniqueIndex(g.probe.meta, bsonItems)) {
 		tx.mu.Lock()
 		if g.typed != nil {
@@ -148,7 +158,7 @@ func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTx
 				changed  []preparedBatchUpdate
 				runtimes []indexRuntime
 			)
-			opts, changed, runtimes, err = resolveNativeJSONFinalRows(g.name, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
+			opts, changed, runtimes, err = resolveNativeJSONFinalRowsWithSchema(g.name, g.probe.collection.schema, g.probe.meta, &g.rows, func(n uint64) error { return tx.admitStage(g, n) }, func(doc []byte) error { return tx.prepareValidation(g, doc) }, mode, g.templates)
 			if err == nil {
 				g.resolvedFinal = nativeJSONResolvedFinalRows{
 					valid:    true,
@@ -194,7 +204,11 @@ func bsonSetFieldTouchesIndexPath(fieldKey, indexPath string) bool {
 }
 
 func bsonSetFieldsMayTouchAnyIndex(meta CollectionMeta, items []BSONSetUpdateBatchItem) bool {
-	if !nativeBSONSetMeta(&meta) || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 {
+	return bsonSetFieldsMayTouchAnyIndexPtr(&meta, items)
+}
+
+func bsonSetFieldsMayTouchAnyIndexPtr(meta *CollectionMeta, items []BSONSetUpdateBatchItem) bool {
+	if !nativeBSONSetMeta(meta) || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 {
 		return true
 	}
 	for _, item := range items {
@@ -215,6 +229,15 @@ func bsonSetFieldsMayTouchAnyIndex(meta CollectionMeta, items []BSONSetUpdateBat
 					}
 				}
 			}
+		}
+	}
+	return false
+}
+
+func collectionMetaPtrHasSecondaryUniqueIndex(meta *CollectionMeta) bool {
+	for i := range meta.Indexes {
+		if meta.Indexes[i].Unique {
+			return true
 		}
 	}
 	return false
@@ -278,6 +301,10 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 // uses exactly the same per-item encoder as the physical planner. Tombstones
 // represent the empty final document; no second mutable collection engine runs.
 func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []indexRuntime, changed []preparedBatchUpdate, stateEntries, roots int) (*directBufferedInsertPlan, error) {
+	return buildNativeCRUDFinalPlanWithRootNames(name, "", "", opts, runtimes, changed, stateEntries, roots)
+}
+
+func buildNativeCRUDFinalPlanWithRootNames(name, primaryRootName, indexStateRootName string, opts collectionOptions, runtimes []indexRuntime, changed []preparedBatchUpdate, stateEntries, roots int) (*directBufferedInsertPlan, error) {
 	primary := buildDirectBufferedPrimaryRootEntries(changed, nil)
 	for i := range primary {
 		if changed[i].document == nil {
@@ -289,8 +316,14 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 	if err != nil {
 		return nil, err
 	}
+	if primaryRootName == "" {
+		primaryRootName = collectionPrimaryRootName(name)
+	}
+	if indexStateRootName == "" {
+		indexStateRootName = collectionIndexStateRootName(name)
+	}
 	plan := &directBufferedInsertPlan{
-		primaryRootName: collectionPrimaryRootName(name), indexStateRootName: collectionIndexStateRootName(name),
+		primaryRootName: primaryRootName, indexStateRootName: indexStateRootName,
 		primaryEntries: primary, secondaryRootPlans: secondary,
 		indexStateEntries: make([]directBufferedRootEntry, 0, stateEntries),
 		rootNames:         make([]string, 0, roots), policies: make([]backenddb.OrderedRootStoragePolicy, 0, roots),

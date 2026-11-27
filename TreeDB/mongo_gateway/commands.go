@@ -1365,13 +1365,14 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
 	var (
-		collection string
-		db         string
-		updates    []wire.Document
-		ordered    = true
-		hasMaxTime bool
-		fastParsed bool
-		singleSeq  [1]wire.Document
+		collection    string
+		db            string
+		updates       []wire.Document
+		ordered       = true
+		hasMaxTime    bool
+		fastParsed    bool
+		singleSeq     [1]wire.Document
+		updatesArrVal bson.RawValue
 	)
 	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: command}); ok {
 		var (
@@ -1407,7 +1408,13 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 					}
 				}
 			case "updates":
-				hasUpdatesField = true
+				if !hasUpdatesField {
+					hasUpdatesField = true
+					v := elem.Value()
+					updatesArrVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+				} else {
+					scanOK = false
+				}
 			case "ordered":
 				if !hasOrdered {
 					if b, bOK := elem.Value().BooleanOK(); bOK {
@@ -1425,14 +1432,29 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 			}
 			contents = next
 		}
-		if scanOK && !hasTxn && hasUpdate && hasDB && !hasUpdatesField && len(sequences) == 1 && sequences[0].Identifier == "updates" && len(sequences[0].Documents) > 0 {
-			if len(sequences[0].Documents) == 1 {
-				singleSeq[0] = sequences[0].Documents[0]
-				updates = singleSeq[:]
-			} else {
-				updates = sequences[0].Documents
+		if scanOK && !hasTxn && hasUpdate && hasDB {
+			if !hasUpdatesField && len(sequences) == 1 && sequences[0].Identifier == "updates" && len(sequences[0].Documents) > 0 {
+				if len(sequences[0].Documents) == 1 {
+					singleSeq[0] = sequences[0].Documents[0]
+					updates = singleSeq[:]
+				} else {
+					updates = sequences[0].Documents
+				}
+				fastParsed = true
+			} else if hasUpdatesField && len(sequences) == 0 && updatesArrVal.Type == bson.TypeArray {
+				if arrContents, arrOK := rawBSONContainerContents(updatesArrVal); arrOK && len(arrContents) != 0 {
+					elem, next, elemOK := bsoncore.ReadElement(arrContents)
+					if elemOK && len(next) == 0 {
+						if rawVal, valErr := elem.ValueErr(); valErr == nil {
+							if elemDoc, docOK := (bson.RawValue{Type: bson.Type(rawVal.Type), Value: rawVal.Data}).DocumentOK(); docOK {
+								singleSeq[0] = wire.Document(elemDoc)
+								updates = singleSeq[:]
+								fastParsed = true
+							}
+						}
+					}
+				}
 			}
-			fastParsed = true
 		}
 	}
 	if !fastParsed {
@@ -1471,43 +1493,61 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 	// Parse the entire command before opening/creating a collection or applying a
 	// mutation.  This is deliberately stricter than the legacy streaming parser:
 	// malformed later specifications never leave a partial command behind.
-	var singleParsed [1]mongoUpdateItem
-	var parsed []mongoUpdateItem
-	if len(updates) <= len(singleParsed) {
-		parsed = singleParsed[:len(updates)]
-	} else {
-		parsed = make([]mongoUpdateItem, len(updates))
-	}
-	var budget *mongoWriteBudget
-	if hasMaxTime {
-		budget, err = s.newMongoWriteBudgetForCommand(ctx, command)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-	} else {
-		budget = s.newMongoWriteBudget()
-		if ctx != nil {
-			if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
-				budget.deadline = deadline
+	var (
+		parsed  []mongoUpdateItem
+		budget  *mongoWriteBudget
+		scratch *mongoSingleUpdateScratch
+	)
+	if len(updates) == 1 {
+		scratch = getMongoSingleUpdateScratch()
+		defer putMongoSingleUpdateScratch(scratch)
+		parsed = scratch.parsed[:1]
+		budget = &scratch.budget
+		if hasMaxTime {
+			if err = s.initMongoWriteBudgetForCommand(budget, ctx, command); err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		} else {
+			s.initMongoWriteBudget(budget)
+			if ctx != nil {
+				if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
+					budget.deadline = deadline
+				}
 			}
 		}
-	}
-	var singleKeyBuf [32]byte
-	var singleFieldsBuf [4]collections.BSONSetField
-	for i, update := range updates {
-		var item mongoUpdateItem
-		var parseErr error
-		if len(updates) == 1 {
-			item, parseErr = parseMongoUpdateItemInto(i, update, singleKeyBuf[:0], singleFieldsBuf[:0])
-		} else {
-			item, parseErr = parseMongoUpdateItem(i, update)
-		}
+		item, parseErr := parseMongoUpdateItemInto(0, updates[0], scratch.keyBuf[:0], scratch.fieldsBuf[:0])
 		if parseErr != nil {
 			return mongoUpdateParseCommandError(parseErr)
 		}
 		item.selector = s
 		item.budget = budget
-		parsed[i] = item
+		parsed[0] = item
+	} else {
+		if len(updates) > 0 {
+			parsed = make([]mongoUpdateItem, len(updates))
+		}
+		if hasMaxTime {
+			budget, err = s.newMongoWriteBudgetForCommand(ctx, command)
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		} else {
+			budget = s.newMongoWriteBudget()
+			if ctx != nil {
+				if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
+					budget.deadline = deadline
+				}
+			}
+		}
+		for i, update := range updates {
+			item, parseErr := parseMongoUpdateItem(i, update)
+			if parseErr != nil {
+				return mongoUpdateParseCommandError(parseErr)
+			}
+			item.selector = s
+			item.budget = budget
+			parsed[i] = item
+		}
 	}
 	if err := budget.ensureMinimumResponse(); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1565,41 +1605,100 @@ func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Doc
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
-	// Only one existing-collection exact-ID structured set can cover the whole
-	// RPC. Multi-spec/DDL/upsert/selector routes keep their fresh final fence.
-	if journal != nil && !missingCollection && len(parsed) == 1 && !parsed[0].multi &&
-		parsed[0].exactID && !parsed[0].upsert && parsed[0].bsonSetFieldsOK &&
-		!mongoBSONSetFieldsNeedNestingValidation(parsed[0].bsonSetFields) {
-		canShareJournal := false
-		col.WithMetaView(func(meta *collections.CollectionMeta) {
-			if meta.Options.DocumentFormat == collections.DocumentFormatBSON && mongoUpdateCanUseBatchMetaPtr(meta, parsed[0]) {
-				canShareJournal = true
-			}
-		})
-		if canShareJournal {
+	// Resolve single-op existing-collection routing capabilities once under a
+	// single metadata view so coalescing, BSON-set dispatch, and optional
+	// journal sharing avoid repeated WithMetaView COW cut pins. Concurrent DDL
+	// remains authoritative because batched and collection mutations recheck
+	// live schema under the exact publication cut.
+	if !missingCollection && len(parsed) == 1 && !parsed[0].multi && parsed[0].exactID && !parsed[0].upsert {
+		var (
+			isBSON   bool
+			canBatch bool
+		)
+		if scratch != nil {
+			scratch.isBSON = false
+			scratch.canBatch = false
+			col.WithMetaView(scratch.metaFn)
+			isBSON = scratch.isBSON
+			canBatch = scratch.canBatch
+		} else {
+			col.WithMetaView(func(meta *collections.CollectionMeta) {
+				isBSON = meta.Options.DocumentFormat == collections.DocumentFormatBSON
+				canBatch = mongoUpdateCanUseBatchMetaPtr(meta, parsed[0])
+			})
+		}
+		canBSONSet := isBSON && parsed[0].bsonSetFieldsOK && !mongoUpdateItemNeedsNestingValidation(parsed[0])
+		parsed[0].metaCapabilitiesSet = true
+		parsed[0].canUseBatchCached = canBatch
+		parsed[0].canUseBSONSetCached = canBSONSet
+		// Only one existing-collection exact-ID structured set can cover the whole
+		// RPC. Multi-spec/DDL/upsert/selector routes keep their fresh final fence.
+		if journal != nil && canBSONSet && canBatch {
 			budget.journal = journal
 		}
 	}
 	return s.runMongoUpdateCommand(name, col, parsed, ordered)
 }
 
+type mongoSingleUpdateScratch struct {
+	parsed    [1]mongoUpdateItem
+	budget    mongoWriteBudget
+	keyBuf    [64]byte
+	fieldsBuf [8]collections.BSONSetField
+	isBSON    bool
+	canBatch  bool
+	metaFn    func(*collections.CollectionMeta)
+}
+
+var mongoSingleUpdateScratchPool = sync.Pool{
+	New: func() any {
+		s := new(mongoSingleUpdateScratch)
+		s.metaFn = func(meta *collections.CollectionMeta) {
+			s.isBSON = meta.Options.DocumentFormat == collections.DocumentFormatBSON
+			s.canBatch = mongoUpdateCanUseBatchMetaPtr(meta, s.parsed[0])
+		}
+		return s
+	},
+}
+
+func getMongoSingleUpdateScratch() *mongoSingleUpdateScratch {
+	return mongoSingleUpdateScratchPool.Get().(*mongoSingleUpdateScratch)
+}
+
+func putMongoSingleUpdateScratch(s *mongoSingleUpdateScratch) {
+	if s == nil {
+		return
+	}
+	s.parsed[0] = mongoUpdateItem{}
+	s.budget = mongoWriteBudget{}
+	clear(s.fieldsBuf[:])
+	s.isBSON = false
+	s.canBatch = false
+	mongoSingleUpdateScratchPool.Put(s)
+}
+
 type mongoUpdateItem struct {
-	index           int
-	key             []byte
-	updateDoc       wire.Document
-	setFields       map[string]struct{}
-	bsonSetFields   []collections.BSONSetField
-	setFieldsOK     bool
-	bsonSetFieldsOK bool
-	pureSet         bool
-	mutation        mongoMutation
-	upsert          bool
-	multi           bool
-	id              bson.RawValue
-	plan            findPlan
-	exactID         bool
-	selector        *Server
-	budget          *mongoWriteBudget
+	index                 int
+	key                   []byte
+	updateDoc             wire.Document
+	setFields             map[string]struct{}
+	bsonSetFields         []collections.BSONSetField
+	setFieldsOK           bool
+	bsonSetFieldsOK       bool
+	bsonSetNestingChecked bool
+	bsonSetNeedsNesting   bool
+	metaCapabilitiesSet   bool
+	canUseBatchCached     bool
+	canUseBSONSetCached   bool
+	pureSet               bool
+	mutation              mongoMutation
+	upsert                bool
+	multi                 bool
+	id                    bson.RawValue
+	plan                  findPlan
+	exactID               bool
+	selector              *Server
+	budget                *mongoWriteBudget
 }
 
 // mongoWriteBudget is local to one command. It prevents a batch of otherwise
@@ -1646,9 +1745,15 @@ func newMongoWriteBudget(limit int) *mongoWriteBudget {
 	return &mongoWriteBudget{examinedRemaining: limit, targetsRemaining: limit, retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes, errorsRemaining: mongoWriteCommandMaxErrorEntries - 1, responseBytesRemaining: int(wire.DefaultMaxMessageLength) - mongoWriteResponseMinimumBytes - mongoWriteErrorResponseReserveBytes, minimumResponseFits: true, deadline: time.Now().Add(mongoWriteCommandMaxDuration)}
 }
 
-func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
-	budget := newMongoWriteBudget(s.maxFindScanDocuments())
-	budget.targetsRemaining = s.maxMongoWriteTargets()
+func (s *Server) initMongoWriteBudget(budget *mongoWriteBudget) {
+	limit := s.maxFindScanDocuments()
+	*budget = mongoWriteBudget{
+		examinedRemaining:         limit,
+		targetsRemaining:          s.maxMongoWriteTargets(),
+		retainedKeyBytesRemaining: mongoWriteCommandMaxRetainedKeyBytes,
+		errorsRemaining:           mongoWriteCommandMaxErrorEntries - 1,
+		deadline:                  time.Now().Add(mongoWriteCommandMaxDuration),
+	}
 	if s != nil && s.mongoWriteRetainedKeyBytesLimit > 0 {
 		budget.retainedKeyBytesRemaining = s.mongoWriteRetainedKeyBytesLimit
 	}
@@ -1657,18 +1762,13 @@ func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
 	if budget.responseBytesRemaining < 0 {
 		budget.responseBytesRemaining = 0
 	}
-	return budget
 }
 
-// newMongoWriteBudgetForCommand applies the gateway ceiling together with a
-// valid client maxTimeMS and any caller context deadline.  Atomic collection
-// calls remain non-interruptible granules, but every selector and mutation
-// boundary observes this shared deadline before it enters the granule.
-func (s *Server) newMongoWriteBudgetForCommand(ctx context.Context, command wire.Document) (*mongoWriteBudget, error) {
-	budget := s.newMongoWriteBudget()
+func (s *Server) initMongoWriteBudgetForCommand(budget *mongoWriteBudget, ctx context.Context, command wire.Document) error {
+	s.initMongoWriteBudget(budget)
 	maxTimeMS, present, err := optionalPositiveIntFieldWithPresence(command, "maxTimeMS")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if present {
 		deadline := time.Now().Add(time.Duration(maxTimeMS) * time.Millisecond)
@@ -1680,6 +1780,24 @@ func (s *Server) newMongoWriteBudgetForCommand(ctx context.Context, command wire
 		if deadline, ok := ctx.Deadline(); ok && deadline.Before(budget.deadline) {
 			budget.deadline = deadline
 		}
+	}
+	return nil
+}
+
+func (s *Server) newMongoWriteBudget() *mongoWriteBudget {
+	budget := new(mongoWriteBudget)
+	s.initMongoWriteBudget(budget)
+	return budget
+}
+
+// newMongoWriteBudgetForCommand applies the gateway ceiling together with a
+// valid client maxTimeMS and any caller context deadline.  Atomic collection
+// calls remain non-interruptible granules, but every selector and mutation
+// boundary observes this shared deadline before it enters the granule.
+func (s *Server) newMongoWriteBudgetForCommand(ctx context.Context, command wire.Document) (*mongoWriteBudget, error) {
+	budget := new(mongoWriteBudget)
+	if err := s.initMongoWriteBudgetForCommand(budget, ctx, command); err != nil {
+		return nil, err
 	}
 	return budget, nil
 }
@@ -2008,28 +2126,35 @@ func parseFastPureSetUpdateDoc(updateDoc wire.Document) (fields []collections.BS
 }
 
 func parseFastPureSetUpdateDocInto(updateDoc wire.Document, fieldsBuf []collections.BSONSetField) (fields []collections.BSONSetField, setFieldsOK, bsonSetFieldsOK, handled bool) {
-	first, remaining, err := mongoMutationFirstRawElement(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: updateDoc})
-	if err != nil || first == nil || len(remaining) != 0 {
-		return nil, false, false, false
+	fields, setFieldsOK, bsonSetFieldsOK, _, handled = parseFastPureSetUpdateDocIntoWithNesting(updateDoc, fieldsBuf)
+	return fields, setFieldsOK, bsonSetFieldsOK, handled
+}
+
+func parseFastPureSetUpdateDocIntoWithNesting(updateDoc wire.Document, fieldsBuf []collections.BSONSetField) (fields []collections.BSONSetField, setFieldsOK, bsonSetFieldsOK, needsNesting, handled bool) {
+	topContents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: updateDoc})
+	if !ok || len(topContents) == 0 {
+		return nil, false, false, false, false
 	}
-	if string(first.KeyBytes()) != "$set" {
-		return nil, false, false, false
+	first, remaining, elemOK := bsoncore.ReadElement(topContents)
+	if !elemOK || len(remaining) != 0 || len(first) < 6 {
+		return nil, false, false, false, false
 	}
-	val, valErr := first.ValueErr()
-	if valErr != nil || bson.Type(val.Type) != bson.TypeEmbeddedDocument {
-		return nil, false, false, false
+	// Outer single element must be an embedded document keyed by "$set".
+	// Exact framing is verified below and every inner element is validated
+	// once in the loop, avoiding redundant recursive BSON validation passes.
+	if bson.Type(first[0]) != bson.TypeEmbeddedDocument ||
+		first[1] != '$' || first[2] != 's' || first[3] != 'e' || first[4] != 't' || first[5] != 0 {
+		return nil, false, false, false, false
 	}
-	contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: val.Data})
-	if !ok {
-		return nil, false, false, false
-	}
-	if len(contents) == 0 {
-		return nil, false, false, false
+	contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: first[6:]})
+	if !ok || len(contents) == 0 {
+		return nil, false, false, false, false
 	}
 
 	var (
 		count            int
 		allJSONSupported = true
+		hadDuplicate     bool
 		seen             map[string]int
 	)
 	if cap(fieldsBuf) > 0 {
@@ -2039,36 +2164,48 @@ func parseFastPureSetUpdateDocInto(updateDoc wire.Document, fieldsBuf []collecti
 	}
 	for len(contents) != 0 {
 		elem, next, ok := bsoncore.ReadElement(contents)
-		if !ok {
-			return nil, false, false, false
+		if !ok || len(elem) < 2 {
+			return nil, false, false, false, false
 		}
-		if elemErr := elem.Validate(); elemErr != nil {
-			return nil, false, false, false
+		nul := bytes.IndexByte(elem[1:], 0x00)
+		if nul < 0 {
+			return nil, false, false, false, false
+		}
+		kb := elem[1 : 1+nul]
+		rawVal := bsoncore.Value{Type: bsoncore.Type(elem[0]), Data: elem[nul+2:]}
+		if valErr := rawVal.Validate(); valErr != nil {
+			return nil, false, false, false, false
 		}
 		count++
 		if count > mongoMutationMaxTargets {
-			return nil, false, false, false
+			return nil, false, false, false, false
 		}
-		key := string(elem.KeyBytes())
-		rawVal, rawErr := elem.ValueErr()
-		if rawErr != nil {
-			return nil, false, false, false
+		if validateSetFieldNameBytes(kb) != nil {
+			return nil, false, false, false, false
 		}
+		key := string(kb)
 		rv := bson.RawValue{Type: bson.Type(rawVal.Type), Value: rawVal.Data}
-		if validateMongoMutationRawNesting(rv) != nil {
-			return nil, false, false, false
-		}
-		if validateSetFieldName(key) != nil {
-			return nil, false, false, false
-		}
-		if allJSONSupported {
-			if validateSupportedValue(key, rv) != nil {
-				allJSONSupported = false
+		switch rv.Type {
+		case bson.TypeDouble, bson.TypeString, bson.TypeObjectID, bson.TypeBoolean, bson.TypeNull, bson.TypeInt32, bson.TypeInt64:
+			// Already validated by rawVal.Validate(); scalar values need neither
+			// container nesting checks nor recursive JSON-support checks.
+		default:
+			if validateMongoMutationRawNesting(rv) != nil {
+				return nil, false, false, false, false
+			}
+			if !needsNesting && !mongoBSONSetFieldFitsResultNesting(rv) {
+				needsNesting = true
+			}
+			if allJSONSupported {
+				if validateSupportedValue(key, rv) != nil {
+					allJSONSupported = false
+				}
 			}
 		}
 		if seen != nil {
 			if prevIdx, exists := seen[key]; exists {
 				fields[prevIdx].Value = rv
+				hadDuplicate = true
 			} else {
 				seen[key] = len(fields)
 				fields = append(fields, collections.BSONSetField{Key: key, Value: rv})
@@ -2083,6 +2220,7 @@ func parseFastPureSetUpdateDocInto(updateDoc wire.Document, fieldsBuf []collecti
 			}
 			if foundIdx >= 0 {
 				fields[foundIdx].Value = rv
+				hadDuplicate = true
 			} else {
 				if len(fields) == 16 {
 					seen = make(map[string]int, 32)
@@ -2097,9 +2235,28 @@ func parseFastPureSetUpdateDocInto(updateDoc wire.Document, fieldsBuf []collecti
 		contents = next
 	}
 	if len(fields) == 0 {
-		return nil, false, false, false
+		return nil, false, false, false, false
 	}
-	return fields, allJSONSupported, true, true
+	if hadDuplicate && needsNesting {
+		needsNesting = mongoBSONSetFieldsNeedNestingValidation(fields)
+	}
+	return fields, allJSONSupported, true, needsNesting, true
+}
+
+func validateSetFieldNameBytes(kb []byte) error {
+	if len(kb) == 0 {
+		return errors.New("Mongo gateway $set field name cannot be empty")
+	}
+	if len(kb) == 3 && kb[0] == '_' && kb[1] == 'i' && kb[2] == 'd' {
+		return errors.New("Mongo gateway update cannot modify _id")
+	}
+	if bytes.IndexByte(kb, '.') >= 0 {
+		return errors.New("Mongo gateway $set currently supports top-level fields only")
+	}
+	if kb[0] == '$' {
+		return errors.New("Mongo gateway $set field names cannot start with $")
+	}
+	return nil
 }
 
 func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
@@ -2125,11 +2282,18 @@ func parseMongoUpdateItemInto(index int, update wire.Document, keyBuf []byte, fi
 		scannedOK = true
 		for len(contents) != 0 {
 			elem, next, ok := bsoncore.ReadElement(contents)
-			if !ok {
+			if !ok || len(elem) < 2 {
 				scannedOK = false
 				break
 			}
-			kb := elem.KeyBytes()
+			nul := bytes.IndexByte(elem[1:], 0x00)
+			if nul < 0 {
+				scannedOK = false
+				break
+			}
+			kb := elem[1 : 1+nul]
+			valData := elem[nul+2:]
+			valType := bson.Type(elem[0])
 			switch string(kb) {
 			case "arrayFilters":
 				hasArrayFilters = true
@@ -2139,26 +2303,22 @@ func parseMongoUpdateItemInto(index int, update wire.Document, keyBuf []byte, fi
 				hasHint = true
 			case "q":
 				if !hasQ {
-					v := elem.Value()
-					qVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					qVal = bson.RawValue{Type: valType, Value: valData}
 					hasQ = true
 				}
 			case "u":
 				if !hasU {
-					v := elem.Value()
-					uVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					uVal = bson.RawValue{Type: valType, Value: valData}
 					hasU = true
 				}
 			case "multi":
 				if !hasMulti {
-					v := elem.Value()
-					multiVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					multiVal = bson.RawValue{Type: valType, Value: valData}
 					hasMulti = true
 				}
 			case "upsert":
 				if !hasUpsert {
-					v := elem.Value()
-					upsertVal = bson.RawValue{Type: bson.Type(v.Type), Value: v.Data}
+					upsertVal = bson.RawValue{Type: valType, Value: valData}
 					hasUpsert = true
 				}
 			}
@@ -2270,20 +2430,22 @@ func parseMongoUpdateItemInto(index int, update wire.Document, keyBuf []byte, fi
 			return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 		}
 	}
-	if bsonSetFields, setFieldsOK, bsonSetFieldsOK, handled := parseFastPureSetUpdateDocInto(updateDoc, fieldsBuf); handled {
+	if bsonSetFields, setFieldsOK, bsonSetFieldsOK, needsNesting, handled := parseFastPureSetUpdateDocIntoWithNesting(updateDoc, fieldsBuf); handled {
 		return mongoUpdateItem{
-			index:           index,
-			key:             key,
-			updateDoc:       updateDoc,
-			bsonSetFields:   bsonSetFields,
-			setFieldsOK:     setFieldsOK,
-			bsonSetFieldsOK: bsonSetFieldsOK,
-			pureSet:         true,
-			upsert:          upsert,
-			multi:           multi,
-			id:              id,
-			plan:            plan,
-			exactID:         directID,
+			index:                 index,
+			key:                   key,
+			updateDoc:             updateDoc,
+			bsonSetFields:         bsonSetFields,
+			setFieldsOK:           setFieldsOK,
+			bsonSetFieldsOK:       bsonSetFieldsOK,
+			bsonSetNestingChecked: true,
+			bsonSetNeedsNesting:   needsNesting,
+			pureSet:               true,
+			upsert:                upsert,
+			multi:                 multi,
+			id:                    id,
+			plan:                  plan,
+			exactID:               directID,
 		}, nil
 	}
 	if err := validateMongoMutationTargetCount(updateDoc); err != nil {
@@ -2422,7 +2584,11 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 		matched, modified, err := update.selector.runMongoFilterUpdateOne(col, update)
 		return matched, modified, false, err
 	}
-	if mongoUpdateCanUseBSONSet(col, update) {
+	canUseBSONSet := update.canUseBSONSetCached
+	if !update.metaCapabilitiesSet {
+		canUseBSONSet = mongoUpdateCanUseBSONSet(col, update)
+	}
+	if canUseBSONSet {
 		if !update.upsert && update.budget != nil && update.budget.journal != nil {
 			journal := update.budget.journal
 			if err := update.budget.checkDeadline(); err != nil {
@@ -2841,7 +3007,11 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if err := update.budget.checkDeadline(); err != nil {
 		return false, false, err
 	}
-	if !mongoUpdateCanUseBatch(col, update) {
+	canUseBatch := update.canUseBatchCached
+	if !update.metaCapabilitiesSet {
+		canUseBatch = mongoUpdateCanUseBatch(col, update)
+	}
+	if !canUseBatch {
 		return runMongoUpdateOne(col, update)
 	}
 	coalescer := s.mongoUpdateCoalescer(name)
@@ -4085,7 +4255,7 @@ func mongoUpdateCoalescerBatchCapabilities(batch []mongoUpdateCoalescerRequest) 
 		return true, false
 	}
 	for i := range batch {
-		if !batch[i].item.exactID || !batch[i].item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(batch[i].item.bsonSetFields) {
+		if !batch[i].item.exactID || !batch[i].item.bsonSetFieldsOK || mongoUpdateItemNeedsNestingValidation(batch[i].item) {
 			return true, false
 		}
 	}
@@ -4133,7 +4303,7 @@ func mongoUpdateItemsBatchCapabilities(col *collections.Collection, updates []mo
 		return true, false
 	}
 	for _, update := range updates {
-		if !update.exactID || !update.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields) {
+		if !update.exactID || !update.bsonSetFieldsOK || mongoUpdateItemNeedsNestingValidation(update) {
 			return true, false
 		}
 	}
@@ -4161,7 +4331,7 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 		return false
 	}
 	for _, update := range updates {
-		if !update.exactID || !update.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields) {
+		if !update.exactID || !update.bsonSetFieldsOK || mongoUpdateItemNeedsNestingValidation(update) {
 			return false
 		}
 	}
@@ -4169,7 +4339,14 @@ func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoU
 }
 
 func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
-	return col != nil && update.exactID && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK && !mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields)
+	return col != nil && update.exactID && !update.upsert && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.bsonSetFieldsOK && !mongoUpdateItemNeedsNestingValidation(update)
+}
+
+func mongoUpdateItemNeedsNestingValidation(update mongoUpdateItem) bool {
+	if update.bsonSetNestingChecked {
+		return update.bsonSetNeedsNesting
+	}
+	return mongoBSONSetFieldsNeedNestingValidation(update.bsonSetFields)
 }
 
 func mongoBSONSetFieldsNeedNestingValidation(fields []collections.BSONSetField) bool {
@@ -5023,6 +5200,12 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		})
 	}
 	s.invalidateCollectionCache(name)
+	mutated := false
+	defer func() {
+		if mutated {
+			s.invalidateCollectionCache(name)
+		}
+	}()
 	numBefore := int32(1 + len(col.MetaView().Indexes) + len(col.MetaView().VectorIndexes))
 	meta := col.MetaView()
 	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
@@ -5044,6 +5227,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			return commandError(code, codeName, err.Error())
 		}
 		meta = *next
+		mutated = true
 	}
 	for _, def := range vectorDefs {
 		if existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name); ok && sameVectorIndexDefinition(existing, def) {
@@ -5054,8 +5238,10 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		meta = *next
+		mutated = true
 	}
 	s.invalidateCollectionCache(name)
+	mutated = false
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "createdCollectionAutomatically", Value: createdAutomatically},
@@ -5132,14 +5318,22 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	mutated := false
+	defer func() {
+		if mutated {
+			s.invalidateCollectionCache(name)
+		}
+	}()
 	if all {
 		if _, err := col.DropAllIndexes(); err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
+		mutated = true
 		for _, index := range metaBefore.VectorIndexes {
 			if _, err := col.DropVectorIndex(index.Name); err != nil {
 				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("dropIndexes partially applied before vector index %q failed: %v", index.Name, err))
 			}
+			mutated = true
 		}
 	} else {
 		scalarNames, vectorNames, err := classifyDropIndexNames(metaBefore, names)
@@ -5156,6 +5350,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 				}
 				return commandError(commandCodeBadValue, "BadValue", err.Error())
 			}
+			mutated = true
 		}
 		for _, indexName := range vectorNames {
 			if _, err := col.DropVectorIndex(indexName); err != nil {
@@ -5164,9 +5359,11 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 				}
 				return commandError(commandCodeBadValue, "BadValue", err.Error())
 			}
+			mutated = true
 		}
 	}
 	s.invalidateCollectionCache(name)
+	mutated = false
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "nIndexesWas", Value: before},
@@ -5229,23 +5426,57 @@ func (s *Server) killCursorsResponse(command wire.Document, cursorOwner int64) (
 	})
 }
 
+var (
+	simpleUpdateResponse00 = encodeSimpleUpdateResponse(0, 0)
+	simpleUpdateResponse10 = encodeSimpleUpdateResponse(1, 0)
+	simpleUpdateResponse11 = encodeSimpleUpdateResponse(1, 1)
+)
+
+func encodeSimpleUpdateResponse(matched, modified int32) wire.Document {
+	buf := make([]byte, 0, 39)
+	idx, buf := bsoncore.AppendDocumentStart(buf)
+	buf = bsoncore.AppendDoubleElement(buf, "ok", 1.0)
+	buf = bsoncore.AppendInt32Element(buf, "n", matched)
+	buf = bsoncore.AppendInt32Element(buf, "nModified", modified)
+	buf, _ = bsoncore.AppendDocumentEnd(buf, idx)
+	return wire.Document(buf)
+}
+
+func marshalSimpleUpdateResponse(matched, modified int32) wire.Document {
+	if matched == 1 {
+		if modified == 1 {
+			return simpleUpdateResponse11
+		}
+		if modified == 0 {
+			return simpleUpdateResponse10
+		}
+	} else if matched == 0 && modified == 0 {
+		return simpleUpdateResponse00
+	}
+	return encodeSimpleUpdateResponse(matched, modified)
+}
+
 func marshalUpdateResponse(matched, modified int32, upserted ...[]mongoUpdateUpserted) (wire.Document, error) {
+	if len(upserted) == 0 || len(upserted[0]) == 0 {
+		return marshalSimpleUpdateResponse(matched, modified), nil
+	}
 	response := bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "n", Value: matched},
 		{Key: "nModified", Value: modified},
 	}
-	if len(upserted) > 0 && len(upserted[0]) > 0 {
-		items := make(bson.A, len(upserted[0]))
-		for i, item := range upserted[0] {
-			items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}}
-		}
-		response = append(response, bson.E{Key: "upserted", Value: items})
+	items := make(bson.A, len(upserted[0]))
+	for i, item := range upserted[0] {
+		items[i] = bson.D{{Key: "index", Value: int32(item.index)}, {Key: "_id", Value: item.id}}
 	}
+	response = append(response, bson.E{Key: "upserted", Value: items})
 	return marshalDocument(response)
 }
 
 func marshalUpdateResponseWithWriteErrors(matched, modified int32, upserted []mongoUpdateUpserted, writeErrors []mongoWriteError) (wire.Document, error) {
+	if len(upserted) == 0 && len(writeErrors) == 0 {
+		return marshalSimpleUpdateResponse(matched, modified), nil
+	}
 	response := bson.D{{Key: "ok", Value: 1.0}, {Key: "n", Value: matched}, {Key: "nModified", Value: modified}}
 	if len(upserted) != 0 {
 		items := make(bson.A, len(upserted))
@@ -6355,7 +6586,23 @@ func (s *Server) openOrCreateCollectionForFirstWrite(name string) (*collections.
 }
 
 func (s *Server) openCollectionForMutation(name string) (*collections.Collection, error) {
-	col, err := s.Collections.OpenCollection(name)
+	if s == nil || s.Collections == nil {
+		return nil, collections.ErrCollectionNotFound
+	}
+	// Native COW Collection handles are immutable and resolve live schema via
+	// the native semantic engine on every operation, so sharing the cached
+	// handle across concurrent mutations is race-free. Legacy non-native
+	// Collection handles mutate c.meta during writes and must open per-call.
+	useCache := s.Collections.UsesNativeCommandWALApply()
+	var (
+		col *collections.Collection
+		err error
+	)
+	if useCache {
+		col, err = s.openCollectionCached(name)
+	} else {
+		col, err = s.Collections.OpenCollection(name)
+	}
 	if err != nil {
 		return col, err
 	}
@@ -6368,6 +6615,10 @@ func (s *Server) openCollectionForMutation(name string) (*collections.Collection
 		pending := registry.byName[name]
 		if pending == nil {
 			if waited {
+				if useCache {
+					s.invalidateCollectionCache(name)
+					return s.openCollectionCached(name)
+				}
 				return s.Collections.OpenCollection(name)
 			}
 			return col, nil
@@ -6379,6 +6630,10 @@ func (s *Server) openCollectionForMutation(name string) (*collections.Collection
 		waited = true
 		registry = s.collectionFirstWrites.Load()
 		if registry == nil {
+			if useCache {
+				s.invalidateCollectionCache(name)
+				return s.openCollectionCached(name)
+			}
 			return s.Collections.OpenCollection(name)
 		}
 	}
@@ -6629,6 +6884,17 @@ func commandDocuments(doc wire.Document, sequences []wire.DocumentSequence, key 
 }
 
 func idEqualityFilterValue(filter wire.Document, commandName string) (bson.RawValue, error) {
+	if contents, ok := rawBSONContainerContents(bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: filter}); ok && len(contents) != 0 {
+		elem, next, elemOK := bsoncore.ReadElement(contents)
+		if elemOK && len(next) == 0 && len(elem) >= 5 &&
+			elem[1] == '_' && elem[2] == 'i' && elem[3] == 'd' && elem[4] == 0 {
+			id := bson.RawValue{Type: bson.Type(elem[0]), Value: elem[5:]}
+			if id.Type == bson.TypeRegex {
+				return bson.RawValue{}, fmt.Errorf("Mongo gateway %s currently requires an _id equality filter", commandName)
+			}
+			return id, nil
+		}
+	}
 	elements, err := bson.Raw(filter).Elements()
 	if err != nil {
 		return bson.RawValue{}, err
