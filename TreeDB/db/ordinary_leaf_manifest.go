@@ -4,10 +4,67 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+// NoteLeafLogDirSyncPending records that a new leaf_vlog segment file was
+// created with its parent directory sync deferred. The next same-directory
+// leaf-generation manifest replacement sync (or the fail-closed pre-meta
+// durable-root barrier if no manifest replacement runs) must sync leaf_vlog
+// before any meta page referencing the segment becomes durable.
+func (db *DB) NoteLeafLogDirSyncPending() {
+	if db == nil {
+		return
+	}
+	db.leafLogDirUnsyncedSeq.Add(1)
+}
+
+func (db *DB) markLeafLogDirSyncedThrough(seq uint64) {
+	if db == nil || seq == 0 {
+		return
+	}
+	for {
+		cur := db.leafLogDirSyncedSeq.Load()
+		if cur >= seq {
+			return
+		}
+		if db.leafLogDirSyncedSeq.CompareAndSwap(cur, seq) {
+			return
+		}
+	}
+}
+
+func (db *DB) syncPendingLeafLogDirIfNeeded() error {
+	if db == nil || db.dir == "" {
+		return nil
+	}
+	target := db.leafLogDirUnsyncedSeq.Load()
+	if target == 0 || db.leafLogDirSyncedSeq.Load() >= target {
+		return nil
+	}
+	leafDir := LeafLogDirPath(db.dir)
+	if store := db.leafGenerationManifestStore; store != nil && store.mode == leafGenerationManifestStable {
+		if err := store.syncParentDir(); err != nil {
+			return err
+		}
+	} else {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, leafDir, leafDir); err != nil {
+			return err
+		}
+		if err := syncDirFn(leafDir); err != nil {
+			return err
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, leafDir, leafDir); err != nil {
+			return err
+		}
+	}
+	db.markLeafLogDirSyncedThrough(target)
+	return nil
+}
 
 type packedRootPublication struct {
 	afterActivation          func()
@@ -15,8 +72,9 @@ type packedRootPublication struct {
 }
 
 type ordinaryLeafManifestPublication struct {
-	staged   stagedLeafGenerationManifestResult
-	prepared *LeafGenerationManifestStablePreparedClosure
+	staged                stagedLeafGenerationManifestResult
+	prepared              *LeafGenerationManifestStablePreparedClosure
+	dependenciesPreSynced bool
 }
 
 // The exact resource set belongs to the candidate after preparation. This
@@ -181,9 +239,45 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	// operational manifest fixed while the staged successor does its file and
 	// directory syncs. No code may reacquire build locks under that gate.
 	opts.releaseRootConstruction()
-	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
-	if err != nil {
-		return result, update, err
+	// Sample the deferred leaf_vlog directory-sync sequence strictly before the
+	// stable manifest replacement syncs maindb/leaf_vlog. Any segment created
+	// before this load is provably durable in leaf_vlog once replacement returns.
+	leafDirSeq := db.leafLogDirUnsyncedSeq.Load()
+	if !durabilitycut.Enabled() && resources != nil {
+		// Overlap syncing the candidate's external dependency files (e.g.
+		// value-l255-*.log) with staging and syncing the new immutable manifest
+		// revision in leaf_vlog. Both barriers must finish before any index sync
+		// or durable meta write can proceed.
+		var (
+			wg         sync.WaitGroup
+			resSyncErr error
+		)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if flushErr := resources.FlushThrough(); flushErr != nil {
+				resSyncErr = fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
+				return
+			}
+			if syncErr := resources.SyncThrough(); syncErr != nil {
+				resSyncErr = fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+			}
+		}()
+		update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
+		wg.Wait()
+		if err == nil {
+			db.markLeafLogDirSyncedThrough(leafDirSeq)
+		}
+		if err != nil || resSyncErr != nil {
+			return result, update, errors.Join(err, resSyncErr)
+		}
+		update.dependenciesPreSynced = true
+	} else {
+		update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
+		if err != nil {
+			return result, update, err
+		}
+		db.markLeafLogDirSyncedThrough(leafDirSeq)
 	}
 	if pack != nil {
 		if err := opts.packedRootPublication.afterManifestPreparation(); err != nil {
@@ -199,6 +293,79 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 		return result, update, errors.Join(err, db.releaseCapturedRootResources(replacement))
 	}
 	return replacement, update, db.releaseCapturedRootResources(resources)
+}
+
+// prepareSyncOperationalLeafManifest handles synchronous commits whose durable
+// root does not yet inherit an immutable leaf-generation manifest token
+// (authority.revision == 0, such as initial checkpoints before any pack).
+// Running operational manifest replacement here — before EnqueueBuilt — lets
+// its fsync(leaf_vlog) satisfy any deferred leaf_vlog segment creation barrier
+// in one directory sync and overlap with flushing/syncing the candidate's
+// external dependencies (e.g. value-l255-*.log) when durabilitycut is disabled.
+func (db *DB) prepareSyncOperationalLeafManifest(
+	resources *rootpublication.StableResourceSet,
+	next page.MetaPageBody,
+	syncWrite bool,
+	post *finalizeCommitPost,
+	opts *finalizeCommitOptions,
+) (leafManifest *leafGenerationManifest, rawFileIDs []uint32, dependenciesPreSynced bool, err error) {
+	if !syncWrite || db.leafPageLog == nil || opts.ordinaryLeafManifestBound {
+		return nil, nil, false, nil
+	}
+	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		return nil, nil, false, nil
+	}
+	db.mu.RLock()
+	base := db.leafGenerationManifest
+	db.mu.RUnlock()
+	staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(base, 0, next.CommitSeq, opts.preparedLimits)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var toPersist *leafGenerationManifest
+	if staged.changed {
+		toPersist = staged.manifest
+	} else if db.leafGenerationManifestDirty.Load() && base != nil {
+		toPersist = base.clone()
+	} else {
+		return nil, nil, false, nil
+	}
+	opts.releaseRootConstruction()
+	if !durabilitycut.Enabled() && resources != nil {
+		var (
+			wg         sync.WaitGroup
+			resSyncErr error
+		)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if flushErr := resources.FlushThrough(); flushErr != nil {
+				resSyncErr = fmt.Errorf("flush durable-root external dependencies: %w", flushErr)
+				return
+			}
+			if syncErr := resources.SyncThrough(); syncErr != nil {
+				resSyncErr = fmt.Errorf("sync durable-root external dependencies: %w", syncErr)
+			}
+		}()
+		manifestErr := db.replaceLeafGenerationManifest(toPersist)
+		wg.Wait()
+		if manifestErr != nil || resSyncErr != nil {
+			return nil, nil, false, errors.Join(manifestErr, resSyncErr)
+		}
+		dependenciesPreSynced = true
+	} else {
+		if err := db.replaceLeafGenerationManifest(toPersist); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	db.leafGenerationManifestDirty.Store(false)
+	if !staged.changed {
+		return nil, nil, dependenciesPreSynced, nil
+	}
+	opts.leafManifestAlreadyPersistent = true
+	opts.ordinaryLeafManifestBound = true
+	post.clearLeafGenerationPendingFileIDs = append(post.clearLeafGenerationPendingFileIDs[:0], staged.pendingFileIDs...)
+	return staged.manifest, staged.rawFileIDs, dependenciesPreSynced, nil
 }
 
 // GC can retire a pack whose exact token is still retained conservatively by

@@ -1891,6 +1891,13 @@ func (w *Writer) StableCreationNamespacePending() (bool, error) {
 	return w.creationProof != nil || w.creationUnsupported || w.creationUncertified, nil
 }
 
+// StableCreationNamespaceUncertified reports whether the current segment was
+// created by this writer with its parent directory sync deferred (not yet
+// certified into a creation proof).
+func (w *Writer) StableCreationNamespaceUncertified() bool {
+	return w != nil && w.f != nil && w.creationUncertified
+}
+
 // StableNamespaceParentGeneration returns the logical epoch derived from the
 // exact retained parent directory handle used by stable creation and rotation.
 func (w *Writer) StableNamespaceParentGeneration() (uint64, error) {

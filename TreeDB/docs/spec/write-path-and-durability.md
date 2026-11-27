@@ -909,7 +909,33 @@ stats update is not a valid source of recovery truth.
 Stable split-leaf manifest replacement syncs the immutable revision file and
 its retained parent, then syncs the separate compatibility file and its rename.
 The exact immutable token carries the completed content and namespace frontiers
-into the root publisher.
+into the root publisher. When `durabilitycut` is disabled, staging and syncing
+that replacement revision (both bound immutable replacements and pre-enqueue
+operational manifest replacements on synchronous commits before a root inherits
+a manifest token) may execute concurrently with flushing and syncing
+the candidate's already-captured external dependency handles; both barriers
+complete before index data sync or any durable meta write (or fail and abandon
+any unpublished bound manifest), and the publisher skips re-syncing dependencies
+already covered by that barrier.
+
+On platforms with stable relative namespace support, uncaptured split-leaf
+segment creation (`leaf_vlog/value-l*.log`) defers its parent-directory sync so
+the same-directory manifest replacement sync covers both the new segment entry
+and the immutable manifest revision; a fail-closed pre-meta barrier syncs
+`leaf_vlog` whenever no manifest replacement covered the deferred creation
+sequence. Writable `Open` seeds the `index.db` namespace creation proof so the
+first publication revalidates the cached proof without performing an extra
+parent-directory `fsync` during `Checkpoint()`. Optional `vlog_ref_counts.meta`
+persistence skips rewriting an already-present valid empty V6 cache file when
+tracked ordinary `value_vlog` counts remain empty and no ordinary `value_vlog`
+segments exist. Opportunistic checkpoint/close WAL cleanup
+(`CleanupCommandWALCoveredSegmentsAtCheckpoint` and `Close`) checks closed
+segment headers (and for fixed containers, the first extent witness at offset
+4096) at cleanup frontier `0` to avoid scanning retained stream segments or
+non-empty fixed containers when no potentially empty fixed-container candidate
+exists (while still flushing any pending WAL deletion-directory sync debt), and
+locked closed-stream scans reuse `CleanupReadBuffer` across closed stream
+segments.
 
 Once a root selects an immutable leaf manifest, ordinary inline and queued
 successors check that authority against their captured external leaf resources.

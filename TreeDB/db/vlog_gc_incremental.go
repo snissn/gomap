@@ -313,6 +313,8 @@ type valueLogRefTracker struct {
 	rawValid                                 bool
 	valid                                    bool
 	dirty                                    bool
+	persistedEmpty                           bool
+	staleOnDisk                              bool
 }
 
 func newValueLogRefTracker() *valueLogRefTracker {
@@ -519,19 +521,34 @@ func (t *valueLogRefTracker) dirtySnapshot() (uint64, valueLogRefIncarnation, ui
 	return seq, inc, revision, counts.toMap(), true
 }
 func (t *valueLogRefTracker) dirtySnapshotOwned() (uint64, valueLogRefIncarnation, uint64, valueLogRefCounts, bool, error) {
+	seq, inc, revision, counts, _, _, ok, err := t.dirtySnapshotOwnedWithDiskState()
+	return seq, inc, revision, counts, ok, err
+}
+
+func (t *valueLogRefTracker) dirtySnapshotOwnedWithDiskState() (uint64, valueLogRefIncarnation, uint64, valueLogRefCounts, bool, bool, bool, error) {
 	if t == nil {
-		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, nil
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, false, false, nil
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.valid || !t.dirty {
-		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, nil
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, false, false, nil
 	}
 	counts, err := t.counts.clone()
 	if err != nil {
-		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, err
+		return 0, valueLogRefIncarnation{}, 0, valueLogRefCounts{}, false, false, false, err
 	}
-	return t.commitSeq, t.incarnation, t.revision, counts, true, nil
+	return t.commitSeq, t.incarnation, t.revision, counts, t.persistedEmpty, t.staleOnDisk, true, nil
+}
+
+func (t *valueLogRefTracker) setDiskCacheState(persistedEmpty, staleOnDisk bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.persistedEmpty = persistedEmpty
+	t.staleOnDisk = staleOnDisk
+	t.mu.Unlock()
 }
 
 func (t *valueLogRefTracker) markClean(commitSeq uint64, incarnation valueLogRefIncarnation, revision uint64) {
@@ -539,6 +556,22 @@ func (t *valueLogRefTracker) markClean(commitSeq uint64, incarnation valueLogRef
 		return
 	}
 	t.mu.Lock()
+	if t.valid && t.commitSeq == commitSeq && t.incarnation == incarnation && t.revision == revision {
+		if t.dirty {
+			t.dirty = false
+			t.revision++
+		}
+	}
+	t.mu.Unlock()
+}
+
+func (t *valueLogRefTracker) markPersistedClean(commitSeq uint64, incarnation valueLogRefIncarnation, revision uint64, empty bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.persistedEmpty = empty
+	t.staleOnDisk = false
 	if t.valid && t.commitSeq == commitSeq && t.incarnation == incarnation && t.revision == revision {
 		if t.dirty {
 			t.dirty = false
@@ -617,7 +650,12 @@ func (db *DB) loadValueLogRefTracker() (_ bool, retErr error) {
 	}()
 	data, err := db.valueLogRefTracker.readCache(path)
 	if err != nil {
-		if os.IsNotExist(err) || errors.Is(err, errValueLogRefCorrupt) {
+		if os.IsNotExist(err) {
+			db.valueLogRefTracker.setDiskCacheState(false, false)
+			return false, nil
+		}
+		if errors.Is(err, errValueLogRefCorrupt) {
+			db.valueLogRefTracker.setDiskCacheState(false, true)
 			return false, nil
 		}
 		return false, err
@@ -626,16 +664,37 @@ func (db *DB) loadValueLogRefTracker() (_ bool, retErr error) {
 	if err != nil {
 		// Corrupt metadata is non-fatal: rebuild from full scan.
 		if errors.Is(err, errValueLogRefCorrupt) {
+			db.valueLogRefTracker.setDiskCacheState(false, true)
 			return false, nil
 		}
 		return false, err
 	}
 	defer disk.records.close()
 	if disk.commitSeq != commitSeq || !disk.incarnation.samePhysical(incarnation) {
+		db.valueLogRefTracker.setDiskCacheState(false, true)
 		return false, nil
 	}
+	loadedEmpty := disk.records.used == 0
 	db.valueLogRefTracker.replaceOwned(&disk.records, disk.commitSeq, incarnation, false)
+	db.valueLogRefTracker.setDiskCacheState(loadedEmpty, false)
 	return true, nil
+}
+
+func (db *DB) hasOrdinaryValueLogFiles() bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		return false
+	}
+	defer db.valueLogManager.Release(set)
+	for id, file := range set.Files {
+		if file != nil && !db.isLeafLogValueFile(id, file) {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) persistValueLogRefTracker() error {
@@ -646,12 +705,20 @@ func (db *DB) persistValueLogRefTracker() error {
 	if path == "" {
 		return nil
 	}
-	commitSeq, incarnation, revision, counts, ok, err := db.valueLogRefTracker.dirtySnapshotOwned()
+	commitSeq, incarnation, revision, counts, persistedEmpty, staleOnDisk, ok, err := db.valueLogRefTracker.dirtySnapshotOwnedWithDiskState()
 	if err != nil {
 		return err
 	}
 	defer counts.close()
 	if !ok {
+		return nil
+	}
+	// vlog_ref_counts.meta is an optional scan cache covering only ordinary
+	// value_vlog segments (leaf_vlog is excluded). Once a valid empty cache file
+	// is already on disk, skip rewriting and fsyncing it again while tracked
+	// counts remain empty and no ordinary value_vlog segments exist.
+	if counts.used == 0 && persistedEmpty && !staleOnDisk && !db.hasOrdinaryValueLogFiles() {
+		db.valueLogRefTracker.markClean(commitSeq, incarnation, revision)
 		return nil
 	}
 	blob, charge, err := encodeValueLogRefCountsOwned(commitSeq, incarnation, &counts)
@@ -668,7 +735,7 @@ func (db *DB) persistValueLogRefTracker() error {
 	if err := writeFileAtomic(path, blob, 0o644); err != nil {
 		return err
 	}
-	db.valueLogRefTracker.markClean(commitSeq, incarnation, revision)
+	db.valueLogRefTracker.markPersistedClean(commitSeq, incarnation, revision, counts.used == 0)
 	return nil
 }
 

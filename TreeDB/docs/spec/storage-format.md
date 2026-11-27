@@ -2303,7 +2303,28 @@ rename. Independent durable-root dependency syncs
 (`StabilizeStableNamespaceTokens`), and multi-segment advisory `.lenidx`
 rebuild syncs may execute concurrently across distinct handles/directories when
 `durabilitycut` is disabled, preserving deterministic error ordering and strict
-sequential execution when `durabilitycut` is enabled.
+sequential execution when `durabilitycut` is enabled. When `durabilitycut` is
+disabled and a successor requires a stable leaf-generation manifest replacement
+(either an immutable bound revision or an operational manifest replacement on a
+synchronous commit before a root inherits a manifest token), the producer may
+overlap flushing and syncing the candidate's already-captured external
+dependency handles with staging and syncing the replacement manifest revision;
+both barriers complete (or abort and abandon any unpublished bound manifest)
+before index data sync or any durable meta write, and the publisher avoids
+re-syncing dependencies already covered by that barrier.
+
+On platforms with stable relative namespace support, uncaptured split-leaf
+segment creation (`leaf_vlog/value-l*.log`) may defer its parent-directory
+`fsync` and notify the backend so the same-directory manifest replacement
+`fsync(leaf_vlog)` satisfies both entries; if a publication or checkpoint does
+not run manifest replacement after a deferred leaf segment creation (or a
+concurrent rotation advances past the sampled sequence), a fail-closed
+pre-meta barrier syncs `leaf_vlog` before index/meta durability. Direct
+stable-resource leaf capture continues to certify creation namespaces before
+recording proofs. Writable `Open` also seeds the `index.db` namespace creation
+proof on stable relative-namespace platforms so the first durable root
+publication reuses and revalidates that proof without paying a directory sync
+on the checkpoint path.
 
 An ordinary successor may reuse its inherited revision while the candidate's
 external leaf files are covered by it. A successor that needs a new raw file
@@ -4530,7 +4551,13 @@ original Snapshot generation. V5, malformed tuples, checksum failures, or a
 foreign physical pair miss and rebuild through the existing full scan.
 Process-local index-generation IDs are not persisted. A completed scan never
 receives identities captured from a later current generation. No atomic-file
-rename persistence assumption can make an old physical pair eligible.
+rename persistence assumption can make an old physical pair eligible. Because
+`vlog_ref_counts.meta` tracks only ordinary `value_vlog` segments (excluding
+`leaf_vlog`), once a valid empty V6 cache file is already present on disk,
+subsequent `persistValueLogRefTracker` calls skip rewriting and syncing it
+while tracked counts remain empty and no ordinary `value_vlog` segments exist;
+any stale, corrupt, non-empty, or non-empty-to-empty transition is still
+rebuilt or refreshed normally.
 
 Native scalar JSON index DDL uses catalog command kind **201**, payload format
 **17**, payload version **1**. It records the collection incarnation and prior/next
@@ -4794,10 +4821,20 @@ When each selected file uses the active file's format, it releases append
 exclusion to validate sealed frames and, for fixed containers, their complete
 reserves. It then reacquires exclusion to verify the prefix and validate the
 remaining inventory. It checks sealed streams' size and modification time
-against the captured handles. Ineligible inventories,
-`CleanupCommandWALCoveredSegments`, synchronous checkpoint and Close use
-the complete locked scan. Cleanup releases append exclusion before publication
-revalidation and never flushes buffered commands as a maintenance side effect.
+against the captured handles. Ineligible inventories, `CleanupCommandWALCoveredSegments`, synchronous
+checkpoint and Close use the complete locked scan (reusing one read-ahead
+`CleanupReadBuffer` across closed stream segments while keeping fixed-container
+extent/reserve validation unchanged). When opportunistic checkpoint/close
+cleanup (`CleanupCommandWALCoveredSegmentsAtCheckpoint` or `Close`) observes
+cleanup frontier `0`, it inspects closed non-active segment headers (and for
+fixed containers, the first extent witness at offset 4096) under append
+exclusion and skips full frame scanning when no potentially empty
+fixed-container segment is present (since stream segments and non-empty fixed
+containers can never be reclaimed at frontier `0`), while still flushing any
+pending WAL deletion-directory sync debt; explicit
+`CleanupCommandWALCoveredSegments` always executes the full scan.
+Cleanup releases append exclusion before publication revalidation and never
+flushes buffered commands as a maintenance side effect.
 
 An interrupted relaxed extent can retain an explicit incomplete-frame identity
 only when its start bounds/checksum and stable V2 identity validate and its end

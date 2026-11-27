@@ -66,6 +66,7 @@ type rootPublicationVisibleMemberV1 struct {
 	transaction              *rootpublication.DurableRootTransaction
 	primary                  *rootpublication.PreparedPrimaryRootV5
 	primaryRecordTransferred bool
+	dependenciesPreSynced    bool
 	sequence                 uint64
 	next                     page.MetaPageBody
 	prepared                 *freelist.PreparedCOWCandidateV1
@@ -303,9 +304,23 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 	return db.initializeRootPublicationRuntimeModeV1(idx, false)
 }
 
+func (db *DB) seedStableIndexNamespaceProof(idx *indexGen) error {
+	if db == nil || db.readOnly || db.dir == "" || idx == nil || idx.pager == nil || !rootpublication.StableRelativeNamespaceSupported() {
+		return nil
+	}
+	ns, err := idx.stableIndexNamespaceToken(db.dir)
+	if err != nil {
+		return err
+	}
+	return ns.ReleaseWithError()
+}
+
 func (db *DB) initializeRootPublicationRuntimeModeV1(idx *indexGen, startup bool) error {
 	if db == nil || idx == nil || db.durableRoot.record.CommitSeq == 0 {
 		return errors.New("missing root-publication durable base")
+	}
+	if err := db.seedStableIndexNamespaceProof(idx); err != nil {
+		return err
 	}
 	runtime, err := newRootPublicationRuntimeModeV1(db, idx, db.durableRoot, db.meta, startup)
 	if err != nil {
@@ -749,6 +764,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	install *rootPublicationVisibleInstallV1,
 	dependencyBytes uint64,
 	indexBytes uint64,
+	dependenciesPreSynced bool,
 	timing *CommandWALPublishTiming,
 	limits *PreparedRootPublicationLimits,
 ) (_ *rootpublication.PreparedRootCandidate, transferred bool, err error) {
@@ -927,7 +943,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	}()
 	member := &rootPublicationVisibleMemberV1{
 		sequence: next.CommitSeq, next: next, prepared: prepared, primary: primary,
-		resources: visibleResources, install: install, preparedLimits: limits,
+		dependenciesPreSynced: dependenciesPreSynced,
+		resources:             visibleResources, install: install, preparedLimits: limits,
 	}
 
 	runtime.mu.Lock()
@@ -1258,6 +1275,19 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			retErr = errors.Join(retErr, db.releaseCapturedRootResources(resources))
 		}
 	}()
+	dependenciesPreSynced := manifestUpdate.dependenciesPreSynced
+	if manifestUpdate.prepared == nil && leafManifest == nil {
+		opManifest, opRawFileIDs, opPreSynced, opErr := db.prepareSyncOperationalLeafManifest(resources, next, syncWrite, &post, &opts)
+		if opErr != nil {
+			return post, prePublishErr(opErr)
+		}
+		if opManifest != nil {
+			leafManifest, leafManifestRawFileIDs = opManifest, opRawFileIDs
+		}
+		if opPreSynced {
+			dependenciesPreSynced = true
+		}
+	}
 
 	rootReuseLocked := false
 	releaseReuse := func() {
@@ -1320,7 +1350,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	candidate, transferred, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		dependencyBytes, 0, &candidateTiming, opts.preparedLimits,
+		dependencyBytes, 0, dependenciesPreSynced, &candidateTiming, opts.preparedLimits,
 	)
 	if transferred {
 		if copied != nil {
@@ -1669,6 +1699,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 	memberResources := member.resources
 	memberNext := member.next
+	memberDependenciesPreSynced := member.dependenciesPreSynced
 	var previousAuxiliary []uint64
 	if previous := runtime.activeSeal; previous != nil {
 		previousAuxiliary = previous.prepared.AuxiliaryPageIDs()
@@ -1870,11 +1901,15 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	preparedOwned = false
 	dependenciesCovered := false
 	if !durabilitycut.Enabled() && resources != nil && token != nil && runtime.idx != nil &&
-		base.pending == nil && len(base.ambiguous) == 0 && base.slot <= 1 && base.slotResources[base.slot] != nil {
-		completed := base.dataCompletion
-		if completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
-			if covered, covErr := resources.DependenciesCoveredBy(base.slotResources[base.slot]); covErr == nil {
-				dependenciesCovered = covered
+		base.pending == nil && len(base.ambiguous) == 0 {
+		if memberDependenciesPreSynced {
+			dependenciesCovered = true
+		} else if base.slot <= 1 && base.slotResources[base.slot] != nil {
+			completed := base.dataCompletion
+			if completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
+				if covered, covErr := resources.DependenciesCoveredBy(base.slotResources[base.slot]); covErr == nil {
+					dependenciesCovered = covered
+				}
 			}
 		}
 	}
@@ -2051,10 +2086,11 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		}
 	}
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		installAuthority:    installAuthority,
-		resources:           seal.resources,
-		dependenciesCovered: seal.dependenciesCovered,
-		materialize:         func() error { return runtime.materializeSeal(seal) },
+		installAuthority:      installAuthority,
+		resources:             seal.resources,
+		dependenciesCovered:   seal.dependenciesCovered,
+		syncPendingLeafLogDir: db.syncPendingLeafLogDirIfNeeded,
+		materialize:           func() error { return runtime.materializeSeal(seal) },
 		syncIndex: func() error {
 			// V6 stages its opposite capsule before the sole PRIMARY fence.
 			// Other PRIMARY formats retain the original pre-authority sync.

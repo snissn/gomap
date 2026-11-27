@@ -677,6 +677,19 @@ func NewWriterWithStableResourcePinRegistry(path string, fileID uint32, registry
 	return newFileWriter(path, fileID, true, func(file *os.File) error { return file.Sync() }, registry)
 }
 
+// NewWriterWithStableResourcePinRegistryDeferredDirSync creates a writer like
+// NewWriterWithStableResourcePinRegistry, except on platforms with stable
+// relative namespace support it defers syncing the parent directory on new
+// segment creation so the caller can amortize that directory barrier with a
+// same-directory manifest sync (or an explicit pre-meta fallback barrier)
+// before durable root publication.
+func NewWriterWithStableResourcePinRegistryDeferredDirSync(path string, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
+	if registry == nil {
+		return nil, errors.New("valuelog: nil stable resource pin registry")
+	}
+	return newFileWriter(path, fileID, !rootpublication.StableRelativeNamespaceSupported(), func(file *os.File) error { return file.Sync() }, registry)
+}
+
 // NewStagingWriter creates a writer for an unreferenced temporary file whose
 // caller owns later promotion. It skips syncing the disposable source
 // directory; callers must sync the file, rename it into its durable namespace,

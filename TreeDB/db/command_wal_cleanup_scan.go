@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -108,6 +109,11 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 	if !scanSealedPrefix {
 		// Checkpoint, Close, and explicit cleanup use the original locked scan.
+		// Reuse one read-ahead buffer across closed stream segments (fixed
+		// containers bypass buffering inside CleanupReadBuffer.Open).
+		if !proof.journal.FixedContainer {
+			scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
+		}
 		return scan.finish(proof.journalOwner.WithCleanupScan(proof.journal, func() error {
 			return scan.scanLockedDirectory(db.dir)
 		}))
@@ -271,4 +277,71 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		return decisions, errDurableWALCleanupProofUnavailable
 	}
 	return decisions, scanErr
+}
+
+// hasZeroFrontierReclaimableCommandWALCandidate inspects only closed non-active
+// command-WAL segment headers under the cleanup scan lock when the cleanup
+// frontier is 0. At frontier 0, only a positively validated empty fixed
+// container can ever be reclaimed; stream segments and non-empty fixed
+// containers (whose first extent witness at offset 4096 is non-zero) are never
+// deletable at frontier 0. Returning (false, nil) lets opportunistic
+// checkpoint/close cleanup avoid scanning retained segments before fallback
+// convergence advances the cleanup frontier.
+func (db *DB) hasZeroFrontierReclaimableCommandWALCandidate(proof durableWALCleanupProofV1) (bool, error) {
+	const (
+		fixedWALHeaderSize  = 4096
+		fixedWALWitnessSize = 96
+	)
+	var hasCandidate bool
+	var probe [fixedWALWitnessSize]byte
+	err := proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+		segments, err := listSegments(resolveStorageLayout(db.dir).walDir, true)
+		if err != nil {
+			return err
+		}
+		activeByLane := commandWALActiveSeqByLane(segments)
+		for _, seg := range segments {
+			if seg.valueLog || !isCommandWALLaneSegment(seg) {
+				continue
+			}
+			if seg.seq == activeByLane[seg.lane] {
+				continue
+			}
+			file, err := os.Open(seg.path)
+			if err != nil {
+				return fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err)
+			}
+			fixed, magicErr := commitlog.HasFixedWALMagic(file)
+			var maybeEmptyFixed bool
+			var probeErr error
+			if magicErr == nil && fixed {
+				clear(probe[:])
+				n, readErr := file.ReadAt(probe[:], fixedWALHeaderSize)
+				if readErr != nil && !errors.Is(readErr, io.EOF) {
+					probeErr = readErr
+				} else if n < fixedWALWitnessSize {
+					maybeEmptyFixed = true
+				} else {
+					allZero := true
+					for _, b := range probe {
+						if b != 0 {
+							allZero = false
+							break
+						}
+					}
+					maybeEmptyFixed = allZero
+				}
+			}
+			closeErr := file.Close()
+			if err := errors.Join(magicErr, probeErr, closeErr); err != nil {
+				return fmt.Errorf("classify command WAL segment %s: %w", filepath.Base(seg.path), err)
+			}
+			if maybeEmptyFixed {
+				hasCandidate = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return hasCandidate, err
 }

@@ -153,6 +153,8 @@ type DB struct {
 	leafGenerationManifest            *leafGenerationManifest
 	leafGenerationManifestStore       *leafGenerationManifestStore
 	leafGenerationManifestDirty       atomic.Bool
+	leafLogDirUnsyncedSeq             atomic.Uint64
+	leafLogDirSyncedSeq               atomic.Uint64
 	leafGenerationPendingMu           sync.Mutex
 	leafGenerationPendingFileIDs      []uint32
 	leafGenerationPendingSet          map[uint32]struct{}
@@ -3735,7 +3737,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// dependency debt and recovery handoffs stay pinned until shutdown below.
 	// Only the exact pre-unlink sentinel qualifies; joined failures must surface.
 	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
-		if err := db.cleanupCommandWALCoveredSegmentsV1(false); err != nil &&
+		if err := db.cleanupCommandWALCoveredSegmentsV1(false, true); err != nil &&
 			err != rootpublication.ErrResourcePinned &&
 			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
 			!errors.Is(err, errDurableWALCleanupProofStale) &&
@@ -4528,6 +4530,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	var manifestUpdate ordinaryLeafManifestPublication
+	var opDependenciesPreSynced bool
 	if db.durableRoot.pending == nil {
 		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
@@ -4543,6 +4546,16 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 					retErr = errors.Join(retErr, manifestUpdate.finish(db.publicationPoisoned.Load()))
 				}()
 			}
+		}
+		if manifestUpdate.prepared == nil && leafManifest == nil {
+			opManifest, opRawFileIDs, opPreSynced, opErr := db.prepareSyncOperationalLeafManifest(durableResources, nextMeta, sync, &post, &opts)
+			if opErr != nil {
+				return post, prePublishErr(errors.Join(opErr, db.releaseCapturedRootResources(durableResources)))
+			}
+			if opManifest != nil {
+				leafManifest, leafManifestRawFileIDs = opManifest, opRawFileIDs
+			}
+			opDependenciesPreSynced = opPreSynced
 		}
 	} else if opts.durableResources != nil {
 		opts.durableResources.Release()
@@ -4562,7 +4575,13 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if prepareErr != nil {
 		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
 	}
+	if opDependenciesPreSynced {
+		candidate.dependenciesPreSynced = true
+	}
 	if manifestUpdate.prepared != nil {
+		if manifestUpdate.dependenciesPreSynced {
+			candidate.dependenciesPreSynced = true
+		}
 		db.inlineLeafManifest = &inlineLeafManifestPublication{candidate: candidate, update: manifestUpdate}
 		manifestUpdate = ordinaryLeafManifestPublication{}
 	}
@@ -5280,6 +5299,9 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 		if err := runtime.coordinator.WaitThrough(context.Background(), visibleCommitSeq); err != nil {
 			return publicRootPublicationErrorV1(err)
 		}
+		if err := db.syncPendingLeafLogDirIfNeeded(); err != nil {
+			return err
+		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
 		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefixWithDurableApplied(commitlog.SealedRotationDebt{}, visibleAppliedLSN)
 		if err != nil {
@@ -5324,9 +5346,17 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 			if err := db.leafPageLog.Sync(); err != nil {
 				return err
 			}
+			if err := db.syncPendingLeafLogDirIfNeeded(); err != nil {
+				return err
+			}
 			durLeafLog = time.Since(t0)
-		} else if err := db.leafPageLog.Sync(); err != nil {
-			return err
+		} else {
+			if err := db.leafPageLog.Sync(); err != nil {
+				return err
+			}
+			if err := db.syncPendingLeafLogDirIfNeeded(); err != nil {
+				return err
+			}
 		}
 	}
 	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})

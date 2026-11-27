@@ -673,11 +673,17 @@ revalidation before reclaim. `CompactStorage`'s specialized
 `UnsafeValueLogReclaimFencedUnreferenced` option is refused before checkpoint
 or writer rotation in this mode; its pre-held fence cannot be nested inside
 the COW maintenance fence. Ordinary `CompactStorage` remains supported.
-Its automatic unsafe reclamation policy stays disabled for COW. Successful
-concrete backend registration of a rotated leaf segment already transfers its
-registration and manifest identity to that backend; COW does not retain duplicate
-pending registration debt across an empty checkpoint. Unreferenced empty leaf
-segments can therefore be reclaimed without later trying to reopen them.
+Its automatic unsafe reclamation policy stays disabled for COW. Successful concrete backend registration of a rotated leaf segment already
+transfers its registration and manifest identity to that backend; COW does not
+retain duplicate pending registration debt across an empty checkpoint.
+Unreferenced empty leaf segments can therefore be reclaimed without later
+trying to reopen them. On platforms with stable relative namespace support,
+uncaptured `leaf_vlog` segment creation opens the writer with deferred
+parent-directory sync and records pending leaf-log directory sync on the
+backend (`NoteLeafLogDirSyncPending`) so the same-directory manifest
+replacement sync satisfies both entries (with a fail-closed pre-meta fallback
+sync if no manifest replacement runs); direct `AppendLeafPagesWithStableResources`
+continues to certify creation namespaces immediately.
 After backend compaction refreshes the COW basis, the same maintenance writer
 fence covers one ordinary leaf-GC settle pass for generations held retiring by
 the old basis. Independent old cuts and every recoverable slot/parent retain
