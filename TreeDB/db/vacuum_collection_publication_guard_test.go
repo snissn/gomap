@@ -1744,9 +1744,8 @@ var (
 	publicationGuardGOROOTOnce sync.Once
 	publicationGuardGOROOTVal  string
 
-	publicationGuardFixtureExportsOnce sync.Once
-	publicationGuardFixtureExports     map[string]string
-	publicationGuardFixtureExportsErr  error
+	publicationGuardFixtureExportsMu sync.Mutex
+	publicationGuardFixtureExports   = make(map[string]string)
 )
 
 func publicationGuardGOROOT() string {
@@ -1766,15 +1765,31 @@ func publicationGuardGOROOT() string {
 	return publicationGuardGOROOTVal
 }
 
-func loadPublicationGuardFixtureExports() (map[string]string, error) {
-	publicationGuardFixtureExportsOnce.Do(func() {
-		cmd := exec.Command("go", "list", "-json", "-export", "-deps", "sync/atomic")
+func loadPublicationGuardFixtureExports(importPaths []string) (map[string]string, error) {
+	publicationGuardFixtureExportsMu.Lock()
+	defer publicationGuardFixtureExportsMu.Unlock()
+
+	var missing []string
+	seen := make(map[string]struct{}, len(importPaths))
+	for _, p := range importPaths {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if _, ok := publicationGuardFixtureExports[p]; !ok {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		args := append([]string{"list", "-json", "-export", "-deps"}, missing...)
+		cmd := exec.Command("go", args...)
 		output, err := cmd.Output()
 		if err != nil {
-			publicationGuardFixtureExportsErr = fmt.Errorf("go list -export -deps sync/atomic: %w", err)
-			return
+			return nil, fmt.Errorf("go list -export -deps %v: %w", missing, err)
 		}
-		exports := make(map[string]string)
 		dec := json.NewDecoder(bytes.NewReader(output))
 		for {
 			var listed struct {
@@ -1786,16 +1801,18 @@ func loadPublicationGuardFixtureExports() (map[string]string, error) {
 				break
 			}
 			if err != nil {
-				publicationGuardFixtureExportsErr = fmt.Errorf("decode go list output: %w", err)
-				return
+				return nil, fmt.Errorf("decode go list output: %w", err)
 			}
 			if listed.Export != "" {
-				exports[listed.ImportPath] = listed.Export
+				publicationGuardFixtureExports[listed.ImportPath] = listed.Export
 			}
 		}
-		publicationGuardFixtureExports = exports
-	})
-	return publicationGuardFixtureExports, publicationGuardFixtureExportsErr
+	}
+	snapshot := make(map[string]string, len(publicationGuardFixtureExports))
+	for k, v := range publicationGuardFixtureExports {
+		snapshot[k] = v
+	}
+	return snapshot, nil
 }
 
 // These summaries are bound to the audited toolchain source. A source change
@@ -2777,7 +2794,11 @@ func (db *DB) publishSnapshotView() {}
 	info := publicationGuardTypesInfo()
 	imp := importer.Default()
 	if runtime.GOROOT() == "" && os.Getenv("GOROOT") == "" {
-		exports, err := loadPublicationGuardFixtureExports()
+		importPaths := make([]string, 0, len(file.Imports))
+		for _, spec := range file.Imports {
+			importPaths = append(importPaths, strings.Trim(spec.Path.Value, "\"`"))
+		}
+		exports, err := loadPublicationGuardFixtureExports(importPaths)
 		if err != nil {
 			t.Fatalf("load fixture exports: %v", err)
 		}
