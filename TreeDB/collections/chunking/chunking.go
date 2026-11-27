@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -36,9 +37,14 @@ const (
 	// `size` runes (the final window may be shorter).
 	StrategyFixedWindow Strategy = "fixed_window"
 	// StrategyRecursive fills each size window at the furthest boundary of the
-	// first configured separator present, then advances by end-overlap. It
-	// falls through progressively finer separators; an empty separator causes
-	// an immediate hard split for that window.
+	// first configured separator present, then advances by end-overlap (or snaps
+	// forward to a line/word boundary in [end-overlap, end) when
+	// SnapOverlapToBoundary is true). By default separators stay at the end of
+	// chunk N; setting SeparatorPlacementStart attaches structural/prefix
+	// separators to the start of chunk N+1 while keeping delimiter-only
+	// separators at the end of chunk N. It falls through progressively finer
+	// separators; an empty separator causes an immediate hard split for that
+	// window.
 	StrategyRecursive Strategy = "recursive"
 )
 
@@ -47,6 +53,21 @@ const (
 type SizeUnit string
 
 const SizeUnitRunes SizeUnit = "runes"
+
+// SeparatorPlacement controls where StrategyRecursive places matched
+// structural separators relative to chunk boundaries.
+type SeparatorPlacement string
+
+const (
+	// SeparatorPlacementEnd attaches every matched separator to the end of the
+	// preceding chunk (default, legacy behavior).
+	SeparatorPlacementEnd SeparatorPlacement = "end"
+	// SeparatorPlacementStart keeps delimiter-only separators (whitespace and
+	// ASCII sentence/clause punctuation) attached to the end of chunk N, while
+	// attaching structural/prefix separators (such as headings, declarations,
+	// or LaTeX section commands) to the start of chunk N+1.
+	SeparatorPlacementStart SeparatorPlacement = "start"
+)
 
 // KindChunk is the kind value carried by every generated child document.
 const KindChunk = "chunk"
@@ -127,12 +148,21 @@ type Config struct {
 	// Size is the maximum chunk length, in runes.
 	Size int `json:"size"`
 	// Overlap is the number of trailing runes repeated at the start of the next
-	// chunk. Must satisfy 0 <= Overlap < Size.
+	// chunk (or the upper bound on repeated runes when SnapOverlapToBoundary is
+	// true). Must satisfy 0 <= Overlap < Size.
 	Overlap int `json:"overlap"`
 	// Separators customizes StrategyRecursive splitting, tried in order. An
 	// empty entry means a hard split by runes. When omitted,
 	// DefaultSeparators is used.
 	Separators []string `json:"separators,omitempty"`
+	// SeparatorPlacement controls where StrategyRecursive attaches matched
+	// separators. The zero value ("") defaults to SeparatorPlacementEnd.
+	// SeparatorPlacementStart is only valid for StrategyRecursive.
+	SeparatorPlacement SeparatorPlacement `json:"separator_placement,omitempty"`
+	// SnapOverlapToBoundary snaps StrategyRecursive overlap starts forward to a
+	// nearby line or word boundary so chunks avoid starting mid-word when
+	// possible. Only valid for StrategyRecursive.
+	SnapOverlapToBoundary bool `json:"snap_overlap_to_boundary,omitempty"`
 }
 
 // DefaultSeparators returns the default recursive splitting order: paragraph
@@ -140,6 +170,34 @@ type Config struct {
 // split ("" entry).
 func DefaultSeparators() []string {
 	return []string{"\n\n", "\n", ". ", " ", ""}
+}
+
+// MarkdownSeparators returns a fresh separator list for Markdown documents,
+// splitting on ATX headings before paragraphs, lines, sentences, words, and a
+// trailing hard rune split (""). Pair with SeparatorPlacementStart so headings
+// remain attached to the start of their sections.
+func MarkdownSeparators() []string {
+	return []string{"\n# ", "\n## ", "\n### ", "\n#### ", "\n\n", "\n", ". ", " ", ""}
+}
+
+// CodeSeparators returns a fresh separator list for source code and formal
+// proof files (Go, Python, Lean, etc.), splitting on top-level declarations
+// before blank lines, lines, words, and a trailing hard rune split (""). Pair
+// with SeparatorPlacementStart so declarations start their own chunks.
+func CodeSeparators() []string {
+	return []string{
+		"\nfunc ", "\ntype ", "\nclass ", "\ndef ", "\nasync def ",
+		"\ntheorem ", "\nlemma ", "\nstructure ", "\nnamespace ",
+		"\n\n", "\n", " ", "",
+	}
+}
+
+// LaTeXSeparators returns a fresh separator list for LaTeX documents, splitting
+// on sectioning and environment commands before paragraphs, lines, sentences,
+// words, and a trailing hard rune split (""). Pair with SeparatorPlacementStart
+// so section headers and environments start their own chunks.
+func LaTeXSeparators() []string {
+	return []string{"\n\\section", "\n\\subsection", "\n\\subsubsection", "\n\\begin{", "\n\n", "\n", ". ", " ", ""}
 }
 
 func (c Config) normalizedSeparators() []string {
@@ -166,6 +224,22 @@ func (c Config) Validate() error {
 	}
 	if c.Overlap < 0 || c.Overlap >= c.Size {
 		return fmt.Errorf("chunking: overlap %d out of range [0, size=%d)", c.Overlap, c.Size)
+	}
+	switch c.SeparatorPlacement {
+	case "", SeparatorPlacementEnd, SeparatorPlacementStart:
+	default:
+		return fmt.Errorf("chunking: unsupported separator placement %q (want %q or %q)",
+			string(c.SeparatorPlacement), SeparatorPlacementEnd, SeparatorPlacementStart)
+	}
+	if c.Strategy == StrategyFixedWindow {
+		if c.SeparatorPlacement == SeparatorPlacementStart {
+			return fmt.Errorf("chunking: separator placement %q is only supported for strategy %q",
+				string(c.SeparatorPlacement), StrategyRecursive)
+		}
+		if c.SnapOverlapToBoundary {
+			return fmt.Errorf("chunking: snap_overlap_to_boundary is only supported for strategy %q",
+				StrategyRecursive)
+		}
 	}
 	return nil
 }
@@ -267,7 +341,9 @@ func ValidateChunkChild(documentID string, document []byte) error {
 // SplitChunks splits text into a deterministic, ordered stream of child chunks
 // under parentID. Every rune offset of text is covered by at least one chunk,
 // every chunk is at most Size runes, and consecutive chunks share exactly
-// Overlap trailing/leading runes. Empty text yields no chunks.
+// Overlap trailing/leading runes (or at most Overlap runes when
+// SnapOverlapToBoundary is true on StrategyRecursive). Empty text yields no
+// chunks.
 func SplitChunks(parentID, text string, cfg Config) ([]Chunk, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -283,7 +359,7 @@ func SplitChunks(parentID, text string, cfg Config) ([]Chunk, error) {
 	if cfg.Strategy == StrategyFixedWindow {
 		spans = fixedWindowSpans(runes, cfg.Size, cfg.Overlap)
 	} else {
-		spans = recursiveSpans(runes, cfg.normalizedSeparators(), cfg.Size, cfg.Overlap)
+		spans = recursiveSpans(runes, cfg.normalizedSeparators(), cfg.Size, cfg.Overlap, cfg.SeparatorPlacement, cfg.SnapOverlapToBoundary)
 	}
 	validText := utf8.ValidString(text)
 	var byteOffsets []int
@@ -343,39 +419,92 @@ func fixedWindowSpans(runes []rune, size, overlap int) []span {
 }
 
 // recursiveSpans chooses the furthest boundary for the first configured
-// separator that occurs inside each size window. The next window starts at the
-// prior end minus overlap, so every path has identical overlap semantics.
-func recursiveSpans(runes []rune, seps []string, size, overlap int) []span {
+// separator that occurs inside each size window. By default, the next window
+// starts at end - overlap; when snapOverlap is true and overlap > 0, the start
+// snaps forward to a nearby line or word boundary in [end-overlap, end) while
+// preserving strict forward progress and full rune coverage.
+func recursiveSpans(runes []rune, seps []string, size, overlap int, placement SeparatorPlacement, snapOverlap bool) []span {
 	var spans []span
 	for start := 0; start < len(runes); {
 		capEnd := start + size
 		if capEnd >= len(runes) {
 			capEnd = len(runes)
 		}
-		end := recursiveChunkEnd(runes, start, capEnd, overlap, seps)
+		end := recursiveChunkEnd(runes, start, capEnd, overlap, seps, placement)
 		spans = append(spans, span{start: start, end: end})
 		if end == len(runes) {
 			break
 		}
-		start = end - overlap
+		if snapOverlap && overlap > 0 {
+			start = snapOverlapStart(runes, end, overlap)
+		} else {
+			start = end - overlap
+		}
 	}
 	return spans
 }
 
-func recursiveChunkEnd(runes []rune, start, capEnd, overlap int, seps []string) int {
+func isDelimiterOnlySeparator(sep []rune) bool {
+	if len(sep) == 0 {
+		return false
+	}
+	for _, r := range sep {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		switch r {
+		case '.', '!', '?', ';', ',':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func snapOverlapStart(runes []rune, end, overlap int) int {
+	rawStart := end - overlap
+	if rawStart > 0 && runes[rawStart-1] == '\n' {
+		return rawStart
+	}
+	for idx := rawStart; idx+1 < end; idx++ {
+		if runes[idx] == '\n' {
+			return idx + 1
+		}
+	}
+	if rawStart > 0 && unicode.IsSpace(runes[rawStart-1]) {
+		return rawStart
+	}
+	for idx := rawStart; idx+1 < end; idx++ {
+		if unicode.IsSpace(runes[idx]) {
+			return idx + 1
+		}
+	}
+	return rawStart
+}
+
+func recursiveChunkEnd(runes []rune, start, capEnd, overlap int, seps []string, placement SeparatorPlacement) int {
 	for _, sep := range seps {
 		if sep == "" {
 			return capEnd
 		}
 		separator := []rune(sep)
+		splitBeforeStructural := placement == SeparatorPlacementStart && !isDelimiterOnlySeparator(separator)
 		last := 0
 		for i := start; i <= capEnd-len(separator); {
 			if slices.Equal(runes[i:i+len(separator)], separator) {
 				candidate := i + len(separator)
+				if splitBeforeStructural {
+					if separator[0] == '\n' && len(separator) > 1 {
+						candidate = i + 1
+					} else {
+						candidate = i
+					}
+				}
 				if candidate > start+overlap {
 					last = candidate
 				}
-				i = candidate
+				i += len(separator)
 				continue
 			}
 			i++
