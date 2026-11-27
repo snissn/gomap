@@ -50,6 +50,10 @@ func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
 			_ = database.Close()
 			t.Fatal("default ProfileNoWALFast COW DB did not enable COW pressure drain worker")
 		}
+		if got := database.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "true" {
+			_ = database.Close()
+			t.Fatalf("default ProfileNoWALFast COW DB private_cow_default = %q, want %q", got, "true")
+		}
 		if err := database.Close(); err != nil {
 			t.Fatalf("Close(default ProfileNoWALFast): %v", err)
 		}
@@ -69,6 +73,9 @@ func TestPublicProfileNoWALFastStartsCOWPressureDrain(t *testing.T) {
 		}()
 		if disabledDB.cached.COWPressureDrainEnabled() {
 			t.Fatal("NoWAL COW DB unexpectedly enabled pressure drain when BackgroundCheckpointInterval and BackgroundCheckpointIdleDuration are disabled")
+		}
+		if got := disabledDB.Stats()["treedb.cache.vlog_generation.leaf_pack.private_cow_default"]; got != "false" {
+			t.Fatalf("disabled NoWAL COW DB private_cow_default = %q, want %q", got, "false")
 		}
 	})
 

@@ -129,7 +129,7 @@ func (db *DB) shouldRunPeriodicPrivateCOWLeafPack(now time.Time) (bool, string) 
 // outer-leaf generational storage (both command-WAL and NoWALFast) use this
 // bounded path; non-COW stores remain unchanged.
 func (db *DB) privateCOWLeafPackEnabled() bool {
-	if db == nil || db.cow == nil || db.cow.txnOwner == nil || !db.indexOuterLeavesInValueLog ||
+	if db == nil || db.cow == nil || db.cow.txnOwner == nil || db.disablePrivateCOWLeafPack || !db.indexOuterLeavesInValueLog ||
 		db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) || envBool(envDisableVlogGenerationLoop) {
 		return false
 	}

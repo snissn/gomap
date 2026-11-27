@@ -2414,10 +2414,16 @@ initial pass leaves unpinned dead generations in `retiring` solely because of
 an older recoverable fallback root, GC converges the alternate durable meta
 slot onto the current root using the existing durable publication path before
 retrying reclamation, and refreshes conservative outer-leaf slot pins when
-deleted records remain unpruned; ordinary `LeafGenerationGC`
+deleted records remain unpruned; ordinary backend `LeafGenerationGC`
 (`ConvergeFallback: false`) retains existing fallback roots, and dry-run,
-read-only, native-semantic-owner, and active snapshot-pin exclusions remain
-unchanged so fallback recovery and held readers stay valid. When
+read-only, native-semantic-owner backend `LeafGenerationGC`, and active
+snapshot-pin exclusions remain unchanged so fallback recovery and held readers
+stay valid. Separately, the cached private-COW leaf-maintenance slice (for
+eligible command-WAL and NoWAL private-COW stores when not opted out, such as
+outside `OpenExternalRecovery`) may perform exact-endpoint fallback convergence
+under `flushMu` before or between maintained GC passes while preserving mutable
+suffixes, newer frozen suffixes, and held readers (see
+[value-log lifecycle](value-log-lifecycle.md#51-periodic-whole-generation-leaf-reclamation)). When
 `VacuumIndexOffline` swaps a rebuilt `index.db` under the exclusive database
 lock, it may also prune settled 0-logical-byte fixed command-WAL containers
 once the replacement index is durably synced, while conservatively retaining
