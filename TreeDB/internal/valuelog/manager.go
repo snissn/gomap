@@ -65,6 +65,9 @@ type File struct {
 	// deletionAdmissions is protected by manager.mu. Eviction must retain the
 	// exact owner and parent until each admitted destructive attempt finishes.
 	deletionAdmissions int
+	// deletionDone is lazily allocated under manager.mu when a caller awaits
+	// an in-flight deletion admission and closed when deletionAdmissions hits 0.
+	deletionDone chan struct{}
 	// The physical parent is captured with retirementIdentity, independently of
 	// an optional pin registry. A missing configured alias is not absence proof.
 	retirementParentMu       sync.Mutex
@@ -3434,6 +3437,86 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 	m.mu.Unlock()
 	// Preserve the admitted-attempt result even when physical removal fails.
 	return true, m.finishDirectSegmentDeletion(f, identity, lease)
+}
+
+// RemoveUnpinnedZombies synchronously removes any tracked zombie segments that
+// currently have zero snapshot references and no remaining stable-pin blockers.
+// Zombies still pinned by another live Snapshot or identity pin are left
+// untouched without blocking. If a concurrent deletion worker has already
+// admitted a zombie, RemoveUnpinnedZombies waits for that bounded unlink
+// attempt to complete so callers observe the completed unlink on return.
+func (m *Manager) RemoveUnpinnedZombies() error {
+	if m == nil || m.closingAtomic.Load() {
+		return nil
+	}
+	m.mu.Lock()
+	if m.closing || m.retiredCount == 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	var candidates []uint32
+	var inFlight []chan struct{}
+	for id, f := range m.files {
+		if f == nil || !f.IsZombie.Load() || f.RefCount.Load() != 0 {
+			continue
+		}
+		if f.deletionAdmissions > 0 {
+			if f.deletionDone == nil {
+				f.deletionDone = make(chan struct{})
+			}
+			inFlight = append(inFlight, f.deletionDone)
+			continue
+		}
+		candidates = append(candidates, id)
+	}
+	m.mu.Unlock()
+
+	var firstErr error
+	for _, id := range candidates {
+		removed, err := m.RemoveSegmentIfUnpinned(id)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if removed {
+			continue
+		}
+		// If a racing retry worker admitted deletion between our snapshot and
+		// RemoveSegmentIfUnpinned, await that bounded unlink so it finishes
+		// before RemoveUnpinnedZombies returns.
+		m.mu.Lock()
+		if !m.closing {
+			if f := m.files[id]; f != nil && f.IsZombie.Load() && f.RefCount.Load() == 0 && f.deletionAdmissions > 0 {
+				if f.deletionDone == nil {
+					f.deletionDone = make(chan struct{})
+				}
+				inFlight = append(inFlight, f.deletionDone)
+			}
+		}
+		m.mu.Unlock()
+	}
+	for _, done := range inFlight {
+		<-done
+	}
+	if len(inFlight) > 0 && !m.closingAtomic.Load() {
+		// Re-check once in case an awaited worker aborted a transient attempt
+		// on a segment that is now unpinned.
+		m.mu.Lock()
+		var retryIDs []uint32
+		if !m.closing && m.retiredCount > 0 {
+			for id, f := range m.files {
+				if f != nil && f.IsZombie.Load() && f.RefCount.Load() == 0 && f.deletionAdmissions == 0 {
+					retryIDs = append(retryIDs, id)
+				}
+			}
+		}
+		m.mu.Unlock()
+		for _, id := range retryIDs {
+			if _, err := m.RemoveSegmentIfUnpinned(id); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.

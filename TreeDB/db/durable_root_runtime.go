@@ -226,17 +226,18 @@ func (sink durablePagerSinkV1) WriteCandidatePageV1(pageID uint64, view freelist
 }
 
 type durableRootRuntimeV1 struct {
-	primary       *primaryDurableRuntimeV5
-	meta          page.DurableMetaV1
-	record        rootpublication.DurableRootRecordV1
-	manifest      *rootpublication.DependencyManifestV1
-	slot          uint64
-	slotCommit    [2]uint64
-	slotResources [2]*rootpublication.StableResourceSet
-	slotMeta      [2]page.DurableMetaV1
-	slotRecord    [2]rootpublication.DurableRootRecordV1
-	pending       *durableRootPublishCandidateV1
-	ambiguous     []*durableRootPublishCandidateV1
+	primary        *primaryDurableRuntimeV5
+	dataCompletion primaryDataCompletionV6
+	meta           page.DurableMetaV1
+	record         rootpublication.DurableRootRecordV1
+	manifest       *rootpublication.DependencyManifestV1
+	slot           uint64
+	slotCommit     [2]uint64
+	slotResources  [2]*rootpublication.StableResourceSet
+	slotMeta       [2]page.DurableMetaV1
+	slotRecord     [2]rootpublication.DurableRootRecordV1
+	pending        *durableRootPublishCandidateV1
+	ambiguous      []*durableRootPublishCandidateV1
 }
 
 // durableRootPublishCandidateV1 owns every identity and allocator reservation
@@ -2337,14 +2338,26 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	if candidate == nil || candidate.released || candidate.metaMutated {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root candidate is not retryable"), true)
 	}
+	dependenciesCovered := false
+	if !durabilitycut.Enabled() && candidate.resources != nil && candidate.token != nil && candidate.idx != nil &&
+		candidate.base.pending == nil && len(candidate.base.ambiguous) == 0 && candidate.base.slot <= 1 &&
+		candidate.base.slotResources[candidate.base.slot] != nil {
+		completed := candidate.base.dataCompletion
+		if completed.pager == candidate.idx.pager && completed.incarnation == candidate.token.Generation() && completed.identity == candidate.token.Identity() {
+			if covered, covErr := candidate.resources.DependenciesCoveredBy(candidate.base.slotResources[candidate.base.slot]); covErr == nil {
+				dependenciesCovered = covered
+			}
+		}
+	}
 	metaPath := filepath.Join(db.dir, indexFileName)
 	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
-		resources:   candidate.resources,
-		materialize: func() error { return db.materializeDurableRootCandidateV1(candidate) },
-		syncIndex:   candidate.token.SyncThrough,
-		sink:        durablePagerSinkV1{pager: candidate.idx.pager},
-		target:      candidate.target,
-		meta:        candidate.meta,
+		resources:           candidate.resources,
+		dependenciesCovered: dependenciesCovered,
+		materialize:         func() error { return db.materializeDurableRootCandidateV1(candidate) },
+		syncIndex:           candidate.token.SyncThrough,
+		sink:                durablePagerSinkV1{pager: candidate.idx.pager},
+		target:              candidate.target,
+		meta:                candidate.meta,
 		syncMeta: func() error {
 			return candidate.token.WithPinnedFile(func(file *os.File) error {
 				return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
@@ -2377,6 +2390,13 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	}
 
 	current := candidate.base
+	if candidate.idx != nil && candidate.token != nil {
+		current.dataCompletion = primaryDataCompletionV6{
+			pager:       candidate.idx.pager,
+			incarnation: candidate.token.Generation(),
+			identity:    candidate.token.Identity(),
+		}
+	}
 	current.meta = candidate.meta
 	current.record = candidate.record
 	current.manifest = candidate.manifest.DiagnosticProjectionV1()

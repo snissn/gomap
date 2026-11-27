@@ -33,6 +33,7 @@ func (l *COWExternalLease) ShrinkNativeBytes(bytes, retainedBytes uint64) error 
 	b.stats.TotalBytes -= bytes
 	b.stats.ReservedBytes -= bytes
 	b.stats.ExternalBytes -= bytes
+	b.updateFastHeadroomLocked()
 	return nil
 }
 
@@ -75,5 +76,6 @@ func (l *COWExternalLease) SplitNativeBytes(bytes, retainedBytes uint64) (*COWEx
 	}
 	l.charge -= child
 	b.stats.ExternalLeases++
+	b.updateFastHeadroomLocked()
 	return &COWExternalLease{budget: b, charge: child}, nil
 }

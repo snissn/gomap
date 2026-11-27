@@ -2754,22 +2754,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 	}
-	leafEntrySizeWithRevision := func(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
-		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
-		if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
-			entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
-		}
-		return entrySize, prefixLen, suffixLen
-	}
+	var (
+		oldLoaded   bool
+		oldKey      []byte
+		oldVal      []byte
+		oldPtr      page.ValuePtr
+		oldRevision page.EntryRevision
+		oldFlags    byte
+	)
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
-		var oldLoaded bool
-		var oldKey, oldVal []byte
-		var oldPtr page.ValuePtr
-		var oldRevision page.EntryRevision
-		var oldFlags byte
 
 		if oldIdx >= oldCount && opIdx >= len(ops) {
 			break
@@ -2781,21 +2777,23 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// useOld = true
 		} else {
 			// Compare
-			// Optimization: decode old entry once; reuse it below when we
-			// consume from oldNode in the same loop iteration.
-			k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
-			if err != nil {
-				return page.ChildRef{}, nil, err
+			// Optimization: decode old entry once and retain it across
+			// consecutive batch-winning iterations until oldIdx advances.
+			if !oldLoaded {
+				k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
+				if err != nil {
+					return page.ChildRef{}, nil, err
+				}
+				oldLoaded = true
+				oldKey = k
+				oldVal = v
+				oldPtr = ptr
+				oldRevision = rev
+				oldFlags = f
 			}
-			oldLoaded = true
-			oldKey = k
-			oldVal = v
-			oldPtr = ptr
-			oldRevision = rev
-			oldFlags = f
 			batchKey := ops[opIdx].Key
 
-			cmp := bytes.Compare(k, batchKey)
+			cmp := bytes.Compare(oldKey, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -2803,10 +2801,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			} else {
 				// Equal: Update (Batch wins). The old entry is being overwritten
 				// or deleted; if it was a pointer, track it as dead bytes.
-				recordRemovedEntry(f, ptr)
+				recordRemovedEntry(oldFlags, oldPtr)
 
 				useBatch = true
 				oldIdx++ // Skip old
+				oldLoaded = false
 			}
 		}
 
@@ -2860,6 +2859,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				}
 			}
 			oldIdx++
+			oldLoaded = false
 			if flags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
 			}
@@ -2870,13 +2870,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		entrySize, prefixLen, suffixLen := leafEntrySizeWithRevision(target, key, val, flags, revision)
-		var err error
-		if z.leafSoftFull(target, entrySize) {
-			err = node.ErrNodeFull
-		} else {
-			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
-		}
+		err := target.TryAddLeafEntryWithRevisionReserve(key, val, flags, valPtr, revision, z.leafReserveBytes)
 		if err == node.ErrNodeFull {
 			// SPLIT!
 			allocHint := uint64(0)
@@ -2947,9 +2941,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			targetOuterLeafDataPooled = z.outerLeavesInValueLog && reuseOuterLeafPages
 
 			// Retry insert
-			entrySize, prefixLen, suffixLen = leafEntrySizeWithRevision(target, key, val, flags, revision)
-			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
+			err = target.TryAddLeafEntryWithRevisionReserve(key, val, flags, valPtr, revision, 0)
 			if err != nil {
+				entrySize := target.LeafEntrySize(key, val, flags)
+				if revision != page.LegacyEntryRevision && !target.LeafEntryRevisionsEnabled() {
+					entrySize = target.LeafEntrySizeWithRevision(key, val, flags, revision)
+				}
 				return page.ChildRef{}, nil, fmt.Errorf("zipper: leaf split retry key_len=%d val_len=%d flags=%d entry_size=%d free=%d: %w", len(key), len(val), flags, entrySize, target.FreeSpace(), err)
 			}
 		} else if err != nil {

@@ -1045,6 +1045,9 @@ func (s *Server) findMsgResponseInto(ctx context.Context, dst []byte, command wi
 			return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
 		}
 	}
+	if msg, handled, err := s.tryFastPrimaryEqualityFindMsgResponseInto(ctx, dst, command, requestID, responseTo); handled {
+		return msg, err
+	}
 	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err
@@ -2759,7 +2762,10 @@ func putMongoUpdateResultChan(done chan mongoUpdateCoalescerResult) {
 	mongoUpdateResultChanPool.Put(done)
 }
 
-const defaultUpdateCoalescingBatchHysteresis = 25 * time.Millisecond
+const (
+	defaultUpdateCoalescingBatchHysteresis = 25 * time.Millisecond
+	defaultUpdateCoalescingInlineMaxActive = 4
+)
 
 type mongoUpdateCoalescer struct {
 	maxDelay        time.Duration
@@ -2785,6 +2791,7 @@ type mongoUpdateCoalescer struct {
 	nowNano         func() int64
 	batchBuf        []mongoUpdateCoalescerRequest
 	updatesBuf      []mongoUpdateItem
+	bsonItemsBuf    []collections.BSONSetUpdateBatchItem
 	dupSeen         map[string]struct{}
 }
 
@@ -2815,7 +2822,7 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	defer coalescer.inFlight.Add(-1)
 
 	if coalescer.maxDelay == 0 {
-		if active > 2 {
+		if active > defaultUpdateCoalescingInlineMaxActive {
 			coalescer.noteBatchConcurrency()
 		} else if len(coalescer.requests) == 0 &&
 			!coalescer.workerBusy.Load() &&
@@ -3278,7 +3285,7 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	}
 drained:
 	c.runBatch(batch)
-	if c.maxDelay == 0 && (len(batch) >= 3 || c.inFlight.Load() > 2) {
+	if c.maxDelay == 0 && (len(batch) > defaultUpdateCoalescingInlineMaxActive || c.inFlight.Load() > defaultUpdateCoalescingInlineMaxActive) {
 		c.noteBatchConcurrency()
 	}
 	clear(batch)
@@ -3292,27 +3299,74 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 	if len(batch) == 1 ||
 		c.hasDuplicateKeys(batch) ||
-		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
-		!mongoUpdateCoalescerBatchCanUseBatch(batch) {
+		!mongoUpdateCoalescerUsesSingleCollection(batch) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
-	if cap(c.updatesBuf) < len(batch) {
-		c.updatesBuf = make([]mongoUpdateItem, len(batch))
+	canBatch, canBSONSet := mongoUpdateCoalescerBatchCapabilities(batch)
+	if !canBatch {
+		runMongoUpdateCoalescerSequential(batch)
+		return
 	}
-	updates := c.updatesBuf[:len(batch)]
-	for i, req := range batch {
-		updates[i] = req.item
-	}
-	defer clear(updates)
+	var journalVal standaloneOperationJournalOutcome
 	var journal *standaloneOperationJournalOutcome
 	for _, req := range batch {
 		if req.item.budget != nil && req.item.budget.journal != nil {
-			journal = &standaloneOperationJournalOutcome{}
+			journal = &journalVal
 			break
 		}
 	}
-	results, batched, err := runMongoUpdateBatchResultsWithJournal(batch[0].col, updates, journal)
+	var (
+		results []collections.UpdateBatchResult
+		batched bool
+		err     error
+	)
+	if canBSONSet {
+		var inlineItems [32]collections.BSONSetUpdateBatchItem
+		var items []collections.BSONSetUpdateBatchItem
+		if len(batch) <= len(inlineItems) {
+			items = inlineItems[:len(batch)]
+		} else {
+			if cap(c.bsonItemsBuf) < len(batch) {
+				c.bsonItemsBuf = make([]collections.BSONSetUpdateBatchItem, len(batch))
+			}
+			items = c.bsonItemsBuf[:len(batch)]
+			defer clear(items)
+		}
+		for i, req := range batch {
+			items[i] = collections.BSONSetUpdateBatchItem{
+				DocumentID: req.item.key,
+				Fields:     req.item.bsonSetFields,
+			}
+		}
+		if budget := batch[0].item.budget; budget != nil {
+			if budget.beforeNativeUpdateBatchHook != nil {
+				budget.beforeNativeUpdateBatchHook()
+			}
+			if err = budget.checkDeadline(); err != nil {
+				results, batched = nil, false
+			}
+		}
+		if err == nil {
+			if journal != nil {
+				var completion backenddb.NativeJournalCompletion
+				results, batched, completion, err = batch[0].col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt(items)
+				journal.completion, journal.err = completion, err
+			} else {
+				results, batched, err = batch[0].col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
+			}
+		}
+	} else {
+		if cap(c.updatesBuf) < len(batch) {
+			c.updatesBuf = make([]mongoUpdateItem, len(batch))
+		}
+		updates := c.updatesBuf[:len(batch)]
+		for i, req := range batch {
+			updates[i] = req.item
+		}
+		defer clear(updates)
+		results, batched, err = runMongoUpdateBatchResultsWithJournal(batch[0].col, updates, journal)
+	}
 	installed := batched && journal != nil && journal.completion.Installed()
 	if err != nil && !installed && ((journal != nil && journal.completion.Selected()) || errors.Is(err, collections.ErrCommitAmbiguous)) {
 		for _, req := range batch {
@@ -3467,20 +3521,41 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	return true
 }
 
-func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) bool {
+func mongoUpdateCoalescerBatchCapabilities(batch []mongoUpdateCoalescerRequest) (canBatch, canBSONSet bool) {
 	if len(batch) == 0 || batch[0].col == nil {
-		return false
+		return false, false
 	}
-	ok := true
+	var format collections.DocumentFormat
+	canBatch = true
 	batch[0].col.WithMetaView(func(meta *collections.CollectionMeta) {
+		format = meta.Options.DocumentFormat
+		if format == collections.DocumentFormatDefault {
+			format = collections.DocumentFormatJSON
+		}
 		for _, req := range batch {
 			if !mongoUpdateCanUseBatchMetaPtr(meta, req.item) {
-				ok = false
+				canBatch = false
 				return
 			}
 		}
 	})
-	return ok
+	if !canBatch {
+		return false, false
+	}
+	if format != collections.DocumentFormatBSON {
+		return true, false
+	}
+	for _, req := range batch {
+		if !req.item.exactID || !req.item.bsonSetFieldsOK || mongoBSONSetFieldsNeedNestingValidation(req.item.bsonSetFields) {
+			return true, false
+		}
+	}
+	return true, true
+}
+
+func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) bool {
+	canBatch, _ := mongoUpdateCoalescerBatchCapabilities(batch)
+	return canBatch
 }
 
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {

@@ -13602,6 +13602,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.wg.Add(1)
 	if db.cow != nil {
 		db.cow.flushWake = db.flushCh
+		db.cow.ownerDB = db
 	}
 	go db.flushLoop()
 	db.startVlogGenerationLoop()

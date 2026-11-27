@@ -171,7 +171,7 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"parseCPUProfile(offCPUProfilePaths[idx])",
 		"cpuEfficiencyGeomean <= minCPUEfficiencyFrac",
 	)
-	workflow := collapseWhitespace(readRepoText(t, ".github/workflows/treedb-tests.yml"))
+	workflow := collapseWhitespace(readRepoText(t, ".github/workflows/ci-full-sweep.yml"))
 	assertContainsAll(t, workflow, "current perf smoke workflow",
 		"sample_count=6",
 		"record_vlog_row treedb_vlog_off",

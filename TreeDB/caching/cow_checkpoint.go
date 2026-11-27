@@ -31,7 +31,15 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 
 func (db *DB) checkpointCOWColumnCompactionProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, projected *backenddb.NativeProjectedGenerationPressure) error {
 	defer db.observeCOWCheckpointRun(time.Now())
-	return db.materializeCOWPrefixProjected(ctx, automatic, operation, cowCheckpointMaterialization, projected)
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, cowCheckpointMaterialization, projected, !automatic && operation == nil)
+}
+
+// checkpointCOWPressure runs a full durable COW checkpoint boundary for
+// internal foreground pressure relief or exact-seal publication without
+// triggering synchronous leaf-generation pack+GC maintenance.
+func (db *DB) checkpointCOWPressure(ctx context.Context, projected *backenddb.NativeProjectedGenerationPressure) error {
+	defer db.observeCOWCheckpointRun(time.Now())
+	return db.materializeCOWPrefixProjected(ctx, false, nil, cowCheckpointMaterialization, projected, false)
 }
 
 func (db *DB) observeCOWCheckpointRun(start time.Time) {
@@ -83,7 +91,7 @@ func (db *DB) reserveCOWAcceptedOrdinaryAfterPressure(c *cowCache, cause error) 
 	}
 	for {
 		before := c.prefix.LogicalFrontiers()
-		if err := db.Checkpoint(); err != nil {
+		if err := db.checkpointCOWPressure(context.Background(), nil); err != nil {
 			return rootpublication.AcceptedTicket{}, err
 		}
 		ticket, err := c.prefix.ReserveAccepted(false)
@@ -131,7 +139,7 @@ func (db *DB) joinRawTxnPressureCheckpoint(denied rootpublication.AcceptedOrdina
 		}
 	}
 	checkpoint = true
-	err := db.materializeCOWPrefixProjectedLocked(context.Background(), false, nil, cowCheckpointMaterialization, nil)
+	err := db.materializeCOWPrefixProjectedLocked(context.Background(), false, nil, cowCheckpointMaterialization, nil, false)
 	return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, err
 }
 
@@ -217,10 +225,10 @@ func cowGenerationAdmissionError(generationPressure bool, err error) error {
 // retirement, leaving journal rotation and covered-file maintenance to the already
 // running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
 func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) error {
-	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil)
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil, false)
 }
 
-func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) error {
+func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure, reclaimLeafDebt bool) error {
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -268,12 +276,12 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 			return nil
 		}
 	}
-	return db.materializeCOWPrefixProjectedLocked(ctx, automatic, operation, mode, projected)
+	return db.materializeCOWPrefixProjectedLocked(ctx, automatic, operation, mode, projected, reclaimLeafDebt)
 }
 
 // materializeCOWPrefixProjectedLocked is the original durable materialization;
 // its caller owns flushMu through the final unwind and cleanup.
-func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) (retErr error) {
+func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure, reclaimLeafDebt bool) (retErr error) {
 	pressureOnly := mode != cowCheckpointMaterialization
 	generationPressure := mode == cowGenerationPressureMaterialization
 	if generationPressure {
@@ -343,6 +351,7 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	}
 	var frontier *cowReadCut
 	var err error
+	deferRelaxedWALSync := false
 	if generationPressure {
 		// Producer admission already froze and marked this prefix. Retain
 		// that root set and use its frozen endpoint; concurrent writes in
@@ -356,9 +365,11 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		db.writeMu.Unlock()
 	} else {
 		// Explicit Checkpoint on relaxed command-WAL defers active WAL segment
-		// rotation until after index.db + leaf_vlog durably cover the frontier,
-		// avoiding a synchronous fsync of a segment about to be unlinked.
+		// rotation and WAL fsync until after index.db + leaf_vlog durably cover
+		// the frontier, avoiding a synchronous fsync of a segment about to be
+		// unlinked.
 		rotateJournal := !pressureOnly && (!db.relaxedSync || automatic || durabilitycut.Enabled() || db.testBeforeCheckpointFrontierDrain != nil || db.testAfterCheckpointFrontierCapture != nil)
+		deferRelaxedWALSync = !pressureOnly && !rotateJournal
 		err = db.rotateCOWFrontier(ctx, true, &frontier, rotateJournal)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
@@ -390,11 +401,13 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure)
+	flushedDirty := frontier != nil && len(frontier.frozen) > 0
+	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure, !deferRelaxedWALSync)
 	frontier = nil
 	if err != nil {
 		return err
 	}
+	flushedDirty = flushedDirty || publish.consumed || publish.appliedLSN != 0
 	if operation != nil {
 		// An adopted compaction has completed its original build and handoff.
 		// Finish this same checkpoint's durability and retirement boundary even
@@ -458,6 +471,12 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		}
 	} else if cleanupNeeded {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
+			return err
+		}
+	}
+	if reclaimLeafDebt && !automatic && operation == nil && !durabilitycut.Enabled() &&
+		db.testBeforeCheckpointFrontierDrain == nil && db.testAfterCheckpointFrontierCapture == nil {
+		if err = db.maybeRunPrivateCOWLeafPackAtCheckpointLocked(ctx, flushedDirty); err != nil {
 			return err
 		}
 	}

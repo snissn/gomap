@@ -99,3 +99,76 @@ func rawLeafEntryLocked(set *StableResourceSet, key stableLogicalResourceKey) *s
 	})
 	return found
 }
+
+// DependenciesCoveredBy reports whether every entry in set is already durably
+// synced: either via its own producer ContentSynced certificate (with a stable
+// namespace) or via an already-published parent set whose exact physical handle,
+// compatible stable namespace, and synced frontier cover this entry's frontier.
+// Only producer-certified entries and mutable-append outer-leaf/value-log
+// segments are admitted; ResourceIndex and any grown, rotated, or uncertified
+// resource always decline.
+func (set *StableResourceSet) DependenciesCoveredBy(parent *StableResourceSet) (bool, error) {
+	if set == nil || parent == nil {
+		return false, nil
+	}
+	first, second := set, parent
+	if uintptr(unsafe.Pointer(first)) > uintptr(unsafe.Pointer(second)) {
+		first, second = second, first
+	}
+	first.mu.Lock()
+	defer first.mu.Unlock()
+	if second != first {
+		second.mu.Lock()
+		defer second.mu.Unlock()
+	}
+	for _, s := range []*StableResourceSet{set, parent} {
+		if s.physicalOnly || !s.selectedKindViewsAccessibleLocked() || s.Owner() == ResourceOwnerReleased || s.Owner() == ResourceOwnerTransferred {
+			return false, ErrResourceOwnership
+		}
+	}
+	seen, covered := false, true
+	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		t := activeEntryToken(*entry)
+		if t == nil || t.released.Load() {
+			covered = false
+			return false
+		}
+		seen = true
+		if t.hasSyncedFrontier && durableFrontierCovers(t.syncedFrontier, entry.frontier) &&
+			(t.namespace == nil || t.namespace.validateStable() == nil) {
+			return true
+		}
+		if (t.kind != ResourceOuterLeafLog && t.kind != ResourceValueLog) || t.stability != ResourceMutableAppend {
+			covered = false
+			return false
+		}
+		match := false
+		prior := logicalEntryLocked(parent, t.logicalKey())
+		if prior != nil {
+			p := activeEntryToken(*prior)
+			if p != nil && !p.released.Load() {
+				coalesce, err := stableResourcesCoalesce(p, t)
+				match = err == nil && coalesce && (t.namespace == nil || p.namespace != nil) && p.namespaceCompatible(t) && durableFrontierCovers(prior.frontier, entry.frontier)
+			}
+		}
+		covered = match
+		return covered
+	})
+	return seen && covered, nil
+}
+
+func logicalEntryLocked(set *StableResourceSet, key stableLogicalResourceKey) *stableResourceEntry {
+	if set.kindViews != nil {
+		return findStableResourceLogical(set.kindViews.get(key.kind).logical, key)
+	}
+	var found *stableResourceEntry
+	set.rangeEntriesLocked(func(e *stableResourceEntry) bool {
+		t := activeEntryToken(*e)
+		if t != nil && t.logicalKey() == key {
+			found = e
+			return false
+		}
+		return true
+	})
+	return found
+}

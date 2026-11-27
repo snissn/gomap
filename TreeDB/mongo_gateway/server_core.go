@@ -444,7 +444,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, writeBuf, err = s.appendOneWithOwner(ctx, rw, owner, readBuf, writeBuf[:0])
+		readBuf, writeBuf, err = s.appendOneWithOwner(ctx, rw.reader, owner, readBuf, writeBuf[:0])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil

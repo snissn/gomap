@@ -1194,3 +1194,39 @@ func TestOpenReadOnly_IndexOuterLeavesInValueLog_MissingManifestUsesSynthetic(t 
 		t.Fatalf("expected read-only open to leave durable manifests absent, got %v err=%v", afterDurable, err)
 	}
 }
+
+func TestStagedLeafGenerationManifestWithPending_OutOfOrderCommitSeqDoesNotSuppressLowerSeq(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_, fileID12 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 12)
+	if err := db.noteLeafGenerationWritableFileID(fileID12, 40); err != nil {
+		t.Fatalf("noteLeafGenerationWritableFileID(12): %v", err)
+	}
+	_, fileID13 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 13)
+	_, fileID14 := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 14)
+	raw13 := page.ValueLogSegmentID(fileID13)
+	raw14 := page.ValueLogSegmentID(fileID14)
+
+	// Queue seq 14 with an older commitSeq before passing promoted seq 13 at
+	// the newer commitSeq. Ascending sequence order must register both so seq 14
+	// cannot raise maxSeq first and drop seq 13.
+	db.queueLeafGenerationWritableFileIDAtCommit(fileID14, 50)
+	staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(db.leafGenerationManifest, 0, 51, nil, raw13)
+	if err != nil {
+		t.Fatalf("stagedLeafGenerationManifestWithPendingResultAndLimit: %v", err)
+	}
+	if !staged.changed {
+		t.Fatal("expected staged manifest change")
+	}
+	if !leafManifestContainsActiveFile(staged.manifest, raw13) {
+		t.Fatalf("staged manifest omitted lower-seq promoted file %d", raw13)
+	}
+	if !leafManifestContainsActiveFile(staged.manifest, raw14) {
+		t.Fatalf("staged manifest omitted higher-seq pending file %d", raw14)
+	}
+}

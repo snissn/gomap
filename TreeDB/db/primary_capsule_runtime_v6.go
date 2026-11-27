@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -220,7 +221,11 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	dependenciesCovered := false
 	completed := base.primary.dataCompletion
 	if base.pending == nil && len(base.ambiguous) == 0 && completed.pager == runtime.idx.pager && completed.incarnation == token.Generation() && completed.identity == token.Identity() {
-		dependenciesCovered, e = resources.RawLeafDependenciesCoveredBy(proofResources)
+		if durabilitycut.Enabled() {
+			dependenciesCovered, e = resources.RawLeafDependenciesCoveredBy(proofResources)
+		} else {
+			dependenciesCovered, e = resources.DependenciesCoveredBy(proofResources)
+		}
 		if e != nil {
 			return e
 		}
