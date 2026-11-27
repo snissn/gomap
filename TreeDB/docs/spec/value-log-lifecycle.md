@@ -666,13 +666,14 @@ In non-exhaustive `CompactStorage` modes (`CompactStorageFull` and
 `CompactStorageQuick`), when `leaf-generation-pack` or
 `settle-leaf-generation-pack` cannot promote a packed generation because the
 platform lacks exact cross-parent no-replace move authority
-(`ErrNamespacePersistenceUnsupported`, e.g. macOS `darwin`), the phase is
+(`ErrNamespacePersistenceUnsupported`, e.g. macOS `darwin`) and the error does
+not wrap `ErrRecoveryRequired`, the phase is
 recorded as `CompactStoragePhaseStatusUnsupported` (`Skipped=true`), further
 pack passes in that run stop, and compaction continues through
 `leaf-generation-gc`, `index-vacuum`, and empty-file pruning while leaving any
 unpacked debt honestly reflected in `RemainingDebt` and `FullyCompacted=false`.
-`CompactStorageExhaustive` and direct `LeafGenerationPack*` calls remain
-strictly fail-closed.
+Any pack error wrapping `ErrRecoveryRequired`, `CompactStorageExhaustive`, and
+direct `LeafGenerationPack*` calls remain strictly fail-closed.
 
 Leaf and value collection share the existing maintenance admission, checkpoint
 and COW writer fence, a 30-second cancellable context, 90-second attempt interval,

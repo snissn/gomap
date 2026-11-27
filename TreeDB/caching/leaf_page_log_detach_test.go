@@ -86,13 +86,21 @@ func TestDetachSealedLeafPageLogSegments_PrunesCreatedDemotesReaderAndLazyReopen
 		}
 	}
 
-	// valueLogReader must have demoted fileID0 from currentWritable.
-	if db.valueLogReader != nil {
-		for _, id := range db.valueLogReader.CurrentWritableFileIDs() {
-			if id == fileID0 {
-				t.Fatalf("detached fileID0=%d still currentWritable in valueLogReader", fileID0)
-			}
+	// valueLogReader must have demoted fileID0 from currentWritable while keeping fileID1.
+	if db.valueLogReader == nil {
+		t.Fatal("expected non-nil valueLogReader")
+	}
+	foundFileID1 := false
+	for _, id := range db.valueLogReader.CurrentWritableFileIDs() {
+		if id == fileID0 {
+			t.Fatalf("detached fileID0=%d still currentWritable in valueLogReader", fileID0)
 		}
+		if id == fileID1 {
+			foundFileID1 = true
+		}
+	}
+	if !foundFileID1 {
+		t.Fatalf("expected writable fileID1=%d to remain currentWritable in valueLogReader", fileID1)
 	}
 
 	// Lazy reopen on lane 0 must allocate a strictly newer sequence than both prior segments.

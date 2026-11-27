@@ -123,11 +123,38 @@ func TestCompactStorageNonExhaustiveHandlesUnsupportedLeafPackPromotion(t *testi
 			if stats.RemainingDebt.LeafPackGenerations == 0 {
 				t.Fatalf("expected RemainingDebt.LeafPackGenerations > 0 in %s mode, debt=%+v", mode, stats.RemainingDebt)
 			}
-			if stats.LeafGenerationGC.GenerationsDeleted == 0 {
-				t.Fatalf("expected dead gen 2 to be deleted by leaf-generation-gc in %s mode, gc=%+v", mode, stats.LeafGenerationGC)
+			// Depending on whether indexVacuumLeafGuard pins gen 2 through vacuum or
+			// vacuum is unsupported (Windows), leaf-generation-gc marks gen 2 retiring,
+			// eligible, or deleted during CompactStorage.
+			if stats.LeafGenerationGC.GenerationsDeleted == 0 && stats.LeafGenerationGC.GenerationsEligible == 0 && stats.LeafGenerationGC.GenerationsRetiring == 0 && stats.LeafGenerationGC.BytesDeleted == 0 {
+				t.Fatalf("expected dead gen 2 to be processed by leaf-generation-gc in %s mode, gc=%+v", mode, stats.LeafGenerationGC)
 			}
 		})
 	}
+
+	t.Run("recovery_required_joined_with_unsupported_remains_fatal", func(t *testing.T) {
+		if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+			t.Skip("target probe injection requires platform preflight support")
+		}
+		orig := leafGenerationPackPromotionTargetProbe
+		leafGenerationPackPromotionTargetProbe = func(*leafGenerationPackPromotionAuthority) error {
+			return errors.Join(
+				fmt.Errorf("%w: injected unsupported leaf pack target", rootpublication.ErrNamespacePersistenceUnsupported),
+				ErrRecoveryRequired,
+			)
+		}
+		t.Cleanup(func() { leafGenerationPackPromotionTargetProbe = orig })
+
+		d, _ := newTestDB(t)
+		_, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+			Mode:                            CompactStorageFull,
+			LeafPackMinExpectedReclaimBytes: 1,
+			LeafPackMinReclaimPerCopyPPM:    1,
+		})
+		if !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("CompactStorage(Full) err=%v want ErrRecoveryRequired", err)
+		}
+	})
 
 	t.Run("exhaustive_remains_fail_closed", func(t *testing.T) {
 		d, leafLog := newTestDB(t)
@@ -227,5 +254,88 @@ func TestDetachSealedLeafPageLogSegmentsHelper(t *testing.T) {
 	}
 	if logB.detachedCalls != 1 || len(logB.current) != 0 {
 		t.Fatalf("group detach did not forward to lane: calls=%d current=%+v", logB.detachedCalls, logB.current)
+	}
+}
+
+func TestDemoteSealedLeafLogCurrentWritableSkipsStillAttachedSegments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		KeepRecent:                 1,
+		DisableBackgroundPrune:     true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0, d.valueLogIdentityPins)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	d.SetLeafPageLog(leafLog)
+	t.Cleanup(func() {
+		if closer, ok := d.leafPageLog.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		_ = leafLog.Close()
+	})
+
+	b := d.NewBatch()
+	if err := b.Set([]byte("k1"), bytes.Repeat([]byte("a"), 256)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.Close()
+
+	_, fileID1, ok := leafLog.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("missing current leaf segment 1")
+	}
+	raw1 := page.ValueLogSegmentID(fileID1)
+	if err := d.valueLogManager.PromoteCurrentWritable(fileID1); err != nil {
+		t.Fatalf("PromoteCurrentWritable(1): %v", err)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	b2 := d.NewBatch()
+	if err := b2.Set([]byte("k2"), bytes.Repeat([]byte("b"), 256)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b2.Write(); err != nil {
+		t.Fatal(err)
+	}
+	_ = b2.Close()
+
+	_, fileID2, ok := leafLog.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("missing current leaf segment 2")
+	}
+	raw2 := page.ValueLogSegmentID(fileID2)
+	if err := d.valueLogManager.PromoteCurrentWritable(fileID2); err != nil {
+		t.Fatalf("PromoteCurrentWritable(2): %v", err)
+	}
+
+	// Mark both raw1 and raw2 sealed, but raw2 is still attached in stillCurrent.
+	// raw1 must be demoted while raw2 must remain currentWritable.
+	d.demoteSealedLeafLogCurrentWritable(
+		map[uint32]struct{}{raw1: {}, raw2: {}},
+		map[uint32]struct{}{raw2: {}},
+	)
+	hasID := func(target uint32) bool {
+		for _, id := range d.valueLogManager.CurrentWritableFileIDs() {
+			if id == target {
+				return true
+			}
+		}
+		return false
+	}
+	if hasID(fileID1) {
+		t.Fatalf("expected detached sealed fileID1=%d to be demoted", fileID1)
+	}
+	if !hasID(fileID2) {
+		t.Fatalf("expected still-attached fileID2=%d to remain currentWritable", fileID2)
 	}
 }

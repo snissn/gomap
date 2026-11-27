@@ -363,34 +363,33 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
 		return stats, false, err
 	}
+	var detachedSealedRawFileIDs map[uint32]struct{}
 	if !dryRun {
 		if err := db.flushDeferredLeafGenerationManifestLocked(); err != nil {
 			return stats, false, err
 		}
 		if detachSealedCurrentWriters && db.leafPageLog != nil {
 			db.mu.RLock()
-			var sealedRawFileIDs map[uint32]struct{}
 			if db.leafGenerationManifest != nil {
 				for _, gen := range db.leafGenerationManifest.Generations {
 					if gen.State != leafGenerationStateSealed || len(gen.FileIDs) == 0 {
 						continue
 					}
-					if sealedRawFileIDs == nil {
-						sealedRawFileIDs = make(map[uint32]struct{}, len(db.leafGenerationManifest.Generations))
+					if detachedSealedRawFileIDs == nil {
+						detachedSealedRawFileIDs = make(map[uint32]struct{}, len(db.leafGenerationManifest.Generations))
 					}
 					for _, rawID := range gen.FileIDs {
 						if rawID != 0 {
-							sealedRawFileIDs[rawID] = struct{}{}
+							detachedSealedRawFileIDs[rawID] = struct{}{}
 						}
 					}
 				}
 			}
 			db.mu.RUnlock()
-			if len(sealedRawFileIDs) > 0 {
-				if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedRawFileIDs); err != nil {
+			if len(detachedSealedRawFileIDs) > 0 {
+				if err := detachSealedLeafPageLogSegments(db.leafPageLog, detachedSealedRawFileIDs); err != nil {
 					return stats, false, err
 				}
-				db.demoteSealedLeafLogCurrentWritable(sealedRawFileIDs)
 			}
 		}
 	}
@@ -400,6 +399,9 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 	currentFileIDs, err := db.currentLeafPageLogRawFileIDSet()
 	if err != nil {
 		return stats, false, err
+	}
+	if len(detachedSealedRawFileIDs) > 0 {
+		db.demoteSealedLeafLogCurrentWritable(detachedSealedRawFileIDs, currentFileIDs)
 	}
 	// Optimistic root publishers also replace the manifest under db.mu.
 	db.mu.RLock()

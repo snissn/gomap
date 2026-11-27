@@ -943,7 +943,7 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 			return err
 		})
 		if packErr != nil {
-			if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) {
+			if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) && !errors.Is(packErr, ErrRecoveryRequired) {
 				if len(stats.Phases) > 0 {
 					phase := &stats.Phases[len(stats.Phases)-1]
 					phase.Status = CompactStoragePhaseStatusUnsupported
@@ -1488,7 +1488,11 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 			if err := detachSealedLeafPageLogSegments(db.leafPageLog, sealedSet); err != nil {
 				return false, err
 			}
-			db.demoteSealedLeafLogCurrentWritable(sealedSet)
+			stillCurrent, err := db.currentLeafPageLogRawFileIDSet()
+			if err != nil {
+				return false, err
+			}
+			db.demoteSealedLeafLogCurrentWritable(sealedSet, stillCurrent)
 		}
 	}
 
@@ -1575,7 +1579,7 @@ func (db *DB) settleCompactStorageGCWithOwner(ctx context.Context, opts CompactS
 				return err
 			})
 			if packErr != nil {
-				if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) {
+				if opts.Mode != CompactStorageExhaustive && errors.Is(packErr, rootpublication.ErrNamespacePersistenceUnsupported) && !errors.Is(packErr, ErrRecoveryRequired) {
 					if len(stats.Phases) > 0 {
 						phase := &stats.Phases[len(stats.Phases)-1]
 						phase.Status = CompactStoragePhaseStatusUnsupported
@@ -3120,7 +3124,7 @@ func detachSealedLeafPageLogSegments(log LeafPageLog, sealedRawFileIDs map[uint3
 	return detacher.DetachSealedLeafPageLogSegments(sealedRawFileIDs)
 }
 
-func (db *DB) demoteSealedLeafLogCurrentWritable(sealedRawFileIDs map[uint32]struct{}) {
+func (db *DB) demoteSealedLeafLogCurrentWritable(sealedRawFileIDs, stillCurrentRawFileIDs map[uint32]struct{}) {
 	if db == nil || db.valueLogManager == nil || len(sealedRawFileIDs) == 0 {
 		return
 	}
@@ -3129,7 +3133,11 @@ func (db *DB) demoteSealedLeafLogCurrentWritable(sealedRawFileIDs map[uint32]str
 		if lane != valuelog.ReservedLeafLogLaneID {
 			continue
 		}
-		if _, sealed := sealedRawFileIDs[page.ValueLogSegmentID(id)]; sealed {
+		rawID := page.ValueLogSegmentID(id)
+		if _, current := stillCurrentRawFileIDs[rawID]; current {
+			continue
+		}
+		if _, sealed := sealedRawFileIDs[rawID]; sealed {
 			db.valueLogManager.DemoteCurrentWritable(id)
 		}
 	}
