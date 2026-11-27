@@ -995,7 +995,7 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 		return stats, err
 	}
 
-	indexDebt, err := db.compactStorageIndexVacuumDebtForExecution(ctx, opts)
+	indexDebt, err := db.compactStorageIndexVacuumDebtForExecution(ctx, opts, owner)
 	if err != nil {
 		stats.Phases = append(stats.Phases, CompactStoragePhaseStats{
 			Name:       "index-vacuum",
@@ -1238,7 +1238,7 @@ func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactSto
 	return db.compactStorageIndexVacuumDebtFromReport(opts, report, db.compactStorageExpectedVacuumSlotCopies()), nil
 }
 
-func (db *DB) compactStorageIndexVacuumDebtForExecution(ctx context.Context, opts CompactStorageOptions) (CompactStorageDebt, error) {
+func (db *DB) compactStorageIndexVacuumDebtForExecution(ctx context.Context, opts CompactStorageOptions, owner *transactionowner.Owner) (CompactStorageDebt, error) {
 	report, err := db.IndexVacuumTriggerReportContext(ctx)
 	if err != nil {
 		return CompactStorageDebt{}, err
@@ -1251,7 +1251,10 @@ func (db *DB) compactStorageIndexVacuumDebtForExecution(ctx context.Context, opt
 	// best-effort fallback refresh now: on a quiet DB the slots converge and
 	// vacuum shrinks the file to 1x; under active writers non-convergence leaves
 	// slotCopies == 2 so CompactStorage avoids launching a futile 2-slot rebuild.
+	// Never issue an unowned fallback refresh while private-COW or native
+	// semantic ownership is active (matching compactStorageVacuumIndexOnlineWithOwner).
 	if !debt.IndexVacuumRequired && slotCopies == 2 && db != nil && !db.commandWAL &&
+		owner == nil && !db.nativeSemanticActive.Load() &&
 		runtime.GOOS != "windows" && !db.readOnly {
 		if idx := db.idx.Load(); idx != nil && idx.primary == nil {
 			singleCopyDebt := db.compactStorageIndexVacuumDebtFromReport(opts, report, 1)
@@ -1273,15 +1276,7 @@ func (db *DB) compactStorageIndexVacuumDebtForExecution(ctx context.Context, opt
 }
 
 func compactStorageFallbackRefreshNonConvergence(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ErrClosed) || errors.Is(err, ErrRecoveryRequired) ||
-		errors.Is(err, ErrReadOnly) || errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	return strings.Contains(err.Error(), "did not converge")
+	return errors.Is(err, errDurableRootFallbackDidNotConverge)
 }
 
 func (db *DB) compactStorageDurableSlotsDiverged() bool {

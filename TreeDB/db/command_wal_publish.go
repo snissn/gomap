@@ -395,6 +395,8 @@ func (db *DB) RefreshCommandWALCheckpointFallback() error {
 	return db.refreshDurableRootFallback()
 }
 
+var errDurableRootFallbackDidNotConverge = errors.New("command WAL checkpoint fallback refresh did not converge")
+
 // Maintenance may also converge an unjournaled fallback after rebuilding the
 // index. Both slots then retain the already-durable current closure; independent
 // readers and prepared members keep their own old resources pinned through GC.
@@ -484,7 +486,7 @@ func (db *DB) refreshDurableRootFallback() error {
 	fallback = db.durableRoot.slotRecord[db.durableRoot.slot^1]
 	if selected.AppliedCommandLSN != state.AppliedCommandLSN || fallback.AppliedCommandLSN != state.AppliedCommandLSN ||
 		!db.commandWALCheckpointRootsEqualLocked(selected, fallback) {
-		return fmt.Errorf("command WAL checkpoint fallback refresh did not converge: selected_lsn=%d fallback_lsn=%d want_lsn=%d selected_roots=%d/%d fallback_roots=%d/%d", selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN, selected.UserRootPageID, selected.SystemRootPageID, fallback.UserRootPageID, fallback.SystemRootPageID)
+		return fmt.Errorf("%w: selected_lsn=%d fallback_lsn=%d want_lsn=%d selected_roots=%d/%d fallback_roots=%d/%d", errDurableRootFallbackDidNotConverge, selected.AppliedCommandLSN, fallback.AppliedCommandLSN, state.AppliedCommandLSN, selected.UserRootPageID, selected.SystemRootPageID, fallback.UserRootPageID, fallback.SystemRootPageID)
 	}
 	return nil
 }

@@ -2819,9 +2819,19 @@ func writeRebuiltDurableRootsV1WithFreeAndReader(dir, indexPath string, p *pager
 	}
 	var filteredFree []uint64
 	if len(initialFree) > 0 {
+		var olderPagesSet map[uint64]struct{}
+		if len(roots[0].pages) > 0 {
+			olderPagesSet = make(map[uint64]struct{}, len(roots[0].pages))
+			for _, id := range roots[0].pages {
+				olderPagesSet[id] = struct{}{}
+			}
+		}
 		filteredFree = make([]uint64, 0, len(initialFree))
 		for _, id := range initialFree {
 			if id == roots[1].meta.UserRootPageID || id == roots[1].meta.SystemRootPageID {
+				continue
+			}
+			if _, inOlder := olderPagesSet[id]; inOlder {
 				continue
 			}
 			filteredFree = append(filteredFree, id)

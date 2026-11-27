@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -117,22 +118,70 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 		{key: []byte("cm-shared"), page: sharedColLeaf},
 	})
 
-	olderSysRoot := buildLeaf([][2][]byte{
+	// Prepare non-nil dependency-directory V2 resources so both slots build
+	// independent dependency directory trees (`directory.RootPageID != 0`),
+	// proving that successor directory pages are excluded from retirement while
+	// replaced older directory pages are retired at older.CommitSeq.
+	srcDB, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open dependency directory source db: %v", err)
+	}
+	defer func() { _ = srcDB.Close() }()
+	srcDB.rootReuseMu.Lock()
+	boundResources, _, err := srcDB.prepareDependencyDirectoryV2(srcDB.idx.Load(), 2, nil, nil)
+	srcDB.rootReuseMu.Unlock()
+	if err != nil {
+		t.Fatalf("prepareDependencyDirectoryV2: %v", err)
+	}
+	defer boundResources.Release()
+
+	// Build two distinct 2-level system roots that share a child leaf (`sharedSysLeaf`)
+	// while holding distinct collection root descriptors (`olderColRoot` vs `nextColRoot`).
+	olderOnlySysLeaf := buildLeaf([][2][]byte{
 		{[]byte("collections/root/shared_guard/primary"), encodeCollectionRootDescriptorRootID(olderColRoot)},
 	})
-	nextSysRoot := buildLeaf([][2][]byte{
+	nextOnlySysLeaf := buildLeaf([][2][]byte{
 		{[]byte("collections/root/shared_guard/primary"), encodeCollectionRootDescriptorRootID(nextColRoot)},
 	})
+	sharedSysLeaf := buildLeaf([][2][]byte{
+		{[]byte("sys/shared-meta"), []byte("shared-sys-val")},
+	})
+
+	olderSysRoot := buildInternal([]struct {
+		key  []byte
+		page uint64
+	}{
+		{key: []byte{}, page: olderOnlySysLeaf},
+		{key: []byte("sys/shared-meta"), page: sharedSysLeaf},
+	})
+	nextSysRoot := buildInternal([]struct {
+		key  []byte
+		page uint64
+	}{
+		{key: []byte{}, page: nextOnlySysLeaf},
+		{key: []byte("sys/shared-meta"), page: sharedSysLeaf},
+	})
+
+	// Allocate genuinely unused spare pages (enough that some remain in
+	// FreelistFree even after slot 0/1 auxiliary metadata placement) to verify
+	// filteredFree keeps unrelated free pages while defensively excluding
+	// roots[0].pages.
+	var unusedSparePages []uint64
+	for i := 0; i < 16; i++ {
+		unusedSparePages = append(unusedSparePages, buildLeaf([][2][]byte{{[]byte(fmt.Sprintf("spare-%02d", i)), []byte("unused")}}))
+	}
 
 	olderOnlyPages := []uint64{
 		olderUserRoot,
 		olderOnlyUserLeaf,
 		olderSysRoot,
+		olderOnlySysLeaf,
 		olderColRoot,
 		olderOnlyColLeaf,
 	}
 	sharedPages := []uint64{
 		sharedUserLeaf,
+		sharedSysLeaf,
 		sharedColLeaf,
 	}
 	allOlderPages := append(append([]uint64(nil), olderOnlyPages...), sharedPages...)
@@ -143,7 +192,8 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 			UserRootPageID:   olderUserRoot,
 			SystemRootPageID: olderSysRoot,
 		},
-		pages: allOlderPages,
+		resources: boundResources,
+		pages:     allOlderPages,
 	}
 	next := rebuiltDurableRootV1{
 		meta: page.MetaPageBody{
@@ -151,9 +201,13 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 			UserRootPageID:   nextUserRoot,
 			SystemRootPageID: nextSysRoot,
 		},
+		resources: boundResources,
 	}
 
-	if err := writeRebuiltDurableRootsV1WithFree(dir, indexPath, p, []rebuiltDurableRootV1{older, next}, nil); err != nil {
+	// Pass an initialFree containing BOTH an older-slot page (must be defensively
+	// filtered out!) and unrelated spare pages (must remain allocatable/usable).
+	initialFree := append([]uint64{olderOnlyUserLeaf}, unusedSparePages...)
+	if err := writeRebuiltDurableRootsV1WithFree(dir, indexPath, p, []rebuiltDurableRootV1{older, next}, initialFree); err != nil {
 		t.Fatalf("writeRebuiltDurableRootsV1WithFree: %v", err)
 	}
 
@@ -164,24 +218,75 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 	if selected.Slot != MetaPage1ID || selected.Record.CommitSeq != next.meta.CommitSeq {
 		t.Fatalf("selected slot=%d commit=%d want slot=%d commit=%d", selected.Slot, selected.Record.CommitSeq, MetaPage1ID, next.meta.CommitSeq)
 	}
+	olderDirRoot := selected.SlotRecords[MetaPage0ID].Directory.RootPageID
+	nextDirRoot := selected.SlotRecords[MetaPage1ID].Directory.RootPageID
+	if olderDirRoot == 0 || nextDirRoot == 0 || olderDirRoot == nextDirRoot {
+		t.Fatalf("expected distinct non-zero dependency directory roots: older=%d next=%d", olderDirRoot, nextDirRoot)
+	}
+	olderDirPages, err := tree.New(p, nil, olderDirRoot).CollectPageIDs()
+	if err != nil || len(olderDirPages) == 0 {
+		t.Fatalf("collect older directory pages: pages=%v err=%v", olderDirPages, err)
+	}
+	nextDirPages, err := tree.New(p, nil, nextDirRoot).CollectPageIDs()
+	if err != nil || len(nextDirPages) == 0 {
+		t.Fatalf("collect next directory pages: pages=%v err=%v", nextDirPages, err)
+	}
 
-	// Shared pages reachable from next MUST NOT be retired or allocatable.
-	for _, id := range sharedPages {
-		if selected.Freelist.Allocatable(id) {
-			t.Fatalf("successor-reachable shared page %d is unexpectedly allocatable", id)
-		}
-		unused, err := selected.Freelist.SnapshotPageUnusedV1(id, ^uint64(0))
-		if err != nil {
-			t.Fatalf("SnapshotPageUnusedV1(shared page %d): %v", id, err)
-		}
-		if unused {
-			t.Fatalf("successor-reachable shared page %d was erroneously retired in appendRebuiltDurableRootV1", id)
+	// Verify collectRebuiltSuccessorReachablePagesV1 covers user, system,
+	// collection, and dependency-directory pages of the successor.
+	successorReachable, err := collectRebuiltSuccessorReachablePagesV1(p, nil, next.meta, selected.Record.Directory)
+	if err != nil {
+		t.Fatalf("collectRebuiltSuccessorReachablePagesV1: %v", err)
+	}
+	for _, id := range append(append([]uint64(nil), sharedPages...), nextDirPages...) {
+		if _, ok := successorReachable[id]; !ok {
+			t.Fatalf("collectRebuiltSuccessorReachablePagesV1 omitted successor page %d", id)
 		}
 	}
 
-	// Strictly older-only pages MUST be retired at older.meta.CommitSeq (protected
-	// while oldestCommit == older.CommitSeq, reusable once oldestCommit > older.CommitSeq).
-	for _, id := range olderOnlyPages {
+	// Verify filteredFree defensively excluded olderOnlyUserLeaf (so slot 0's
+	// live B-tree leaf was never overwritten by metadata allocation and still
+	// reads back intact) while keeping unrelated spare pages in the freelist.
+	if got, err := tree.New(p, nil, olderUserRoot).Get([]byte("a-old")); err != nil || string(got) != "v-old" {
+		t.Fatalf("olderOnlyUserLeaf corrupted (leaked into filteredFree): got=%q err=%v", got, err)
+	}
+	gen0, err := freelist.LoadGenerationV1(p, selected.SlotRecords[MetaPage0ID].Freelist)
+	if err != nil {
+		t.Fatalf("LoadGenerationV1(slot0): %v", err)
+	}
+	if gen0.Allocatable(olderOnlyUserLeaf) {
+		t.Fatalf("olderOnlyUserLeaf %d leaked into slot0 FreelistFree", olderOnlyUserLeaf)
+	}
+	spareFreeCount := 0
+	for _, id := range unusedSparePages {
+		if selected.Freelist.Allocatable(id) {
+			spareFreeCount++
+		}
+	}
+	if spareFreeCount == 0 {
+		t.Fatalf("expected unrelated initialFree spare pages to remain allocatable in FreelistFree (freeCount=%d)", selected.Freelist.FreeCount())
+	}
+
+	// Shared pages AND successor dependency-directory pages MUST NOT be retired or allocatable.
+	protectedSuccessorPages := append(append([]uint64(nil), sharedPages...), nextDirPages...)
+	for _, id := range protectedSuccessorPages {
+		if selected.Freelist.Allocatable(id) {
+			t.Fatalf("successor-reachable page %d is unexpectedly allocatable", id)
+		}
+		unused, err := selected.Freelist.SnapshotPageUnusedV1(id, ^uint64(0))
+		if err != nil {
+			t.Fatalf("SnapshotPageUnusedV1(successor page %d): %v", id, err)
+		}
+		if unused {
+			t.Fatalf("successor-reachable page %d was erroneously retired in appendRebuiltDurableRootV1", id)
+		}
+	}
+
+	// Strictly older-only pages AND replaced older dependency-directory pages
+	// MUST be retired at older.meta.CommitSeq (protected while oldestCommit ==
+	// older.CommitSeq, reusable once oldestCommit > older.CommitSeq).
+	expectedRetiredOlderPages := append(append([]uint64(nil), olderOnlyPages...), olderDirPages...)
+	for _, id := range expectedRetiredOlderPages {
 		if selected.Freelist.Allocatable(id) {
 			t.Fatalf("older-only page %d became allocatable while older slot is still recoverable", id)
 		}
@@ -202,7 +307,8 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 	}
 
 	// Simulate superseding slot 0 with a reuse capability whose OldestCommitSeq > older.CommitSeq:
-	// older-only pages must promote to FreelistFree while shared pages remain non-allocatable.
+	// older-only pages (including replaced older directory pages) must promote
+	// to FreelistFree while shared and successor directory pages remain non-allocatable.
 	allocator := freelist.New(p, 0)
 	if err := allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
 		t.Fatalf("EnableCOWV1: %v", err)
@@ -225,14 +331,14 @@ func TestWriteRebuiltDurableRootsV1ExcludesSuccessorReachablePages(t *testing.T)
 		t.Fatalf("PrepareCOWCandidateV1: %v", err)
 	}
 	promotedGen := prepared.Candidate().Generation()
-	for _, id := range olderOnlyPages {
+	for _, id := range expectedRetiredOlderPages {
 		if !promotedGen.Allocatable(id) {
 			t.Fatalf("older-only page %d did not promote to FreelistFree after superseding older slot", id)
 		}
 	}
-	for _, id := range sharedPages {
+	for _, id := range protectedSuccessorPages {
 		if promotedGen.Allocatable(id) {
-			t.Fatalf("successor-reachable shared page %d became allocatable after superseding older slot", id)
+			t.Fatalf("successor-reachable page %d became allocatable after superseding older slot", id)
 		}
 	}
 }
@@ -906,8 +1012,11 @@ func TestVacuumIndexOnlineRebuiltSlotRetirementAndFallbackRecovery(t *testing.T)
 			}
 			return nil
 		})
+		var restoreOnce sync.Once
+		restoreCut := func() { restoreOnce.Do(restore) }
+		defer restoreCut()
 		vacStats, err := d.VacuumIndexOnlineWithStats(context.Background())
-		restore()
+		restoreCut()
 		if err != nil {
 			_ = d.Close()
 			t.Fatalf("VacuumIndexOnlineWithStats(crash cut): %v", err)
