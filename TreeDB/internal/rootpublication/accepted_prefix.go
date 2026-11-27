@@ -529,6 +529,34 @@ func (install *AcceptedInstall) CommitReturningRootCustody() bool {
 	return install.commit(true)
 }
 
+// CommitReturningNoWALRootCustody is the NoWAL counterpart to
+// CommitReturningRootCustody for root-covered native publications with no
+// command-WAL assignment (no preassigned custody, CanonicalLSN == 0) and no
+// sparse FIFO obligations.
+func (install *AcceptedInstall) CommitReturningNoWALRootCustody() bool {
+	if install == nil || install.done || install.ticket.owner == nil {
+		panic("invalid accepted installation")
+	}
+	p, e := install.ticket.entryLocked()
+	d := &install.descriptor
+	returnCustody := !e.receipt.Assigned && !e.receipt.WALCompleted && !e.receipt.WALStable &&
+		e.firstCanonicalLSN == 0 && e.receipt.CanonicalLSN == 0 && !e.maintenance && !d.RootNeutral &&
+		e.descriptor.Custody == nil && d.Custody != nil &&
+		len(d.Projections) == 0 && d.SealTarget == nil && d.AdmittedBytes == 0 && d.CleanupBytes == 0
+	if returnCustody {
+		d.Custody = nil
+	}
+	e.descriptor = *d
+	e.receipt.LogicalSequence, e.receipt.Installed = d.Sequence, true
+	p.orderEntryLocked(install.ticket.slot, e)
+	p.frontiers.V = d.Sequence
+	p.coalesceCoveredTailLocked(install.ticket.slot, e)
+	install.done = true
+	p.changed.Broadcast()
+	p.mu.Unlock()
+	return returnCustody
+}
+
 func (install *AcceptedInstall) commit(returnCustody bool) bool {
 	if install == nil || install.done || install.ticket.owner == nil {
 		panic("invalid accepted installation")

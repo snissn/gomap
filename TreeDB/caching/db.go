@@ -10506,6 +10506,7 @@ type DB struct {
 	nativeGenerationFlushCh  chan struct{}
 	nativeReservationFlushCh chan struct{}
 	autoCheckpointOn         atomic.Bool
+	cowPressureDrainOn       atomic.Bool
 	autoCheckpointBytesFn    atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is normally re-armed after reclaimable WAL bytes fall below
@@ -14235,6 +14236,24 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
 	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
+}
+
+// StartCOWPressureDrain enables the lightweight background worker that drains
+// asynchronous COW generation and soft-reservation pressure signals in NoWAL
+// COW modes (where StartAutoCheckpoint does not run). It has no periodic or
+// idle timers and exits cleanly when db.closeCh is closed.
+func (db *DB) StartCOWPressureDrain() {
+	if db == nil || db.cow == nil || db.externalCommandWAL || db.closing.Load() {
+		return
+	}
+	if db.autoCheckpointOn.Load() {
+		return
+	}
+	if !db.cowPressureDrainOn.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go db.cowPressureDrainLoop()
 }
 
 // SetAutoCheckpointWALBytesHook supplies external WAL pressure bytes for modes
@@ -20123,6 +20142,125 @@ func (db *DB) maintainCOWGenerationPressure() (retry bool, allocation *cowGenera
 	return false, nil
 }
 
+type cowGenerationPressureLoopState struct {
+	timer                   *time.Timer
+	retryCh                 <-chan time.Time
+	blockedAllocation       bool
+	blockedBasisRefresh     bool
+	blockedThrough          rootpublication.SealedPrefix
+	blockedMaintenanceBytes uint64
+	blockedRefunds          uint64
+	quietRetryAt            time.Time
+	quietRetryDelay         time.Duration
+}
+
+func (s *cowGenerationPressureLoopState) stop() {
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+}
+
+func (s *cowGenerationPressureLoopState) armRetry() {
+	if s.timer == nil {
+		s.timer = time.NewTimer(cowGenerationPressureRetryDelay)
+	} else {
+		s.timer.Reset(cowGenerationPressureRetryDelay)
+	}
+	s.retryCh = s.timer.C
+}
+
+// maintain drives one generation-pressure drain attempt, tracking temporary
+// successor-refresh or snapshot-allocation refusals with bounded quiet backoff.
+// A temporary successor refresh can refuse before it builds or seals a frozen
+// prefix. In that phase even an already sealed or empty cut can wait.
+func (s *cowGenerationPressureLoopState) maintain(db *DB) {
+	var maintenanceBefore uint64
+	if s.blockedAllocation {
+		if db.closing.Load() {
+			return
+		}
+		// Close withdraws the original prefix under flushMu. A parked
+		// probe must never wait behind Close or a physical maintenance pass.
+		if !db.flushMu.TryLock() {
+			s.armRetry()
+			return
+		}
+		c := db.cow
+		sameWait := c.generationFrozenThrough() == s.blockedThrough
+		if s.blockedBasisRefresh {
+			sameWait = sameWait && c.refreshRequired.Load()
+		} else {
+			sealed := c.prefix.LogicalFrontiers().S
+			sameWait = sameWait && (sealed.LogicalSequence < s.blockedThrough.LogicalSequence || sealed.CanonicalLSN < s.blockedThrough.CanonicalLSN)
+		}
+		var refunds uint64
+		if sameWait {
+			maintenanceBefore, refunds = c.maintenance.MaintenanceUsage()
+		}
+		db.flushMu.Unlock()
+		if !sameWait {
+			// An independent checkpoint or a newly frozen range must not
+			// inherit the previous range's allocation wait.
+			s.blockedAllocation = false
+		} else if maintenanceBefore < s.blockedMaintenanceBytes || refunds != s.blockedRefunds {
+			s.quietRetryDelay = 0
+		} else if time.Now().Before(s.quietRetryAt) {
+			s.armRetry()
+			return
+		}
+	}
+	retry, allocation := db.maintainCOWGenerationPressure()
+	if allocation != nil {
+		if s.blockedAllocation && s.blockedThrough == allocation.through && s.blockedBasisRefresh == allocation.basisRefresh {
+			s.quietRetryDelay = min(cowGenerationQuietRetryMax, max(cowGenerationQuietRetryFloor, 2*s.quietRetryDelay))
+			s.quietRetryAt = time.Now().Add(s.quietRetryDelay)
+		} else {
+			s.quietRetryDelay, s.quietRetryAt = 0, time.Time{}
+		}
+		s.blockedAllocation, s.blockedThrough, s.blockedBasisRefresh = true, allocation.through, allocation.basisRefresh
+		// Both samples are outside the attempt's temporary reservations.
+		// A refund racing the abort can already have lowered the second sample.
+		s.blockedMaintenanceBytes = max(maintenanceBefore, allocation.maintenanceBytes)
+		s.blockedRefunds = allocation.maintenanceRefunds
+	} else {
+		s.blockedAllocation = false
+	}
+	if retry {
+		s.armRetry()
+	}
+}
+
+func (s *cowGenerationPressureLoopState) onFlushSignal(db *DB) {
+	if s.retryCh == nil {
+		s.maintain(db)
+	}
+}
+
+func (s *cowGenerationPressureLoopState) onRetryTimer(db *DB) {
+	s.retryCh = nil
+	s.maintain(db)
+}
+
+func (db *DB) cowPressureDrainLoop() {
+	defer db.wg.Done()
+
+	var cowGen cowGenerationPressureLoopState
+	defer cowGen.stop()
+
+	for {
+		select {
+		case <-db.closeCh:
+			return
+		case <-db.nativeGenerationFlushCh:
+			cowGen.onFlushSignal(db)
+		case <-db.nativeReservationFlushCh:
+			db.maintainCOWReservationPressure()
+		case <-cowGen.retryCh:
+			cowGen.onRetryTimer(db)
+		}
+	}
+}
+
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	defer db.wg.Done()
 
@@ -20144,84 +20282,8 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		idleCh = idleTimer.C
 	}
 
-	var generationTimer *time.Timer
-	var generationRetry <-chan time.Time
-	defer func() {
-		if generationTimer != nil {
-			generationTimer.Stop()
-		}
-	}()
-	// A temporary successor refresh can refuse before it builds or seals a
-	// frozen prefix. In that phase even an already sealed or empty cut can wait.
-	var blockedAllocation, blockedBasisRefresh bool
-	var blockedThrough rootpublication.SealedPrefix
-	var blockedMaintenanceBytes, blockedRefunds uint64
-	var quietRetryAt time.Time
-	var quietRetryDelay time.Duration
-	armGenerationRetry := func() {
-		if generationTimer == nil {
-			generationTimer = time.NewTimer(cowGenerationPressureRetryDelay)
-		} else {
-			generationTimer.Reset(cowGenerationPressureRetryDelay)
-		}
-		generationRetry = generationTimer.C
-	}
-	maintainGeneration := func() {
-		var maintenanceBefore uint64
-		if blockedAllocation {
-			if db.closing.Load() {
-				return
-			}
-			// Close withdraws the original prefix under flushMu. A parked
-			// probe must never wait behind Close or a physical maintenance pass.
-			if !db.flushMu.TryLock() {
-				armGenerationRetry()
-				return
-			}
-			c := db.cow
-			sameWait := c.generationFrozenThrough() == blockedThrough
-			if blockedBasisRefresh {
-				sameWait = sameWait && c.refreshRequired.Load()
-			} else {
-				sealed := c.prefix.LogicalFrontiers().S
-				sameWait = sameWait && (sealed.LogicalSequence < blockedThrough.LogicalSequence || sealed.CanonicalLSN < blockedThrough.CanonicalLSN)
-			}
-			var refunds uint64
-			if sameWait {
-				maintenanceBefore, refunds = c.maintenance.MaintenanceUsage()
-			}
-			db.flushMu.Unlock()
-			if !sameWait {
-				// An independent checkpoint or a newly frozen range must not
-				// inherit the previous range's allocation wait.
-				blockedAllocation = false
-			} else if maintenanceBefore < blockedMaintenanceBytes || refunds != blockedRefunds {
-				quietRetryDelay = 0
-			} else if time.Now().Before(quietRetryAt) {
-				armGenerationRetry()
-				return
-			}
-		}
-		retry, allocation := db.maintainCOWGenerationPressure()
-		if allocation != nil {
-			if blockedAllocation && blockedThrough == allocation.through && blockedBasisRefresh == allocation.basisRefresh {
-				quietRetryDelay = min(cowGenerationQuietRetryMax, max(cowGenerationQuietRetryFloor, 2*quietRetryDelay))
-				quietRetryAt = time.Now().Add(quietRetryDelay)
-			} else {
-				quietRetryDelay, quietRetryAt = 0, time.Time{}
-			}
-			blockedAllocation, blockedThrough, blockedBasisRefresh = true, allocation.through, allocation.basisRefresh
-			// Both samples are outside the attempt's temporary reservations.
-			// A refund racing the abort can already have lowered the second sample.
-			blockedMaintenanceBytes = max(maintenanceBefore, allocation.maintenanceBytes)
-			blockedRefunds = allocation.maintenanceRefunds
-		} else {
-			blockedAllocation = false
-		}
-		if retry {
-			armGenerationRetry()
-		}
-	}
+	var cowGen cowGenerationPressureLoopState
+	defer cowGen.stop()
 	for {
 		select {
 		case <-db.closeCh:
@@ -20229,14 +20291,11 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.nativeGenerationFlushCh:
-			if generationRetry == nil {
-				maintainGeneration()
-			}
+			cowGen.onFlushSignal(db)
 		case <-db.nativeReservationFlushCh:
 			db.maintainCOWReservationPressure()
-		case <-generationRetry:
-			generationRetry = nil
-			maintainGeneration()
+		case <-cowGen.retryCh:
+			cowGen.onRetryTimer(db)
 		case <-db.autoCheckpointOnceCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
 		case <-db.autoCheckpointResampleCh:

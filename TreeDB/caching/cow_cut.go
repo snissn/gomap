@@ -1345,7 +1345,11 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	}
 	if ticket.Valid() {
 		if returnCustody {
-			returnCustody = install.CommitReturningRootCustody()
+			if p.next.visibleCommandLSN == 0 {
+				returnCustody = install.CommitReturningNoWALRootCustody()
+			} else {
+				returnCustody = install.CommitReturningRootCustody()
+			}
 		} else {
 			install.Commit()
 		}

@@ -212,12 +212,13 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 			}
 			return observed.observation(limits), nil
 		}
-		// In command-WAL modes (both durable and relaxed) with a running
-		// size-maintenance worker, soft reservation pressure (3/4..7/8 of
-		// MaxInFlightBytes) still leaves headroom for concurrent writers while
-		// the background worker seals and retires the captured prefix, gated by
-		// reservationDrainFloor hysteresis. Hard reservation pressure (>=7/8)
-		// and non-reservation pressure retain the synchronous foreground drain.
+		// When an asynchronous COW pressure drain worker is running (command-WAL
+		// size-maintenance worker or NoWAL COW pressure drain worker), soft
+		// reservation pressure (3/4..7/8 of MaxInFlightBytes) still leaves
+		// headroom for concurrent writers while the background worker seals and
+		// retires the captured prefix, gated by reservationDrainFloor hysteresis.
+		// Hard reservation pressure (>=7/8) and non-reservation pressure retain
+		// synchronous foreground reclamation.
 		if db.nativePressureDrainEnabled() &&
 			!observed.nonReservationPressure(limits) && !observed.reservationHardPressure(limits) {
 			if floor := c.reservationDrainFloor.Load(); floor == 0 || observed.stats.ReservedBytes >= floor {
@@ -323,13 +324,34 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 	return after.observation(limits), nil
 }
 
-// nativePressureDrainEnabled requires a real running size-maintenance worker.
-// Its original captured threshold, external total-byte hook and deferred cleanup
-// authority must all exist. Merely reconfiguring the notification atomic cannot
-// turn an interval-only worker into size maintenance. This is a soft asynchronous
-// cleanup capability, not a hard bound on journal bytes.
+// COWPressureDrainEnabled reports whether the asynchronous COW generation and
+// soft-reservation pressure drain path is active on this cached DB.
+func (db *DB) COWPressureDrainEnabled() bool {
+	return db.nativePressureDrainEnabled()
+}
+
+// nativePressureDrainEnabled reports whether an asynchronous background worker
+// is running to drain COW generation and soft-reservation pressure.
+//
+// In external command-WAL modes, this requires a real running size-maintenance
+// worker: its original captured threshold, external total-byte hook, cutover
+// hook and deferred cleanup authority must all exist. Merely reconfiguring the
+// notification atomic cannot turn an interval-only worker into size
+// maintenance. This is a soft asynchronous cleanup capability, not a hard
+// bound on journal bytes.
+//
+// In NoWAL COW modes (!db.externalCommandWAL), there are no command-WAL
+// segments to bound or clean up, so the dedicated COW pressure drain worker
+// (StartCOWPressureDrain) enables asynchronous generation and soft-reservation
+// drainage.
 func (db *DB) nativePressureDrainEnabled() bool {
-	return db != nil && db.externalCommandWAL && db.autoCheckpointOn.Load() &&
+	if db == nil {
+		return false
+	}
+	if !db.externalCommandWAL {
+		return db.cow != nil && db.cowPressureDrainOn.Load()
+	}
+	return db.autoCheckpointOn.Load() &&
 		db.autoCheckpointWorkerMaxWALBytes.Load() > 0 &&
 		db.loadAutoCheckpointBytesHook() != nil &&
 		db.loadCommandWALCheckpointCutoverHook() != nil &&
