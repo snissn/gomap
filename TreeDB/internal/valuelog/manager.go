@@ -2057,6 +2057,20 @@ func (m *Manager) HasSegment(id uint32) bool {
 	return f != nil && !f.IsZombie.Load()
 }
 
+// HasLiveSegment reports whether id is currently registered as an open,
+// non-zombie segment with a non-nil file handle (the exact precondition for
+// CurrentSubsetNoRefresh and stable-resource capture to resolve id).
+func (m *Manager) HasLiveSegment(id uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	f := m.files[id]
+	live := !m.closing && f != nil && !f.IsZombie.Load() && !f.closed.Load() && f.File != nil
+	m.mu.RUnlock()
+	return live
+}
+
 // RefreshScanCount returns the number of directory scans performed by Refresh().
 // This is used in tests and profiling to guard against accidental rescan loops.
 func (m *Manager) RefreshScanCount() uint64 {
