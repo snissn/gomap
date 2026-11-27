@@ -143,6 +143,20 @@ func TestResolveVlogWriteMode_DictFallsBackToBlockWithoutDict(t *testing.T) {
 	}
 }
 
+func TestValueLogKeepPolicy_BlockModeUsesSizeBasedKeep(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionBlock),
+		valueLogBlockCodec:      valuelog.BlockCodecLZ4,
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium},
+	}
+	db.valueLogAutotuneMetrics.seed(10.0, 1.0)
+
+	ioNs, encNs, _ := db.valueLogKeepPolicy()
+	if ioNs != 0 || encNs != 0 {
+		t.Fatalf("expected block mode to bypass wall-time autotune keep-policy (size-based keep only), got ioNs=%v encNs=%v", ioNs, encNs)
+	}
+}
+
 func TestResolveVlogWriteMode_DictAggressiveLargeOuterLeafPayloadPrefersBlock(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:    uint8(vlogCompressionDict),
