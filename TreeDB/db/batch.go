@@ -368,7 +368,7 @@ func (b *Batch) writeWithCommandWALIntentPreflight(sync bool, intent *commandWAL
 }
 
 func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) (bool, error) {
-	if b.db.stagedSystemOpsCount.Load() > 0 {
+	if b.db.privateCOWOwner == nil && b.db.stagedSystemOpsCount.Load() > 0 {
 		return false, nil
 	}
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
@@ -808,7 +808,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 			b.db.requeuePiggybackedSystemOps(piggybacked)
 		}
 	}()
-	if b.db.stagedSystemOpsCount.Load() > 0 {
+	if b.db.privateCOWOwner == nil && b.db.stagedSystemOpsCount.Load() > 0 {
 		piggybacked, err = b.db.preparePiggybackedSystemOpsLocked(sysRoot, baseSeq, sync, nil)
 		if err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)

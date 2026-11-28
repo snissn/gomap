@@ -659,6 +659,9 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if err != nil {
 		return cowGenerationAdmissionError(generationPressure, err)
 	}
+	if sealedFallback {
+		group.SetSkipStagedSystemOps(true)
+	}
 	if h.prefix.Valid() {
 		if err = group.BindAcceptedPrefixCut(h.prefix); err != nil {
 			return errors.Join(err, group.Close())

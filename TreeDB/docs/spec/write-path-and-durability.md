@@ -322,13 +322,30 @@ The fixed consequences are:
   before consuming cached scan results at cleanup.
 - Value-log dictionary publication persists dictionary bytes (inline or 2 KiB
   inline chunks by default, or optional raw `dictID=0` `ValuePtr` records in
-  `maindb/value_vlog/`), content hash, frame group size `K`, leaf payload mode,
-  and class/global current markers inside `maindb`'s `SystemRootPageID` in a
-  single atomic `ApplySystemOps` commit with pager-resident system leaves
-  (never in `leaf_vlog`). When a dictionary uses a `ValuePtr` in `maindb/value_vlog/`,
-  the raw `dictID=0` record is flushed and synced before `maindb/index.db`
-  commits, and value-log rewrite preserves `dictID=0, templateID=0` raw
-  encoding for all `SystemRootPageID` pointers.
+  `maindb/value_vlog/` lane `SystemValueLogLaneID`), content hash, frame group
+  size `K`, leaf payload mode, and class/global current markers inside
+  `maindb`'s `SystemRootPageID`. `SystemRootPageID` outer-leaf placement obeys
+  `systemRootUsesOuterLeaves()` uniformly (pager leaves when
+  `FreshSystemPagerLeaves=true`, or strictly non-dictionary `dictID=0` outer
+  leaves in `leaf_vlog` when `FreshSystemPagerLeaves=false`). Direct/standalone
+  publishers commit via `ApplySystemOps`; background value-log dictionary
+  training stages updates in memory via `StageSystemOps` / `StagePublishDict`
+  and piggybacks them atomically onto the next eligible user-root flush or
+  checkpoint commit (`RootPublicationBuildGroup` in COW mode, excluding
+  same-root fallback convergence, or serialized `Batch` in non-COW mode) with a
+  bounded idle-coalesce flush fallback (`FlushStagedSystemOps`). Under
+  journal-backed profiles (`command_wal_durable` and `command_wal_relaxed`,
+  i.e., whenever command-WAL durability is active), staged dictionaries
+  activate for foreground writers only after `index.db` has been synced through
+  the piggybacked `CommitSeq` (and periodic `currentDictIDForClass` refreshes
+  defer while unsynced system ops are pending, dispatching older sync waiters
+  in commit order), ensuring no durable command-WAL record can reference an
+  unpersisted dictionary; under `no_wal_fast`, activation occurs immediately
+  upon piggybacked commit without an extra fsync. When a dictionary uses a `ValuePtr` in `maindb/value_vlog/`, the raw
+  `dictID=0` record stays pending-GC pinned until publication or abandonment,
+  is flushed and synced before a synced `maindb/index.db` commit, and value-log
+  rewrite preserves `dictID=0, templateID=0` raw encoding for all
+  `SystemRootPageID` pointers.
 - A write or sync error after target-meta bytes may have been dirtied poisons
   the writable handle. Writes, publication, cleanup, GC, rewrite, and
   reclamation fail with the public recovery-required error until reopen.

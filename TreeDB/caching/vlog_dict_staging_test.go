@@ -131,3 +131,82 @@ func TestCachingIdleLoopFlushesStagedDict(t *testing.T) {
 		t.Fatalf("timed out waiting for idle valueLogDictLoop to flush staged dict %d", id)
 	}
 }
+
+func TestCurrentDictIDRefreshDefersWhileUnsyncedPiggybackPending(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:        dir,
+		ChunkSize:  64 << 10,
+		Durability: backenddb.DurabilityDurable,
+	})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{
+		FlushThreshold: 4 << 20,
+		DisableWAL:     false,
+		RelaxedSync:    false,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open caching: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	store := dictdb.New(backend)
+	cached.SetDictStore(store)
+
+	// Stage a dictionary and commit it via an unsynced backend write so its
+	// dict/current marker is visible in SystemRootPageID while still unsynced.
+	dictBytes := bytes.Repeat([]byte("unsynced-refresh-guard-dict|"), 32)
+	var activated atomic.Uint64
+	dictID, err := store.StagePublishDict(context.Background(), dictBytes, 8, "single_value", true, func(id uint64) {
+		activated.Store(id)
+		cached.dictCurrentCached.Store(id)
+		cached.dictCurrentCachedByClass[vlogDictClassSingleValue].Store(id)
+	})
+	if err != nil {
+		t.Fatalf("StagePublishDict: %v", err)
+	}
+	b := backend.NewBatch()
+	if err := b.Set([]byte("k/unsynced"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	if !store.HasUnsyncedOps() {
+		t.Fatal("expected HasUnsyncedOps=true after unsynced piggybacked write")
+	}
+
+	// Force currentDictIDForClass to hit its refresh boundary (65,536th op).
+	cached.dictCurrentOps.Store((1 << 16) - 1)
+	cached.dictCurrentOpsByClass[vlogDictClassSingleValue].Store((1 << 16) - 1)
+	gotID, err := cached.currentDictIDForClass(context.Background(), vlogDictClassSingleValue)
+	if err != nil {
+		t.Fatalf("currentDictIDForClass(unsynced): %v", err)
+	}
+	if gotID != 0 {
+		t.Fatalf("currentDictIDForClass activated unsynced dict %d before sync (activated=%d)", gotID, activated.Load())
+	}
+
+	// Sync via backend Checkpoint -> activation runs and refreshes work again.
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatalf("backend.Checkpoint: %v", err)
+	}
+	if store.HasUnsyncedOps() {
+		t.Fatal("expected HasUnsyncedOps=false after Checkpoint")
+	}
+	if activated.Load() != dictID {
+		t.Fatalf("expected activation of dict %d after Checkpoint, got %d", dictID, activated.Load())
+	}
+	gotID, err = cached.currentDictIDForClass(context.Background(), vlogDictClassSingleValue)
+	if err != nil {
+		t.Fatalf("currentDictIDForClass(synced): %v", err)
+	}
+	if gotID != dictID {
+		t.Fatalf("expected synced dictID=%d, got %d", dictID, gotID)
+	}
+}

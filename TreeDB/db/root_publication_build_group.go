@@ -126,6 +126,7 @@ type RootPublicationBuildGroup struct {
 	teardownLocked       bool
 	writeLocked          bool
 	durablePublishLocked bool
+	skipStagedSystemOps  bool
 	failed               bool
 	accepted             bool
 	closed               bool
@@ -525,7 +526,8 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 			db.requeuePiggybackedSystemOps(piggybacked)
 		}
 	}()
-	if db.stagedSystemOpsCount.Load() > 0 &&
+	if !group.skipStagedSystemOps &&
+		db.stagedSystemOpsCount.Load() > 0 &&
 		group.nativeResources == nil &&
 		len(group.nativeRequirements.ScopedFields) == 0 &&
 		len(group.nativeRequirements.Obligations) == 0 &&
@@ -1065,4 +1067,16 @@ func (group *RootPublicationBuildGroup) BindAcceptedPrefixCut(cut rootpublicatio
 	}
 	group.acceptedPrefixCut = cut
 	return nil
+}
+
+// SetSkipStagedSystemOps prevents this build group from piggybacking staged
+// SystemRootPageID mutations. Used by sealed same-root fallback convergence
+// passes that must republish an exact existing (UserRootPageID, SystemRootPageID).
+func (group *RootPublicationBuildGroup) SetSkipStagedSystemOps(skip bool) {
+	if group == nil {
+		return
+	}
+	group.mu.Lock()
+	group.skipStagedSystemOps = skip
+	group.mu.Unlock()
 }

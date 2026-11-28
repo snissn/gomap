@@ -314,6 +314,15 @@ func (s *Store) HasStagedOps() bool {
 	return s.backend.HasStagedSystemOps()
 }
 
+// HasUnsyncedOps reports whether any piggybacked system operations have been
+// committed without a durability sync and are awaiting sync before activation.
+func (s *Store) HasUnsyncedOps() bool {
+	if s == nil || s.backend == nil || s.ownsBackend {
+		return false
+	}
+	return s.backend.HasUnsyncedSystemOps()
+}
+
 // FlushStagedOps commits and (when sync is true) syncs any staged dictionary
 // operations that have not yet been piggybacked onto a user flush/checkpoint.
 func (s *Store) FlushStagedOps(sync bool) error {

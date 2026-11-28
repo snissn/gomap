@@ -810,4 +810,60 @@ func TestStageSystemOps_PiggybackDurableWaitsForSyncAndRelaxedActivatesImmediate
 			t.Fatalf("reopen LookupSystemDictBytes: len=%d want=%d err=%v", len(got), len(payload), err)
 		}
 	})
+
+	t.Run("sync_waiters_dispatch_in_strict_commit_order", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		var order []string
+		// Batch A piggybacked onto an unsynced Write() enters sync waiters.
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-order"),
+			Value: []byte("A"),
+		}}, func() { order = append(order, "A") }); err != nil {
+			t.Fatalf("StageSystemOps(A): %v", err)
+		}
+		bA := d.NewBatch()
+		if err := bA.Set([]byte("order/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set(A): %v", err)
+		}
+		if err := bA.Write(); err != nil {
+			t.Fatalf("Write(A): %v", err)
+		}
+		_ = bA.Close()
+		if len(order) != 0 || !d.HasUnsyncedSystemOps() {
+			t.Fatalf("expected A to remain unsynced waiter, order=%v unsynced=%v", order, d.HasUnsyncedSystemOps())
+		}
+
+		// Batch B piggybacked onto WriteSync() must activate A before B.
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-order"),
+			Value: []byte("B"),
+		}}, func() { order = append(order, "B") }); err != nil {
+			t.Fatalf("StageSystemOps(B): %v", err)
+		}
+		bB := d.NewBatch()
+		if err := bB.Set([]byte("order/k2"), []byte("v2")); err != nil {
+			t.Fatalf("Set(B): %v", err)
+		}
+		if err := bB.WriteSync(); err != nil {
+			t.Fatalf("WriteSync(B): %v", err)
+		}
+		_ = bB.Close()
+
+		if len(order) != 2 || order[0] != "A" || order[1] != "B" {
+			t.Fatalf("expected strict commit-order activation [A B], got %v", order)
+		}
+		if d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=false after WriteSync")
+		}
+	})
 }

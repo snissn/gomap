@@ -160,6 +160,7 @@ type dictStoreStager interface {
 	StagePublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool, onDurable func(uint64)) (uint64, error)
 	StageSetK(ctx context.Context, dictID uint64, k int, onDurable func()) error
 	HasStagedOps() bool
+	HasUnsyncedOps() bool
 	FlushStagedOps(sync bool) error
 }
 
@@ -1264,7 +1265,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if stager, ok := store.(dictStoreStager); ok {
+			if stager, ok := store.(dictStoreStager); ok && db.backend != nil && db.closeCh != nil {
 				db.valueLogDictStagedKByClass[class].Store(uint32(profileK))
 				if err := stager.StageSetK(ctx, dictID, profileK, applyKLocal); err != nil {
 					db.valueLogDictStagedKByClass[class].CompareAndSwap(uint32(profileK), 0)
@@ -1357,7 +1358,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			vlogDictClassSuffix(class), dictID, profileK, profile.PayloadRatio, profile.TotalRatio)
 		db.valueLogAutotuneRecordSwitch(candidate)
 	}
-	if stager, ok := store.(dictStoreStager); ok {
+	if stager, ok := store.(dictStoreStager); ok && db.backend != nil && db.closeCh != nil {
 		db.valueLogDictStagedHashByClass[class].Store(profile.DictHash)
 		if _, err := stager.StagePublishDict(ctx, profile.Dict, publishK, targetClass, alsoSetGlobal, activatePublished); err != nil {
 			db.valueLogDictStagedHashByClass[class].CompareAndSwap(profile.DictHash, 0)

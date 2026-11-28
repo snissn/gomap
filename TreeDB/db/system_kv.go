@@ -816,6 +816,7 @@ type piggybackedSystemOps struct {
 	touchedValueLogSegments []uint32
 	vlogRefDelta            *valueLogRefDelta
 	hasPointer              bool
+	inFlightUnsynced        bool
 }
 
 func cloneSystemKVOps(ops []SystemKVOp) []SystemKVOp {
@@ -899,13 +900,20 @@ func (db *DB) HasPendingStagedSystemOps() bool {
 	return db != nil && db.stagedSystemOpsCount.Load() > 0
 }
 
+// HasUnsyncedSystemOps reports whether any piggybacked SystemRootPageID
+// mutations are in-flight or committed without a durability sync and are
+// awaiting sync before activation.
+func (db *DB) HasUnsyncedSystemOps() bool {
+	return db != nil && (db.stagedSystemSyncWaitersCount.Load() > 0 || db.stagedSystemInFlightUnsynced.Load() > 0)
+}
+
 // HasStagedSystemOps reports whether any staged SystemRootPageID mutations are
 // queued for piggybacking or awaiting durability sync before activation.
 func (db *DB) HasStagedSystemOps() bool {
 	if db == nil {
 		return false
 	}
-	if db.stagedSystemOpsCount.Load() > 0 {
+	if db.stagedSystemOpsCount.Load() > 0 || db.stagedSystemSyncWaitersCount.Load() > 0 {
 		return true
 	}
 	db.stagedSystemOpsMu.Lock()
@@ -993,6 +1001,11 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, commi
 	}
 	db.releaseStagedSystemOpBatchPins(batches)
 	if synced || !db.requiresSyncForSystemDictActivation() {
+		if synced {
+			// Dispatch older unsynced sync waiters before this commit's
+			// callbacks so activation strictly preserves commit order.
+			db.notifySystemOpsSyncedThrough(commitSeq)
+		}
 		cbs := make([]func(), 0, len(batches))
 		for _, b := range batches {
 			if b.onDurable != nil {
@@ -1000,9 +1013,6 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, commi
 			}
 		}
 		runStagedSystemCallbacks(cbs)
-		if synced {
-			db.notifySystemOpsSyncedThrough(commitSeq)
-		}
 		return
 	}
 	db.stagedSystemOpsMu.Lock()
@@ -1014,6 +1024,7 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, commi
 			})
 		}
 	}
+	db.stagedSystemSyncWaitersCount.Store(int32(len(db.stagedSystemSyncWaiters)))
 	db.stagedSystemOpsMu.Unlock()
 }
 
@@ -1021,8 +1032,12 @@ func (db *DB) notifySystemOpsSyncedThrough(commitSeq uint64) {
 	if db == nil {
 		return
 	}
+	if db.stagedSystemSyncWaitersCount.Load() == 0 {
+		return
+	}
 	db.stagedSystemOpsMu.Lock()
 	if len(db.stagedSystemSyncWaiters) == 0 {
+		db.stagedSystemSyncWaitersCount.Store(0)
 		db.stagedSystemOpsMu.Unlock()
 		return
 	}
@@ -1042,6 +1057,7 @@ func (db *DB) notifySystemOpsSyncedThrough(commitSeq uint64) {
 	} else {
 		db.stagedSystemSyncWaiters = kept
 	}
+	db.stagedSystemSyncWaitersCount.Store(int32(len(db.stagedSystemSyncWaiters)))
 	db.stagedSystemOpsMu.Unlock()
 	runStagedSystemCallbacks(ready)
 }
@@ -1055,6 +1071,7 @@ func (db *DB) clearStagedSystemOpsOnClose() {
 	db.stagedSystemOps = nil
 	db.stagedSystemSyncWaiters = nil
 	db.updateStagedSystemOpsCountLocked()
+	db.stagedSystemSyncWaitersCount.Store(0)
 	db.stagedSystemOpsMu.Unlock()
 	db.releaseStagedSystemOpBatchPins(drained)
 }
@@ -1089,6 +1106,10 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		db.requeueStagedSystemOpBatches(drained)
 		return nil, err
 	}
+	inFlightUnsynced := !sync && db.requiresSyncForSystemDictActivation()
+	if inFlightUnsynced {
+		db.stagedSystemInFlightUnsynced.Add(1)
+	}
 	return &piggybackedSystemOps{
 		batches:                 drained,
 		newSystemRoot:           newSystemRoot,
@@ -1097,6 +1118,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		touchedValueLogSegments: touchedValueLogSegments,
 		vlogRefDelta:            vlogRefDelta,
 		hasPointer:              hasPointer,
+		inFlightUnsynced:        inFlightUnsynced,
 	}, nil
 }
 
@@ -1105,12 +1127,20 @@ func (db *DB) commitPiggybackedSystemOps(p *piggybackedSystemOps, commitSeq uint
 		return
 	}
 	db.completeStagedSystemOpBatches(p.batches, commitSeq, synced)
+	if p.inFlightUnsynced {
+		p.inFlightUnsynced = false
+		db.stagedSystemInFlightUnsynced.Add(-1)
+	}
 	p.batches = nil
 }
 
 func (db *DB) requeuePiggybackedSystemOps(p *piggybackedSystemOps) {
 	if db == nil || p == nil || len(p.batches) == 0 {
 		return
+	}
+	if p.inFlightUnsynced {
+		p.inFlightUnsynced = false
+		db.stagedSystemInFlightUnsynced.Add(-1)
 	}
 	if p.vlogRefDelta != nil {
 		releaseValueLogRefDelta(p.vlogRefDelta)

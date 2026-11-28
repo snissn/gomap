@@ -237,6 +237,8 @@ type DB struct {
 	systemRootMutationFenceMu      sync.RWMutex
 	systemRootMutationFence        func() (func() error, error)
 	stagedSystemOpsCount           atomic.Int32
+	stagedSystemSyncWaitersCount   atomic.Int32
+	stagedSystemInFlightUnsynced   atomic.Int32
 	stagedSystemOpsMu              sync.Mutex
 	stagedSystemOps                []stagedSystemOpBatch
 	stagedSystemSyncWaiters        []stagedSystemSyncWaiter

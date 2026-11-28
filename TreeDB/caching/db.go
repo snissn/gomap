@@ -4737,6 +4737,11 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 			if seq&(refreshEvery-1) != 0 {
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
 			}
+			if stager, ok := db.dictStore.(dictStoreStager); ok && stager.HasUnsyncedOps() {
+				// Defer refreshes while an unsynced piggybacked dictionary is
+				// awaiting durability sync in SystemRootPageID.
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
 			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(clampedClass))
 			if err != nil {
 				// Fall back to cached value on transient errors (best-effort).
@@ -4763,6 +4768,11 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	seq := db.dictCurrentOps.Add(1)
 	if seq&(refreshEvery-1) != 0 {
+		return db.dictCurrentCached.Load(), nil
+	}
+	if stager, ok := db.dictStore.(dictStoreStager); ok && stager.HasUnsyncedOps() {
+		// Defer refreshes while an unsynced piggybacked dictionary is awaiting
+		// durability sync in SystemRootPageID.
 		return db.dictCurrentCached.Load(), nil
 	}
 	dictID, err := db.dictStore.GetCurrent(ctx)
