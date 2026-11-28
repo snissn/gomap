@@ -661,6 +661,7 @@ type DB struct {
 	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()
 	testAfterDurableRootVisibleInstallHook         func()
+	testBeforeAcceptedRootPublicationWaitHook      func(rootpublication.PhysicalSealReceipt)
 	testRootPublicationDependencyBytes             atomic.Uint64
 	testScanCandidateExternalReferencesHook        func()
 	testCheckpointAfterPoisonPreflightHook         func()
