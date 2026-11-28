@@ -1136,6 +1136,11 @@ type stagedSystemOpBatch struct {
 	onDurable   func()
 }
 
+type inFlightStagedSystemOps struct {
+	token   uint64
+	batches []stagedSystemOpBatch
+}
+
 type stagedSystemSyncWaiter struct {
 	commitSeq uint64
 	onDurable func()
@@ -1143,6 +1148,7 @@ type stagedSystemSyncWaiter struct {
 
 type piggybackedSystemOps struct {
 	batches                 []stagedSystemOpBatch
+	inFlightToken           uint64
 	newSystemRoot           uint64
 	retired                 []uint64
 	metrics                 adaptive.Metrics
@@ -1207,7 +1213,7 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 			return nil
 		}
 		db.stagedSystemOpsMu.Lock()
-		if len(db.stagedSystemOps) > 0 || db.stagedSystemInFlightUnsynced.Load() > 0 {
+		if len(db.stagedSystemOps) > 0 || len(db.stagedSystemOpsInFlight) > 0 || db.stagedSystemInFlightUnsynced.Load() > 0 {
 			db.stagedSystemOps = append(db.stagedSystemOps, stagedSystemOpBatch{
 				onDurable: onDurable,
 			})
@@ -1488,30 +1494,46 @@ func (db *DB) GetSystemIncludingStaged(key []byte) ([]byte, error) {
 	if db.closing.Load() {
 		return nil, ErrClosed
 	}
-	if db.stagedSystemOpsCount.Load() > 0 {
+	if db.stagedSystemOpsCount.Load() > 0 || db.stagedSystemOpsInFlightCount.Load() > 0 {
+		searchBatches := func(batches []stagedSystemOpBatch) (found bool, deleted bool, isPtr bool, val []byte, ptr page.ValuePtr) {
+			for bi := len(batches) - 1; bi >= 0; bi-- {
+				ops := batches[bi].ops
+				for oi := len(ops) - 1; oi >= 0; oi-- {
+					op := ops[oi]
+					if !bytes.Equal(op.Key, key) {
+						continue
+					}
+					if op.Delete {
+						return true, true, false, nil, page.ValuePtr{}
+					}
+					if !op.IsPointer {
+						return true, false, false, append([]byte(nil), op.Value...), page.ValuePtr{}
+					}
+					return true, false, true, nil, op.ValuePtr
+				}
+			}
+			return false, false, false, nil, page.ValuePtr{}
+		}
 		db.stagedSystemOpsMu.Lock()
-		for bi := len(db.stagedSystemOps) - 1; bi >= 0; bi-- {
-			ops := db.stagedSystemOps[bi].ops
-			for oi := len(ops) - 1; oi >= 0; oi-- {
-				op := ops[oi]
-				if !bytes.Equal(op.Key, key) {
-					continue
+		found, deleted, isPtr, val, ptr := searchBatches(db.stagedSystemOps)
+		if !found {
+			for fi := len(db.stagedSystemOpsInFlight) - 1; fi >= 0; fi-- {
+				found, deleted, isPtr, val, ptr = searchBatches(db.stagedSystemOpsInFlight[fi].batches)
+				if found {
+					break
 				}
-				if op.Delete {
-					db.stagedSystemOpsMu.Unlock()
-					return nil, nil
-				}
-				if !op.IsPointer {
-					cp := append([]byte(nil), op.Value...)
-					db.stagedSystemOpsMu.Unlock()
-					return cp, nil
-				}
-				ptr := op.ValuePtr
-				db.stagedSystemOpsMu.Unlock()
-				return db.readSystemValueLogPointer(ptr)
 			}
 		}
 		db.stagedSystemOpsMu.Unlock()
+		if found {
+			if deleted {
+				return nil, nil
+			}
+			if !isPtr {
+				return val, nil
+			}
+			return db.readSystemValueLogPointer(ptr)
+		}
 	}
 	return db.GetSystem(key)
 }
@@ -1542,37 +1564,43 @@ func (db *DB) LookupSystemTemplateDefIncludingStaged(templateID uint64) ([]byte,
 	if templateID == 0 {
 		return nil, templ.ErrMissingTemplate
 	}
-	if db.stagedSystemOpsCount.Load() > 0 {
+	if db.stagedSystemOpsCount.Load() > 0 || db.stagedSystemOpsInFlightCount.Load() > 0 {
 		defKey := SystemTemplateDefKey(templateID)
 		var (
 			found    bool
 			foundOp  SystemKVOp
 			chunkOps map[uint32][]byte
 		)
-		db.stagedSystemOpsMu.Lock()
-		for bi := len(db.stagedSystemOps) - 1; bi >= 0; bi-- {
-			ops := db.stagedSystemOps[bi].ops
-			for oi := len(ops) - 1; oi >= 0; oi-- {
-				op := ops[oi]
-				if !found && bytes.Equal(op.Key, defKey) {
-					found = true
-					foundOp = op
-					if !op.Delete && !op.IsPointer {
-						foundOp.Value = append([]byte(nil), op.Value...)
-					}
-					continue
-				}
-				if !op.Delete && !op.IsPointer {
-					if cid, idx, ok := parseSystemTemplateChunkKey(op.Key); ok && cid == templateID {
-						if chunkOps == nil {
-							chunkOps = make(map[uint32][]byte, 4)
+		scanBatches := func(batches []stagedSystemOpBatch) {
+			for bi := len(batches) - 1; bi >= 0; bi-- {
+				ops := batches[bi].ops
+				for oi := len(ops) - 1; oi >= 0; oi-- {
+					op := ops[oi]
+					if !found && bytes.Equal(op.Key, defKey) {
+						found = true
+						foundOp = op
+						if !op.Delete && !op.IsPointer {
+							foundOp.Value = append([]byte(nil), op.Value...)
 						}
-						if _, exists := chunkOps[idx]; !exists {
-							chunkOps[idx] = append([]byte(nil), op.Value...)
+						continue
+					}
+					if !op.Delete && !op.IsPointer {
+						if cid, idx, ok := parseSystemTemplateChunkKey(op.Key); ok && cid == templateID {
+							if chunkOps == nil {
+								chunkOps = make(map[uint32][]byte, 4)
+							}
+							if _, exists := chunkOps[idx]; !exists {
+								chunkOps[idx] = append([]byte(nil), op.Value...)
+							}
 						}
 					}
 				}
 			}
+		}
+		db.stagedSystemOpsMu.Lock()
+		scanBatches(db.stagedSystemOps)
+		for fi := len(db.stagedSystemOpsInFlight) - 1; fi >= 0; fi-- {
+			scanBatches(db.stagedSystemOpsInFlight[fi].batches)
 		}
 		db.stagedSystemOpsMu.Unlock()
 		if found {
@@ -1639,28 +1667,58 @@ func (db *DB) HasStagedSystemOps() bool {
 	return has
 }
 
-func (db *DB) drainStagedSystemOps() []stagedSystemOpBatch {
+func (db *DB) removeInFlightStagedSystemOpsLocked(token uint64) {
+	if token == 0 || len(db.stagedSystemOpsInFlight) == 0 {
+		return
+	}
+	kept := db.stagedSystemOpsInFlight[:0]
+	for _, entry := range db.stagedSystemOpsInFlight {
+		if entry.token != token {
+			kept = append(kept, entry)
+		}
+	}
+	if len(kept) == 0 {
+		db.stagedSystemOpsInFlight = nil
+	} else {
+		db.stagedSystemOpsInFlight = kept
+	}
+	db.stagedSystemOpsInFlightCount.Store(int32(len(db.stagedSystemOpsInFlight)))
+}
+
+func (db *DB) drainStagedSystemOps() ([]stagedSystemOpBatch, uint64) {
 	if db == nil || db.stagedSystemOpsCount.Load() == 0 {
-		return nil
+		return nil, 0
 	}
 	db.stagedSystemOpsMu.Lock()
 	if len(db.stagedSystemOps) == 0 {
 		db.updateStagedSystemOpsCountLocked()
 		db.stagedSystemOpsMu.Unlock()
-		return nil
+		return nil, 0
 	}
 	drained := db.stagedSystemOps
 	db.stagedSystemOps = nil
+	db.stagedSystemOpsInFlightSeq++
+	token := db.stagedSystemOpsInFlightSeq
+	db.stagedSystemOpsInFlight = append(db.stagedSystemOpsInFlight, inFlightStagedSystemOps{
+		token:   token,
+		batches: drained,
+	})
+	db.stagedSystemOpsInFlightCount.Store(int32(len(db.stagedSystemOpsInFlight)))
 	db.updateStagedSystemOpsCountLocked()
 	db.stagedSystemOpsMu.Unlock()
-	return drained
+	return drained, token
 }
 
-func (db *DB) requeueStagedSystemOpBatches(batches []stagedSystemOpBatch) {
-	if db == nil || len(batches) == 0 {
+func (db *DB) requeueStagedSystemOpBatches(batches []stagedSystemOpBatch, token uint64) {
+	if db == nil || (len(batches) == 0 && token == 0) {
 		return
 	}
 	db.stagedSystemOpsMu.Lock()
+	db.removeInFlightStagedSystemOpsLocked(token)
+	if len(batches) == 0 {
+		db.stagedSystemOpsMu.Unlock()
+		return
+	}
 	if db.closing.Load() {
 		db.stagedSystemOpsMu.Unlock()
 		db.releaseStagedSystemOpBatchPins(batches)
@@ -1746,12 +1804,17 @@ func (db *DB) drainStagedSyncWaitersLocked(throughSeq uint64) []func() {
 	return ready
 }
 
-func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, commitSeq uint64, physicallyDurable bool) {
-	if db == nil || len(batches) == 0 {
+func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, token uint64, commitSeq uint64, physicallyDurable bool) {
+	if db == nil || (len(batches) == 0 && token == 0) {
 		return
 	}
 	db.releaseStagedSystemOpBatchPins(batches)
 	if !db.requiresSyncForSystemDictActivation() {
+		if token != 0 {
+			db.stagedSystemOpsMu.Lock()
+			db.removeInFlightStagedSystemOpsLocked(token)
+			db.stagedSystemOpsMu.Unlock()
+		}
 		cbs := make([]func(), 0, len(batches))
 		for _, b := range batches {
 			if b.onDurable != nil {
@@ -1762,6 +1825,7 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, commi
 		return
 	}
 	db.stagedSystemOpsMu.Lock()
+	db.removeInFlightStagedSystemOpsLocked(token)
 	durableSeq := db.stagedSystemDurableSeq.Load()
 	if physicallyDurable {
 		durableSeq = db.advanceStagedSystemDurableSeqLocked(commitSeq)
@@ -1809,27 +1873,29 @@ func (db *DB) clearStagedSystemOpsOnClose() {
 	db.stagedSystemOpsMu.Lock()
 	drained := db.stagedSystemOps
 	db.stagedSystemOps = nil
+	db.stagedSystemOpsInFlight = nil
 	db.stagedSystemSyncWaiters = nil
 	db.updateStagedSystemOpsCountLocked()
+	db.stagedSystemOpsInFlightCount.Store(0)
 	db.stagedSystemSyncWaitersCount.Store(0)
 	db.stagedSystemOpsMu.Unlock()
 	db.releaseStagedSystemOpBatchPins(drained)
 }
 
 func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, sync bool, alloc zipper.PageAllocator) (*piggybackedSystemOps, error) {
-	drained := db.drainStagedSystemOps()
+	drained, token := db.drainStagedSystemOps()
 	if len(drained) == 0 {
 		return nil, nil
 	}
 	allOps := flattenStagedSystemOpBatches(drained)
 	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(allOps)
 	if len(sortedOps) == 0 {
-		db.completeStagedSystemOpBatches(drained, baseSeq, sync)
+		db.completeStagedSystemOpBatches(drained, token, baseSeq, sync)
 		return nil, nil
 	}
 	if sync && hasPointer {
 		if err := db.syncSystemValueLogWriterIfOpen(); err != nil {
-			db.requeueStagedSystemOpBatches(drained)
+			db.requeueStagedSystemOpBatches(drained, token)
 			return nil, err
 		}
 	}
@@ -1843,7 +1909,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
-		db.requeueStagedSystemOpBatches(drained)
+		db.requeueStagedSystemOpBatches(drained, token)
 		return nil, err
 	}
 	inFlightUnsynced := db.requiresSyncForSystemDictActivation()
@@ -1852,6 +1918,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 	}
 	return &piggybackedSystemOps{
 		batches:                 drained,
+		inFlightToken:           token,
 		newSystemRoot:           newSystemRoot,
 		retired:                 retired,
 		metrics:                 metrics,
@@ -1866,16 +1933,17 @@ func (db *DB) commitPiggybackedSystemOps(p *piggybackedSystemOps, commitSeq uint
 	if db == nil || p == nil {
 		return
 	}
-	db.completeStagedSystemOpBatches(p.batches, commitSeq, synced)
+	db.completeStagedSystemOpBatches(p.batches, p.inFlightToken, commitSeq, synced)
 	if p.inFlightUnsynced {
 		p.inFlightUnsynced = false
 		db.stagedSystemInFlightUnsynced.Add(-1)
 	}
 	p.batches = nil
+	p.inFlightToken = 0
 }
 
 func (db *DB) requeuePiggybackedSystemOps(p *piggybackedSystemOps) {
-	if db == nil || p == nil || len(p.batches) == 0 {
+	if db == nil || p == nil || (len(p.batches) == 0 && p.inFlightToken == 0) {
 		return
 	}
 	if p.inFlightUnsynced {
@@ -1886,8 +1954,9 @@ func (db *DB) requeuePiggybackedSystemOps(p *piggybackedSystemOps) {
 		releaseValueLogRefDelta(p.vlogRefDelta)
 		p.vlogRefDelta = nil
 	}
-	db.requeueStagedSystemOpBatches(p.batches)
+	db.requeueStagedSystemOpBatches(p.batches, p.inFlightToken)
 	p.batches = nil
+	p.inFlightToken = 0
 }
 
 // flushStagedSystemOpsDirect commits pending staged ops without invoking
@@ -1897,7 +1966,7 @@ func (db *DB) flushStagedSystemOpsDirect(sync bool) error {
 	if db == nil || db.stagedSystemOpsCount.Load() == 0 {
 		return nil
 	}
-	drained := db.drainStagedSystemOps()
+	drained, token := db.drainStagedSystemOps()
 	if len(drained) == 0 {
 		return nil
 	}
@@ -1911,14 +1980,14 @@ func (db *DB) flushStagedSystemOpsDirect(sync bool) error {
 		db.mu.RLock()
 		curSeq := db.meta.CommitSeq
 		db.mu.RUnlock()
-		db.completeStagedSystemOpBatches(drained, curSeq, false)
+		db.completeStagedSystemOpBatches(drained, token, curSeq, false)
 		return nil
 	}
 	commitSeq, accepted, physicallyDurable, err := db.applySystemOpsDirectWithCommitSeq(allOps, sync)
 	if accepted {
-		db.completeStagedSystemOpBatches(drained, commitSeq, physicallyDurable)
+		db.completeStagedSystemOpBatches(drained, token, commitSeq, physicallyDurable)
 	} else {
-		db.requeueStagedSystemOpBatches(drained)
+		db.requeueStagedSystemOpBatches(drained, token)
 	}
 	return err
 }
@@ -1946,7 +2015,7 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 				return fenceErr
 			}
 		}
-		drained := db.drainStagedSystemOps()
+		drained, token := db.drainStagedSystemOps()
 		var err error
 		if len(drained) > 0 {
 			inFlight := db.requiresSyncForSystemDictActivation()
@@ -1958,13 +2027,13 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 				db.mu.RLock()
 				curSeq := db.meta.CommitSeq
 				db.mu.RUnlock()
-				db.completeStagedSystemOpBatches(drained, curSeq, false)
+				db.completeStagedSystemOpBatches(drained, token, curSeq, false)
 			} else {
 				commitSeq, accepted, physicallyDurable, applyErr := db.applySystemOpsDirectWithCommitSeq(allOps, sync)
 				if accepted {
-					db.completeStagedSystemOpBatches(drained, commitSeq, physicallyDurable)
+					db.completeStagedSystemOpBatches(drained, token, commitSeq, physicallyDurable)
 				} else {
-					db.requeueStagedSystemOpBatches(drained)
+					db.requeueStagedSystemOpBatches(drained, token)
 				}
 				err = applyErr
 			}
