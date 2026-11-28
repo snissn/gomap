@@ -1316,6 +1316,42 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
 			t.Fatalf("unpinned owned segment should be deleted, stat err=%v", err)
 		}
+
+		// 3. Already-retired identity (ErrResourceConflict) is treated as a nil no-op.
+		retiredName := columnAssetSegmentFileName(3)
+		retiredPath := filepath.Join(segDir, retiredName)
+		retiredPayload := []byte("owned-segment-already-retired")
+		if err := os.WriteFile(retiredPath, retiredPayload, 0o600); err != nil {
+			t.Fatalf("write retired: %v", err)
+		}
+		retiredFile, err := os.Open(retiredPath)
+		if err != nil {
+			t.Fatalf("open retired: %v", err)
+		}
+		retiredIdentity, err := rootpublication.StableIdentityFromFile(retiredFile)
+		_ = retiredFile.Close()
+		if err != nil {
+			t.Fatalf("StableIdentityFromFile(retired): %v", err)
+		}
+		if err := registry.Observe(retiredIdentity); err != nil {
+			t.Fatalf("Observe(retired): %v", err)
+		}
+		defer func() { _ = registry.Unobserve(retiredIdentity) }()
+		retiredLease, err := registry.BeginDeleteAt(retiredIdentity, filepath.ToSlash(retiredPath))
+		if err != nil {
+			t.Fatalf("BeginDeleteAt(retired): %v", err)
+		}
+		retiredLease.Commit()
+		if err := deleteUnpublishedRebuildOwnedSegment(registry, unpublishedRebuildOwnedSegmentTarget{
+			assetPath:      retiredPath,
+			segmentDir:     segDir,
+			fileName:       retiredName,
+			parentIdentity: parentIdentity,
+			childIdentity:  retiredIdentity,
+			expectedSize:   int64(len(retiredPayload)),
+		}); err != nil {
+			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(retired)=%v; want nil no-op", err)
+		}
 	})
 
 	t.Run("case3g_retry_rejects_intervening_logical_write_between_attempts", func(t *testing.T) {

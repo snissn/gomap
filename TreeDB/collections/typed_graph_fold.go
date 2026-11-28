@@ -623,11 +623,13 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		if postSnap := c.db.AcquireSnapshot(); postSnap != nil {
 			postSystem := snapshotSystemRoot(postSnap)
 			if fresh, loadErr := loadCollectionCatalog(postSnap, updated.Name); loadErr == nil && fresh != nil {
-				sameFoldAuthority := postSystem == system ||
-					(sameCollectionMeta(fresh.meta, updated) &&
-						fresh.rootID(latest.rootName) == roots[currentStart] &&
-						fresh.typedGraphBase != nil &&
-						sameCollectionMeta(fresh.typedGraphBase.meta, installed.meta))
+				sameFoldAuthority := fresh.pager == latest.catalog.pager &&
+					len(fresh.rootOverlays) == 0 &&
+					fresh.typedGraphBase != nil &&
+					(postSystem == system ||
+						(sameCollectionMeta(fresh.meta, updated) &&
+							fresh.rootID(latest.rootName) == roots[currentStart] &&
+							sameCollectionMeta(fresh.typedGraphBase.meta, installed.meta)))
 				if sameFoldAuthority {
 					next = fresh
 					c.rememberCatalog(postSnap, fresh)
@@ -653,7 +655,11 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 			beforeStateInstall(c)
 		}
 		nextState.catalog = next
-		baseCatalog := newCollectionCatalogWithOverlays(installed.meta, installed.roots, nil)
+		baseAlias := installed
+		if next.typedGraphBase != nil {
+			baseAlias = next.typedGraphBase
+		}
+		baseCatalog := newCollectionCatalogWithOverlays(baseAlias.meta, baseAlias.roots, nil)
 		baseCatalog.pager = next.pager
 		nextState.servingBase.view.Catalog = baseCatalog
 		nextState.servingBase.materializerView.Catalog = baseCatalog
