@@ -106,6 +106,32 @@ func runColumnVectorGraphRebuildBeforePublishTestHook() {
 	}
 }
 
+var columnVectorGraphRebuildBeforeRetryTestHook struct {
+	sync.RWMutex
+	hook func(attempt int)
+}
+
+func setColumnVectorGraphRebuildBeforeRetryTestHook(hook func(attempt int)) func() {
+	columnVectorGraphRebuildBeforeRetryTestHook.Lock()
+	previous := columnVectorGraphRebuildBeforeRetryTestHook.hook
+	columnVectorGraphRebuildBeforeRetryTestHook.hook = hook
+	columnVectorGraphRebuildBeforeRetryTestHook.Unlock()
+	return func() {
+		columnVectorGraphRebuildBeforeRetryTestHook.Lock()
+		columnVectorGraphRebuildBeforeRetryTestHook.hook = previous
+		columnVectorGraphRebuildBeforeRetryTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphRebuildBeforeRetryTestHook(attempt int) {
+	columnVectorGraphRebuildBeforeRetryTestHook.RLock()
+	hook := columnVectorGraphRebuildBeforeRetryTestHook.hook
+	columnVectorGraphRebuildBeforeRetryTestHook.RUnlock()
+	if hook != nil {
+		hook(attempt)
+	}
+}
+
 var columnVectorGraphRebuildAfterMutationReleaseTestHook struct {
 	sync.RWMutex
 	hook func(*Collection)
@@ -282,8 +308,16 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string,
 	if canRetryPhysicalRewrite {
 		maxAttempts = maxColumnGraphRebuildPhysicalRootRewriteAttempts
 	}
+	var retryWitness *CollectionMeta
+	var witnessPtr **CollectionMeta
+	if canRetryPhysicalRewrite {
+		witnessPtr = &retryWitness
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		status, err = c.rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name, replay, owner)
+		if attempt > 0 {
+			runColumnVectorGraphRebuildBeforeRetryTestHook(attempt)
+		}
+		status, err = c.rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name, replay, owner, witnessPtr)
 		if !canRetryPhysicalRewrite || !isRetriableColumnGraphRebuildPhysicalRootRewrite(err) || attempt+1 >= maxAttempts {
 			return status, err
 		}
@@ -291,7 +325,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string,
 	return status, err
 }
 
-func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name string, replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (status VectorIndexStatus, err error) {
+func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name string, replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection, retryWitness **CollectionMeta) (status VectorIndexStatus, err error) {
 	started := time.Now()
 	var timing ColumnGraphBuildTiming
 	if err := ValidateIndexName(name); err != nil {
@@ -412,6 +446,14 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 		return VectorIndexStatus{}, err
 	}
 	baseMeta := catalog.meta
+	if retryWitness != nil {
+		if *retryWitness == nil {
+			copied := copyCollectionMeta(baseMeta)
+			*retryWitness = &copied
+		} else if !sameCollectionMeta(**retryWitness, baseMeta) {
+			return VectorIndexStatus{}, ErrConcurrentMutation
+		}
+	}
 	c.meta = baseMeta
 	// Construction keeps its existing source snapshot and mutation exclusion,
 	// but must relinquish mutation before waiting for raw publication: a raw
@@ -746,15 +788,20 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 	prepareStarted := time.Now()
 	basePrepared, prepareErr := c.prepareTypedGraphCapturedAssetsFromSources(state, nil, rowSource, typedSource, nil)
 	prepareErr = errors.Join(prepareErr, rowSource.Close())
+	// Snapshot exact owned-segment cleanup identities while basePrepared.stableResources
+	// is still populated (before registerCosineNormalizedF32V1RebuildDurability transfers
+	// it to CommandWALPublishContext) so pre-acceptance publication failures also reclaim
+	// unpublished owned segments.
+	baseCleanupTargets := collectUnpublishedRebuildOwnedSegmentTargets(c.db.ColumnAssetRootDir(), &basePrepared)
 	scheduleOwnedCleanup := func() {
-		targets := collectUnpublishedRebuildOwnedSegmentTargets(c.db.ColumnAssetRootDir(), &basePrepared)
 		if basePrepared.stableResources != nil {
 			basePrepared.stableResources.Release()
 			basePrepared.stableResources = nil
 		}
-		if len(targets) == 0 || registerPostUnlockCleanup == nil {
+		if len(baseCleanupTargets) == 0 || registerPostUnlockCleanup == nil {
 			return
 		}
+		targets := baseCleanupTargets
 		registerPostUnlockCleanup(func() error {
 			return c.deleteUnpublishedRebuildOwnedSegments(targets)
 		})
@@ -2960,7 +3007,7 @@ func deleteUnpublishedRebuildOwnedSegment(registry *rootpublication.IdentityPinR
 	deleteNamespace := filepath.ToSlash(filepath.Join(filepath.Clean(target.segmentDir), target.fileName))
 	lease, err := registry.BeginDeleteAt(childIdentity, deleteNamespace)
 	if err != nil {
-		if errors.Is(err, rootpublication.ErrResourcePinned) || errors.Is(err, rootpublication.ErrResourceConflict) {
+		if errors.Is(err, rootpublication.ErrResourceConflict) {
 			return nil
 		}
 		return err

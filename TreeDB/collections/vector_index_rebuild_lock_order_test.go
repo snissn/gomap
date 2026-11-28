@@ -686,7 +686,10 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d; want %d", gotRoot, afterDocMapRoot)
 		}
 
-		verifyRepoChunks5921SearchAndGC(t, db, col, "r1")
+		survivingID := string(ids1[4])
+		deletedID := string(ids1[0])
+		survivingVec := vecs1[4]
+		verifyRepoChunks5921SearchAndGC(t, db, col, "r1", survivingID, deletedID, survivingVec)
 		if err := db.Checkpoint(); err != nil {
 			t.Fatalf("Checkpoint(post-rebuild): %v", err)
 		}
@@ -700,7 +703,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 				t.Fatalf("close(reopened): %v", err)
 			}
 		}()
-		verifyRepoChunks5921SearchAndGC(t, reopenDB, reopenCol, "r1")
+		verifyRepoChunks5921SearchAndGC(t, reopenDB, reopenCol, "r1", survivingID, deletedID, survivingVec)
 	})
 
 	t.Run("case3b_online_vlog_rewrite_primary_retry_and_gc", func(t *testing.T) {
@@ -751,7 +754,10 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			if got := buildCalls.Load(); got != 2 {
 				t.Fatalf("Option C expected 2 build attempts after single primary physical rewrite, got %d", got)
 			}
-			verifyRepoChunks5921SearchAndGC(t, db, col, "r2")
+			survivingID := string(ids1[4])
+			deletedID := string(ids1[0])
+			survivingVec := vecs1[4]
+			verifyRepoChunks5921SearchAndGC(t, db, col, "r2", survivingID, deletedID, survivingVec)
 			if err := db.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint(post-rebuild): %v", err)
 			}
@@ -765,7 +771,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 					t.Fatalf("close(reopened): %v", err)
 				}
 			}()
-			verifyRepoChunks5921SearchAndGC(t, reopenDB, reopenCol, "r2")
+			verifyRepoChunks5921SearchAndGC(t, reopenDB, reopenCol, "r2", survivingID, deletedID, survivingVec)
 		})
 
 		t.Run("cosine_normalized_f32_v1_base_prepared_cleanup", func(t *testing.T) {
@@ -1038,7 +1044,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			}
 			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d after pre-writeMu rewrite; want %d", gotRoot, afterDocMapRoot)
 		}
-		verifyRepoChunks5921SearchAndGC(t, db, col, "r4")
+		verifyRepoChunks5921SearchAndGC(t, db, col, "r4", string(ids1[4]), string(ids1[0]), vecs1[4])
 	})
 
 	t.Run("case3e_typed_graph_fold_refreshes_catalog_after_intervening_text_root_rewrite", func(t *testing.T) {
@@ -1294,8 +1300,8 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			childIdentity:  pinnedIdentity,
 			expectedSize:   int64(len(pinnedPayload)),
 		}
-		if err := deleteUnpublishedRebuildOwnedSegment(registry, target); err != nil {
-			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(pinned): %v", err)
+		if err := deleteUnpublishedRebuildOwnedSegment(registry, target); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(pinned)=%v; want ErrResourcePinned", err)
 		}
 		if _, err := os.Stat(pinnedPath); err != nil {
 			t.Fatalf("pinned segment should still exist: %v", err)
@@ -1309,6 +1315,61 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		}
 		if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
 			t.Fatalf("unpinned owned segment should be deleted, stat err=%v", err)
+		}
+	})
+
+	t.Run("case3g_retry_rejects_intervening_logical_write_between_attempts", func(t *testing.T) {
+		dir, db, closeFn, mgr, col := openRepoChunks5921TestDB(t, 0)
+		defer func() {
+			if err := closeFn(); err != nil {
+				t.Fatalf("close db: %v", err)
+			}
+		}()
+		ids1, docs1, vecs1, _ := makeRepoChunks5921Batch("r7", 6, 2, "x")
+		if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(ids1, docs1, "embedding", VectorMetricCosine, vecs1); err != nil {
+			t.Fatalf("initial insert: %v", err)
+		}
+		if err := mgr.FlushAll(); err != nil {
+			t.Fatalf("FlushAll: %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		var buildCalls atomic.Int32
+		restoreBuild := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
+			if buildCalls.Add(1) == 1 {
+				_, _ = db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+					BatchSize:     16,
+					SyncEachBatch: true,
+				})
+			}
+		})
+		defer restoreBuild()
+		var betweenErr error
+		var beforeFrames int
+		restoreRetry := setColumnVectorGraphRebuildBeforeRetryTestHook(func(attempt int) {
+			if attempt == 1 {
+				ids2, docs2, vecs2, _ := makeRepoChunks5921Batch("r7b", 1, 2, "between")
+				_, _, betweenErr = col.InsertBatchWithStatsValidatedFloat32Projection(ids2, docs2, "embedding", VectorMetricCosine, vecs2)
+				if betweenErr == nil {
+					betweenErr = mgr.FlushAll()
+				}
+				beforeFrames = countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb"))
+			}
+		})
+		defer restoreRetry()
+		_, rebuildErr := col.RebuildVectorIndex("embedding_graph")
+		if betweenErr != nil {
+			t.Fatalf("intervening logical write between retry attempts failed: %v", betweenErr)
+		}
+		if !errors.Is(rebuildErr, ErrConcurrentMutation) {
+			t.Fatalf("rebuild with logical write between retry attempts returned %v; want ErrConcurrentMutation", rebuildErr)
+		}
+		if got := buildCalls.Load(); got != 1 {
+			t.Fatalf("retry after logical write must fail before attempt 2 build: buildCalls=%d, want 1", got)
+		}
+		if gotFrames := countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb")); gotFrames != beforeFrames {
+			t.Fatalf("rejected retry appended CommandWAL frames: before=%d after=%d", beforeFrames, gotFrames)
 		}
 	})
 
@@ -1465,16 +1526,15 @@ func reopenRepoChunks5921TestDB(t *testing.T, dir string) (*backenddb.DB, func()
 	return db, closeFn, mgr, col
 }
 
-func verifyRepoChunks5921SearchAndGC(t *testing.T, db *backenddb.DB, col *Collection, prefix string) {
+func verifyRepoChunks5921SearchAndGC(t *testing.T, db *backenddb.DB, col *Collection, prefix, survivingID, deletedID string, survivingVec []float32) {
 	t.Helper()
-	q := []float32{0.5, 0.25, 0.25, 0.5, 0.125, 0.375, 0.625, 0.75}
 	for _, mode := range []VectorIndexQueryMode{VectorIndexQueryModeExact, VectorIndexQueryModeQuantizedRerank} {
 		var buf VectorIndexSearchBuffer
 		opts := VectorIndexSearchOptions{
 			IndexName: "embedding_graph",
-			Query:     q,
-			TopK:      5,
-			EfSearch:  16,
+			Query:     survivingVec,
+			TopK:      200,
+			EfSearch:  256,
 			QueryMode: mode,
 		}
 		if mode == VectorIndexQueryModeQuantizedRerank {
@@ -1484,20 +1544,40 @@ func verifyRepoChunks5921SearchAndGC(t *testing.T, db *backenddb.DB, col *Collec
 		if err != nil {
 			t.Fatalf("SearchVectorIndexWithBuffer(mode=%s): %v", mode, err)
 		}
-		if len(resp.Results) == 0 {
-			t.Fatalf("SearchVectorIndexWithBuffer(mode=%s) returned 0 results", mode)
+		foundSurvivor := false
+		for _, item := range resp.Results {
+			id := string(item.ID)
+			if id == deletedID {
+				t.Fatalf("SearchVectorIndexWithBuffer(mode=%s) returned deleted document %q", mode, deletedID)
+			}
+			if id == survivingID {
+				foundSurvivor = true
+			}
+		}
+		if !foundSurvivor {
+			t.Fatalf("SearchVectorIndexWithBuffer(mode=%s) omitted surviving document %q (results=%d)", mode, survivingID, len(resp.Results))
 		}
 	}
 	textResp, err := col.SearchText(TextSearchOptions{
 		IndexName: "lexical",
 		Query:     "quantum " + prefix,
-		TopK:      5,
+		TopK:      200,
 	})
 	if err != nil {
 		t.Fatalf("SearchText: %v", err)
 	}
-	if len(textResp.Results) == 0 {
-		t.Fatalf("SearchText returned 0 results for prefix %q", prefix)
+	foundSurvivorText := false
+	for _, item := range textResp.Results {
+		id := string(item.DocumentID)
+		if id == deletedID {
+			t.Fatalf("SearchText returned deleted document %q", deletedID)
+		}
+		if id == survivingID {
+			foundSurvivorText = true
+		}
+	}
+	if !foundSurvivorText {
+		t.Fatalf("SearchText omitted surviving document %q for prefix %q (results=%d)", survivingID, prefix, len(textResp.Results))
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint before ColumnAssetGC: %v", err)

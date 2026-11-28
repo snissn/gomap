@@ -1062,6 +1062,14 @@ changed-source rejection and ordinary reopen. Normalized public search after
 reopen additionally requires supported prepared-holder/namespace authority.
 `TestVectorIndexRebuildReleasesRawWhileMutationIsBusy` forces mutation contention
 at capture and final publication; unrelated raw commands must still progress.
+`TestVectorIndexRebuildTextV2DocMapRace5921` verifies physical-rewrite handling
+and fail-closed boundaries: text-v2 docmap-only online value-log rewrites during
+construction and in the pre-`writeMu` window (`case3a`, `case3d`, plus
+`installTypedGraphFold` refresh in `case3e`), bounded retry and exact-identity
+owned-segment cleanup on physical primary rewrites (`case3b`, `case3f`), bounded
+retry exhaustion without CommandWAL frame append (`case3c`), logical-write
+rejection between retry attempts (`case3g`), and fail-closed non-retry rejection
+for concurrent logical inserts/updates/deletes (`case4`).
 
 ### Internal mutable graph consumer (#4617)
 

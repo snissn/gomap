@@ -621,11 +621,17 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		c.noteWriteDomainCatalog(system, next)
 	} else if system != 0 {
 		if postSnap := c.db.AcquireSnapshot(); postSnap != nil {
-			if snapshotSystemRoot(postSnap) == system {
-				if fresh, loadErr := loadCollectionCatalog(postSnap, updated.Name); loadErr == nil && fresh != nil {
+			postSystem := snapshotSystemRoot(postSnap)
+			if fresh, loadErr := loadCollectionCatalog(postSnap, updated.Name); loadErr == nil && fresh != nil {
+				sameFoldAuthority := postSystem == system ||
+					(sameCollectionMeta(fresh.meta, updated) &&
+						fresh.rootID(latest.rootName) == roots[currentStart] &&
+						fresh.typedGraphBase != nil &&
+						sameCollectionMeta(fresh.typedGraphBase.meta, installed.meta))
+				if sameFoldAuthority {
 					next = fresh
 					c.rememberCatalog(postSnap, fresh)
-					c.noteWriteDomainCatalog(system, fresh)
+					c.noteWriteDomainCatalog(postSystem, fresh)
 				}
 			}
 			_ = postSnap.Close()
