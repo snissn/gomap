@@ -1,11 +1,13 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1383,4 +1385,721 @@ func prepareColumnAssetGCBenchmarkCollectionM15B(b *testing.B) (*backenddb.DB, *
 		b.Fatalf("Insert: %v", err)
 	}
 	return d, col
+}
+
+func openEventsCollection5922(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	col, err := NewCollectionManager(d).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection(events): %v", err)
+	}
+	return col
+}
+
+func snapshotColumnAssetSegments5922(t testing.TB, d *backenddb.DB, col *Collection) map[string]int64 {
+	t.Helper()
+	nsName := col.columnAssetLifecycleScope().namespace
+	if nsName == "" {
+		t.Fatal("typed storage asset namespace missing")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), nsName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]int64{}
+	}
+	if err != nil {
+		t.Fatalf("ReadDir(%q): %v", namespace.SegmentDir, err)
+	}
+	got := make(map[string]int64, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("entry.Info(%q): %v", entry.Name(), err)
+		}
+		got[entry.Name()] = info.Size()
+	}
+	return got
+}
+
+func TestColumnAssetGCPrePublishRebuildFailureCleansUpAssets5922(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
+
+	t.Run("non_normalized_prepared_pre_publish_failure", func(t *testing.T) {
+		rows := []columnGraphRebuildInputRowV2A{
+			{id: "doc-a", vector: []float32{1, 0, 0}},
+			{id: "doc-b", vector: []float32{0, 1, 0}},
+		}
+		dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		beforeSegments := snapshotColumnAssetSegments5922(t, d, col)
+		injected := errors.New("injected pre-publish prepared rebuild failure")
+		restore := setColumnVectorGraphConstructionMatrixLastUseTestHook(func([]columnVectorGraphAssetRow, *columnVectorGraphConstructionMatrix) error {
+			return injected
+		})
+		defer restore()
+
+		if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, injected) {
+			t.Fatalf("RebuildVectorIndex error=%v want injected", err)
+		}
+		restore()
+		afterSegments := snapshotColumnAssetSegments5922(t, d, col)
+		if !reflect.DeepEqual(afterSegments, beforeSegments) {
+			t.Fatalf("failed non-normalized rebuild leaked segments: before=%v after=%v", beforeSegments, afterSegments)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+
+		reopened := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = reopened.Close() }()
+		reopenedCol, err := NewCollectionManager(reopened).OpenCollection(col.Meta().Name)
+		if err != nil {
+			t.Fatalf("OpenCollection after reopen: %v", err)
+		}
+		stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		if err != nil {
+			t.Fatalf("ColumnAssetGC after reopen: %v", err)
+		}
+		if !stats.Plan.Complete || stats.Plan.Segments.Unknown != 0 || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC stats=%+v plan=%+v want complete clean plan with zero unknown/deleted", stats, stats.Plan.Segments)
+		}
+	})
+
+	t.Run("cosine_normalized_base_and_graph_pre_publish_failure", func(t *testing.T) {
+		meta := cosineNormalizedF32V1TestMeta()
+		dir, d, col := openTypedMinimaCollectionMeta(t, meta)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		ids := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		docs := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`), []byte(`{"id":"c"}`)}
+		vecs := [][]float32{
+			{1, 0, 0, 0, 0, 0, 0, 0},
+			{0, 1, 0, 0, 0, 0, 0, 0},
+			{0, 0, 1, 0, 0, 0, 0, 0},
+		}
+		columns := []TypedColumnBatch{
+			{Name: "embedding", Float32Vectors: vecs},
+			{Name: "content", Strings: []string{"alpha", "beta", "gamma"}},
+			{Name: "user", Strings: []string{"u1", "u2", "u3"}},
+			{Name: "path", Strings: []string{"file1", "file2", "file3"}},
+		}
+		if _, _, err := col.InsertTypedBatchWithStats(ids, docs, columns); err != nil {
+			t.Fatalf("InsertTypedBatchWithStats: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		beforeSegments := snapshotColumnAssetSegments5922(t, d, col)
+		injected := errors.New("injected pre-publish cosine normalized failure after base transfer")
+		restore := setColumnVectorGraphStablePublishTestHook(func(*columnVectorGraphPreparedPhysicalAsset) error {
+			return injected
+		})
+		defer restore()
+
+		if _, err := col.RebuildVectorIndex("embedding_graph"); !errors.Is(err, injected) {
+			t.Fatalf("RebuildVectorIndex error=%v want injected", err)
+		}
+		restore()
+		afterSegments := snapshotColumnAssetSegments5922(t, d, col)
+		if !reflect.DeepEqual(afterSegments, beforeSegments) {
+			t.Fatalf("failed cosine-normalized rebuild leaked segments: before=%v after=%v", beforeSegments, afterSegments)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+
+		reopened := openTypedMinimaDB(t, dir)
+		defer func() { _ = reopened.Close() }()
+		reopenedCol, err := NewCollectionManager(reopened).OpenCollection(meta.Name)
+		if err != nil {
+			t.Fatalf("OpenCollection after reopen: %v", err)
+		}
+		stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		if err != nil {
+			t.Fatalf("ColumnAssetGC after reopen: %v", err)
+		}
+		if !stats.Plan.Complete || stats.Plan.Segments.Unknown != 0 || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC stats=%+v plan=%+v want complete clean plan with zero unknown/deleted", stats, stats.Plan.Segments)
+		}
+	})
+
+	t.Run("cosine_normalized_base_preflight_concurrent_mutation_cleanup", func(t *testing.T) {
+		meta := cosineNormalizedF32V1TestMeta()
+		dir, d, col := openTypedMinimaCollectionMeta(t, meta)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		ids := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		docs := [][]byte{[]byte(`{"id":"a"}`), []byte(`{"id":"b"}`), []byte(`{"id":"c"}`)}
+		vecs := [][]float32{
+			{1, 0, 0, 0, 0, 0, 0, 0},
+			{0, 1, 0, 0, 0, 0, 0, 0},
+			{0, 0, 1, 0, 0, 0, 0, 0},
+		}
+		columns := []TypedColumnBatch{
+			{Name: "embedding", Float32Vectors: vecs},
+			{Name: "content", Strings: []string{"alpha", "beta", "gamma"}},
+			{Name: "user", Strings: []string{"u1", "u2", "u3"}},
+			{Name: "path", Strings: []string{"file1", "file2", "file3"}},
+		}
+		if _, _, err := col.InsertTypedBatchWithStats(ids, docs, columns); err != nil {
+			t.Fatalf("InsertTypedBatchWithStats: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		otherMgr := NewCollectionManager(d)
+		otherCol, err := otherMgr.OpenCollection(meta.Name)
+		if err != nil {
+			t.Fatalf("OpenCollection(concurrent writer): %v", err)
+		}
+		var insertErr error
+		var afterInsertSegments map[string]int64
+		restoreBuild := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
+			_, _, insertErr = otherCol.InsertTypedBatchWithStats(
+				[][]byte{[]byte("d")},
+				[][]byte{[]byte(`{"id":"d"}`)},
+				[]TypedColumnBatch{
+					{Name: "embedding", Float32Vectors: [][]float32{{0, 0, 0, 1, 0, 0, 0, 0}}},
+					{Name: "content", Strings: []string{"delta"}},
+					{Name: "user", Strings: []string{"u4"}},
+					{Name: "path", Strings: []string{"file4"}},
+				},
+			)
+			if insertErr == nil {
+				insertErr = otherMgr.FlushAll()
+			}
+			if insertErr == nil {
+				afterInsertSegments = snapshotColumnAssetSegments5922(t, d, otherCol)
+			}
+		})
+		defer restoreBuild()
+
+		if _, err := col.RebuildVectorIndex("embedding_graph"); err == nil || (!errors.Is(err, ErrConcurrentMutation) && !strings.Contains(err.Error(), "concurrent schema modification detected")) {
+			t.Fatalf("RebuildVectorIndex error=%v want concurrent modification preflight rejection", err)
+		}
+		restoreBuild()
+		if insertErr != nil {
+			t.Fatalf("concurrent insert during rebuild: %v", insertErr)
+		}
+		afterRebuildSegments := snapshotColumnAssetSegments5922(t, d, otherCol)
+		if !reflect.DeepEqual(afterRebuildSegments, afterInsertSegments) {
+			t.Fatalf("preflight-failed cosine rebuild leaked basePrepared segments: want=%v got=%v", afterInsertSegments, afterRebuildSegments)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint after preflight failure: %v", err)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+
+		reopened := openTypedMinimaDB(t, dir)
+		defer func() { _ = reopened.Close() }()
+		reopenedCol, err := NewCollectionManager(reopened).OpenCollection(meta.Name)
+		if err != nil {
+			t.Fatalf("OpenCollection after reopen: %v", err)
+		}
+		stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		if err != nil {
+			t.Fatalf("ColumnAssetGC after reopen: %v", err)
+		}
+		if !stats.Plan.Complete || stats.Plan.Segments.Unknown != 0 || stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC stats=%+v plan=%+v want complete clean plan with zero unknown/deleted", stats, stats.Plan.Segments)
+		}
+	})
+}
+
+func TestColumnAssetGCPrePublishStableInsertFailureCleansUpTail5922(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
+
+	cases := []struct {
+		name     string
+		install  bool
+		transfer bool
+	}{
+		{name: "abandon_before_install"},
+		{name: "finish_failure_before_transfer", install: true},
+		{name: "finish_failure_after_transfer_pre_publish", install: true, transfer: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+			d := openCollectionCommandWALDB(t, dir)
+			closed := false
+			defer func() {
+				if !closed {
+					_ = d.Close()
+				}
+			}()
+			col := openEventsCollection5922(t, d)
+			if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+				t.Fatalf("Insert e1: %v", err)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+
+			view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+			if err != nil {
+				t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+			}
+			cfg := view.FullConfig
+			if releaseView != nil {
+				releaseView()
+			}
+			livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+			if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+				t.Fatalf("initial reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+			}
+			liveFileID := livePlan.SegmentEntries[0].FileID
+			committedSize := livePlan.SegmentEntries[0].Bytes
+
+			candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("unrelated-reclaimable-candidate"))
+			candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+			if err != nil {
+				t.Fatalf("columnAssetSegmentPath(candidate): %v", err)
+			}
+
+			captureLease, err := d.AcquireStableResourceCaptureLease()
+			if err != nil {
+				t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+			}
+			refs, stableResources, err := AppendColumnPhysicalAssetsWithStableResources(
+				d.ColumnAssetRootDir(),
+				cfg,
+				liveFileID,
+				[]StableColumnPhysicalAssetAppend{{
+					Payload:    []byte("unpublished-stable-tail-payload"),
+					Kind:       ColumnAssetKindTCS1PartImage,
+					Generation: livePlan.ActiveManifestGeneration + 1,
+					PartID:     999,
+				}},
+				d.StableResourceIdentityPinRegistry(),
+				captureLease,
+			)
+			captureLease.Release()
+			if err != nil {
+				t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+			}
+			if len(refs) != 1 || stableResources == nil {
+				t.Fatalf("refs=%d stableResources=%v want 1 non-nil", len(refs), stableResources)
+			}
+			lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+				Enabled:              true,
+				Collection:           col.Meta().Name,
+				AppliedCommandLSN:    77,
+				ManifestRootBaseID:   44,
+				RootDelta:            ColumnManifestRootDelta{BaseRootID: 44},
+				PreparedAssets:       []ColumnPreparedAsset{{Ref: refs[0], Rows: 1, Bytes: refs[0].Length, GenerationID: refs[0].Generation}},
+				stableResources:      stableResources,
+				stablePreparedAssets: true,
+			})
+			if err != nil {
+				t.Fatalf("newColumnPublishPlanLease: %v", err)
+			}
+
+			var cleanupErr error
+			if !tc.install {
+				cleanupErr = lease.Abandon()
+			} else {
+				if _, err := lease.beginInstall(col.Meta().Name, 77, 44); err != nil {
+					t.Fatalf("beginInstall: %v", err)
+				}
+				if tc.transfer {
+					// Simulate transfer into a publisher context that fails pre-publication
+					// and releases the transferred StableResourceSet.
+					if err := lease.transferStableResources(backenddb.CommandWALPublishContext{}); err != nil && !errors.Is(err, rootpublication.ErrResourceOwnership) {
+						t.Fatalf("transferStableResources: %v", err)
+					}
+				}
+				cleanupErr = lease.finishFailure(errors.New("injected pre-publish failure"))
+			}
+			if cleanupErr != nil {
+				t.Fatalf("pre-publish stable cleanup returned error=%v (want clean truncation without quarantine)", cleanupErr)
+			}
+
+			livePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
+			if err != nil {
+				t.Fatalf("columnAssetSegmentPath(live): %v", err)
+			}
+			info, err := os.Stat(livePath)
+			if err != nil {
+				t.Fatalf("Stat(livePath): %v", err)
+			}
+			if info.Size() != committedSize {
+				t.Fatalf("live segment size after pre-publish cleanup=%d want committedSize=%d", info.Size(), committedSize)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint before reopen: %v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			closed = true
+
+			reopened := openCollectionCommandWALDB(t, dir)
+			reopenedClosed := false
+			defer func() {
+				if !reopenedClosed {
+					_ = reopened.Close()
+				}
+			}()
+			reopenedCol := openEventsCollection5922(t, reopened)
+			stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+				CandidateRefs: []ColumnAssetRef{candidate},
+			})
+			if err != nil {
+				t.Fatalf("default ColumnAssetGC after reopen failed: %v (stats=%+v)", err, stats)
+			}
+			if !stats.Plan.Complete || stats.Plan.Segments.Unknown != 0 || stats.SegmentsDeleted != 1 {
+				t.Fatalf("GC stats=%+v plan=%+v want complete plan deleting unrelated candidate", stats, stats.Plan.Segments)
+			}
+			if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("candidate segment stat err=%v want ErrNotExist", err)
+			}
+			got, err := reopenedCol.Get([]byte("e1"))
+			if err != nil || !bytes.Contains(got, []byte(`"did":"d1"`)) {
+				t.Fatalf("Get(e1) after GC=%q err=%v", got, err)
+			}
+			if err := reopened.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint after GC: %v", err)
+			}
+			if err := reopened.Close(); err != nil {
+				t.Fatalf("Close after GC: %v", err)
+			}
+			reopenedClosed = true
+
+			reopened2 := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopened2.Close() }()
+			reopenedCol2 := openEventsCollection5922(t, reopened2)
+			got2, err := reopenedCol2.Get([]byte("e1"))
+			if err != nil || !bytes.Contains(got2, []byte(`"did":"d1"`)) {
+				t.Fatalf("Get(e1) after second reopen=%q err=%v", got2, err)
+			}
+		})
+	}
+}
+
+func TestColumnAssetGCTruncateUnpublishedTails5922(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
+
+	t.Run("recovers_crash_tail_and_reclaims_unrelated_candidate", func(t *testing.T) {
+		dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+		d := openCollectionCommandWALDB(t, dir)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		col := openEventsCollection5922(t, d)
+		if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+			t.Fatalf("Insert e1: %v", err)
+		}
+		if _, err := col.Insert([]byte("e2"), []byte(`{"time_us":2,"kind":"post","did":"d2"}`)); err != nil {
+			t.Fatalf("Insert e2: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+		if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+			t.Fatalf("initial reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+		}
+		liveEntry := livePlan.SegmentEntries[0]
+		committedSize := liveEntry.Bytes
+
+		candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("unrelated-reclaimable-segment"))
+		candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+		if err != nil {
+			t.Fatalf("columnAssetSegmentPath(candidate): %v", err)
+		}
+
+		// Simulate crash-left unpublished append tail past committed EOF.
+		tailBytes := bytes.Repeat([]byte{0xAB}, 256)
+		f, err := os.OpenFile(liveEntry.Path, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatalf("OpenFile(live segment): %v", err)
+		}
+		if _, err := f.Write(tailBytes); err != nil {
+			_ = f.Close()
+			t.Fatalf("Write tail: %v", err)
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			t.Fatalf("Sync tail: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close tail: %v", err)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close setup DB: %v", err)
+		}
+		closed = true
+
+		reopened := openCollectionCommandWALDB(t, dir)
+		reopenedClosed := false
+		defer func() {
+			if !reopenedClosed {
+				_ = reopened.Close()
+			}
+		}()
+		reopenedCol := openEventsCollection5922(t, reopened)
+
+		// Default ColumnAssetGC MUST remain fail-closed.
+		defaultStats, defaultErr := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			CandidateRefs: []ColumnAssetRef{candidate},
+		})
+		if !errors.Is(defaultErr, ErrColumnAssetReachabilityIncomplete) || !strings.Contains(defaultErr.Error(), "unknown_segments=1") {
+			t.Fatalf("default ColumnAssetGC err=%v want ErrColumnAssetReachabilityIncomplete with unknown_segments=1", defaultErr)
+		}
+		if defaultStats.SegmentsDeleted != 0 || defaultStats.BytesDeleted != 0 {
+			t.Fatalf("default GC unexpectedly deleted segments: %+v", defaultStats)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != committedSize+int64(len(tailBytes)) {
+			t.Fatalf("default GC mutated tail segment: size=%d err=%v want %d", info.Size(), err, committedSize+int64(len(tailBytes)))
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			t.Fatalf("default GC removed candidate segment: %v", err)
+		}
+
+		// DryRun with TruncateUnpublishedTails: true MUST NOT mutate disk.
+		dryStats, dryErr := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			DryRun:                   true,
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{candidate},
+		})
+		if dryErr != nil {
+			t.Fatalf("DryRun ColumnAssetGC(TruncateUnpublishedTails=true): %v", dryErr)
+		}
+		if dryStats.Plan.Complete || dryStats.Plan.Segments.Unknown != 1 || dryStats.SegmentsDeleted != 0 {
+			t.Fatalf("DryRun stats=%+v plan=%+v want incomplete dry-run", dryStats, dryStats.Plan.Segments)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != committedSize+int64(len(tailBytes)) {
+			t.Fatalf("DryRun mutated tail segment: size=%d err=%v", info.Size(), err)
+		}
+
+		// Opt-in TruncateUnpublishedTails: true MUST truncate only the unpublished tail,
+		// re-plan cleanly, and delete the unrelated reclaimable candidate segment.
+		gcStats, gcErr := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{candidate},
+		})
+		if gcErr != nil {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true): %v (stats=%+v)", gcErr, gcStats)
+		}
+		if !gcStats.Plan.Complete || gcStats.Plan.Segments.Unknown != 0 || gcStats.SegmentsDeleted != 1 {
+			t.Fatalf("GC stats=%+v plan=%+v want complete plan and 1 deleted candidate", gcStats, gcStats.Plan.Segments)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != committedSize {
+			t.Fatalf("post-GC live segment size=%d err=%v want committedSize=%d", info.Size(), err, committedSize)
+		}
+		if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("candidate segment stat err=%v want ErrNotExist", err)
+		}
+		for _, tc := range []struct{ id, want string }{{"e1", `"did":"d1"`}, {"e2", `"did":"d2"`}} {
+			got, err := reopenedCol.Get([]byte(tc.id))
+			if err != nil || !bytes.Contains(got, []byte(tc.want)) {
+				t.Fatalf("Get(%s) after tail-truncating GC=%q err=%v", tc.id, got, err)
+			}
+		}
+		if err := reopened.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint after tail-truncating GC: %v", err)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close after tail-truncating GC: %v", err)
+		}
+		reopenedClosed = true
+
+		reopened2 := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = reopened2.Close() }()
+		reopenedCol2 := openEventsCollection5922(t, reopened2)
+		for _, tc := range []struct{ id, want string }{{"e1", `"did":"d1"`}, {"e2", `"did":"d2"`}} {
+			got, err := reopenedCol2.Get([]byte(tc.id))
+			if err != nil || !bytes.Contains(got, []byte(tc.want)) {
+				t.Fatalf("Get(%s) after final reopen=%q err=%v", tc.id, got, err)
+			}
+		}
+	})
+
+	t.Run("negative_control_directory_entry_fails_closed", func(t *testing.T) {
+		dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+		d := openCollectionCommandWALDB(t, dir)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		col := openEventsCollection5922(t, d)
+		if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+			t.Fatalf("Insert e1: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+		if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+			t.Fatalf("initial reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+		}
+		liveEntry := livePlan.SegmentEntries[0]
+		tailSize := liveEntry.Bytes + 128
+		f, err := os.OpenFile(liveEntry.Path, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatalf("OpenFile: %v", err)
+		}
+		if _, err := f.Write(bytes.Repeat([]byte{0xCD}, 128)); err != nil {
+			_ = f.Close()
+			t.Fatalf("Write: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), col.columnAssetLifecycleScope().namespace)
+		if err != nil {
+			t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+		}
+		if err := os.Mkdir(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), 0o700); err != nil {
+			t.Fatalf("Mkdir: %v", err)
+		}
+		candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("must-retain-candidate"))
+		candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+		if err != nil {
+			t.Fatalf("columnAssetSegmentPath: %v", err)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+
+		reopened := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = reopened.Close() }()
+		reopenedCol := openEventsCollection5922(t, reopened)
+		stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{candidate},
+		})
+		if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) with dir entry err=%v want ErrColumnAssetReachabilityIncomplete", err)
+		}
+		if stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC deleted segments despite non-eligible dir entry: %+v", stats)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != tailSize {
+			t.Fatalf("live tail segment was mutated despite non-eligible sibling: size=%d err=%v want %d", info.Size(), err, tailSize)
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			t.Fatalf("candidate segment was deleted despite non-eligible dir entry: %v", err)
+		}
+	})
+
+	t.Run("negative_control_interior_gap_fails_closed", func(t *testing.T) {
+		dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+		d := openCollectionCommandWALDB(t, dir)
+		closed := false
+		defer func() {
+			if !closed {
+				_ = d.Close()
+			}
+		}()
+		col := openEventsCollection5922(t, d)
+		if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+			t.Fatalf("Insert e1: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+		if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+			t.Fatalf("initial reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+		}
+		liveEntry := livePlan.SegmentEntries[0]
+
+		// Write an 8 KiB non-zero interior gap + a second candidate ref + trailing 128 bytes.
+		gap := bytes.Repeat([]byte{0x5A}, 8192)
+		secondPayload := []byte("second-ref-after-large-interior-gap")
+		trailing := bytes.Repeat([]byte{0xEE}, 128)
+		secondOffset := liveEntry.Bytes + int64(len(gap))
+		totalSize := secondOffset + int64(len(secondPayload)) + int64(len(trailing))
+		f, err := os.OpenFile(liveEntry.Path, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatalf("OpenFile: %v", err)
+		}
+		for _, chunk := range [][]byte{gap, secondPayload, trailing} {
+			if _, err := f.Write(chunk); err != nil {
+				_ = f.Close()
+				t.Fatalf("Write: %v", err)
+			}
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			t.Fatalf("Sync: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		afterGapRef := ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  col.columnAssetLifecycleScope().namespace,
+			Generation: livePlan.ActiveManifestGeneration + 1,
+			PartID:     555,
+			FileID:     liveEntry.FileID,
+			Offset:     secondOffset,
+			Length:     int64(len(secondPayload)),
+			Checksum:   page.Checksum(secondPayload),
+		}
+		candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("must-retain-candidate-on-interior-gap"))
+		candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+		if err != nil {
+			t.Fatalf("columnAssetSegmentPath: %v", err)
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+
+		reopened := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = reopened.Close() }()
+		reopenedCol := openEventsCollection5922(t, reopened)
+		stats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{afterGapRef, candidate},
+		})
+		if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) with interior gap err=%v want ErrColumnAssetReachabilityIncomplete", err)
+		}
+		if stats.SegmentsDeleted != 0 {
+			t.Fatalf("GC deleted segments despite interior gap: %+v", stats)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != totalSize {
+			t.Fatalf("interior-gap segment was truncated: size=%d err=%v want %d", info.Size(), err, totalSize)
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			t.Fatalf("candidate segment was deleted despite interior gap: %v", err)
+		}
+	})
 }

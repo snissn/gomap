@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestColumnPublishPlanLeaseCommitOnce4550(t *testing.T) {
@@ -384,4 +385,165 @@ func assertColumnPublishPlanLeaseRegistry4550(t testing.TB, col *Collection, pen
 	if gotPending != pending || gotPrepared != prepared || gotQuarantine != quarantine {
 		t.Fatalf("registry pending/prepared/quarantine=%d/%d/%d, want %d/%d/%d", gotPending, gotPrepared, gotQuarantine, pending, prepared, quarantine)
 	}
+}
+
+func TestColumnPublishPlanLeaseStableNonNilRebindQuarantines5922(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace support required")
+	}
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openEventsCollection5922(t, d)
+	if _, err := col.Insert([]byte("seed-meta"), []byte(`{"time_us":1,"kind":"like","did":"d0"}`)); err != nil {
+		t.Fatalf("Insert seed: %v", err)
+	}
+	view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	cfg := view.FullConfig
+	if releaseView != nil {
+		releaseView()
+	}
+	captureLease, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+	}
+	refs, stableResources, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		columnAssetM12ASegmentFileID+1,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    []byte("planned"),
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Generation: 7,
+			PartID:     1,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLease,
+	)
+	captureLease.Release()
+	if err != nil {
+		t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+	}
+	asset := ColumnPreparedAsset{Ref: refs[0], Rows: 1, Bytes: refs[0].Length, GenerationID: refs[0].Generation}
+	lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+		Enabled:              true,
+		Collection:           "events",
+		AppliedCommandLSN:    77,
+		ManifestRootBaseID:   44,
+		RootDelta:            ColumnManifestRootDelta{BaseRootID: 44},
+		PreparedAssets:       []ColumnPreparedAsset{asset},
+		stableResources:      stableResources,
+		stablePreparedAssets: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPublishPlanLease: %v", err)
+	}
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPath := path + ".original"
+	if err := os.Rename(path, originalPath); err != nil {
+		t.Fatal(err)
+	}
+	// Same length as "planned" (7 bytes), different inode.
+	if err := os.WriteFile(path, []byte("rebound"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := lease.Abandon(); !errors.Is(err, errColumnPublishPlanLeaseCleanupQuarantined) {
+		t.Fatalf("Abandon error=%v, want quarantined cleanup on rebound inode", err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "rebound" {
+		t.Fatalf("rebound segment raw=%q err=%v", raw, err)
+	}
+	if raw, err := os.ReadFile(originalPath); err != nil || string(raw) != "planned" {
+		t.Fatalf("original segment raw=%q err=%v", raw, err)
+	}
+	assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 1)
+}
+
+func TestColumnPublishPlanLeaseStableAlignedNonZeroOffsetQuarantines5922(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace support required")
+	}
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openEventsCollection5922(t, d)
+	if _, err := col.Insert([]byte("seed-meta"), []byte(`{"time_us":1,"kind":"like","did":"d0"}`)); err != nil {
+		t.Fatalf("Insert seed: %v", err)
+	}
+	view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	cfg := view.FullConfig
+	if releaseView != nil {
+		releaseView()
+	}
+
+	// Seed a fresh segment with an unaligned 3-byte payload so an aligned
+	// int64_values append writes prefix zero-padding before its ref.Offset.
+	seed := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, columnAssetM12ASegmentFileID+2, []byte("abc"))
+	captureLease, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+	}
+	refs, stableResources, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		seed.FileID,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    []byte("12345678"),
+			Kind:       ColumnAssetKindTCS1Int64Values,
+			Generation: 7,
+			PartID:     2,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLease,
+	)
+	captureLease.Release()
+	if err != nil {
+		t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+	}
+	if refs[0].Offset <= seed.Length {
+		t.Fatalf("expected prefix alignment padding before ref.Offset=%d (seed len=%d)", refs[0].Offset, seed.Length)
+	}
+	asset := ColumnPreparedAsset{Ref: refs[0], Rows: 1, Bytes: refs[0].Length, GenerationID: refs[0].Generation}
+	lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+		Enabled:              true,
+		Collection:           "events",
+		AppliedCommandLSN:    78,
+		ManifestRootBaseID:   44,
+		RootDelta:            ColumnManifestRootDelta{BaseRootID: 44},
+		PreparedAssets:       []ColumnPreparedAsset{asset},
+		stableResources:      stableResources,
+		stablePreparedAssets: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPublishPlanLease: %v", err)
+	}
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Abandon(); !errors.Is(err, errColumnPublishPlanLeaseCleanupQuarantined) {
+		t.Fatalf("Abandon error=%v, want quarantined cleanup when prefix alignment padding precedes ref.Offset", err)
+	}
+	afterInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterInfo.Size() != beforeInfo.Size() {
+		t.Fatalf("aligned non-zero offset segment was truncated from %d to %d", beforeInfo.Size(), afterInfo.Size())
+	}
+	assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 1)
 }

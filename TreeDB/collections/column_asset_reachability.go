@@ -123,6 +123,7 @@ type ColumnAssetReachabilityPlan struct {
 	RewriteDebtBytes           int64
 	Entries                    []ColumnAssetReachabilityRefEntry
 	SegmentEntries             []ColumnAssetReachabilitySegmentEntry
+	pinStateIncomplete         bool
 }
 
 // ColumnAssetReachabilitySourceStats counts unique ref contributions by
@@ -218,6 +219,8 @@ type ColumnAssetReachabilitySegmentEntry struct {
 	RefCount              int
 	plannedParentIdentity rootpublication.StableIdentity
 	plannedChildIdentity  rootpublication.StableIdentity
+	tailTruncateEligible  bool
+	tailTruncateEnd       int64
 }
 
 type columnAssetReachabilityRefBuilder struct {
@@ -1028,6 +1031,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		}
 		rangeSet := rangesByFile[segment.fileID]
 		logicalRefCount := rangeSet.count
+		_, ownedSegment := input.ownedSegments[segment.fileID]
 		if owned, ok := input.ownedSegments[segment.fileID]; ok {
 			namespace, ok := owned.Namespace()
 			if !ok || !rootpublication.SamePhysicalIdentity(owned.Identity(), segment.childIdentity) ||
@@ -1037,6 +1041,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 			rangeSet.appendRange(columnAssetReachabilityRange{start: 0, end: segment.bytes, status: ColumnAssetReachabilityProtected})
 		}
+		_, quarantinedSegment := input.quarantineSegments[segment.fileID]
 		if quarantineBytes, ok := input.quarantineSegments[segment.fileID]; ok {
 			seenQuarantineSegments[segment.fileID] = struct{}{}
 			plan.Segments.QuarantineSegments++
@@ -1059,7 +1064,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Segments.Total++
 		plan.Segments.BytesTotal = addColumnAssetReachabilityBytes(plan.Segments.BytesTotal, segment.bytes)
 		segmentPlan := classifyColumnAssetReachabilitySegmentSet(segment, rangeSet)
-		if _, quarantined := input.quarantineSegments[segment.fileID]; quarantined && segment.bytes == 0 && segmentPlan.status == ColumnAssetReachabilitySegmentReclaimable {
+		if quarantinedSegment && segment.bytes == 0 && segmentPlan.status == ColumnAssetReachabilitySegmentReclaimable {
 			segmentPlan.status = ColumnAssetReachabilitySegmentProtected
 		}
 		if segmentPlan.outOfBoundsRefs != 0 {
@@ -1088,6 +1093,14 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		if input.detailed || input.segmentDetails {
+			var tailTruncateEligible bool
+			var tailTruncateEnd int64
+			if segmentPlan.status == ColumnAssetReachabilitySegmentUnknown &&
+				segmentPlan.outOfBoundsRefs == 0 &&
+				!ownedSegment &&
+				!quarantinedSegment {
+				tailTruncateEnd, tailTruncateEligible = columnAssetReachabilityUnpublishedTailEnd(segment, rangeSet)
+			}
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
 				Namespace:             input.namespace,
 				FileID:                segment.fileID,
@@ -1100,6 +1113,8 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 				RefCount:              logicalRefCount,
 				plannedParentIdentity: segment.parentIdentity,
 				plannedChildIdentity:  segment.childIdentity,
+				tailTruncateEligible:  tailTruncateEligible,
+				tailTruncateEnd:       tailTruncateEnd,
 			})
 		}
 	}
@@ -1180,6 +1195,7 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 	return ColumnAssetReachabilityPlan{
 		ProtectOnly:                true,
 		Complete:                   !input.pinStateIncomplete,
+		pinStateIncomplete:         input.pinStateIncomplete,
 		Collection:                 input.collection,
 		Namespace:                  input.namespace,
 		ManifestRootName:           input.manifestRootName,
@@ -1391,6 +1407,60 @@ func classifyColumnAssetReachabilitySingleRangeSegment(segment columnAssetReacha
 		unknownBytes:     unknownBytes,
 		outOfBoundsRefs:  outOfBounds,
 	}
+}
+
+// columnAssetReachabilityUnpublishedTailEnd returns (maxRefEnd, true) only when
+// an Unknown canonical regular segment has a strictly trailing unpublished
+// suffix [maxRefEnd..segment.bytes) with zero interior gaps across
+// [0..maxRefEnd) (after deterministic zero-padding) and zero uncertain or
+// out-of-bounds ranges.
+func columnAssetReachabilityUnpublishedTailEnd(segment columnAssetReachabilitySegment, ranges columnAssetReachabilityRangeSet) (int64, bool) {
+	if segment.fileID == 0 || segment.bytes <= 0 || ranges.count == 0 {
+		return 0, false
+	}
+	if !rootpublication.SamePhysicalIdentity(segment.parentIdentity, segment.parentIdentity) ||
+		!rootpublication.SamePhysicalIdentity(segment.childIdentity, segment.childIdentity) {
+		return 0, false
+	}
+	if ranges.count == 1 && ranges.ranges == nil {
+		r := ranges.first
+		if (r.status != ColumnAssetReachabilityProtected && r.status != ColumnAssetReachabilityReclaimable) ||
+			r.start != 0 || r.end <= 0 || r.end >= segment.bytes {
+			return 0, false
+		}
+		return r.end, true
+	}
+	if len(ranges.ranges) == 0 {
+		return 0, false
+	}
+	var maxRefEnd int64
+	intervals := make([]columnAssetReachabilityInterval, 0, len(ranges.ranges))
+	for _, r := range ranges.ranges {
+		if r.status != ColumnAssetReachabilityProtected && r.status != ColumnAssetReachabilityReclaimable {
+			return 0, false
+		}
+		if r.start < 0 || r.end <= r.start || r.end > segment.bytes {
+			return 0, false
+		}
+		if r.end > maxRefEnd {
+			maxRefEnd = r.end
+		}
+		intervals = append(intervals, columnAssetReachabilityInterval{start: r.start, end: r.end})
+	}
+	if maxRefEnd <= 0 || maxRefEnd >= segment.bytes {
+		return 0, false
+	}
+	prefixSegment := segment
+	prefixSegment.bytes = maxRefEnd
+	padding := deterministicColumnAssetReachabilityPaddingIntervals(prefixSegment, ranges.ranges)
+	for _, p := range padding {
+		intervals = append(intervals, p.interval)
+	}
+	merged := mergeColumnAssetReachabilityIntervals(intervals)
+	if len(merged) != 1 || merged[0].start != 0 || merged[0].end != maxRefEnd {
+		return 0, false
+	}
+	return maxRefEnd, true
 }
 
 // columnAssetReachabilitySourceBit returns ok only for recognized non-unknown

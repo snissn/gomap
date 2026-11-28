@@ -348,10 +348,10 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 		unlockSchema := c.lockCollectionSchemaRead()
 		defer unlockSchema()
 	}
-	var postUnlockCleanup func() error
+	var postUnlockCleanups []func() error
 	defer func() {
-		if postUnlockCleanup != nil {
-			if cleanupErr := postUnlockCleanup(); cleanupErr != nil {
+		for i := len(postUnlockCleanups) - 1; i >= 0; i-- {
+			if cleanupErr := postUnlockCleanups[i](); cleanupErr != nil {
 				err = errors.Join(err, cleanupErr)
 			}
 		}
@@ -366,6 +366,14 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 	defer func() { unlockMutation.Unlock() }()
 	_, fromReplay := replay.ReplayAssignedLSN()
 	heldRaw := c.commandWALRawPublishLocked || replay.StagedForPublish()
+	var registerPostUnlockCleanup func(func() error)
+	if !heldRaw && owner == nil {
+		registerPostUnlockCleanup = func(fn func() error) {
+			if fn != nil {
+				postUnlockCleanups = append(postUnlockCleanups, fn)
+			}
+		}
+	}
 	publicHandoff := c.db.CommandWALEnabled() && !fromReplay && !heldRaw
 	acquirePublicationMutation := func() error {
 		for {
@@ -518,7 +526,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 				return VectorIndexStatus{}, err
 			}
 			timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication, registerPostUnlockCleanup)
 		}
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 		timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
@@ -526,7 +534,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 			return VectorIndexStatus{}, err
 		}
 		if len(rows) == 0 {
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing, baseCopy, preparePublication, registerPostUnlockCleanup)
 		}
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires an initial physical column manifest root before rebuilding %d documents", name, len(rows))
 	}
@@ -605,13 +613,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 		}
 	}
 	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		var registerCleanup func(func() error)
-		if !heldRaw && owner == nil {
-			registerCleanup = func(fn func() error) {
-				postUnlockCleanup = fn
-			}
-		}
-		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing, preparePublication, registerCleanup)
+		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing, preparePublication, registerPostUnlockCleanup)
 	}
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: baseManifestRootID}
@@ -625,7 +627,21 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 	var captured *typedGraphBaseAlias
 	if intent != nil {
 		var prepared columnVectorGraphPreparedPhysicalAsset
-		defer func() { prepared.releaseStableResources() }()
+		var preparedCleanupTargets []unpublishedRebuildOwnedSegmentTarget
+		preparedPublished := false
+		defer func() {
+			prepared.releaseStableResources()
+			if !preparedPublished && len(preparedCleanupTargets) != 0 &&
+				!backenddb.CommitPublicationAccepted(err) &&
+				!errors.Is(err, ErrCommitAmbiguous) &&
+				!errors.Is(err, backenddb.ErrRecoveryRequired) &&
+				registerPostUnlockCleanup != nil {
+				targets := preparedCleanupTargets
+				registerPostUnlockCleanup(func() error {
+					return c.deleteUnpublishedRebuildOwnedSegments(targets)
+				})
+			}
+		}()
 		var updatedMeta CollectionMeta
 		buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 			var deltaRecords []columnManifestRecord
@@ -640,7 +656,15 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 			timing.FileSyncCount = preparedAsset.stableContentSyncs
 			timing.NamespaceSync = preparedAsset.stableNamespaceSync
 			timing.NamespaceSyncCount = preparedAsset.stableNamespaceSyncs
+			if len(preparedCleanupTargets) != 0 && registerPostUnlockCleanup != nil {
+				replaced := preparedCleanupTargets
+				registerPostUnlockCleanup(func() error {
+					return c.deleteUnpublishedRebuildOwnedSegments(replaced)
+				})
+				preparedCleanupTargets = nil
+			}
 			replaceColumnVectorGraphPreparedPhysicalAsset(&prepared, preparedAsset)
+			preparedCleanupTargets = collectUnpublishedRebuildStableResourceTargets(c.db.ColumnAssetRootDir(), prepared.stableResources)
 			deltaRecords, nextIdentity = preparedRecords, preparedIdentity
 			if prepared.RowCount != len(rows) {
 				return nil, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
@@ -730,6 +754,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 		if err != nil {
 			return VectorIndexStatus{}, err
 		}
+		preparedPublished = true
 		c.meta = updatedMeta
 		if capture {
 			rootIDs = rootIDs[:1]
@@ -813,7 +838,7 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 	}
 	basePublished := false
 	defer func() {
-		if !basePublished && !backenddb.CommitPublicationAccepted(retErr) && !errors.Is(retErr, ErrCommitAmbiguous) {
+		if !basePublished && !backenddb.CommitPublicationAccepted(retErr) && !errors.Is(retErr, ErrCommitAmbiguous) && !errors.Is(retErr, backenddb.ErrRecoveryRequired) {
 			scheduleOwnedCleanup()
 			return
 		}
@@ -867,7 +892,20 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 		return VectorIndexStatus{}, err
 	}
 	var graphPrepared columnVectorGraphPreparedPhysicalAsset
-	defer func() { graphPrepared.releaseStableResources() }()
+	var graphCleanupTargets []unpublishedRebuildOwnedSegmentTarget
+	defer func() {
+		graphPrepared.releaseStableResources()
+		if !basePublished && len(graphCleanupTargets) != 0 &&
+			!backenddb.CommitPublicationAccepted(retErr) &&
+			!errors.Is(retErr, ErrCommitAmbiguous) &&
+			!errors.Is(retErr, backenddb.ErrRecoveryRequired) &&
+			registerPostUnlockCleanup != nil {
+			targets := graphCleanupTargets
+			registerPostUnlockCleanup(func() error {
+				return c.deleteUnpublishedRebuildOwnedSegments(targets)
+			})
+		}
+	}()
 	var updatedMeta CollectionMeta
 	var captured *typedGraphBaseAlias
 	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
@@ -875,7 +913,15 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 		if err != nil {
 			return nil, err
 		}
+		if len(graphCleanupTargets) != 0 && registerPostUnlockCleanup != nil {
+			replaced := graphCleanupTargets
+			registerPostUnlockCleanup(func() error {
+				return c.deleteUnpublishedRebuildOwnedSegments(replaced)
+			})
+			graphCleanupTargets = nil
+		}
 		replaceColumnVectorGraphPreparedPhysicalAsset(&graphPrepared, graph)
+		graphCleanupTargets = collectUnpublishedRebuildStableResourceTargets(c.db.ColumnAssetRootDir(), graphPrepared.stableResources)
 		if err := constructionMatrix.CloseRows(rows); err != nil {
 			return nil, err
 		}
@@ -1251,7 +1297,7 @@ func columnVectorGraphRowsFromTypedColumnSnapshotWithRoots(c *Collection, rootDi
 	return rows, source, true, nil
 }
 
-func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, baseCopy *typedGraphBaseCopy, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
+func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming, baseCopy *typedGraphBaseCopy, preparePublication func() (bool, error), registerPostUnlockCleanup func(func() error)) (status VectorIndexStatus, retErr error) {
 	capture := baseCopy != nil
 	if capture {
 		if err := baseCopy.reserveManifest(def, nil); err != nil {
@@ -1271,7 +1317,21 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	var updatedMeta CollectionMeta
 	var captured *typedGraphBaseAlias
 	var prepared columnVectorGraphPreparedPhysicalAsset
-	defer func() { prepared.releaseStableResources() }()
+	var preparedCleanupTargets []unpublishedRebuildOwnedSegmentTarget
+	preparedPublished := false
+	defer func() {
+		prepared.releaseStableResources()
+		if !preparedPublished && len(preparedCleanupTargets) != 0 &&
+			!backenddb.CommitPublicationAccepted(retErr) &&
+			!errors.Is(retErr, ErrCommitAmbiguous) &&
+			!errors.Is(retErr, backenddb.ErrRecoveryRequired) &&
+			registerPostUnlockCleanup != nil {
+			targets := preparedCleanupTargets
+			registerPostUnlockCleanup(func() error {
+				return c.deleteUnpublishedRebuildOwnedSegments(targets)
+			})
+		}
+	}()
 	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 		manifest, records, err := initialColumnVectorGraphBaseManifestForRebuild(baseMeta.Name, cfg, ctx.AppliedCommandLSN)
 		if err != nil {
@@ -1291,7 +1351,15 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 			timing.NamespaceSync = preparedAsset.stableNamespaceSync
 			timing.NamespaceSyncCount = preparedAsset.stableNamespaceSyncs
 		}
+		if len(preparedCleanupTargets) != 0 && registerPostUnlockCleanup != nil {
+			replaced := preparedCleanupTargets
+			registerPostUnlockCleanup(func() error {
+				return c.deleteUnpublishedRebuildOwnedSegments(replaced)
+			})
+			preparedCleanupTargets = nil
+		}
 		replaceColumnVectorGraphPreparedPhysicalAsset(&prepared, preparedAsset)
+		preparedCleanupTargets = collectUnpublishedRebuildStableResourceTargets(c.db.ColumnAssetRootDir(), prepared.stableResources)
 		if prepared.RowCount != 0 {
 			return nil, fmt.Errorf("collections: empty column_graph rebuild prepared rows=%d want 0", prepared.RowCount)
 		}
@@ -1373,6 +1441,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
+	preparedPublished = true
 	if capture {
 		rootIDs = rootIDs[:1]
 	}
@@ -1381,7 +1450,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	}
 	c.meta = updatedMeta
 	c.rememberColumnGraphRebuildPublishedCatalog(catalog, updatedMeta, baseCommitSeq, baseSystemRoot, preflightCommitSeq, preflightSystemRoot, newSystemRoot, rootNames, rootIDs, captured)
-	status, err := c.columnGraphVectorIndexStatus(def.Name)
+	status, err = c.columnGraphVectorIndexStatus(def.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -2832,6 +2901,33 @@ func collectUnpublishedRebuildOwnedSegmentTargets(rootDir string, prepared *Colu
 	if prepared == nil || len(prepared.ownedSegmentFileIDs) == 0 || prepared.stableResources == nil || len(prepared.Assets) == 0 {
 		return nil
 	}
+	return collectUnpublishedRebuildOwnedSegmentTargetsForAssets(rootDir, prepared.Assets, prepared.ownedSegmentFileIDs, prepared.stableResources)
+}
+
+// collectUnpublishedRebuildStableResourceTargets snapshots exact parent and
+// child physical identities for freshly created O_EXCL segments recorded in
+// resources (such as vector-graph rebuild prepared / graphPrepared segments),
+// before resources is transferred or released.
+func collectUnpublishedRebuildStableResourceTargets(rootDir string, resources *rootpublication.StableResourceSet) []unpublishedRebuildOwnedSegmentTarget {
+	if resources == nil {
+		return nil
+	}
+	assets, err := extractStableColumnAssetCleanupAssets(resources)
+	if err != nil || len(assets) == 0 {
+		return nil
+	}
+	return collectUnpublishedRebuildOwnedSegmentTargetsForAssets(rootDir, assets, nil, resources)
+}
+
+func collectUnpublishedRebuildOwnedSegmentTargetsForAssets(
+	rootDir string,
+	assets []ColumnPreparedAsset,
+	ownedFileIDs map[uint32]struct{},
+	resources *rootpublication.StableResourceSet,
+) []unpublishedRebuildOwnedSegmentTarget {
+	if resources == nil || len(assets) == 0 {
+		return nil
+	}
 	type segmentSpan struct {
 		ref       ColumnAssetRef
 		minOffset int64
@@ -2841,14 +2937,16 @@ func collectUnpublishedRebuildOwnedSegmentTargets(rootDir string, prepared *Colu
 		namespace string
 		fileID    uint32
 	}
-	spans := make(map[segmentKey]*segmentSpan, len(prepared.ownedSegmentFileIDs))
-	for _, asset := range prepared.Assets {
+	spans := make(map[segmentKey]*segmentSpan, len(assets))
+	for _, asset := range assets {
 		ref := asset.Ref
-		if ref.Namespace == "" || ref.FileID == 0 {
+		if ref.Namespace == "" || ref.FileID == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > math.MaxInt64-ref.Length {
 			continue
 		}
-		if _, owned := prepared.ownedSegmentFileIDs[ref.FileID]; !owned {
-			continue
+		if ownedFileIDs != nil {
+			if _, owned := ownedFileIDs[ref.FileID]; !owned {
+				continue
+			}
 		}
 		key := segmentKey{namespace: ref.Namespace, fileID: ref.FileID}
 		span := spans[key]
@@ -2866,6 +2964,11 @@ func collectUnpublishedRebuildOwnedSegmentTargets(rootDir string, prepared *Colu
 	if len(spans) == 0 {
 		return nil
 	}
+	diagnostics, err := resources.AcquirePhysicalDiagnostics()
+	if err != nil || diagnostics == nil {
+		return nil
+	}
+	defer diagnostics.Close()
 	type identityMatch struct {
 		parentIdentity rootpublication.StableIdentity
 		childIdentity  rootpublication.StableIdentity
@@ -2873,7 +2976,7 @@ func collectUnpublishedRebuildOwnedSegmentTargets(rootDir string, prepared *Colu
 		conflict       bool
 	}
 	matched := make(map[segmentKey]*identityMatch, len(spans))
-	for _, desc := range prepared.stableResources.PhysicalDescriptors() {
+	for _, desc := range diagnostics.Physical() {
 		if desc.Generation == 0 || desc.Generation > uint64(^uint32(0)) {
 			continue
 		}
