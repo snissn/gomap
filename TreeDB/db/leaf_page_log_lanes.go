@@ -191,20 +191,50 @@ func maxSegmentTargetBytesForLane(dir string, fileID uint32, defaultTarget, leaf
 	return defaultTarget
 }
 
+func (g *leafPageLogLaneGroup) supportsLeafPageNoDict() bool {
+	lane0 := g.defaultLane()
+	if lane0 == nil {
+		return false
+	}
+	if _, ok := lane0.(leafPageNoDictLog); !ok {
+		return false
+	}
+	if capable, ok := lane0.(leafPageNoDictCapable); ok {
+		return capable.supportsLeafPageNoDict()
+	}
+	return true
+}
+
 func (g *leafPageLogLaneGroup) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
-	return g.appendLeafPageAt(0, leafPage)
+	return g.appendLeafPageAt(0, leafPage, false)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error) {
+	return g.appendLeafPageAt(0, leafPage, true)
 }
 
 func (g *leafPageLogLaneGroup) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
-	return g.appendLeafPagesAt(0, leafPages)
+	return g.appendLeafPagesAt(0, leafPages, false)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return g.appendLeafPagesAt(0, leafPages, true)
 }
 
 func (g *leafPageLogLaneGroup) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
-	return g.appendLeafPageStableAt(0, leafPage)
+	return g.appendLeafPageStableAt(0, leafPage, false)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPageWithStableResourcesNoDict(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPageStableAt(0, leafPage, true)
 }
 
 func (g *leafPageLogLaneGroup) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
-	return g.appendLeafPagesStableAt(0, leafPages)
+	return g.appendLeafPagesStableAt(0, leafPages, false)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPagesWithStableResourcesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPagesStableAt(0, leafPages, true)
 }
 
 func (g *leafPageLogLaneGroup) Flush() error {
@@ -373,32 +403,67 @@ func (h *leafPageLogLaneHandle) ReserveLeafPageLogSequence(floor uint32) (uint32
 	return h.group.ReserveLeafPageLogSequence(floor)
 }
 
+func (h *leafPageLogLaneHandle) supportsLeafPageNoDict() bool {
+	if h == nil || h.group == nil {
+		return false
+	}
+	return h.group.supportsLeafPageNoDict()
+}
+
 func (h *leafPageLogLaneHandle) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if h == nil || h.group == nil {
 		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
 	}
-	return h.group.appendLeafPageAt(h.index, leafPage)
+	return h.group.appendLeafPageAt(h.index, leafPage, false)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error) {
+	if h == nil || h.group == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPageAt(h.index, leafPage, true)
 }
 
 func (h *leafPageLogLaneHandle) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
 	if h == nil || h.group == nil {
 		return nil, errors.New("leaf page log unavailable")
 	}
-	return h.group.appendLeafPagesAt(h.index, leafPages)
+	return h.group.appendLeafPagesAt(h.index, leafPages, false)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if h == nil || h.group == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPagesAt(h.index, leafPages, true)
 }
 
 func (h *leafPageLogLaneHandle) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if h == nil || h.group == nil {
 		return page.LeafLogPtr{}, nil, errors.New("leaf page log unavailable")
 	}
-	return h.group.appendLeafPageStableAt(h.index, leafPage)
+	return h.group.appendLeafPageStableAt(h.index, leafPage, false)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPageWithStableResourcesNoDict(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if h == nil || h.group == nil {
+		return page.LeafLogPtr{}, nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPageStableAt(h.index, leafPage, true)
 }
 
 func (h *leafPageLogLaneHandle) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if h == nil || h.group == nil {
 		return nil, nil, errors.New("leaf page log unavailable")
 	}
-	return h.group.appendLeafPagesStableAt(h.index, leafPages)
+	return h.group.appendLeafPagesStableAt(h.index, leafPages, false)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPagesWithStableResourcesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if h == nil || h.group == nil {
+		return nil, nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPagesStableAt(h.index, leafPages, true)
 }
 
 func (h *leafPageLogLaneHandle) Flush() error {
@@ -429,10 +494,16 @@ func (h *leafPageLogLaneHandle) LastLeafPageRecordLength() uint32 {
 	return recordLen
 }
 
-func (g *leafPageLogLaneGroup) appendLeafPageAt(index int, leafPage []byte) (page.LeafLogPtr, error) {
+func (g *leafPageLogLaneGroup) appendLeafPageAt(index int, leafPage []byte, noDict bool) (page.LeafLogPtr, error) {
 	var ptr page.LeafLogPtr
 	err := g.withLane(index, func(lane LeafPageLog) error {
 		var err error
+		if noDict {
+			if nd, ok := lane.(leafPageNoDictLog); ok {
+				ptr, err = nd.AppendLeafPageNoDict(leafPage)
+				return err
+			}
+		}
 		ptr, err = lane.AppendLeafPage(leafPage)
 		return err
 	})
@@ -443,12 +514,19 @@ func (g *leafPageLogLaneGroup) appendLeafPageAt(index int, leafPage []byte) (pag
 	return ptr, nil
 }
 
-func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte) ([]page.LeafLogPtr, error) {
+func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte, noDict bool) ([]page.LeafLogPtr, error) {
 	if len(leafPages) == 0 {
 		return nil, nil
 	}
 	var ptrs []page.LeafLogPtr
 	err := g.withLane(index, func(lane LeafPageLog) error {
+		if noDict {
+			if nd, ok := lane.(leafPageNoDictLog); ok {
+				var err error
+				ptrs, err = nd.AppendLeafPagesNoDict(leafPages)
+				return err
+			}
+		}
 		if batcher, ok := lane.(LeafPageBatchLog); ok {
 			var err error
 			ptrs, err = batcher.AppendLeafPages(leafPages)
@@ -476,15 +554,21 @@ func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte) 
 	return ptrs, nil
 }
 
-func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte, noDict bool) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	var ptr page.LeafLogPtr
 	var resources *rootpublication.StableResourceSet
 	err := g.withLane(index, func(lane LeafPageLog) error {
+		var err error
+		if noDict {
+			if nd, ok := lane.(leafPageNoDictStableLog); ok {
+				ptr, resources, err = nd.AppendLeafPageWithStableResourcesNoDict(leafPage)
+				return err
+			}
+		}
 		stable, ok := lane.(LeafPageStableLog)
 		if !ok {
 			return fmt.Errorf("%w: leaf page lane lacks stable append", rootpublication.ErrUnresolvedResource)
 		}
-		var err error
 		ptr, resources, err = stable.AppendLeafPageWithStableResources(leafPage)
 		return err
 	})
@@ -505,18 +589,24 @@ func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte
 	return ptr, resources, nil
 }
 
-func (g *leafPageLogLaneGroup) appendLeafPagesStableAt(index int, leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+func (g *leafPageLogLaneGroup) appendLeafPagesStableAt(index int, leafPages [][]byte, noDict bool) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if len(leafPages) == 0 {
 		return nil, nil, nil
 	}
 	var ptrs []page.LeafLogPtr
 	var resources *rootpublication.StableResourceSet
 	err := g.withLane(index, func(lane LeafPageLog) error {
+		var err error
+		if noDict {
+			if nd, ok := lane.(leafPageNoDictStableLog); ok {
+				ptrs, resources, err = nd.AppendLeafPagesWithStableResourcesNoDict(leafPages)
+				return err
+			}
+		}
 		stable, ok := lane.(LeafPageStableBatchLog)
 		if !ok {
 			return fmt.Errorf("%w: leaf page lane lacks stable batch append", rootpublication.ErrUnresolvedResource)
 		}
-		var err error
 		ptrs, resources, err = stable.AppendLeafPagesWithStableResources(leafPages)
 		return err
 	})

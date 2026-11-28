@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -488,6 +491,108 @@ func TestSystemDict_CompactRewriteWriter_SystemLeafNeverUsesSelfDict(t *testing.
 	if !bytes.Equal(entry2.Value, enc) {
 		t.Fatalf("system dict mismatch after initSystemZipper publication")
 	}
+
+	// Also cover leafRefRewritePageAppender with a non-system dictionary active
+	// on publishCtx.writer: initSystemZipper must route through noDict so
+	// SystemRootPageID outer leaves still use DictID==0 without mutating
+	// publishCtx.writer.leafDictID.
+	const nonSystemDictID = uint64(7311)
+	nonSystemSamples := make([][]byte, 8)
+	basePage := bytes.Repeat([]byte("nonsystem-rewrite-appender-dict|"), page.PageSize/len("nonsystem-rewrite-appender-dict|"))
+	for i := range nonSystemSamples {
+		s := append([]byte(nil), basePage...)
+		binary.LittleEndian.PutUint64(s[len(s)-8:], uint64(i+1))
+		nonSystemSamples[i] = s
+	}
+	nonSystemDict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(nonSystemDictID),
+		Contents: nonSystemSamples,
+		History:  append([]byte(nil), nonSystemSamples[0]...),
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("zstd.BuildDict(nonSystem): %v", err)
+	}
+	rewriteW := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0, d.valueLogIdentityPins)
+	rewriteW.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 10)
+	rewriteW.ridAlloc = newRewriteRIDAllocator(1000, nil)
+	rewriteW.blockCompression = true
+	rewriteW.blockCodec = valuelog.BlockCodecSnappy
+	rewriteW.leafBlockCodec = valuelog.BlockCodecSnappy
+	rewriteW.SetLeafDictMode(nonSystemDictID, nonSystemDict, false)
+	defer func() { _ = rewriteW.Close() }()
+
+	rewriteCtx := &leafRefRewriteCtx{
+		ctx:        context.Background(),
+		db:         d,
+		pager:      idx.pager,
+		leafReader: d.valueLogManager,
+		alloc:      idx.allocator,
+		writer:     rewriteW,
+		ridAlloc:   rewriteW.ridAlloc,
+	}
+	rewriteCtx.initSystemZipper(idx.zipper, d.valueLogManager, &leafRefRewritePageAppender{ctx: rewriteCtx})
+	newSysRoot2, changed2, err := rewriteCtx.applySystemRootCollectionRootReplacements(
+		newSysRoot,
+		[]vacuumCollectionRootReplacement{{key: []byte("meta/pack-publish-nonsystem-dict"), value: []byte("root-v3")}},
+	)
+	if err != nil {
+		t.Fatalf("applySystemRootCollectionRootReplacements(leafRefRewritePageAppender): %v", err)
+	}
+	if !changed2 || newSysRoot2 == 0 {
+		t.Fatalf("expected updated system root via leafRefRewritePageAppender, changed=%v root=%d", changed2, newSysRoot2)
+	}
+	if rewriteW.leafDictID != nonSystemDictID {
+		t.Fatalf("rewriteW.leafDictID=%d after system root publish; want %d", rewriteW.leafDictID, nonSystemDictID)
+	}
+	if err := rewriteW.Flush(); err != nil {
+		t.Fatalf("rewriteW.Flush: %v", err)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet(rewriteW): %v", err)
+	}
+	vset2 := d.valueLogManager.CurrentSetNoRefresh()
+	if vset2 == nil {
+		t.Fatal("nil value log set after rewriteW flush")
+	}
+	defer func() { _ = d.valueLogManager.Release(vset2) }()
+	readLeaf2 := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		vptr := ptr.ValuePtr()
+		f := vset2.Files[vptr.FileID]
+		if f == nil {
+			return nil, valuelog.ErrFileNotFound
+		}
+		gotDictID, err := f.PreparedRecordDictionaryID(vptr)
+		if err != nil {
+			return nil, err
+		}
+		if gotDictID != 0 {
+			return nil, fmt.Errorf("leafRefRewritePageAppender system outer leaf unexpectedly uses dict %d", gotDictID)
+		}
+		raw, usedDst, err := d.valueLogManager.ReadUnsafeTo(vptr, dst[:0])
+		if err != nil {
+			return nil, err
+		}
+		if usedDst {
+			return raw, nil
+		}
+		out := dst[:len(raw)]
+		copy(out, raw)
+		return out, nil
+	}
+	entry3, err := tree.New(idx.pager, d.valueLogManager, newSysRoot2).GetEntryWithFixedScratch(
+		[]byte("meta/pack-publish-nonsystem-dict"),
+		keyScratch[:],
+		leafCheckScratch[:],
+		readLeaf2,
+	)
+	if err != nil {
+		t.Fatalf("GetEntryWithFixedScratch(leafRefRewritePageAppender): %v", err)
+	}
+	if !bytes.Equal(entry3.Value, []byte("root-v3")) {
+		t.Fatalf("system root entry mismatch after leafRefRewritePageAppender: got=%q", entry3.Value)
+	}
 }
 
 func TestSystemDict_PendingPointerProtectedAcrossValueLogGC(t *testing.T) {
@@ -922,4 +1027,553 @@ func TestStageSystemOps_PiggybackDurableWaitsForSyncAndRelaxedActivatesImmediate
 			t.Fatal("expected HasUnsyncedSystemOps=false after physical root seal")
 		}
 	})
+}
+
+func TestNoDictRewriteLeafPageLogConcurrentAppendPreservesLeafDict(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 << 10,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0, d.valueLogIdentityPins)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 1)
+	writer.ridAlloc = newRewriteRIDAllocator(1, nil)
+	writer.blockCompression = true
+	writer.blockCodec = valuelog.BlockCodecSnappy
+	writer.leafBlockCodec = valuelog.BlockCodecSnappy
+	leafPage := bytes.Repeat([]byte("concurrent-nodict-leaf-log-dict|"), page.PageSize/len("concurrent-nodict-leaf-log-dict|"))
+	const dictID = uint64(7307)
+	dictSamples := make([][]byte, 8)
+	for i := range dictSamples {
+		sample := append([]byte(nil), leafPage...)
+		binary.LittleEndian.PutUint64(sample[len(sample)-8:], uint64(i+1))
+		dictSamples[i] = sample
+	}
+	dictPayload, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: dictSamples,
+		History:  append([]byte(nil), dictSamples[0]...),
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("zstd.BuildDict: %v", err)
+	}
+	writer.SetLeafDictMode(dictID, dictPayload, false)
+
+	// Install through DB.SetLeafPageLog so the test exercises the full production
+	// stack: leafPageLogLaneGroup -> leafPageLogWithRecordLengthHints -> rewriteWriter.
+	d.SetLeafPageLog(writer)
+	laneGroup := d.leafPageLog
+	defer func() {
+		d.SetLeafPageLog(nil)
+		if closer, ok := laneGroup.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}()
+
+	// Verify wrapNoDictLeafPageLog does NOT wrap a non-dict-capable log wrapped
+	// by leafPageLogWithRecordLengthHints (preserving cached-mode default zipper
+	// reuse and prepared-payload fast paths).
+	plainWrapped := wrapLeafPageLogWithRecordLengthHints(d, nopPlainLeafPageLog{})
+	if got := wrapNoDictLeafPageLog(plainWrapped); got != plainWrapped {
+		t.Fatalf("wrapNoDictLeafPageLog unexpectedly wrapped non-dict-capable log %T -> %T", plainWrapped, got)
+	}
+	plainLaneWrapped := wrapLeafPageLogWithLaneSelection(plainWrapped)
+	if got := wrapNoDictLeafPageLog(plainLaneWrapped); got != plainLaneWrapped {
+		t.Fatalf("wrapNoDictLeafPageLog unexpectedly wrapped non-dict-capable lane group %T -> %T", plainLaneWrapped, got)
+	}
+
+	// Exercise multiple distinct noDict wrappers (matching concurrent optimistic
+	// systemRootOrderedPublishOptions calls) alongside concurrent direct
+	// dictionary-enabled user leaf appends on the same shared leafPageLogLaneGroup,
+	// covering single, batch, and stable-resource paths.
+	const noDictWorkers = 6
+	const userWorkers = 2
+	const iters = 16
+	errCh := make(chan error, noDictWorkers+userWorkers)
+	var noDictPtrsMu sync.Mutex
+	var noDictPtrs []page.LeafLogPtr
+	var userPtrsMu sync.Mutex
+	var userPtrs []page.LeafLogPtr
+	var wg sync.WaitGroup
+	modes := 2
+	if rootpublication.StableRelativeNamespaceSupported() {
+		modes = 4
+	}
+	for g := 0; g < noDictWorkers; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			wrapped := wrapNoDictLeafPageLog(laneGroup)
+			target := wrapped
+			if provider, ok := wrapped.(LeafPageLogLaneProvider); ok {
+				if lane, ok := provider.LeafPageLogLane(id % 3); ok {
+					target = lane
+				}
+			}
+			for i := 0; i < iters; i++ {
+				switch (id + i) % modes {
+				case 0:
+					ptr, err := target.AppendLeafPage(leafPage)
+					if err != nil {
+						errCh <- err
+						return
+					}
+					noDictPtrsMu.Lock()
+					noDictPtrs = append(noDictPtrs, ptr)
+					noDictPtrsMu.Unlock()
+				case 1:
+					batcher, ok := target.(LeafPageBatchLog)
+					if !ok {
+						errCh <- fmt.Errorf("expected LeafPageBatchLog on noDict wrapper")
+						return
+					}
+					ptrs, err := batcher.AppendLeafPages([][]byte{leafPage, leafPage})
+					if err != nil {
+						errCh <- err
+						return
+					}
+					noDictPtrsMu.Lock()
+					noDictPtrs = append(noDictPtrs, ptrs...)
+					noDictPtrsMu.Unlock()
+				case 2:
+					stable, ok := target.(LeafPageStableLog)
+					if !ok {
+						errCh <- fmt.Errorf("expected LeafPageStableLog on noDict wrapper")
+						return
+					}
+					ptr, res, err := stable.AppendLeafPageWithStableResources(leafPage)
+					if err != nil {
+						errCh <- err
+						return
+					}
+					if res != nil {
+						res.Release()
+					}
+					noDictPtrsMu.Lock()
+					noDictPtrs = append(noDictPtrs, ptr)
+					noDictPtrsMu.Unlock()
+				case 3:
+					stableBatch, ok := target.(LeafPageStableBatchLog)
+					if !ok {
+						errCh <- fmt.Errorf("expected LeafPageStableBatchLog on noDict wrapper")
+						return
+					}
+					ptrs, res, err := stableBatch.AppendLeafPagesWithStableResources([][]byte{leafPage, leafPage})
+					if err != nil {
+						errCh <- err
+						return
+					}
+					if res != nil {
+						res.Release()
+					}
+					noDictPtrsMu.Lock()
+					noDictPtrs = append(noDictPtrs, ptrs...)
+					noDictPtrsMu.Unlock()
+				}
+			}
+		}(g)
+	}
+	for g := 0; g < userWorkers; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			var target LeafPageLog = laneGroup
+			if provider, ok := laneGroup.(LeafPageLogLaneProvider); ok {
+				if lane, ok := provider.LeafPageLogLane(id % 3); ok {
+					target = lane
+				}
+			}
+			for i := 0; i < iters; i++ {
+				ptr, err := target.AppendLeafPage(leafPage)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				userPtrsMu.Lock()
+				userPtrs = append(userPtrs, ptr)
+				userPtrsMu.Unlock()
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent leaf log append failed: %v", err)
+	}
+	if err := laneGroup.Flush(); err != nil {
+		t.Fatalf("laneGroup.Flush: %v", err)
+	}
+	if writer.leafDictID != dictID {
+		t.Fatalf("writer.leafDictID=%d after concurrent appends; want %d", writer.leafDictID, dictID)
+	}
+	if !bytes.Equal(writer.leafDict, dictPayload) {
+		t.Fatalf("writer.leafDict was mutated after concurrent appends")
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	vset := d.valueLogManager.CurrentSetNoRefresh()
+	if vset == nil {
+		t.Fatal("nil value log set after flush")
+	}
+	defer func() { _ = d.valueLogManager.Release(vset) }()
+	for _, ptr := range noDictPtrs {
+		vptr := ptr.ValuePtr()
+		f := vset.Files[vptr.FileID]
+		if f == nil {
+			t.Fatalf("missing leaf log file %d for ptr %+v", vptr.FileID, ptr)
+		}
+		gotDictID, err := f.PreparedRecordDictionaryID(vptr)
+		if err != nil {
+			t.Fatalf("PreparedRecordDictionaryID(%+v): %v", ptr, err)
+		}
+		if gotDictID != 0 {
+			t.Fatalf("noDict system outer-leaf ptr %+v used dictID=%d; want 0", ptr, gotDictID)
+		}
+	}
+	userDictHits := 0
+	for _, ptr := range userPtrs {
+		vptr := ptr.ValuePtr()
+		f := vset.Files[vptr.FileID]
+		if f == nil {
+			t.Fatalf("missing leaf log file %d for user ptr %+v", vptr.FileID, ptr)
+		}
+		gotDictID, err := f.PreparedRecordDictionaryID(vptr)
+		if err != nil {
+			t.Fatalf("PreparedRecordDictionaryID(user %+v): %v", ptr, err)
+		}
+		if gotDictID == dictID {
+			userDictHits++
+		}
+	}
+	if userDictHits != len(userPtrs) {
+		t.Fatalf("concurrent user outer-leaf appends preserved dictID=%d on %d/%d writes; want all", dictID, userDictHits, len(userPtrs))
+	}
+}
+
+type nopPlainLeafPageLog struct{}
+
+func (nopPlainLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, nil
+}
+func (nopPlainLeafPageLog) Flush() error { return nil }
+func (nopPlainLeafPageLog) Sync() error  { return nil }
+
+func TestCompactStorage_OfflineOuterLeafSystemRootTrainsLeafDict(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 << 10,
+		IndexOuterLeavesInValueLog: true,
+		FreshSystemPagerLeaves:     false,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionAuto,
+		},
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(seed): %v", err)
+	}
+	seedWriter := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0, d.valueLogIdentityPins)
+	seedWriter.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	seedWriter.ridAlloc = newRewriteRIDAllocator(1, nil)
+	d.SetLeafPageLog(seedWriter)
+
+	// Seed enough compressible inline keys to exceed DefaultTrainMinRecords (64)
+	// and DefaultTrainBytes (1 MiB) of outer leaf pages so offline CompactStorage
+	// dictionary training produces and publishes a real outer_leaf dictionary.
+	b := d.NewBatch()
+	baseVal := bytes.Repeat([]byte("offline-compact-leaf-dict-training-value|"), 6)
+	const seedKeys = 5000
+	for i := 0; i < seedKeys; i++ {
+		key := []byte(fmt.Sprintf("offline-compact/key/%06d", i))
+		v := append([]byte(nil), baseVal...)
+		binary.LittleEndian.PutUint32(v[len(v)-4:], uint32(i))
+		if err := b.Set(key, v); err != nil {
+			t.Fatalf("seed Set(%d): %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("seed WriteSync: %v", err)
+	}
+	_ = b.Close()
+	d.SetLeafPageLog(nil)
+	if err := seedWriter.Close(); err != nil {
+		t.Fatalf("seedWriter.Close: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close(seed): %v", err)
+	}
+
+	// Reopen backend-only with db.leafPageLog == nil and systemRootUsesOuterLeaves() == true,
+	// mirroring offline/standalone treedb.OpenBackend -> CompactStorage.
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(reopen): %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.leafPageLog != nil {
+		t.Fatalf("expected reopened backend db.leafPageLog == nil")
+	}
+	if !reopened.systemRootUsesOuterLeaves() {
+		t.Fatalf("expected systemRootUsesOuterLeaves() == true for regression coverage")
+	}
+
+	var publishedDictID uint64
+	reopened.valueLogDictLookup = reopened.LookupSystemDictBytes
+	reopened.valueLogDictPut = func(ctx context.Context, dict []byte) (uint64, error) {
+		sum := sha256.Sum256(dict)
+		id := binary.BigEndian.Uint64(sum[:8])
+		ptr, err := reopened.AppendRawSystemValueLog(0, dict)
+		if err != nil {
+			return 0, err
+		}
+		if err := reopened.ApplySystemOps([]SystemKVOp{{
+			Key:       SystemDictBytesKey(id),
+			ValuePtr:  ptr,
+			IsPointer: true,
+		}}, true); err != nil {
+			return 0, err
+		}
+		publishedDictID = id
+		return id, nil
+	}
+	reopened.valueLogDictPublishRewriteLeaf = func(ctx context.Context, dict []byte, class string, useRawPages bool) (uint64, error) {
+		return reopened.valueLogDictPut(ctx, dict)
+	}
+
+	if _, err := reopened.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+		t.Fatalf("offline CompactStorage with outer-leaf system root failed: %v", err)
+	}
+	if publishedDictID == 0 {
+		t.Fatalf("expected offline CompactStorage to train and publish an outer_leaf dictionary")
+	}
+	if reopened.leafPageLog != nil {
+		t.Fatalf("expected CompactStorage handoff cleanup to restore db.leafPageLog == nil")
+	}
+
+	// Verify the published dictionary in SystemRootPageID decodes via fixed-scratch
+	// exact lookup (which enforces DictID == 0 on system outer leaves).
+	snap := reopened.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	var keyScratch, leafScratch [page.PageSize]byte
+	if _, err := snap.GetSystemEntryExactWithFixedScratch(SystemDictBytesKey(publishedDictID), keyScratch[:], leafScratch[:]); err != nil {
+		t.Fatalf("GetSystemEntryExactWithFixedScratch(publishedDictID=%d): %v", publishedDictID, err)
+	}
+
+	// Verify user data remained readable after offline compaction.
+	got, err := reopened.Get([]byte("offline-compact/key/000300"))
+	if err != nil {
+		t.Fatalf("Get(user key): %v", err)
+	}
+	wantVal := append([]byte(nil), baseVal...)
+	binary.LittleEndian.PutUint32(wantVal[len(wantVal)-4:], 300)
+	if !bytes.Equal(got, wantVal) {
+		t.Fatalf("user value mismatch after offline CompactStorage")
+	}
+}
+
+func TestCompactStorage_ExhaustiveReplaceableOwnerOuterLeafSystemRootTrainsLeafDict(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 << 10,
+		CommandWAL:                 true,
+		IndexOuterLeavesInValueLog: true,
+		FreshSystemPagerLeaves:     false,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionAuto,
+		},
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(seed): %v", err)
+	}
+	if d.leafPageLog == nil {
+		_ = d.Close()
+		t.Fatal("expected CommandWAL open to install replaceable replay-inline leaf page log")
+	}
+
+	b := d.NewBatch()
+	baseVal := bytes.Repeat([]byte("exhaustive-replaceable-owner-leaf-dict|"), 6)
+	const seedKeys = 5000
+	for i := 0; i < seedKeys; i++ {
+		key := []byte(fmt.Sprintf("exhaustive-compact/key/%06d", i))
+		v := append([]byte(nil), baseVal...)
+		binary.LittleEndian.PutUint32(v[len(v)-4:], uint32(i))
+		if err := b.Set(key, v); err != nil {
+			t.Fatalf("seed Set(%d): %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("seed WriteSync: %v", err)
+	}
+	_ = b.Close()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("seed Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close(seed): %v", err)
+	}
+
+	// Reopen so previousLeafPageLog is a freshly initialized replaceable
+	// replayInlineLeafPageLog whose first append during prepareCurrentRewriteLeafDict
+	// creates a new leaf segment (seq = maxSeq + 1).
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(reopen): %v", err)
+	}
+	defer func() {
+		if reopened != nil {
+			_ = reopened.Close()
+		}
+	}()
+	if reopened.leafPageLog == nil {
+		t.Fatal("expected reopened CommandWAL DB to have replaceable leafPageLog")
+	}
+	if !reopened.systemRootUsesOuterLeaves() {
+		t.Fatal("expected systemRootUsesOuterLeaves() == true")
+	}
+	previousLeafPageLog := reopened.leafPageLog
+
+	var publishedDictID uint64
+	reopened.valueLogDictLookup = reopened.LookupSystemDictBytes
+	reopened.valueLogDictPut = func(ctx context.Context, dict []byte) (uint64, error) {
+		sum := sha256.Sum256(dict)
+		id := binary.BigEndian.Uint64(sum[:8])
+		ptr, err := reopened.AppendRawSystemValueLog(0, dict)
+		if err != nil {
+			return 0, err
+		}
+		if err := reopened.ApplySystemOps([]SystemKVOp{{
+			Key:       SystemDictBytesKey(id),
+			ValuePtr:  ptr,
+			IsPointer: true,
+		}}, true); err != nil {
+			return 0, err
+		}
+		publishedDictID = id
+		return id, nil
+	}
+	reopened.valueLogDictPublishRewriteLeaf = func(ctx context.Context, dict []byte, class string, useRawPages bool) (uint64, error) {
+		return reopened.valueLogDictPut(ctx, dict)
+	}
+
+	beforeSegs, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("listValueLogSegments(before): %v", err)
+	}
+	beforeMaxLeafSeq := maxRewriteLaneSeq(beforeSegs, rewriteLeafLogLaneID)
+
+	writer, handoff, err := reopened.installCompactStorageLeafPageLog(CompactStorageOptions{
+		Mode: CompactStorageExhaustive,
+	})
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog(exhaustive replaceable owner) failed: %v", err)
+	}
+	if writer == nil || handoff == nil {
+		t.Fatalf("expected non-nil compact writer and handoff, got writer=%v handoff=%v", writer, handoff)
+	}
+	if publishedDictID == 0 {
+		_ = handoff.cleanup()
+		t.Fatal("expected exhaustive installCompactStorageLeafPageLog to train and publish an outer_leaf dictionary")
+	}
+	if writer.leafDictID != publishedDictID {
+		_ = handoff.cleanup()
+		t.Fatalf("writer.leafDictID=%d; want publishedDictID=%d", writer.leafDictID, publishedDictID)
+	}
+
+	afterDictSegs, err := listValueLogSegments(dir)
+	if err != nil {
+		_ = handoff.cleanup()
+		t.Fatalf("listValueLogSegments(afterDict): %v", err)
+	}
+	afterDictMaxLeafSeq := maxRewriteLaneSeq(afterDictSegs, rewriteLeafLogLaneID)
+	if afterDictMaxLeafSeq <= beforeMaxLeafSeq {
+		_ = handoff.cleanup()
+		t.Fatalf("expected previousLeafPageLog dict publication to create a new leaf segment (> %d), got %d", beforeMaxLeafSeq, afterDictMaxLeafSeq)
+	}
+
+	// Appending through the installed compact writer must allocate a strictly
+	// higher leaf segment sequence than the segment created by previousLeafPageLog
+	// during prepareCurrentRewriteLeafDict, never colliding with it.
+	compactPage := bytes.Repeat([]byte("exhaustive-compact-leaf-page-ok|"), page.PageSize/len("exhaustive-compact-leaf-page-ok|"))
+	compactPtr, err := reopened.leafPageLog.AppendLeafPage(compactPage)
+	if err != nil {
+		_ = handoff.cleanup()
+		t.Fatalf("compact writer AppendLeafPage: %v", err)
+	}
+	_, compactSeq := valuelog.DecodeFileID(compactPtr.FileID)
+	if compactSeq <= afterDictMaxLeafSeq {
+		_ = handoff.cleanup()
+		t.Fatalf("compact writer collided with previousLeafPageLog leaf segment: compactSeq=%d <= afterDictMaxLeafSeq=%d", compactSeq, afterDictMaxLeafSeq)
+	}
+	if err := reopened.leafPageLog.Flush(); err != nil {
+		_ = handoff.cleanup()
+		t.Fatalf("compact writer Flush: %v", err)
+	}
+	if err := handoff.cleanup(); err != nil {
+		t.Fatalf("handoff.cleanup: %v", err)
+	}
+	if reopened.leafPageLog != previousLeafPageLog {
+		t.Fatalf("expected CompactStorage handoff to restore previousLeafPageLog %T, got %T", previousLeafPageLog, reopened.leafPageLog)
+	}
+
+	// Verify restored previousLeafPageLog can continue writing without colliding
+	// with any segment created by either dict publication or compact writer.
+	if err := reopened.SetSync([]byte("exhaustive-compact/post"), []byte("post-ok")); err != nil {
+		t.Fatalf("SetSync after exhaustive CompactStorage: %v", err)
+	}
+	if err := reopened.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint after exhaustive CompactStorage: %v", err)
+	}
+
+	snap := reopened.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	var keyScratch, leafScratch [page.PageSize]byte
+	if _, err := snap.GetSystemEntryExactWithFixedScratch(SystemDictBytesKey(publishedDictID), keyScratch[:], leafScratch[:]); err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetSystemEntryExactWithFixedScratch(publishedDictID=%d): %v", publishedDictID, err)
+	}
+	_ = snap.Close()
+
+	// Close and reopen to prove every persisted leaf segment is intact with no
+	// overlapping writer offsets or RID collisions.
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopened): %v", err)
+	}
+	reopened = nil
+
+	verified, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open(verify): %v", err)
+	}
+	defer func() { _ = verified.Close() }()
+	got, err := verified.Get([]byte("exhaustive-compact/key/000300"))
+	if err != nil {
+		t.Fatalf("Get(seeded key after reopen): %v", err)
+	}
+	wantVal := append([]byte(nil), baseVal...)
+	binary.LittleEndian.PutUint32(wantVal[len(wantVal)-4:], 300)
+	if !bytes.Equal(got, wantVal) {
+		t.Fatalf("seeded value mismatch after exhaustive CompactStorage reopen")
+	}
+	gotPost, err := verified.Get([]byte("exhaustive-compact/post"))
+	if err != nil || string(gotPost) != "post-ok" {
+		t.Fatalf("post-compact key mismatch after reopen: got=%q err=%v", gotPost, err)
+	}
 }

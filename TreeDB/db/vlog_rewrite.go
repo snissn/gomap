@@ -4269,6 +4269,14 @@ func (w *rewriteWriter) flushPendingBatches() error {
 }
 
 func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	return w.appendLeafPage(leafPage, false)
+}
+
+func (w *rewriteWriter) AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error) {
+	return w.appendLeafPage(leafPage, true)
+}
+
+func (w *rewriteWriter) appendLeafPage(leafPage []byte, disableLeafDict bool) (page.LeafLogPtr, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4276,10 +4284,18 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
-	return w.appendLeafPageWithRID(rid, leafPage)
+	return w.appendLeafPageWithRIDCapture(rid, leafPage, nil, disableLeafDict)
 }
 
 func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPageWithStableResources(leafPage, false)
+}
+
+func (w *rewriteWriter) AppendLeafPageWithStableResourcesNoDict(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPageWithStableResources(leafPage, true)
+}
+
+func (w *rewriteWriter) appendLeafPageWithStableResources(leafPage []byte, disableLeafDict bool) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4292,7 +4308,7 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 		err = errors.Join(err, capture.abandon())
 		return page.LeafLogPtr{}, nil, err
 	}
-	ptr, err := w.appendLeafPageWithRIDCapture(rid, leafPage, capture)
+	ptr, err := w.appendLeafPageWithRIDCapture(rid, leafPage, capture, disableLeafDict)
 	if err == nil {
 		err = capture.captureCurrent()
 	}
@@ -4309,6 +4325,14 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 }
 
 func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return w.appendLeafPages(leafPages, false)
+}
+
+func (w *rewriteWriter) AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return w.appendLeafPages(leafPages, true)
+}
+
+func (w *rewriteWriter) appendLeafPages(leafPages [][]byte, disableLeafDict bool) ([]page.LeafLogPtr, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4319,10 +4343,18 @@ func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, 
 	if err != nil {
 		return nil, err
 	}
-	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+	return w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil, disableLeafDict)
 }
 
 func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPagesWithStableResources(leafPages, false)
+}
+
+func (w *rewriteWriter) AppendLeafPagesWithStableResourcesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPagesWithStableResources(leafPages, true)
+}
+
+func (w *rewriteWriter) appendLeafPagesWithStableResources(leafPages [][]byte, disableLeafDict bool) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if w == nil {
 		return nil, nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4338,7 +4370,7 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 		err = errors.Join(err, capture.abandon())
 		return nil, nil, err
 	}
-	ptrs, err := w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, capture)
+	ptrs, err := w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, capture, disableLeafDict)
 	if err == nil {
 		err = capture.captureCurrent()
 	}
@@ -4399,10 +4431,10 @@ func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {
 }
 
 func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
-	return w.appendLeafPageWithRIDCapture(rid, leafPage, nil)
+	return w.appendLeafPageWithRIDCapture(rid, leafPage, nil, false)
 }
 
-func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture) (page.LeafLogPtr, error) {
+func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture, disableLeafDict bool) (page.LeafLogPtr, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4426,12 +4458,12 @@ func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte
 		}
 	}
 	if w.leafDir != "" {
-		return w.appendLeafPageSplitCapture(rid, encodedLeafPage, capture)
+		return w.appendLeafPageSplitCapture(rid, encodedLeafPage, capture, disableLeafDict)
 	}
 	if capture != nil {
 		return page.LeafLogPtr{}, fmt.Errorf("%w: raw outer-leaf stable capture requires a split leaf log", rootpublication.ErrUnresolvedResource)
 	}
-	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
+	if !disableLeafDict && w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
 		if err == nil {
 			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
@@ -4458,7 +4490,7 @@ func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte
 }
 
 func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [][]byte) ([]page.LeafLogPtr, error) {
-	return w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil)
+	return w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil, false)
 }
 
 type rewritePreparedLeafBatch struct {
@@ -4484,7 +4516,7 @@ func cloneRewritePreparedLeafBatch(prepared rewritePreparedLeafBatch) rewritePre
 	return clone
 }
 
-func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture) ([]page.LeafLogPtr, error) {
+func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture, disableLeafDict bool) ([]page.LeafLogPtr, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4492,7 +4524,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		return nil, nil
 	}
 	if len(leafPages) == 1 {
-		ptr, err := w.appendLeafPageWithRIDCapture(startRID, leafPages[0], capture)
+		ptr, err := w.appendLeafPageWithRIDCapture(startRID, leafPages[0], capture, disableLeafDict)
 		if err != nil {
 			return nil, err
 		}
@@ -4511,7 +4543,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 				if len(leafPages)-end == 1 {
 					end--
 				}
-				prepared, err := w.prepareLeafPageBatch(startRID+uint64(start), leafPages[start:end], capture)
+				prepared, err := w.prepareLeafPageBatch(startRID+uint64(start), leafPages[start:end], capture, disableLeafDict)
 				if err != nil {
 					return nil, err
 				}
@@ -4534,7 +4566,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 			if end > len(leafPages) {
 				end = len(leafPages)
 			}
-			chunkPtrs, err := w.appendLeafPagesWithRIDStartCapture(startRID+uint64(start), leafPages[start:end], capture)
+			chunkPtrs, err := w.appendLeafPagesWithRIDStartCapture(startRID+uint64(start), leafPages[start:end], capture, disableLeafDict)
 			if err != nil {
 				return nil, err
 			}
@@ -4548,7 +4580,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		}
 		ptrs := make([]page.LeafLogPtr, len(leafPages))
 		for i, leafPage := range leafPages {
-			ptr, err := w.appendLeafPageWithRID(startRID+uint64(i), leafPage)
+			ptr, err := w.appendLeafPageWithRIDCapture(startRID+uint64(i), leafPage, nil, disableLeafDict)
 			if err != nil {
 				return nil, err
 			}
@@ -4556,14 +4588,14 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		}
 		return ptrs, nil
 	}
-	prepared, err := w.prepareLeafPageBatch(startRID, leafPages, capture)
+	prepared, err := w.prepareLeafPageBatch(startRID, leafPages, capture, disableLeafDict)
 	if err != nil {
 		return nil, err
 	}
 	return w.appendPreparedLeafPageBatch(prepared, capture)
 }
 
-func (w *rewriteWriter) prepareLeafPageBatch(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture) (rewritePreparedLeafBatch, error) {
+func (w *rewriteWriter) prepareLeafPageBatch(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture, disableLeafDict bool) (rewritePreparedLeafBatch, error) {
 	var prepared rewritePreparedLeafBatch
 	if cap(w.leafBatchRecords) < len(leafPages) {
 		w.leafBatchRecords = make([]valuelog.Record, len(leafPages))
@@ -4574,7 +4606,7 @@ func (w *rewriteWriter) prepareLeafPageBatch(startRID uint64, leafPages [][]byte
 	rawPayloadBytes := 0
 	dictID := uint64(0)
 	var dict []byte
-	useDict := w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0
+	useDict := !disableLeafDict && w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0
 	if useDict {
 		dictID = w.leafDictID
 		dict = w.leafDict
@@ -4685,12 +4717,16 @@ func (w *rewriteWriter) leafPagesUseCompactPayload() bool {
 }
 
 func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
-	return w.appendLeafPageSplitCapture(rid, leafPage, nil)
+	return w.appendLeafPageSplitCapture(rid, leafPage, nil, false)
 }
 
-func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture) (page.LeafLogPtr, error) {
-	dictID := w.leafDictID
-	dict := w.leafDict
+func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture, disableLeafDict bool) (page.LeafLogPtr, error) {
+	var dictID uint64
+	var dict []byte
+	if !disableLeafDict {
+		dictID = w.leafDictID
+		dict = w.leafDict
+	}
 	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		var templateEncoded bool
 		dictID, dict, leafPage, templateEncoded = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
