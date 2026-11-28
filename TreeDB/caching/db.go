@@ -5766,6 +5766,50 @@ func (db *DB) ValueLogInUsePaths() []string {
 	return db.valueOnlyLogPaths(db.valueLogInUsePaths())
 }
 
+// ActiveDictIDs returns the dictionary IDs currently cached by active writers
+// in this cached DB instance so SystemMetadataAudit/SystemMetadataGC can pin
+// them during online maintenance.
+func (db *DB) ActiveDictIDs() []uint64 {
+	if db == nil {
+		return nil
+	}
+	var out []uint64
+	add := func(id uint64) {
+		if id == 0 {
+			return
+		}
+		for _, existing := range out {
+			if existing == id {
+				return
+			}
+		}
+		out = append(out, id)
+	}
+	add(db.dictCurrentCached.Load())
+	for i := range db.dictCurrentCachedByClass {
+		add(db.dictCurrentCachedByClass[i].Load())
+	}
+	return out
+}
+
+// RecentTemplateIDs returns the template IDs currently tracked by this cached
+// DB's value-log template engine (if enabled).
+func (db *DB) RecentTemplateIDs() []uint64 {
+	if db == nil || db.valueLogTemplateEngine == nil {
+		return nil
+	}
+	return db.valueLogTemplateEngine.RecentTemplateIDs()
+}
+
+// EvictTemplateIDs removes deleted template IDs from this cached DB's template
+// engine after SystemMetadataGC commits their removal.
+func (db *DB) EvictTemplateIDs(ids []uint64) {
+	if db == nil || db.valueLogTemplateEngine == nil || len(ids) == 0 {
+		return
+	}
+	db.valueLogTemplateEngine.EvictTemplateIDs(ids)
+}
+
 // ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
 // source segments and reclaims storage classes that backend rewrite already
 // proved obsolete.

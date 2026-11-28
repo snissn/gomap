@@ -214,3 +214,68 @@ func TestBackendSystemRoot_InlineChunkedAndPointerRoundTrip(t *testing.T) {
 		t.Fatalf("CountSystemPrefix(template/fp/)=(%d, %v) want (4, nil)", fpCount, err)
 	}
 }
+
+func TestStore_StageTemplateDef_PiggybackAndIdempotentCallback(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	store := NewBackend(backend, Config{})
+	ctx := context.Background()
+	tcfg := template.NormalizeConfig(template.Config{})
+	defBytes, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-tpl-anchor-alpha-"), []byte("-stage-tpl-anchor-beta")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef: %v", err)
+	}
+
+	inputFPs := []uint64{900, 300, 900}
+	fired := false
+	id, err := store.StageTemplateDef(ctx, defBytes, inputFPs, func() {
+		fired = true
+	})
+	if err != nil || id == 0 {
+		t.Fatalf("StageTemplateDef: id=%d err=%v", id, err)
+	}
+	// Verify caller's slice was not mutated.
+	if inputFPs[0] != 900 || inputFPs[1] != 300 || inputFPs[2] != 900 {
+		t.Fatalf("StageTemplateDef mutated caller routeFPs: %v", inputFPs)
+	}
+	if fired {
+		t.Fatalf("onDurable should wait until piggybacked commit syncs")
+	}
+	if err := backend.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if !fired {
+		t.Fatalf("expected onDurable to fire after SetSync")
+	}
+	got, err := store.GetTemplateDef(ctx, id)
+	if err != nil || !bytes.Equal(got, defBytes) {
+		t.Fatalf("GetTemplateDef(%d): len=%d err=%v", id, len(got), err)
+	}
+
+	// Idempotent StageTemplateDef with no new routeFPs must invoke onDurable
+	// after releasing store.mu (verified by reading from the store inside callback).
+	idempotentFired := false
+	id2, err := store.StageTemplateDef(ctx, defBytes, nil, func() {
+		if _, cbErr := store.GetTemplateDef(ctx, id); cbErr != nil {
+			t.Errorf("re-entrant GetTemplateDef inside onDurable failed: %v", cbErr)
+		}
+		idempotentFired = true
+	})
+	if err != nil || id2 != id {
+		t.Fatalf("StageTemplateDef(idempotent): id=%d want %d err=%v", id2, id, err)
+	}
+	if !idempotentFired {
+		t.Fatalf("expected idempotent StageTemplateDef onDurable to run")
+	}
+}
