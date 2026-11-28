@@ -126,7 +126,11 @@ func TestNativeVectorDDLPreflightRejectsBeforePressureMaintenance(t *testing.T) 
 	// observation fields, and permit only reservation refunds.
 	pendingBefore, pendingAfter := before, after
 	pendingBefore.ReservedBytes, pendingAfter.ReservedBytes = 0, 0
-	if err != nil || pendingAfter != pendingBefore || after.ReservedBytes > before.ReservedBytes {
+	pendingBefore.TotalBytes, pendingAfter.TotalBytes = 0, 0
+	if err != nil || pendingAfter != pendingBefore ||
+		after.ReservedBytes > before.ReservedBytes ||
+		after.TotalBytes > before.TotalBytes ||
+		before.ReservedBytes-after.ReservedBytes != before.TotalBytes-after.TotalBytes {
 		t.Fatalf("rejected DDL changed pending construction or grew reservations: before=%+v after=%+v err=%v", before, after, err)
 	}
 	if state, ok := f.backend.StateToken(); !ok || state != beforeState {
