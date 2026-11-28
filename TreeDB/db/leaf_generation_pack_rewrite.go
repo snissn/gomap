@@ -248,6 +248,20 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 	return a.ctx.appendLeafPage(leafPage)
 }
 
+func (a *leafRefRewritePageAppender) AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error) {
+	if a == nil || a.ctx == nil {
+		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	return a.ctx.appendLeafPageWithDictControl(leafPage, true)
+}
+
+func (a *leafRefRewritePageAppender) AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if a == nil || a.ctx == nil {
+		return nil, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
+	}
+	return a.ctx.appendLeafPagesWithDictControl(leafPages, true)
+}
+
 type leafRefRewriteRunStats struct {
 	privateCOWOwner                        *transactionowner.Owner
 	handoffTransition                      leafGenerationPackHandoffTransition
@@ -599,6 +613,10 @@ func (c *leafRefRewriteCtx) subtreeMayContainRewriteSource(pageID uint64) bool {
 }
 
 func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	return c.appendLeafPageWithDictControl(leafPage, false)
+}
+
+func (c *leafRefRewriteCtx) appendLeafPageWithDictControl(leafPage []byte, disableLeafDict bool) (page.LeafLogPtr, error) {
 	if c == nil || c.writer == nil || c.ridAlloc == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
 	}
@@ -617,7 +635,7 @@ func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, er
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
-	ptr, err := c.writer.appendLeafPageWithRID(rid, leafPage)
+	ptr, err := c.writer.appendLeafPageWithRIDCapture(rid, leafPage, nil, disableLeafDict)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -631,6 +649,10 @@ func (c *leafRefRewriteCtx) appendLeafPage(leafPage []byte) (page.LeafLogPtr, er
 }
 
 func (c *leafRefRewriteCtx) appendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return c.appendLeafPagesWithDictControl(leafPages, false)
+}
+
+func (c *leafRefRewriteCtx) appendLeafPagesWithDictControl(leafPages [][]byte, disableLeafDict bool) ([]page.LeafLogPtr, error) {
 	if c == nil || c.writer == nil || c.ridAlloc == nil {
 		return nil, errors.New("vlog-rewrite: missing leaf-ref rewrite appender state")
 	}
@@ -654,7 +676,7 @@ func (c *leafRefRewriteCtx) appendLeafPages(leafPages [][]byte) ([]page.LeafLogP
 	if err != nil {
 		return nil, err
 	}
-	ptrs, err := c.writer.appendLeafPagesWithRIDStart(startRID, leafPages)
+	ptrs, err := c.writer.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil, disableLeafDict)
 	if err != nil {
 		return nil, err
 	}
@@ -1035,11 +1057,11 @@ func (c *leafRefRewriteCtx) initSystemZipper(base *zipper.Zipper, reader zipper.
 	z.SetIndexInternalBaseDelta(c.db.indexInternalBaseDelta && !outer)
 	if !outer {
 		log = nil
-	} else if writers := collectRewriteWriters(log); len(writers) > 0 {
+	} else {
 		// SystemRootPageID outer leaves written through a maintenance/compact
 		// rewriteWriter must stay non-dictionary-encoded (dictID=0) even when
 		// publishCtx.writer is nil and db.leafPageLog is a compact rewriteWriter.
-		log = &noDictRewriteLeafPageLog{base: log, writers: writers}
+		log = wrapNoDictLeafPageLog(log)
 	}
 	z.SetLeafPageLog(log)
 	z.SetLeafPageReader(reader)
@@ -1065,15 +1087,6 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
 			return rootID, false, err
-		}
-	}
-	if c.writer != nil && c.writer.leafDictID != 0 {
-		if _, inSelfSystemRoot, _ := c.db.GetSystemEntry(SystemDictBytesKey(c.writer.leafDictID)); inSelfSystemRoot {
-			savedDictID, savedDict := c.writer.leafDictID, c.writer.leafDict
-			c.writer.leafDictID, c.writer.leafDict = 0, nil
-			defer func() {
-				c.writer.leafDictID, c.writer.leafDict = savedDictID, savedDict
-			}()
 		}
 	}
 

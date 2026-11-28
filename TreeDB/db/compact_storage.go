@@ -2955,30 +2955,110 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 		return nil, nil, err
 	}
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
-	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0, db.valueLogIdentityPins)
-	writer.ConfigureLeafLog(LeafLogDirPath(db.dir), rewriteLeafLogLaneID, leafStartSeq)
 	nextRID := uint64(0)
 	if opts.ReserveRIDs == nil {
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
-			_ = writer.Close()
 			return nil, nil, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
-	writer.ridAlloc = newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
-	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
-	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
-	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
-	db.SetLeafPageLog(writer)
-	if writer.blockCompression {
-		leafDictID, leafDictBytes, leafDictUseRawPages, err := db.prepareCurrentRewriteLeafDict()
-		if err != nil {
-			db.SetLeafPageLog(previousLeafPageLog)
-			return nil, nil, errors.Join(err, writer.Close())
+	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
+	newWriter := func(startSeq uint32) *rewriteWriter {
+		w := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0, db.valueLogIdentityPins)
+		w.ConfigureLeafLog(LeafLogDirPath(db.dir), rewriteLeafLogLaneID, startSeq)
+		w.ridAlloc = ridAlloc
+		w.blockCompression = db.valueLogCompression != ValueLogCompressionOff
+		w.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+		w.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+		return w
+	}
+	var (
+		writer              *rewriteWriter
+		leafDictID          uint64
+		leafDictBytes       []byte
+		leafDictUseRawPages bool
+	)
+	if db.valueLogCompression != ValueLogCompressionOff {
+		var (
+			bootstrapWriter *rewriteWriter
+			bootstrapLog    LeafPageLog
+		)
+		if previousLeafPageLog == nil && db.systemRootUsesOuterLeaves() {
+			// Offline/standalone compaction can train and publish a new
+			// outer_leaf dictionary into SystemRootPageID while db.leafPageLog
+			// is nil. Install an immutable no-dict bootstrap writer for that
+			// system-root publish, then swap in a fresh dict-configured writer
+			// if a dictionary is active so SetLeafDictMode is never called on
+			// an already-published writer.
+			bootstrapWriter = newWriter(leafStartSeq)
+			db.SetLeafPageLog(bootstrapWriter)
+			bootstrapLog = db.leafPageLog
 		}
+		leafDictID, leafDictBytes, leafDictUseRawPages, err = db.prepareCurrentRewriteLeafDict()
+		if bootstrapWriter != nil {
+			closeBootstrap := func() error {
+				// Detach bootstrapLog under writeMu/durablePublishMu before
+				// snapshotting segments, closing lanes/writer, and demoting.
+				db.setLeafPageLogRaw(previousLeafPageLog)
+				currentSegs, _ := leafPageLogCurrentSegments(bootstrapLog)
+				var closeErr error
+				if closer, ok := bootstrapLog.(interface{ CloseSelectedLanes() error }); ok {
+					closeErr = errors.Join(closeErr, closer.CloseSelectedLanes())
+				}
+				closeErr = errors.Join(closeErr, compactStorageLeafPageLogHandoffCloseWriter(bootstrapWriter))
+				if db.valueLogManager != nil {
+					for _, seg := range currentSegs {
+						if seg.FileID != 0 {
+							db.valueLogManager.DemoteCurrentWritable(seg.FileID)
+						}
+					}
+				}
+				return closeErr
+			}
+			if err != nil {
+				return nil, nil, errors.Join(err, closeBootstrap())
+			}
+			if leafDictID == 0 || len(leafDictBytes) == 0 {
+				writer = bootstrapWriter
+			} else if closeErr := closeBootstrap(); closeErr != nil {
+				return nil, nil, closeErr
+			}
+		} else if err != nil {
+			return nil, nil, err
+		}
+		if writer == nil && (bootstrapWriter != nil || previousLeafPageLog != nil) {
+			// Refresh leafStartSeq (and nextRID when no external RID reserver
+			// is supplied) after prepareCurrentRewriteLeafDict so any segment
+			// or RID written by bootstrapWriter or previousLeafPageLog during
+			// dictionary publication cannot collide with the new compact writer.
+			refreshedSegments, listErr := rewriteWALSegmentsLister(db.dir)
+			if listErr != nil {
+				return nil, nil, listErr
+			}
+			if seq := maxRewriteLaneSeq(refreshedSegments, rewriteLeafLogLaneID); seq > leafStartSeq {
+				leafStartSeq = seq
+			}
+			if prevSeq := leafPageLogMaxSeq(previousLeafPageLog); prevSeq > leafStartSeq {
+				leafStartSeq = prevSeq
+			}
+			if bootstrapWriter == nil && opts.ReserveRIDs == nil {
+				refreshedNextRID, ridErr := rewriteRIDStartScanner(refreshedSegments)
+				if ridErr != nil {
+					return nil, nil, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, ridErr)
+				}
+				if refreshedNextRID > nextRID {
+					nextRID = refreshedNextRID
+					ridAlloc = newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
+				}
+			}
+		}
+	}
+	if writer == nil {
+		writer = newWriter(leafStartSeq)
 		if leafDictID != 0 && len(leafDictBytes) > 0 {
 			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
+		db.SetLeafPageLog(writer)
 	}
 	return writer, &compactStorageLeafPageLogHandoff{
 		db:                  db,

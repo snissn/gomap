@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -40,134 +39,137 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 	return defaultSystemRootWarmMaxDeltaOps
 }
 
+// leafPageNoDictLog is implemented by leaf-page logs that can disable
+// outer-leaf dictionary encoding per append call without mutating shared
+// writer state (so SystemRootPageID outer leaves stay dictID=0 safely alongside
+// concurrent dictionary-encoded user/collection leaf appends).
+type leafPageNoDictLog interface {
+	AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error)
+	AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error)
+}
+
+type leafPageNoDictStableLog interface {
+	AppendLeafPageWithStableResourcesNoDict(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error)
+	AppendLeafPagesWithStableResourcesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error)
+}
+
+type leafPageNoDictCapable interface {
+	supportsLeafPageNoDict() bool
+}
+
 type noDictRewriteLeafPageLog struct {
-	mu      sync.Mutex
-	base    bulk.LeafPageAppender
-	writers []*rewriteWriter
+	base bulk.LeafPageAppender
 }
 
-func collectRewriteWriters(log any) []*rewriteWriter {
-	var out []*rewriteWriter
-	var visit func(any)
-	visit = func(cur any) {
-		switch v := cur.(type) {
-		case nil:
-			return
-		case *rewriteWriter:
-			if v != nil {
-				out = append(out, v)
-			}
-		case *leafPageLogWithRecordLengthHints:
-			if v != nil {
-				visit(v.inner)
-			}
-		case *leafPageLogLaneGroup:
-			if v != nil {
-				for _, lane := range v.lanes {
-					visit(lane)
-				}
-			}
-		case *noDictRewriteLeafPageLog:
-			if v != nil {
-				out = append(out, v.writers...)
-			}
+func wrapNoDictLeafPageLog(log bulk.LeafPageAppender) bulk.LeafPageAppender {
+	if log == nil {
+		return nil
+	}
+	if _, ok := log.(*noDictRewriteLeafPageLog); ok {
+		return log
+	}
+	if _, ok := log.(leafPageNoDictLog); ok {
+		if capable, hasCap := log.(leafPageNoDictCapable); hasCap && !capable.supportsLeafPageNoDict() {
+			return log
 		}
+		return &noDictRewriteLeafPageLog{base: log}
 	}
-	visit(log)
-	return out
-}
-
-func (l *noDictRewriteLeafPageLog) withoutLeafDict(fn func() error) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	type savedState struct {
-		id   uint64
-		dict []byte
-	}
-	saved := make([]savedState, len(l.writers))
-	for i, w := range l.writers {
-		saved[i] = savedState{id: w.leafDictID, dict: w.leafDict}
-		w.leafDictID = 0
-		w.leafDict = nil
-	}
-	defer func() {
-		for i, w := range l.writers {
-			w.leafDictID = saved[i].id
-			w.leafDict = saved[i].dict
-		}
-	}()
-	return fn()
+	return log
 }
 
 func (l *noDictRewriteLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
-	var ptr page.LeafLogPtr
-	err := l.withoutLeafDict(func() error {
-		var e error
-		ptr, e = l.base.AppendLeafPage(leafPage)
-		return e
-	})
-	return ptr, err
+	if l == nil || l.base == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	if noDict, ok := l.base.(leafPageNoDictLog); ok {
+		return noDict.AppendLeafPageNoDict(leafPage)
+	}
+	return l.base.AppendLeafPage(leafPage)
 }
 
 func (l *noDictRewriteLeafPageLog) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if l == nil || l.base == nil {
+		return page.LeafLogPtr{}, nil, errors.New("leaf page log unavailable")
+	}
+	if noDict, ok := l.base.(leafPageNoDictStableLog); ok {
+		return noDict.AppendLeafPageWithStableResourcesNoDict(leafPage)
+	}
 	stable, ok := l.base.(LeafPageStableLog)
 	if !ok {
 		return page.LeafLogPtr{}, nil, rootpublication.ErrUnresolvedResource
 	}
-	var (
-		ptr page.LeafLogPtr
-		res *rootpublication.StableResourceSet
-	)
-	err := l.withoutLeafDict(func() error {
-		var e error
-		ptr, res, e = stable.AppendLeafPageWithStableResources(leafPage)
-		return e
-	})
-	return ptr, res, err
+	return stable.AppendLeafPageWithStableResources(leafPage)
 }
 
 func (l *noDictRewriteLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.base == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	if noDict, ok := l.base.(leafPageNoDictLog); ok {
+		return noDict.AppendLeafPagesNoDict(leafPages)
+	}
 	if batcher, ok := l.base.(LeafPageBatchLog); ok {
-		var ptrs []page.LeafLogPtr
-		err := l.withoutLeafDict(func() error {
-			var e error
-			ptrs, e = batcher.AppendLeafPages(leafPages)
-			return e
-		})
-		return ptrs, err
+		return batcher.AppendLeafPages(leafPages)
 	}
 	ptrs := make([]page.LeafLogPtr, len(leafPages))
-	err := l.withoutLeafDict(func() error {
-		for i, lp := range leafPages {
-			ptr, e := l.base.AppendLeafPage(lp)
-			if e != nil {
-				return e
-			}
-			ptrs[i] = ptr
+	for i, lp := range leafPages {
+		ptr, err := l.base.AppendLeafPage(lp)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return ptrs, err
+		ptrs[i] = ptr
+	}
+	return ptrs, nil
 }
 
 func (l *noDictRewriteLeafPageLog) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if l == nil || l.base == nil {
+		return nil, nil, errors.New("leaf page log unavailable")
+	}
+	if noDict, ok := l.base.(leafPageNoDictStableLog); ok {
+		return noDict.AppendLeafPagesWithStableResourcesNoDict(leafPages)
+	}
 	stableBatch, ok := l.base.(LeafPageStableBatchLog)
 	if !ok {
 		return nil, nil, rootpublication.ErrUnresolvedResource
 	}
-	var (
-		ptrs []page.LeafLogPtr
-		res  *rootpublication.StableResourceSet
-	)
-	err := l.withoutLeafDict(func() error {
-		var e error
-		ptrs, res, e = stableBatch.AppendLeafPagesWithStableResources(leafPages)
-		return e
-	})
-	return ptrs, res, err
+	return stableBatch.AppendLeafPagesWithStableResources(leafPages)
+}
+
+func (l *noDictRewriteLeafPageLog) ConcurrentLeafPageAppends() bool {
+	if l == nil || l.base == nil {
+		return false
+	}
+	concurrent, ok := l.base.(LeafPageConcurrentAppendLog)
+	return ok && concurrent.ConcurrentLeafPageAppends()
+}
+
+func (l *noDictRewriteLeafPageLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if l == nil || l.base == nil {
+		return nil, false
+	}
+	provider, ok := l.base.(LeafPageLogLaneProvider)
+	if !ok {
+		return nil, false
+	}
+	lane, ok := provider.LeafPageLogLane(workerIndex)
+	if !ok || lane == nil {
+		return nil, false
+	}
+	if _, already := lane.(*noDictRewriteLeafPageLog); already {
+		return lane, true
+	}
+	return &noDictRewriteLeafPageLog{base: lane}, true
+}
+
+func (l *noDictRewriteLeafPageLog) LeafPageLogLaneAny(workerIndex int) (any, bool) {
+	return l.LeafPageLogLane(workerIndex)
 }
 
 func (l *noDictRewriteLeafPageLog) Flush() error {
+	if l == nil || l.base == nil {
+		return nil
+	}
 	if flusher, ok := l.base.(interface{ Flush() error }); ok {
 		return flusher.Flush()
 	}
@@ -175,6 +177,9 @@ func (l *noDictRewriteLeafPageLog) Flush() error {
 }
 
 func (l *noDictRewriteLeafPageLog) Sync() error {
+	if l == nil || l.base == nil {
+		return nil
+	}
 	if syncer, ok := l.base.(interface{ Sync() error }); ok {
 		return syncer.Sync()
 	}
@@ -186,11 +191,11 @@ func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
 	opts.outerLeavesInValueLog = db.systemRootUsesOuterLeaves()
 	if !opts.outerLeavesInValueLog {
 		opts.leafPageLog = nil
-	} else if writers := collectRewriteWriters(opts.leafPageLog); len(writers) > 0 {
+	} else {
 		// SystemRootPageID outer leaves written through a maintenance/compact
 		// rewriteWriter must stay non-dictionary-encoded (dictID=0) so reading
 		// dict/bytes/<dictID> from SystemRootPageID can never self-recurse.
-		opts.leafPageLog = &noDictRewriteLeafPageLog{base: opts.leafPageLog, writers: writers}
+		opts.leafPageLog = wrapNoDictLeafPageLog(opts.leafPageLog)
 	}
 	return opts
 }

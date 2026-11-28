@@ -282,14 +282,47 @@ func (l *leafPageLogWithRecordLengthHints) withoutReadCache() *leafPageLogWithRe
 	return &cp
 }
 
+func (l *leafPageLogWithRecordLengthHints) supportsLeafPageNoDict() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	if _, ok := l.inner.(leafPageNoDictLog); !ok {
+		return false
+	}
+	if capable, ok := l.inner.(leafPageNoDictCapable); ok {
+		return capable.supportsLeafPageNoDict()
+	}
+	return true
+}
+
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	return l.appendLeafPage(leafPage, false)
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPageNoDict(leafPage []byte) (page.LeafLogPtr, error) {
+	return l.appendLeafPage(leafPage, true)
+}
+
+func (l *leafPageLogWithRecordLengthHints) appendLeafPage(leafPage []byte, noDict bool) (page.LeafLogPtr, error) {
 	if l == nil || l.inner == nil {
 		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
 	}
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return page.LeafLogPtr{}, err
 	}
-	ptr, err := l.inner.AppendLeafPage(leafPage)
+	var (
+		ptr page.LeafLogPtr
+		err error
+	)
+	if noDict {
+		if nd, ok := l.inner.(leafPageNoDictLog); ok {
+			ptr, err = nd.AppendLeafPageNoDict(leafPage)
+		} else {
+			ptr, err = l.inner.AppendLeafPage(leafPage)
+		}
+	} else {
+		ptr, err = l.inner.AppendLeafPage(leafPage)
+	}
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -325,6 +358,14 @@ func (l *leafPageLogWithRecordLengthHints) discardStableAppend(resources *rootpu
 }
 
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPageWithStableResources(leafPage, false)
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithStableResourcesNoDict(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPageWithStableResources(leafPage, true)
+}
+
+func (l *leafPageLogWithRecordLengthHints) appendLeafPageWithStableResources(leafPage []byte, noDict bool) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if l == nil || l.inner == nil {
 		return page.LeafLogPtr{}, nil, errors.New("leaf page log unavailable")
 	}
@@ -335,7 +376,20 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithStableResources(lea
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return page.LeafLogPtr{}, nil, err
 	}
-	ptr, resources, err := stable.AppendLeafPageWithStableResources(leafPage)
+	var (
+		ptr       page.LeafLogPtr
+		resources *rootpublication.StableResourceSet
+		err       error
+	)
+	if noDict {
+		if nd, ok := l.inner.(leafPageNoDictStableLog); ok {
+			ptr, resources, err = nd.AppendLeafPageWithStableResourcesNoDict(leafPage)
+		} else {
+			ptr, resources, err = stable.AppendLeafPageWithStableResources(leafPage)
+		}
+	} else {
+		ptr, resources, err = stable.AppendLeafPageWithStableResources(leafPage)
+	}
 	if err != nil {
 		return page.LeafLogPtr{}, nil, l.discardStableAppend(resources, err)
 	}
@@ -377,6 +431,14 @@ func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageBatchAppends() bool {
 }
 
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return l.appendLeafPages(leafPages, false)
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPagesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return l.appendLeafPages(leafPages, true)
+}
+
+func (l *leafPageLogWithRecordLengthHints) appendLeafPages(leafPages [][]byte, noDict bool) ([]page.LeafLogPtr, error) {
 	if l == nil || l.inner == nil {
 		return nil, errors.New("leaf page log unavailable")
 	}
@@ -387,7 +449,30 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return nil, err
 	}
-	if batcher, ok := l.inner.(LeafPageBatchLog); ok {
+	if noDict {
+		if nd, ok := l.inner.(leafPageNoDictLog); ok {
+			var err error
+			ptrs, err = nd.AppendLeafPagesNoDict(leafPages)
+			if err != nil {
+				return nil, err
+			}
+		} else if batcher, ok := l.inner.(LeafPageBatchLog); ok {
+			var err error
+			ptrs, err = batcher.AppendLeafPages(leafPages)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			ptrs = make([]page.LeafLogPtr, len(leafPages))
+			for i, leafPage := range leafPages {
+				ptr, err := l.inner.AppendLeafPage(leafPage)
+				if err != nil {
+					return nil, err
+				}
+				ptrs[i] = ptr
+			}
+		}
+	} else if batcher, ok := l.inner.(LeafPageBatchLog); ok {
 		var err error
 		ptrs, err = batcher.AppendLeafPages(leafPages)
 		if err != nil {
@@ -413,6 +498,14 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 }
 
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPagesWithStableResources(leafPages, false)
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendLeafPagesWithStableResourcesNoDict(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPagesWithStableResources(leafPages, true)
+}
+
+func (l *leafPageLogWithRecordLengthHints) appendLeafPagesWithStableResources(leafPages [][]byte, noDict bool) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if l == nil || l.inner == nil {
 		return nil, nil, errors.New("leaf page log unavailable")
 	}
@@ -426,7 +519,20 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPagesWithStableResources(le
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return nil, nil, err
 	}
-	ptrs, resources, err := stable.AppendLeafPagesWithStableResources(leafPages)
+	var (
+		ptrs      []page.LeafLogPtr
+		resources *rootpublication.StableResourceSet
+		err       error
+	)
+	if noDict {
+		if nd, ok := l.inner.(leafPageNoDictStableLog); ok {
+			ptrs, resources, err = nd.AppendLeafPagesWithStableResourcesNoDict(leafPages)
+		} else {
+			ptrs, resources, err = stable.AppendLeafPagesWithStableResources(leafPages)
+		}
+	} else {
+		ptrs, resources, err = stable.AppendLeafPagesWithStableResources(leafPages)
+	}
 	if err != nil {
 		return nil, nil, l.discardStableAppend(resources, err)
 	}
