@@ -44,6 +44,7 @@ type TemplateDef struct {
 	VarPositions   []uint16
 	ConstPositions []uint16
 
+	anchorBytes    int
 	maskVarSpans   []span
 	maskConstSpans []span
 }

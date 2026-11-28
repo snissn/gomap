@@ -162,7 +162,11 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 		if off != payloadLen {
 			return TemplateDef{}, ErrCorruptTemplateDef
 		}
-		return TemplateDef{Kind: TemplateAnchors, Anchors: anchors}, nil
+		anchorBytes := 0
+		for _, a := range anchors {
+			anchorBytes += len(a)
+		}
+		return TemplateDef{Kind: TemplateAnchors, Anchors: anchors, anchorBytes: anchorBytes}, nil
 	case templateDefVerMask:
 		if payloadLen < 2 {
 			return TemplateDef{}, ErrCorruptTemplateDef

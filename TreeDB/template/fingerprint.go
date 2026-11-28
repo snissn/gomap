@@ -2,12 +2,13 @@ package template
 
 import (
 	"encoding/binary"
-	"sort"
+	"slices"
 
 	"github.com/zeebo/xxh3"
 )
 
-// Fingerprints computes deterministic winnowed fingerprints for value.
+// Fingerprints computes deterministic winnowed fingerprints for value using
+// an O(n) monotonic deque instead of O(n*w) nested scans.
 func Fingerprints(value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
 	k := cfg.FingerprintK
@@ -19,38 +20,70 @@ func Fingerprints(value []byte, cfg Config) []uint64 {
 	if n <= 0 {
 		return nil
 	}
-	hashes := make([]uint64, n)
+	if w <= 0 || n < w {
+		w = n
+	}
+	type dqEntry struct {
+		idx int
+		val uint64
+	}
+	var dqStack [128]dqEntry
+	var dq []dqEntry
+	if w <= len(dqStack) {
+		dq = dqStack[:0]
+	} else {
+		dq = make([]dqEntry, 0, w)
+	}
+	var outStack [64]uint64
+	out := outStack[:0]
+	head := 0
+	lastMin := uint64(0)
+	hasLastMin := false
 	for i := 0; i < n; i++ {
-		hashes[i] = xxh3.Hash(value[i : i+k])
-	}
-	fps := make(map[uint64]struct{}, n)
-	if w <= 0 {
-		w = n
-	}
-	if n < w {
-		w = n
-	}
-	for i := 0; i+w <= n; i++ {
-		min := hashes[i]
-		for j := i + 1; j < i+w; j++ {
-			if hashes[j] < min {
-				min = hashes[j]
+		h := xxh3.Hash(value[i : i+k])
+		// Maintain non-decreasing deque of window hashes (strictly < pops tail).
+		for len(dq) > head && dq[len(dq)-1].val > h {
+			dq = dq[:len(dq)-1]
+		}
+		dq = append(dq, dqEntry{idx: i, val: h})
+		if i+1 >= w {
+			winStart := i - w + 1
+			for head < len(dq) && dq[head].idx < winStart {
+				head++
+			}
+			minVal := dq[head].val
+			if !hasLastMin || minVal != lastMin {
+				out = append(out, minVal)
+				lastMin = minVal
+				hasLastMin = true
+			}
+			// Periodically compact deque backing slice to keep it bounded to w.
+			if head >= 64 && head*2 >= len(dq) {
+				nRem := copy(dq, dq[head:])
+				dq = dq[:nRem]
+				head = 0
 			}
 		}
-		fps[min] = struct{}{}
 	}
-	if len(fps) == 0 {
+	if len(out) == 0 {
 		return nil
 	}
-	out := make([]uint64, 0, len(fps))
-	for h := range fps {
-		out = append(out, h)
+	slices.Sort(out)
+	// Dedup in place.
+	u := 0
+	for i := 0; i < len(out); i++ {
+		if i == 0 || out[i] != out[i-1] {
+			out[u] = out[i]
+			u++
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	out = out[:u]
 	if cfg.MaxFingerprints > 0 && len(out) > cfg.MaxFingerprints {
 		out = out[:cfg.MaxFingerprints]
 	}
-	return out
+	res := make([]uint64, len(out))
+	copy(res, out)
+	return res
 }
 
 func fingerprintsLimited(value []byte, cfg Config, limit int) []uint64 {

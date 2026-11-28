@@ -28,6 +28,80 @@ func encodedLen(gaps [][]byte, templateID uint64) int {
 	return length
 }
 
+// matchAndEncodeAnchor matches value against anchors in a single pass and
+// encodes directly into the output payload with zero intermediate [][]byte
+// slice allocation.
+func matchAndEncodeAnchor(value []byte, def TemplateDef, templateID uint64, cfg Config, minSavings int) (payload []byte, encLen int, matched bool) {
+	anchors := def.Anchors
+	rawLen := len(value)
+	gapCount := len(anchors) + 1
+	if cfg.MaxGaps > 0 && gapCount > cfg.MaxGaps {
+		return nil, 0, false
+	}
+	if cfg.MaxDecodedBytes > 0 && rawLen > cfg.MaxDecodedBytes {
+		return nil, 0, false
+	}
+	anchorBytes := def.anchorBytes
+	if anchorBytes == 0 {
+		for _, a := range anchors {
+			anchorBytes += len(a)
+		}
+	}
+	if minSavings < cfg.MinSavingsBytes {
+		minSavings = cfg.MinSavingsBytes
+	}
+	minEnc := minEncodedLen(rawLen, gapCount, anchorBytes, templateID)
+	if rawLen-minEnc < minSavings {
+		return nil, 0, false
+	}
+	var stackSpans [64]span
+	var spans []span
+	if gapCount <= len(stackSpans) {
+		spans = stackSpans[:gapCount]
+	} else {
+		spans = make([]span, gapCount)
+	}
+	encLen = payloadHeader + uvarintLen(templateID) + uvarintLen(uint64(gapCount))
+	pos := 0
+	ops := 0
+	for i, a := range anchors {
+		if cfg.MaxAnchorSearchOps > 0 && ops >= cfg.MaxAnchorSearchOps {
+			return nil, 0, false
+		}
+		idx := bytes.Index(value[pos:], a)
+		ops++
+		if idx < 0 {
+			return nil, 0, false
+		}
+		start := pos + idx
+		gapLen := start - pos
+		spans[i] = span{start: pos, end: start}
+		encLen += uvarintLen(uint64(gapLen)) + gapLen
+		pos = start + len(a)
+	}
+	tailLen := rawLen - pos
+	spans[gapCount-1] = span{start: pos, end: rawLen}
+	encLen += uvarintLen(uint64(tailLen)) + tailLen
+	if rawLen-encLen < minSavings {
+		return nil, encLen, true
+	}
+	out := make([]byte, encLen)
+	out[0] = magic0
+	out[1] = magic1
+	out[2] = payloadVer
+	out[3] = flagEncoded
+	off := payloadHeader
+	off += binary.PutUvarint(out[off:], templateID)
+	off += binary.PutUvarint(out[off:], uint64(gapCount))
+	for _, sp := range spans {
+		g := value[sp.start:sp.end]
+		off += binary.PutUvarint(out[off:], uint64(len(g)))
+		copy(out[off:], g)
+		off += len(g)
+	}
+	return out, encLen, true
+}
+
 func matchTemplateLen(value []byte, anchors [][]byte, templateID uint64, cfg Config) (encLen int, reason string, matched bool) {
 	rawLen := len(value)
 	gapCount := len(anchors) + 1
@@ -129,6 +203,204 @@ func matchTemplate(value []byte, anchors [][]byte, templateID uint64, cfg Config
 		return gaps, encLen, reasonKeepBounds, true
 	}
 	return gaps, encLen, "", true
+}
+
+// matchAndEncodeMask matches value against a mask template and encodes it in a
+// single pass, using SIMD bytes.Equal on constant spans, direct copy on
+// variable spans when sparse is guaranteed optimal (varCount <= maskLenFull),
+// and word-at-a-time uint64 XOR scanning on full-mask fallback.
+func matchAndEncodeMask(value []byte, def TemplateDef, templateID uint64, cfg Config, minSavings int) (payload []byte, encLen int, sparse bool, matched bool) {
+	if def.Kind != TemplateMask || len(def.Base) == 0 || len(value) != len(def.Base) {
+		return nil, 0, false, false
+	}
+	if cfg.MaxDecodedBytes > 0 && len(value) > cfg.MaxDecodedBytes {
+		return nil, 0, false, false
+	}
+	rawLen := len(value)
+	idLen := uvarintLen(templateID)
+	maskLenFull := (rawLen + 7) / 8
+	varMask := def.Mask
+	if len(varMask) != maskLenFull {
+		varMask = nil
+	}
+	if minSavings < cfg.MinSavingsBytes {
+		minSavings = cfg.MinSavingsBytes
+	}
+
+	if varMask != nil && (len(def.maskConstSpans) > 0 || len(def.ConstPositions) > 0) {
+		constMismatch := false
+		if len(def.maskConstSpans) > 0 {
+			for _, s := range def.maskConstSpans {
+				if !bytes.Equal(value[s.start:s.end], def.Base[s.start:s.end]) {
+					constMismatch = true
+					break
+				}
+			}
+		} else {
+			for _, pos := range def.ConstPositions {
+				if value[pos] != def.Base[pos] {
+					constMismatch = true
+					break
+				}
+			}
+		}
+		if !constMismatch {
+			varCount := len(def.VarPositions)
+			if varCount == 0 {
+				for _, b := range varMask {
+					varCount += bits.OnesCount8(b)
+				}
+			}
+			sparseLen := payloadHeader + idLen + varCount
+			// When varCount <= maskLenFull, sparseLen <= fullLen = hdr + maskLenFull + diffCount
+			// ALWAYS holds regardless of diffCount — skip scanning VarPositions entirely!
+			if varCount <= maskLenFull {
+				if rawLen-sparseLen < cfg.MinSavingsBytes {
+					return nil, sparseLen, true, false
+				}
+				if rawLen-sparseLen < minSavings {
+					return nil, sparseLen, true, true
+				}
+				out := make([]byte, sparseLen)
+				out[0] = magic0
+				out[1] = magic1
+				out[2] = payloadVer
+				out[3] = flagEncoded | flagMask
+				off := payloadHeader
+				off += binary.PutUvarint(out[off:], templateID)
+				if len(def.maskVarSpans) > 0 {
+					for _, s := range def.maskVarSpans {
+						off += copy(out[off:], value[s.start:s.end])
+					}
+				} else if len(def.VarPositions) > 0 {
+					for i, pos := range def.VarPositions {
+						out[off+i] = value[pos]
+					}
+				} else {
+					idx := 0
+					for i := 0; i < rawLen; i++ {
+						if varMask[i/8]&(1<<uint(i%8)) != 0 {
+							out[off+idx] = value[i]
+							idx++
+						}
+					}
+				}
+				return out, sparseLen, true, true
+			}
+
+			// varCount > maskLenFull: count diffs over VarPositions to pick sparse vs full.
+			diffCount := 0
+			for _, pos := range def.VarPositions {
+				if value[pos] != def.Base[pos] {
+					diffCount++
+				}
+			}
+			fullLen := payloadHeader + idLen + maskLenFull + diffCount
+			if sparseLen <= fullLen {
+				if rawLen-sparseLen < cfg.MinSavingsBytes {
+					return nil, sparseLen, true, false
+				}
+				if rawLen-sparseLen < minSavings {
+					return nil, sparseLen, true, true
+				}
+				out := make([]byte, sparseLen)
+				out[0] = magic0
+				out[1] = magic1
+				out[2] = payloadVer
+				out[3] = flagEncoded | flagMask
+				off := payloadHeader
+				off += binary.PutUvarint(out[off:], templateID)
+				if len(def.maskVarSpans) > 0 {
+					for _, s := range def.maskVarSpans {
+						off += copy(out[off:], value[s.start:s.end])
+					}
+				} else {
+					for i, pos := range def.VarPositions {
+						out[off+i] = value[pos]
+					}
+				}
+				return out, sparseLen, true, true
+			}
+			if rawLen-fullLen < cfg.MinSavingsBytes {
+				return nil, fullLen, false, false
+			}
+			if rawLen-fullLen < minSavings {
+				return nil, fullLen, false, true
+			}
+			full := make([]byte, fullLen)
+			full[0] = magic0
+			full[1] = magic1
+			full[2] = payloadVer
+			full[3] = flagEncoded | flagMask | flagMaskFull
+			off := payloadHeader
+			off += binary.PutUvarint(full[off:], templateID)
+			maskOff := off
+			diffOff := maskOff + maskLenFull
+			idx := 0
+			for _, pos := range def.VarPositions {
+				if value[pos] == def.Base[pos] {
+					continue
+				}
+				full[maskOff+int(pos)/8] |= 1 << uint(pos%8)
+				full[diffOff+idx] = value[pos]
+				idx++
+			}
+			return full, fullLen, false, true
+		}
+	}
+
+	// Single-pass word-at-a-time uint64 XOR scan for full-mask encoding
+	// (const-byte drift or no precomputed const spans).
+	var stackMask [256]byte
+	var maskBuf []byte
+	if maskLenFull <= len(stackMask) {
+		maskBuf = stackMask[:maskLenFull]
+		clear(maskBuf)
+	} else {
+		maskBuf = make([]byte, maskLenFull)
+	}
+	var stackDiff [512]byte
+	diffBuf := stackDiff[:0]
+	base := def.Base
+	nWords := rawLen / 8
+	for wi := 0; wi < nWords; wi++ {
+		off := wi * 8
+		xv := binary.LittleEndian.Uint64(value[off:off+8]) ^ binary.LittleEndian.Uint64(base[off:off+8])
+		if xv == 0 {
+			continue
+		}
+		var mb byte
+		for xv != 0 {
+			byteIdx := bits.TrailingZeros64(xv) >> 3
+			mb |= 1 << uint(byteIdx)
+			diffBuf = append(diffBuf, value[off+byteIdx])
+			xv &^= uint64(0xff) << uint(byteIdx*8)
+		}
+		maskBuf[wi] = mb
+	}
+	for i := nWords * 8; i < rawLen; i++ {
+		if value[i] != base[i] {
+			maskBuf[i/8] |= 1 << uint(i%8)
+			diffBuf = append(diffBuf, value[i])
+		}
+	}
+	fullLen := payloadHeader + idLen + maskLenFull + len(diffBuf)
+	if rawLen-fullLen < cfg.MinSavingsBytes {
+		return nil, fullLen, false, false
+	}
+	if rawLen-fullLen < minSavings {
+		return nil, fullLen, false, true
+	}
+	full := make([]byte, fullLen)
+	full[0] = magic0
+	full[1] = magic1
+	full[2] = payloadVer
+	full[3] = flagEncoded | flagMask | flagMaskFull
+	off := payloadHeader
+	off += binary.PutUvarint(full[off:], templateID)
+	copy(full[off:off+maskLenFull], maskBuf)
+	copy(full[off+maskLenFull:], diffBuf)
+	return full, fullLen, false, true
 }
 
 func matchMaskTemplateLen(value []byte, def TemplateDef, templateID uint64, cfg Config) (encLen int, sparse bool, reason string, matched bool) {

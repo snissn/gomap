@@ -8,56 +8,77 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+type paddedAtomicUint64 struct {
+	v atomic.Uint64
+	_ [56]byte
+}
+
 type templateDefCache struct {
 	maxEntries int
 
-	mu sync.Mutex
-	ll list.List
-	m  map[uint64]*list.Element
+	mu   sync.Mutex
+	ll   list.List
+	m    map[uint64]*list.Element
+	snap atomic.Pointer[map[uint64]*templateDefCacheEntry]
 
-	hits   atomic.Uint64
-	misses atomic.Uint64
+	hitShards [16]paddedAtomicUint64
+	misses    atomic.Uint64
 }
 
 type templateDefCacheEntry struct {
-	id  uint64
-	def templ.TemplateDef
+	id      uint64
+	def     templ.TemplateDef
+	touched atomic.Bool
 }
 
 func newTemplateDefCache(maxEntries int) *templateDefCache {
 	if maxEntries <= 0 {
 		return nil
 	}
-	return &templateDefCache{
+	c := &templateDefCache{
 		maxEntries: maxEntries,
 		m:          make(map[uint64]*list.Element, maxEntries),
 	}
+	empty := make(map[uint64]*templateDefCacheEntry)
+	c.snap.Store(&empty)
+	return c
+}
+
+func (c *templateDefCache) publishSnapshotLocked() {
+	next := make(map[uint64]*templateDefCacheEntry, len(c.m))
+	for id, elem := range c.m {
+		if ent, ok := elem.Value.(*templateDefCacheEntry); ok && ent != nil {
+			next[id] = ent
+		}
+	}
+	c.snap.Store(&next)
 }
 
 func (c *templateDefCache) Stats() (hits, misses uint64, entries, capacity int) {
 	if c == nil {
 		return 0, 0, 0, 0
 	}
-	c.mu.Lock()
-	entries = len(c.m)
-	capacity = c.maxEntries
-	c.mu.Unlock()
-	return c.hits.Load(), c.misses.Load(), entries, capacity
+	if s := c.snap.Load(); s != nil {
+		entries = len(*s)
+	}
+	for i := range c.hitShards {
+		hits += c.hitShards[i].v.Load()
+	}
+	return hits, c.misses.Load(), entries, c.maxEntries
 }
 
 func (c *templateDefCache) Get(id uint64) (templ.TemplateDef, bool) {
 	if c == nil || id == 0 {
 		return templ.TemplateDef{}, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if elem := c.m[id]; elem != nil {
-		c.ll.MoveToFront(elem)
-		c.hits.Add(1)
-		if ent, ok := elem.Value.(*templateDefCacheEntry); ok && ent != nil {
+	if s := c.snap.Load(); s != nil {
+		if ent := (*s)[id]; ent != nil {
+			if !ent.touched.Load() {
+				ent.touched.Store(true)
+			}
+			c.hitShards[id&15].v.Add(1)
 			return ent.def, true
 		}
-		return templ.TemplateDef{}, true
 	}
 	c.misses.Add(1)
 	return templ.TemplateDef{}, false
@@ -70,26 +91,34 @@ func (c *templateDefCache) Add(id uint64, def templ.TemplateDef) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if elem := c.m[id]; elem != nil {
-		if ent, ok := elem.Value.(*templateDefCacheEntry); ok && ent != nil {
-			ent.def = def
-		} else {
-			elem.Value = &templateDefCacheEntry{id: id, def: def}
-		}
+		// Publish a fresh immutable entry so concurrent lock-free readers
+		// never race with updates to ent.def.
+		elem.Value = &templateDefCacheEntry{id: id, def: def}
 		c.ll.MoveToFront(elem)
+		c.publishSnapshotLocked()
 		return
 	}
 	elem := c.ll.PushFront(&templateDefCacheEntry{id: id, def: def})
 	c.m[id] = elem
-	if len(c.m) <= c.maxEntries {
-		return
+	if len(c.m) > c.maxEntries {
+		// Second-chance (CLOCK) eviction from the tail: entries hit since
+		// their last scan get one reprieve and move to the front.
+		for tries := 0; tries <= len(c.m); tries++ {
+			back := c.ll.Back()
+			if back == nil {
+				break
+			}
+			ent, ok := back.Value.(*templateDefCacheEntry)
+			if ok && ent != nil && ent.touched.Swap(false) {
+				c.ll.MoveToFront(back)
+				continue
+			}
+			if ok && ent != nil {
+				delete(c.m, ent.id)
+			}
+			c.ll.Remove(back)
+			break
+		}
 	}
-	back := c.ll.Back()
-	if back == nil {
-		return
-	}
-	ent, ok := back.Value.(*templateDefCacheEntry)
-	if ok && ent != nil {
-		delete(c.m, ent.id)
-	}
-	c.ll.Remove(back)
+	c.publishSnapshotLocked()
 }

@@ -270,7 +270,6 @@ func (s *trainShard) process(task trainTask) {
 	if len(routeFPs) == 0 {
 		return
 	}
-	routeFPs = append(routeFPs, RoutingFingerprintsLegacy(routeValue, cfg)...)
 
 	b.publishPending = true
 	s.pending = append(s.pending, pendingPublish{
