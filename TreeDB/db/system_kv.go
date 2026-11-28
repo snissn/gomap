@@ -557,6 +557,16 @@ func (db *DB) EnsureSystemTemplateLookup() {
 	db.valueLogManager.SetTemplateLookup(db.LookupSystemTemplateDef, db.defaultTemplateDecodeOpts)
 }
 
+// HasSystemTemplateLookup reports whether the backend value-log manager has
+// template definition decoding installed (either explicitly configured or
+// auto-enabled because persisted template definitions exist in SystemRootPageID).
+func (db *DB) HasSystemTemplateLookup() bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return db.valueLogManager.PreparedReadProfile().HasTemplateLookup
+}
+
 // LookupSystemTemplateDef resolves template definition bytes for templateID
 // from SystemRootPageID (supporting direct inline, 2 KiB chunked inline, and
 // raw value-log pointer entries) with an in-memory immutable cache.
@@ -1156,6 +1166,7 @@ type piggybackedSystemOps struct {
 	touchedValueLogSegments []uint32
 	vlogRefDelta            *valueLogRefDelta
 	hasPointer              bool
+	hasTemplateDef          bool
 	inFlightUnsynced        bool
 }
 
@@ -1942,6 +1953,13 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		db.requeueStagedSystemOpBatches(drained, token)
 		return nil, err
 	}
+	hasTemplateDef := false
+	for _, op := range sortedOps {
+		if !op.Delete && bytes.HasPrefix(op.Key, systemTemplateDefPrefix) {
+			hasTemplateDef = true
+			break
+		}
+	}
 	inFlightUnsynced := db.requiresSyncForSystemDictActivation()
 	if inFlightUnsynced {
 		db.stagedSystemInFlightUnsynced.Add(1)
@@ -1955,6 +1973,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		touchedValueLogSegments: touchedValueLogSegments,
 		vlogRefDelta:            vlogRefDelta,
 		hasPointer:              hasPointer,
+		hasTemplateDef:          hasTemplateDef,
 		inFlightUnsynced:        inFlightUnsynced,
 	}, nil
 }
@@ -1962,6 +1981,9 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 func (db *DB) commitPiggybackedSystemOps(p *piggybackedSystemOps, commitSeq uint64, synced bool) {
 	if db == nil || p == nil {
 		return
+	}
+	if p.hasTemplateDef {
+		db.EnsureSystemTemplateLookup()
 	}
 	db.completeStagedSystemOpBatches(p.batches, p.inFlightToken, commitSeq, synced)
 	if p.inFlightUnsynced {

@@ -35,6 +35,22 @@ type BatchPublisher interface {
 	PutTemplateDefs(ctx context.Context, defs []PublishSpec) ([]uint64, error)
 }
 
+// StagingStore is an optional extension to Store that stages template
+// definitions for piggybacked durable publication onto the next flush or
+// checkpoint instead of issuing an independent fsync. onDurable is invoked
+// once the staged definition is durable (either synchronously before
+// StageTemplateDef returns or asynchronously when a later commit syncs).
+type StagingStore interface {
+	StageTemplateDef(ctx context.Context, defBytes []byte, routeFPs []uint64, onDurable func()) (uint64, error)
+}
+
+// StagedFlusher is an optional extension to StagingStore that flushes pending
+// staged template definitions to durable storage when no foreground checkpoint
+// or sync flush has piggybacked them yet.
+type StagedFlusher interface {
+	FlushStagedTemplateOps(sync bool) error
+}
+
 // TemplateDef is an ordered list of anchors.
 type TemplateDef struct {
 	Kind           TemplateKind

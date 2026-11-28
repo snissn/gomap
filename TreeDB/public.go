@@ -590,18 +590,6 @@ func writePathStatsInto(stats map[string]string, info writePathInfo) {
 	stats["treedb.write_path.redo_log"] = info.redoLog
 }
 
-func forceTemplateCompressionOff(opts *Options) {
-	if opts == nil {
-		return
-	}
-	// Template compression remains experimental; keep runtime paths disabled so
-	// normal TreeDB opens only exercise dict/block/off value-log compression.
-	opts.ValueLog.TemplateMode = template.TemplateOff
-	opts.ValueLog.TemplateReadStrict = false
-	opts.ValueLog.TemplateLookup = nil
-	opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
-}
-
 func (db *DB) ensureOpen() error {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return ErrClosed
@@ -870,6 +858,7 @@ func validateCOWOpenOptions(opts *Options) error {
 			COWMemtableLimits: opts.COWMemtableLimits, MemtableShards: opts.MemtableShards,
 			DomainIngressWorkers: opts.DomainIngressWorkers,
 			DisableWAL:           opts.Durability == db.DurabilityWALOffRelaxed, ExternalCommandWAL: opts.CommandWAL,
+			ValueLogTemplateMode: opts.ValueLog.TemplateMode,
 		})
 		if err != nil {
 			return err
@@ -897,7 +886,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 
 	applyEnvMaintenanceOverrides(&opts)
-	forceTemplateCompressionOff(&opts)
 
 	dir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
@@ -1012,7 +1000,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	dictStore := dictdb.New(backend)
 	wireMainBackendDictCallbacks(backend, dictStore, opts.ReadOnly)
 	var templateStore *templatedb.Store
-	if opts.ValueLog.TemplateMode != template.TemplateOff {
+	if opts.ValueLog.TemplateMode != template.TemplateOff || (opts.ValueLog.TemplateLookup == nil && backend.HasSystemTemplateLookup()) {
 		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
 		templateStore = templatedb.NewBackend(backend, templatedb.Config{
 			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
@@ -1128,6 +1116,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		ValueLogCompressionAutotune:                opts.ValueLog.CompressionAutotune,
 		ValueLogTemplateMode:                       opts.ValueLog.TemplateMode,
 		ValueLogTemplateConfig:                     opts.ValueLog.TemplateConfig,
+		ValueLogTemplateDecodeOptions:              opts.ValueLog.TemplateDecodeOptions,
 		ValueLogTemplateReadStrict:                 opts.ValueLog.TemplateReadStrict,
 		AllowUnsafe:                                allowUnsafe,
 		MaxValueLogRetainedBytes:                   opts.ValueLog.MaxRetainedBytes,
