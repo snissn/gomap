@@ -532,13 +532,18 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	inputs[0].DurableResources = graph.stableResources
 	graph.stableResources = nil
 	var installed *typedGraphBaseAlias
+	var preflightCommitSeq, preflightSystemRoot uint64
 	handedOff = true // publisher owns all iterators and both producer sets
 	publicationStarted := time.Now()
 	system, roots, err := c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewritePlan(), inputs, func() error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
-		return c.validateColumnGraphRebuildSource(latest.catalog, latest.baseCommitSeq, latest.baseSystemRoot)
+		if e := c.validateColumnGraphRebuildSource(latest.catalog, latest.baseCommitSeq, latest.baseSystemRoot); e != nil {
+			return e
+		}
+		preflightCommitSeq, preflightSystemRoot = dbCommitSeqAndSystemRoot(c.db)
+		return nil
 	}, func(roots []uint64) (iterator.UnsafeIterator, error) {
 		if len(roots) != len(inputs) {
 			return nil, ErrVectorIndexSnapshotMismatch
@@ -576,12 +581,34 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	// Durable publication succeeded, even if the following in-memory install or
 	// later checkpoint/maintenance/warm fails. Never roll this observation back.
 	workstats.Fold.Publications.Add(1)
-	next := cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
-	next.typedGraphBase = installed
 	c.meta = updated
-	c.rememberCatalogAtSystemRoot(system, next)
-	c.noteWriteDomainCatalog(system, next)
+	var next *collectionCatalog
+	if preflightCommitSeq == latest.baseCommitSeq && preflightSystemRoot == latest.baseSystemRoot {
+		next = cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
+		next.typedGraphBase = installed
+		c.rememberCatalogAtSystemRoot(system, next)
+		c.noteWriteDomainCatalog(system, next)
+	} else if system != 0 {
+		if postSnap := c.db.AcquireSnapshot(); postSnap != nil {
+			if snapshotSystemRoot(postSnap) == system {
+				if fresh, loadErr := loadCollectionCatalog(postSnap, updated.Name); loadErr == nil && fresh != nil {
+					next = fresh
+					c.rememberCatalog(postSnap, fresh)
+					c.noteWriteDomainCatalog(system, fresh)
+				}
+			}
+			_ = postSnap.Close()
+		}
+	}
 	if nextState != nil {
+		if next == nil {
+			if current := coord.typedPublication.Load(); current != nil {
+				invalid := *current
+				invalid.invalid = true
+				coord.typedPublication.Store(&invalid)
+			}
+			return ErrConcurrentMutation
+		}
 		typedGraphPublicationAfterAcceptedHook.RLock()
 		beforeStateInstall := typedGraphPublicationAfterAcceptedHook.foldBeforeStateInstall
 		typedGraphPublicationAfterAcceptedHook.RUnlock()

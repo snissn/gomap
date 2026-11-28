@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -921,6 +923,372 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
 		if err != nil || gcStats.Plan.Segments.Unknown != 0 {
 			t.Fatalf("ColumnAssetGC after retry exhaustion: err=%v unknown_segments=%d", err, gcStats.Plan.Segments.Unknown)
+		}
+	})
+
+	t.Run("case3d_online_vlog_rewrite_docmap_after_prepare_before_writeMu", func(t *testing.T) {
+		dir, db, closeFn, mgr, col := openRepoChunks5921TestDB(t, 0)
+		ids1, docs1, vecs1, parents1 := makeRepoChunks5921Batch("r4", 64, 2, "x")
+		if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection(ids1, docs1, "embedding", VectorMetricCosine, vecs1); err != nil {
+			_ = closeFn()
+			t.Fatalf("initial insert: %v", err)
+		}
+		if err := mgr.FlushAll(); err != nil {
+			_ = closeFn()
+			t.Fatalf("FlushAll(1): %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			_ = closeFn()
+			t.Fatalf("Checkpoint(1): %v", err)
+		}
+		if err := closeFn(); err != nil {
+			t.Fatalf("close(1): %v", err)
+		}
+		db, closeFn, mgr, col = reopenRepoChunks5921TestDB(t, dir)
+		defer func() {
+			if err := closeFn(); err != nil {
+				t.Fatalf("close db: %v", err)
+			}
+		}()
+		if _, err := col.DeleteChunkedDocuments(parents1[:2]); err != nil {
+			t.Fatalf("DeleteChunkedDocuments: %v", err)
+		}
+		if err := mgr.FlushAll(); err != nil {
+			t.Fatalf("FlushAll(2): %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(2): %v", err)
+		}
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot returned nil")
+		}
+		cat, err := loadCollectionCatalog(snap, "repo_chunks")
+		if err != nil || cat == nil {
+			_ = snap.Close()
+			t.Fatalf("loadCollectionCatalog: cat=%v err=%v", cat, err)
+		}
+		docMapRootName := collectionTextV2DocMapRootName("repo_chunks", "lexical")
+		beforeDocMapRoot := cat.rootID(docMapRootName)
+		primaryFileIDs := collectRootValueLogFileIDsFor5921Test(t, snap, cat.rootID(collectionPrimaryRootName("repo_chunks")))
+		docMapFileIDs := collectRootValueLogFileIDsFor5921Test(t, snap, beforeDocMapRoot)
+		_ = snap.Close()
+		var docMapOnlyFileIDs []uint32
+		for fid := range docMapFileIDs {
+			if _, inPrimary := primaryFileIDs[fid]; !inPrimary {
+				docMapOnlyFileIDs = append(docMapOnlyFileIDs, fid)
+			}
+		}
+		if len(docMapOnlyFileIDs) == 0 {
+			t.Fatalf("expected text-v2-docmap/lexical to have a distinct value_vlog segment from primary (primary=%v docmap=%v)", primaryFileIDs, docMapFileIDs)
+		}
+		var publishHookCalls atomic.Int32
+		var rewriteStats backenddb.ValueLogRewriteStats
+		var rewriteErr error
+		restoreBeforePublish := setColumnVectorGraphRebuildBeforePublishTestHook(func() {
+			if publishHookCalls.Add(1) == 1 {
+				rewriteStats, rewriteErr = db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+					SourceFileIDs: docMapOnlyFileIDs,
+					BatchSize:     16,
+					SyncEachBatch: true,
+				})
+			}
+		})
+		defer restoreBeforePublish()
+		if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+			t.Fatalf("RebuildVectorIndex failed after pre-writeMu ValueLogRewriteOnline on text-v2-docmap: %v", err)
+		}
+		if rewriteErr != nil {
+			t.Fatalf("ValueLogRewriteOnline(docmap-only) before writeMu failed: %v", rewriteErr)
+		}
+		if rewriteStats.RecordsCopied == 0 {
+			t.Fatalf("expected ValueLogRewriteOnline(docmap-only) to copy >=1 record, got %+v", rewriteStats)
+		}
+		if got := publishHookCalls.Load(); got != 1 {
+			t.Fatalf("expected 1 publish attempt, got %d", got)
+		}
+		postSnap := db.AcquireSnapshot()
+		if postSnap == nil {
+			t.Fatal("AcquireSnapshot(post) returned nil")
+		}
+		postCat, err := loadCollectionCatalog(postSnap, "repo_chunks")
+		_ = postSnap.Close()
+		if err != nil || postCat == nil {
+			t.Fatalf("loadCollectionCatalog(post): cat=%v err=%v", postCat, err)
+		}
+		afterDocMapRoot := postCat.rootID(docMapRootName)
+		if afterDocMapRoot == 0 || afterDocMapRoot == beforeDocMapRoot {
+			t.Fatalf("expected text-v2-docmap root to advance via pre-writeMu ValueLogRewriteOnline: before=%d after=%d", beforeDocMapRoot, afterDocMapRoot)
+		}
+		col.catalogMu.RLock()
+		cachedCat := col.catalog
+		col.catalogMu.RUnlock()
+		if cachedCat == nil || cachedCat.rootID(docMapRootName) != afterDocMapRoot {
+			gotRoot := uint64(0)
+			if cachedCat != nil {
+				gotRoot = cachedCat.rootID(docMapRootName)
+			}
+			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d after pre-writeMu rewrite; want %d", gotRoot, afterDocMapRoot)
+		}
+		verifyRepoChunks5921SearchAndGC(t, db, col, "r4")
+	})
+
+	t.Run("case3e_typed_graph_fold_refreshes_catalog_after_intervening_text_root_rewrite", func(t *testing.T) {
+		dir := t.TempDir()
+		opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+		opts.IndexOuterLeavesInValueLog = true
+		opts.ValueLog.PointerThreshold = 512
+		opts.BackgroundCheckpointInterval = -1
+		opts.BackgroundCheckpointIdleDuration = -1
+		opts.BackgroundIndexVacuumInterval = -1
+		db, closeFn, err := treedb.OpenBackendWithCachedLeafLog(opts)
+		if err != nil {
+			t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
+		}
+		meta := typedMinimaCollectionMeta()
+		meta.VectorIndexes[0].M = 16
+		meta.TextIndexes = []TextIndexDefinition{{
+			Name:           "lexical",
+			Version:        TextIndexVersionV2,
+			Analyzer:       TextAnalyzerSimple,
+			StorePositions: true,
+			Fields: []TextIndexField{
+				{Field: "content", Weight: 1.0},
+			},
+		}}
+		mgr := NewCollectionManager(db)
+		if _, err := mgr.CreateCollection(&meta); err != nil {
+			_ = closeFn()
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection(meta.Name)
+		if err != nil {
+			_ = closeFn()
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		const n = 96
+		ids := make([][]byte, n)
+		docs := make([][]byte, n)
+		vecs := make([][]float32, n)
+		contents := make([]string, n)
+		users := make([]string, n)
+		paths := make([]string, n)
+		for i := 0; i < n; i++ {
+			id := fmt.Sprintf("typed-fold-long-document-identifier-prefix-%05d", i)
+			ids[i] = []byte(id)
+			contents[i] = fmt.Sprintf("quantum lexical fold content document %d", i)
+			users[i] = fmt.Sprintf("u%d", i%8)
+			paths[i] = "source"
+			vecs[i] = vectorBenchmarkEmbedding(i, 8)
+			docs[i] = []byte(fmt.Sprintf(`{"id":%q}`, id))
+		}
+		cols := []TypedColumnBatch{
+			{Name: "embedding", Float32Vectors: vecs},
+			{Name: "content", Strings: contents},
+			{Name: "user", Strings: users},
+			{Name: "path", Strings: paths},
+		}
+		if _, _, err := col.InsertTypedBatchWithStats(ids, docs, cols); err != nil {
+			_ = closeFn()
+			t.Fatalf("InsertTypedBatchWithStats: %v", err)
+		}
+		if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+			_ = closeFn()
+			t.Fatalf("initial RebuildVectorIndex: %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			_ = closeFn()
+			t.Fatalf("Checkpoint(1): %v", err)
+		}
+		if err := closeFn(); err != nil {
+			t.Fatalf("close(1): %v", err)
+		}
+		db, closeFn, err = treedb.OpenBackendWithCachedLeafLog(opts)
+		if err != nil {
+			t.Fatalf("reopen OpenBackendWithCachedLeafLog: %v", err)
+		}
+		defer func() {
+			if err := closeFn(); err != nil {
+				t.Fatalf("close db: %v", err)
+			}
+		}()
+		col, err = NewCollectionManager(db).OpenCollection(meta.Name)
+		if err != nil {
+			t.Fatalf("reopen OpenCollection: %v", err)
+		}
+		if err := col.Delete(ids[0]); err != nil {
+			t.Fatalf("Delete(ids[0]): %v", err)
+		}
+		if err := col.Flush(); err != nil {
+			t.Fatalf("Flush(2): %v", err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(2): %v", err)
+		}
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot returned nil")
+		}
+		cat, err := loadCollectionCatalog(snap, meta.Name)
+		if err != nil || cat == nil {
+			_ = snap.Close()
+			t.Fatalf("loadCollectionCatalog: cat=%v err=%v", cat, err)
+		}
+		docMapRootName := collectionTextV2DocMapRootName(meta.Name, "lexical")
+		beforeDocMapRoot := cat.rootID(docMapRootName)
+		primaryFileIDs := collectRootValueLogFileIDsFor5921Test(t, snap, cat.rootID(collectionPrimaryRootName(meta.Name)))
+		docMapFileIDs := collectRootValueLogFileIDsFor5921Test(t, snap, beforeDocMapRoot)
+		_ = snap.Close()
+		var docMapOnlyFileIDs []uint32
+		for fid := range docMapFileIDs {
+			if _, inPrimary := primaryFileIDs[fid]; !inPrimary {
+				docMapOnlyFileIDs = append(docMapOnlyFileIDs, fid)
+			}
+		}
+		if len(docMapOnlyFileIDs) == 0 {
+			t.Fatalf("expected distinct value_vlog segment for text-v2-docmap (primary=%v docmap=%v)", primaryFileIDs, docMapFileIDs)
+		}
+		var rewriteStats backenddb.ValueLogRewriteStats
+		err = col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 256, typedGraphFoldTestAssetLimits(), func() error {
+			var rewriteErr error
+			rewriteStats, rewriteErr = db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+				SourceFileIDs: docMapOnlyFileIDs,
+				BatchSize:     16,
+				SyncEachBatch: true,
+			})
+			return rewriteErr
+		})
+		if err != nil {
+			t.Fatalf("foldTypedGraph failed after online ValueLogRewriteOnline on text-v2-docmap: %v", err)
+		}
+		if rewriteStats.RecordsCopied == 0 {
+			t.Fatalf("expected ValueLogRewriteOnline(docmap-only) to copy >=1 record, got %+v", rewriteStats)
+		}
+		postSnap := db.AcquireSnapshot()
+		if postSnap == nil {
+			t.Fatal("AcquireSnapshot(post) returned nil")
+		}
+		postCat, err := loadCollectionCatalog(postSnap, meta.Name)
+		_ = postSnap.Close()
+		if err != nil || postCat == nil {
+			t.Fatalf("loadCollectionCatalog(post): cat=%v err=%v", postCat, err)
+		}
+		afterDocMapRoot := postCat.rootID(docMapRootName)
+		if afterDocMapRoot == 0 || afterDocMapRoot == beforeDocMapRoot {
+			t.Fatalf("expected text-v2-docmap root to advance during fold: before=%d after=%d", beforeDocMapRoot, afterDocMapRoot)
+		}
+		col.catalogMu.RLock()
+		cachedCat := col.catalog
+		col.catalogMu.RUnlock()
+		if cachedCat == nil || cachedCat.rootID(docMapRootName) != afterDocMapRoot {
+			gotRoot := uint64(0)
+			if cachedCat != nil {
+				gotRoot = cachedCat.rootID(docMapRootName)
+			}
+			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d after fold; want %d", gotRoot, afterDocMapRoot)
+		}
+	})
+
+	t.Run("case3f_unpublished_owned_segment_cleanup_fails_closed_on_rebound_identity_or_pin", func(t *testing.T) {
+		segDir := t.TempDir()
+		parent, err := os.Open(segDir)
+		if err != nil {
+			t.Fatalf("open segDir: %v", err)
+		}
+		parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
+		_ = parent.Close()
+		if err != nil {
+			t.Fatalf("StableIdentityFromFile(parent): %v", err)
+		}
+		registry := rootpublication.NewIdentityPinRegistry()
+
+		// 1. Rebound file identity at the same pathname must NOT be deleted.
+		reboundName := columnAssetSegmentFileName(1)
+		reboundPath := filepath.Join(segDir, reboundName)
+		origPayload := []byte("original-owned-segment-bytes")
+		if err := os.WriteFile(reboundPath, origPayload, 0o600); err != nil {
+			t.Fatalf("write original: %v", err)
+		}
+		origFile, err := os.Open(reboundPath)
+		if err != nil {
+			t.Fatalf("open original: %v", err)
+		}
+		origIdentity, err := rootpublication.StableIdentityFromFile(origFile)
+		_ = origFile.Close()
+		if err != nil {
+			t.Fatalf("StableIdentityFromFile(orig): %v", err)
+		}
+		// Replace path with a brand-new inode of identical size.
+		replacementPayload := []byte("replaced-live-segment-bytes!")
+		tmpPath := filepath.Join(segDir, "replacement.tmp")
+		if err := os.WriteFile(tmpPath, replacementPayload, 0o600); err != nil {
+			t.Fatalf("write replacement: %v", err)
+		}
+		if err := os.Rename(tmpPath, reboundPath); err != nil {
+			t.Fatalf("rename replacement: %v", err)
+		}
+		if err := deleteUnpublishedRebuildOwnedSegment(registry, unpublishedRebuildOwnedSegmentTarget{
+			assetPath:      reboundPath,
+			segmentDir:     segDir,
+			fileName:       reboundName,
+			parentIdentity: parentIdentity,
+			childIdentity:  origIdentity,
+			expectedSize:   int64(len(origPayload)),
+		}); err != nil {
+			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(rebound): %v", err)
+		}
+		got, err := os.ReadFile(reboundPath)
+		if err != nil || string(got) != string(replacementPayload) {
+			t.Fatalf("rebound replacement file was modified/deleted: got=%q err=%v", got, err)
+		}
+
+		// 2. Actively pinned physical identity must NOT be deleted; once unpinned,
+		// exact-identity deletion removes it cleanly.
+		pinnedName := columnAssetSegmentFileName(2)
+		pinnedPath := filepath.Join(segDir, pinnedName)
+		pinnedPayload := []byte("owned-segment-with-active-pin")
+		if err := os.WriteFile(pinnedPath, pinnedPayload, 0o600); err != nil {
+			t.Fatalf("write pinned: %v", err)
+		}
+		pinnedFile, err := os.Open(pinnedPath)
+		if err != nil {
+			t.Fatalf("open pinned: %v", err)
+		}
+		pinnedIdentity, err := rootpublication.StableIdentityFromFile(pinnedFile)
+		_ = pinnedFile.Close()
+		if err != nil {
+			t.Fatalf("StableIdentityFromFile(pinned): %v", err)
+		}
+		if err := registry.Observe(pinnedIdentity); err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		pin, err := registry.Pin(pinnedIdentity)
+		if err != nil {
+			t.Fatalf("Pin: %v", err)
+		}
+		target := unpublishedRebuildOwnedSegmentTarget{
+			assetPath:      pinnedPath,
+			segmentDir:     segDir,
+			fileName:       pinnedName,
+			parentIdentity: parentIdentity,
+			childIdentity:  pinnedIdentity,
+			expectedSize:   int64(len(pinnedPayload)),
+		}
+		if err := deleteUnpublishedRebuildOwnedSegment(registry, target); err != nil {
+			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(pinned): %v", err)
+		}
+		if _, err := os.Stat(pinnedPath); err != nil {
+			t.Fatalf("pinned segment should still exist: %v", err)
+		}
+		pin.Release()
+		if err := registry.Unobserve(pinnedIdentity); err != nil {
+			t.Fatalf("Unobserve: %v", err)
+		}
+		if err := deleteUnpublishedRebuildOwnedSegment(registry, target); err != nil {
+			t.Fatalf("deleteUnpublishedRebuildOwnedSegment(unpinned): %v", err)
+		}
+		if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
+			t.Fatalf("unpinned owned segment should be deleted, stat err=%v", err)
 		}
 	})
 
