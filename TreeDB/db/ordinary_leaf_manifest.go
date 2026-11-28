@@ -181,7 +181,7 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 			db.ordinaryLeafManifestCache = ordinaryLeafManifestCache{authority: authority, view: newLeafGenerationView(exact)}
 		}
 		files := db.ordinaryLeafManifestCache.view.FileToGeneration
-		missing, _, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool { return files[fileID] != 0 })
+		missing, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool { return files[fileID] != 0 })
 		if err != nil {
 			return result, update, err
 		}
@@ -204,17 +204,18 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	covered := func(fileID uint32) bool {
 		return leafManifestContainsActiveFile(update.staged.manifest, fileID)
 	}
-	missing, missingKind, err := firstUncoveredOuterLeafFile(resources, covered)
+	missing, err := firstUncoveredOuterLeafFile(resources, covered)
 	if err != nil {
 		return result, update, err
 	}
-	// GC can retire or delete an older packed generation without publishing a
-	// root commit, leaving its exact token inherited conservatively from
-	// visibleBase across both ordinary and subsequent packed publications.
-	// Project out only packs that the final candidate roots prove unreachable;
-	// any still-reachable omitted pack remains uncovered and fails closed below.
-	if missingKind == rootpublication.ResourceOuterLeafPack {
-		projected, err := db.projectUncoveredPublicationPacks(resources, idx, next, covered, opts)
+	// GC can retire or delete an older raw or packed outer-leaf generation
+	// without publishing a root commit, leaving its exact token inherited
+	// conservatively from visibleBase across both ordinary and subsequent
+	// packed publications. Project out only outer-leaf files that the final
+	// candidate roots prove unreachable; any still-reachable omitted file
+	// remains uncovered and fails closed below.
+	if missing != 0 {
+		projected, err := db.projectUncoveredPublicationOuterLeafFiles(resources, idx, next, covered, opts)
 		if err != nil {
 			return result, update, err
 		}
@@ -224,7 +225,7 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 				return result, update, err
 			}
 			resources = projected
-			missing, _, err = firstUncoveredOuterLeafFile(resources, covered)
+			missing, err = firstUncoveredOuterLeafFile(resources, covered)
 			if err != nil {
 				return result, update, err
 			}
@@ -367,33 +368,75 @@ func (db *DB) prepareSyncOperationalLeafManifest(
 	return staged.manifest, staged.rawFileIDs, dependenciesPreSynced, nil
 }
 
-// GC can retire a pack whose exact token is still retained conservatively by
-// a predecessor. Remove it from this successor only if the final roots prove
-// that the staged manifest's missing pack is unreachable. Predecessor slots
-// and reachable pack identities retain their original authority.
-func (db *DB) projectUncoveredPublicationPacks(resources *rootpublication.StableResourceSet, idx *indexGen, next page.MetaPageBody, covered func(uint32) bool, opts *finalizeCommitOptions) (*rootpublication.StableResourceSet, error) {
+// GC can retire a raw or packed outer-leaf generation whose exact token is
+// still retained conservatively by a predecessor. Remove uncovered outer-leaf
+// identities from this successor only if the final roots prove they are
+// unreachable. Predecessor slots and reachable identities retain their
+// original authority.
+func (db *DB) projectUncoveredPublicationOuterLeafFiles(resources *rootpublication.StableResourceSet, idx *indexGen, next page.MetaPageBody, covered func(uint32) bool, opts *finalizeCommitOptions) (*rootpublication.StableResourceSet, error) {
 	references, err := db.scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx, next, opts.valueLogPublicationLocked, nil, opts.preparedLimits)
 	if err != nil {
-		return nil, fmt.Errorf("project packed leaf dependencies for manifest replacement: %w", err)
+		return nil, fmt.Errorf("project outer-leaf dependencies for manifest replacement: %w", err)
 	}
-	var selected []rootpublication.StableIdentity
-	var dropped bool
-	kinds := [...]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafPack}
-	err = resources.WalkPhysicalResourceIdentities(kinds[:], func(_ rootpublication.ResourceKind, generation uint64, identity rootpublication.StableIdentity, _ [32]byte) error {
-		// firstUncoveredOuterLeafFile has already validated these generations.
-		rawFileID := page.ValueLogSegmentID(uint32(generation))
+	var selectedRaw, selectedPack []rootpublication.StableIdentity
+	var droppedRaw, droppedPack bool
+	kinds := [...]rootpublication.ResourceKind{
+		rootpublication.ResourceOuterLeafLog,
+		rootpublication.ResourceOuterLeafPack,
+	}
+	err = resources.WalkPhysicalResourceIdentities(kinds[:], func(kind rootpublication.ResourceKind, generation uint64, identity rootpublication.StableIdentity, _ [32]byte) error {
+		if generation > math.MaxUint32 {
+			return fmt.Errorf("%w: invalid physical leaf file ID %d", rootpublication.ErrResourceConflict, generation)
+		}
+		rawFileID, valid := rawLeafGenerationFileID(uint32(generation))
+		if !valid {
+			return fmt.Errorf("%w: invalid physical leaf file ID %d", rootpublication.ErrResourceConflict, generation)
+		}
 		_, reachable := references[page.ValueLogFileID(rawFileID)]
-		if covered(rawFileID) || reachable {
-			selected = append(selected, identity)
-		} else {
-			dropped = true
+		keep := covered(rawFileID) || reachable
+		switch kind {
+		case rootpublication.ResourceOuterLeafLog:
+			if keep {
+				selectedRaw = append(selectedRaw, identity)
+			} else {
+				droppedRaw = true
+			}
+		case rootpublication.ResourceOuterLeafPack:
+			if keep {
+				selectedPack = append(selectedPack, identity)
+			} else {
+				droppedPack = true
+			}
 		}
 		return nil
 	})
-	if err != nil || !dropped {
+	if err != nil || (!droppedRaw && !droppedPack) {
 		return nil, err
 	}
-	return rootpublication.CloneStableResourceSetSelectingPhysicalKind(resources, rootpublication.ResourceOuterLeafPack, selected)
+	cur := resources
+	if droppedRaw {
+		nextSet, err := rootpublication.CloneStableResourceSetSelectingPhysicalKind(cur, rootpublication.ResourceOuterLeafLog, selectedRaw)
+		if err != nil {
+			return nil, err
+		}
+		cur = nextSet
+	}
+	if droppedPack {
+		nextSet, err := rootpublication.CloneStableResourceSetSelectingPhysicalKind(cur, rootpublication.ResourceOuterLeafPack, selectedPack)
+		if err != nil {
+			if cur != resources {
+				err = errors.Join(err, db.releaseCapturedRootResources(cur))
+			}
+			return nil, err
+		}
+		if cur != resources {
+			if releaseErr := db.releaseCapturedRootResources(cur); releaseErr != nil {
+				return nil, errors.Join(releaseErr, db.releaseCapturedRootResources(nextSet))
+			}
+		}
+		cur = nextSet
+	}
+	return cur, nil
 }
 
 func exactOrdinaryLeafManifestAuthority(resources *rootpublication.StableResourceSet) (ordinaryLeafManifestAuthority, error) {
@@ -409,11 +452,10 @@ func exactOrdinaryLeafManifestAuthority(resources *rootpublication.StableResourc
 	return authority, err
 }
 
-func firstUncoveredOuterLeafFile(resources *rootpublication.StableResourceSet, covered func(uint32) bool) (uint32, rootpublication.ResourceKind, error) {
+func firstUncoveredOuterLeafFile(resources *rootpublication.StableResourceSet, covered func(uint32) bool) (uint32, error) {
 	var missing uint32
-	var missingKind rootpublication.ResourceKind
 	kinds := [...]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafLog, rootpublication.ResourceOuterLeafPack}
-	err := resources.WalkPhysicalResourceIdentities(kinds[:], func(kind rootpublication.ResourceKind, generation uint64, _ rootpublication.StableIdentity, _ [32]byte) error {
+	err := resources.WalkPhysicalResourceIdentities(kinds[:], func(_ rootpublication.ResourceKind, generation uint64, _ rootpublication.StableIdentity, _ [32]byte) error {
 		if generation > math.MaxUint32 {
 			return fmt.Errorf("%w: invalid physical leaf file ID %d", rootpublication.ErrResourceConflict, generation)
 		}
@@ -422,11 +464,11 @@ func firstUncoveredOuterLeafFile(resources *rootpublication.StableResourceSet, c
 			return fmt.Errorf("%w: invalid physical leaf file ID %d", rootpublication.ErrResourceConflict, generation)
 		}
 		if missing == 0 && !covered(fileID) {
-			missing, missingKind = fileID, kind
+			missing = fileID
 		}
 		return nil
 	})
-	return missing, missingKind, err
+	return missing, err
 }
 
 func leafManifestContainsActiveFile(manifest *leafGenerationManifest, fileID uint32) bool {
