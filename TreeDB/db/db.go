@@ -228,6 +228,11 @@ type DB struct {
 	valueLogDictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
 	systemDictCache                sync.Map
 	systemTemplateCache            sync.Map
+	systemMetaSegIDCache           sync.Map
+	systemMetaSegIDCacheCount      atomic.Int64
+	recentSystemMetaMu             sync.Mutex
+	recentPublishedDictIDs         []uint64
+	recentPublishedTemplateIDs     []uint64
 	defaultTemplateDecodeOpts      template.DecodeOptions
 	systemVLogMu                   sync.Mutex
 	systemVLogWriter               *valuelog.Writer
