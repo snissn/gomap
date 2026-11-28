@@ -334,6 +334,14 @@ func TestStore_StageTemplateDef_PreservesDurabilityBarrierAndMergesStagedFP(t *t
 	if cb1Fired || cb2Fired {
 		t.Fatalf("callbacks fired before durable sync barrier: cb1=%v cb2=%v", cb1Fired, cb2Fired)
 	}
+	// GetCandidates must hide unsynced template IDs until the durability sync barrier completes.
+	preSyncCands, err := store.GetCandidates(ctx, sharedFP, 0)
+	if err != nil {
+		t.Fatalf("GetCandidates(pre-sync): %v", err)
+	}
+	if len(preSyncCands) != 0 {
+		t.Fatalf("GetCandidates(pre-sync) exposed unsynced templates: %+v", preSyncCands)
+	}
 
 	// Re-staging def1 with no routeFPs while its original commit is still awaiting
 	// the durability sync barrier must NOT invoke cb3 immediately.

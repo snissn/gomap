@@ -1000,7 +1000,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	dictStore := dictdb.New(backend)
 	wireMainBackendDictCallbacks(backend, dictStore, opts.ReadOnly)
 	var templateStore *templatedb.Store
-	if opts.ValueLog.TemplateMode != template.TemplateOff || backend.HasSystemTemplateLookup() {
+	if opts.ValueLog.TemplateMode != template.TemplateOff || (opts.ValueLog.TemplateLookup == nil && backend.HasSystemTemplateLookup()) {
 		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
 		templateStore = templatedb.NewBackend(backend, templatedb.Config{
 			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
@@ -1116,6 +1116,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		ValueLogCompressionAutotune:                opts.ValueLog.CompressionAutotune,
 		ValueLogTemplateMode:                       opts.ValueLog.TemplateMode,
 		ValueLogTemplateConfig:                     opts.ValueLog.TemplateConfig,
+		ValueLogTemplateDecodeOptions:              opts.ValueLog.TemplateDecodeOptions,
 		ValueLogTemplateReadStrict:                 opts.ValueLog.TemplateReadStrict,
 		AllowUnsafe:                                allowUnsafe,
 		MaxValueLogRetainedBytes:                   opts.ValueLog.MaxRetainedBytes,

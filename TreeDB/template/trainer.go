@@ -42,6 +42,11 @@ type pendingPublish struct {
 	routeFPs    []uint64
 }
 
+const (
+	stagedIdleFlushDelay  = 150 * time.Millisecond
+	stagedFlushBackoffMax = 5 * time.Second
+)
+
 type trainShard struct {
 	engine         *Engine
 	cfg            Config
@@ -54,9 +59,12 @@ type trainShard struct {
 	maxBuckets int
 	bucketSeq  uint64
 
-	pending            []pendingPublish
-	stagedStore        StagedFlusher
-	stagedUndurableCnt atomic.Int64
+	pending                []pendingPublish
+	stagedStore            StagedFlusher
+	stagedUndurableCnt     atomic.Int64
+	stagedSince            time.Time
+	stagedNextFlushAttempt time.Time
+	stagedFlushBackoff     time.Duration
 }
 
 func newTrainer(e *Engine) *trainer {
@@ -210,13 +218,27 @@ func (s *trainShard) run(done <-chan struct{}, wg *sync.WaitGroup) {
 				}
 			}
 		drained:
-			s.flushPublishes(context.Background())
+			// Drop pending items for staging stores during Close so teardown
+			// never stages new system ops after memtables have already flushed.
+			if len(s.pending) > 0 {
+				if _, isStaging := s.pending[0].store.(StagingStore); isStaging {
+					for i := range s.pending {
+						if s.pending[i].bucket != nil {
+							s.pending[i].bucket.publishPending = false
+						}
+					}
+					s.pending = nil
+				} else {
+					s.flushPublishes(context.Background())
+				}
+			}
 			return
 		case <-ticker.C:
+			// Check previously staged items BEFORE flushing new pending items
+			// so freshly staged templates always get a coalescing window for
+			// foreground flushes/checkpoints to piggyback them.
+			s.maybeFlushStagedOps()
 			s.flushPublishes(context.Background())
-			if s.stagedUndurableCnt.Load() > 0 && s.stagedStore != nil {
-				_ = s.stagedStore.FlushStagedTemplateOps(true)
-			}
 		case task := <-s.in:
 			s.process(task)
 		}
@@ -378,6 +400,9 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 			}
 			s.totalTemplates.Add(1)
 			s.stats.TemplatesPublished.Add(1)
+			if s.stagedUndurableCnt.Load() > 0 && s.stagedSince.IsZero() {
+				s.stagedSince = time.Now()
+			}
 			idVal.Store(id)
 			activate()
 		}
@@ -413,6 +438,46 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 			continue
 		}
 		s.onPublished(id, items[i])
+	}
+}
+
+func (s *trainShard) maybeFlushStagedOps() {
+	if s.stagedStore == nil || s.stagedUndurableCnt.Load() <= 0 {
+		s.stagedSince = time.Time{}
+		s.stagedFlushBackoff = 0
+		s.stagedNextFlushAttempt = time.Time{}
+		return
+	}
+	now := time.Now()
+	if s.stagedSince.IsZero() {
+		s.stagedSince = now
+		return
+	}
+	if now.Sub(s.stagedSince) < stagedIdleFlushDelay {
+		return
+	}
+	if !s.stagedNextFlushAttempt.IsZero() && now.Before(s.stagedNextFlushAttempt) {
+		return
+	}
+	if err := s.stagedStore.FlushStagedTemplateOps(true); err != nil {
+		s.stats.PublishErrors.Add(1)
+		if s.stagedFlushBackoff <= 0 {
+			s.stagedFlushBackoff = stagedIdleFlushDelay
+		} else {
+			s.stagedFlushBackoff *= 2
+			if s.stagedFlushBackoff > stagedFlushBackoffMax {
+				s.stagedFlushBackoff = stagedFlushBackoffMax
+			}
+		}
+		s.stagedNextFlushAttempt = now.Add(s.stagedFlushBackoff)
+		return
+	}
+	s.stagedFlushBackoff = 0
+	s.stagedNextFlushAttempt = time.Time{}
+	if s.stagedUndurableCnt.Load() <= 0 {
+		s.stagedSince = time.Time{}
+	} else {
+		s.stagedSince = now
 	}
 }
 

@@ -38,19 +38,22 @@ func waitForTemplatePublished(t *testing.T, db *treedb.DB, timeout time.Duration
 
 func TestPublicTemplateOnlyAndPrepassReopenAndGC(t *testing.T) {
 	modes := []struct {
-		name string
-		mode template.Mode
+		name           string
+		mode           template.Mode
+		outerLeafInLog bool
 	}{
 		{name: "TemplateOnly", mode: template.TemplateOnly},
 		{name: "TemplatePrepass", mode: template.TemplatePrepass},
+		{name: "TemplatePrepassOuterLeaf", mode: template.TemplatePrepass, outerLeafInLog: true},
 	}
 
 	for _, tc := range modes {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			opts := treedb.Options{
-				Dir:            dir,
-				FlushThreshold: 256 << 10,
+				Dir:                        dir,
+				FlushThreshold:             256 << 10,
+				IndexOuterLeavesInValueLog: tc.outerLeafInLog,
 				ValueLog: treedb.ValueLogOptions{
 					PointerThreshold: 64,
 					Compression:      treedb.ValueLogCompressionAuto,

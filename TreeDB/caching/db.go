@@ -9215,6 +9215,8 @@ type Options struct {
 	ValueLogTemplateMode template.Mode
 	// ValueLogTemplateConfig controls template creation and encoding behavior.
 	ValueLogTemplateConfig template.Config
+	// ValueLogTemplateDecodeOptions overrides default template decode limits when non-zero.
+	ValueLogTemplateDecodeOptions template.DecodeOptions
 	// ValueLogTemplateReadStrict controls strict template decode behavior.
 	ValueLogTemplateReadStrict bool
 
@@ -13525,12 +13527,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
 	valueLogTemplateMode := opts.ValueLogTemplateMode
+	switch valueLogTemplateMode {
+	case template.TemplateOff, template.TemplateOnly, template.TemplatePrepass:
+	default:
+		return nil, fmt.Errorf("cachingdb: unsupported ValueLogTemplateMode=%d", valueLogTemplateMode)
+	}
 	valueLogTemplateEnabled := valueLogTemplateMode != template.TemplateOff
 	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
-	valueLogTemplateDecodeOpts := template.DecodeOptions{
-		MaxGaps:         valueLogTemplateCfg.MaxGaps,
-		MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes,
-		DefCacheSize:    valueLogTemplateCfg.DefCacheSize,
+	valueLogTemplateDecodeOpts := opts.ValueLogTemplateDecodeOptions
+	if valueLogTemplateDecodeOpts == (template.DecodeOptions{}) {
+		valueLogTemplateDecodeOpts = template.DecodeOptions{
+			MaxGaps:         valueLogTemplateCfg.MaxGaps,
+			MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes,
+			DefCacheSize:    valueLogTemplateCfg.DefCacheSize,
+		}
 	}
 	var valueLogTemplateEngine *template.Engine
 	templateEnginePendingOwnership := false
@@ -16960,6 +16970,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	allowDictFallback := mode == vlogCompressionAuto || (mode == vlogCompressionDict && db.vlogSelectorEnabled(mode))
+	templateOnly := !db.isLeafLogAppendLane(l) && db.valueLogTemplateEnabled && db.valueLogTemplateMode == template.TemplateOnly
 	type queuedVlogRequestPlan struct {
 		writeMode  vlogCompressionWriteMode
 		blockCodec valuelog.BlockCodec
@@ -17002,7 +17013,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		rawBytes := len(requests[i].value)
 		end := i + 1
 		retainedStorageFirst := false
-		if mode != vlogCompressionOff && writeMode != vlogWriteDict {
+		if !templateOnly && mode != vlogCompressionOff && writeMode != vlogWriteDict {
 			retainedRawBytes := 0
 			retainedMaxValLen := 0
 			retainedProbe := false
@@ -17062,7 +17073,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			if recordsInPlan := end - i; recordsInPlan > 0 {
 				unitPayloadBytes = rawBytes / recordsInPlan
 			}
-			retainedStorageFirst = db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
+			retainedStorageFirst = !templateOnly && db.retainedStorageFirstValueLogAuto(rawBytes, unitPayloadBytes, records[i:end])
 			if retainedStorageFirst && mode != vlogCompressionOff && writeMode != vlogWriteDict {
 				writeMode = vlogWriteBlock
 				blockCodec = chooseRetainedStorageFirstBlockCodec(l, db.valueLogBlockCodec, mode)
@@ -27546,7 +27557,6 @@ func (db *DB) Close() error {
 	}
 	if db.valueLogTemplateEngine != nil {
 		db.valueLogTemplateEngine.Close()
-		db.valueLogTemplateEngine = nil
 	}
 	if db.hashSortedIndexer != nil {
 		db.hashSortedIndexer.Close()
