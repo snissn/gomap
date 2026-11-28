@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -40,6 +41,7 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 }
 
 type noDictRewriteLeafPageLog struct {
+	mu      sync.Mutex
 	base    bulk.LeafPageAppender
 	writers []*rewriteWriter
 }
@@ -76,6 +78,8 @@ func collectRewriteWriters(log any) []*rewriteWriter {
 }
 
 func (l *noDictRewriteLeafPageLog) withoutLeafDict(fn func() error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	type savedState struct {
 		id   uint64
 		dict []byte

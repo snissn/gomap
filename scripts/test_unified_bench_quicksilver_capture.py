@@ -150,7 +150,7 @@ print('accepted forged environment')
                                           leaf_generation_pack_maintenance_env='1', rounds=[round, dict(round, round=2, pause_started_unix_nano=11000000001, pause_finished_unix_nano=17000000001,
                                                               before=dict(snapshot, captured_at_unix_nano=10000000001),
                                                               after=dict(snapshot, captured_at_unix_nano=18000000001))],
-                                          final_files_after_close={'maindb/index.db': 4096})
+                                          final_files_after_close={'index.db': 4096})
         with tempfile.TemporaryDirectory() as temp:
             directory, metadata = self.validation_fixture(temp, dict(GOWORK='off', TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE='1'))
             capture.validate([packet], cell, directory, {}, metadata)
@@ -212,8 +212,7 @@ print('accepted forged environment')
             cell=dict(engine='treedb',keys=40000,reads=10000,measure_dir=str(retained))
             with self.assertRaises(AssertionError):
                 capture.retained_settings(cell)
-            (retained/'maindb').mkdir()
-            (retained/'maindb/index.db').write_bytes(b'marker')
+            (retained/'index.db').write_bytes(b'marker')
             packet=report()
             packet['config'].update(final_fixture=True,barrier_policy='retained pre-oracle; final Checkpoint; up to four separately timed concurrent Checkpoints at mutation-batch quarters')
             packet.update(data_dir=str(retained),measurement_state='retained final fixture; pre/post full oracle; no population reload or restore',
@@ -284,7 +283,7 @@ print('accepted forged environment')
                        after=dict(snapshot, captured_at_unix_nano=(i-1)*70000000000+62000000001)) for i in range(1, 33)]
         packet['maintenance_churn'] = dict(shape='full-refresh',writer_semantics='insert identities already exist',label='bounded write/automatic-maintenance characterization; not warmed read throughput or a steady-state bound',
                                           leaf_generation_pack_maintenance_env='', rounds=rounds,
-                                          final_files_after_close={'maindb/index.db': 4096})
+                                          final_files_after_close={'index.db': 4096})
         with tempfile.TemporaryDirectory() as temp:
             directory, metadata = self.validation_fixture(temp)
             capture.validate([packet], cell, directory, {}, metadata)

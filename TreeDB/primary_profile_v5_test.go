@@ -79,7 +79,7 @@ func TestPrimaryNoWALFastOrdinaryHeldSnapshotReopen(t *testing.T) {
 
 func TestPrimaryNoWALFastDependencyPointerHeldSnapshotReopen(t *testing.T) {
 	dir := t.TempDir()
-	if e := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureDependencyDirectoryV2}}); e != nil {
+	if e := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{DurabilityProfile: backenddb.ProfileNoWALFast, RequiredFeatures: []string{backenddb.RequiredFeatureDependencyDirectoryV2}}); e != nil {
 		t.Fatal(e)
 	}
 	opts := OptionsFor(ProfileNoWALFast, dir)

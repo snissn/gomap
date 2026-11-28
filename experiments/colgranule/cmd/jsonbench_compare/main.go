@@ -616,7 +616,7 @@ func validateRawJSONTreeDB(files []string, rows int, dbDir string) error {
 }
 
 func valueLogFileIDs(dbDir string) ([]uint32, error) {
-	valueDir := filepath.Join(dbDir, "maindb", "value_vlog")
+	valueDir := filepath.Join(dbDir, "value_vlog")
 	entries, err := os.ReadDir(valueDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
