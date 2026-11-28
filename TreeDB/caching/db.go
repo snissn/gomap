@@ -8,7 +8,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"io"
-	"log"
 	"math"
 	"math/bits"
 	"os"
@@ -4857,10 +4856,11 @@ func (db *DB) valueLogTemplateEncodeRecords(records []valuelog.Record) ([]valuel
 	}
 	engine := db.valueLogTemplateEngine
 	store := db.templateStore
+	ctx := context.Background()
 	encoded := records
 	used := false
 	for i := range records {
-		payload, ok := engine.Encode(nil, records[i].Value, store)
+		payload, ok := engine.Encode(ctx, records[i].Value, store)
 		if ok {
 			if !used {
 				encoded = make([]valuelog.Record, len(records))
@@ -13524,12 +13524,25 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
-	if opts.ValueLogTemplateMode != template.TemplateOff || opts.ValueLogTemplateReadStrict {
-		log.Printf("cachingdb: template compression options are currently disabled; ignoring ValueLogTemplateMode=%d, ValueLogTemplateReadStrict=%t", opts.ValueLogTemplateMode, opts.ValueLogTemplateReadStrict)
+	valueLogTemplateMode := opts.ValueLogTemplateMode
+	valueLogTemplateEnabled := valueLogTemplateMode != template.TemplateOff
+	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
+	valueLogTemplateDecodeOpts := template.DecodeOptions{
+		MaxGaps:         valueLogTemplateCfg.MaxGaps,
+		MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes,
+		DefCacheSize:    valueLogTemplateCfg.DefCacheSize,
 	}
-	valueLogTemplateEnabled := false
-	valueLogTemplateMode := template.TemplateOff
-	valueLogTemplateDecodeOpts := template.DecodeOptions{}
+	var valueLogTemplateEngine *template.Engine
+	templateEnginePendingOwnership := false
+	if valueLogTemplateEnabled {
+		valueLogTemplateEngine = template.NewEngine(valueLogTemplateCfg)
+		templateEnginePendingOwnership = true
+		defer func() {
+			if templateEnginePendingOwnership && valueLogTemplateEngine != nil {
+				valueLogTemplateEngine.Close()
+			}
+		}()
+	}
 
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
@@ -13734,9 +13747,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogAutotuneCandidateKSet:              valueLogAutotuneCandidateKSet,
 		valueLogTemplateEnabled:                    valueLogTemplateEnabled,
 		valueLogTemplateMode:                       valueLogTemplateMode,
-		valueLogTemplateReadStrict:                 false,
+		valueLogTemplateReadStrict:                 opts.ValueLogTemplateReadStrict,
 		valueLogTemplateDecodeOpts:                 valueLogTemplateDecodeOpts,
-		valueLogTemplateEngine:                     nil,
+		valueLogTemplateEngine:                     valueLogTemplateEngine,
 		mutableShards:                              mutableShards,
 		mutableShardMask:                           uint64(shardCount - 1),
 		hashSortedIndexer:                          indexer,
@@ -13989,6 +14002,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	indexerPendingOwnership = false
 	cowPendingOwnership = false
+	templateEnginePendingOwnership = false
 	return db, nil
 }
 
@@ -18361,8 +18375,10 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		}
 	}
 	templatePrepass := false
-	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
+	templateOnly := false
+	if !leafLogAppend && db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
 		if db.valueLogTemplateMode == template.TemplateOnly {
+			templateOnly = true
 			dictID = 0
 			dict = nil
 		} else if db.valueLogTemplateMode == template.TemplatePrepass {
@@ -18370,15 +18386,18 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		}
 	}
 
-	if dictID == 0 || templatePrepass {
-		records, _ = db.valueLogTemplateEncodeRecords(records)
-		rawPayloadBytes = 0
-		maxPayloadBytes = 0
-		for i := range records {
-			n := len(records[i].Value)
-			rawPayloadBytes += n
-			if n > maxPayloadBytes {
-				maxPayloadBytes = n
+	if !leafLogAppend && (dictID == 0 || templatePrepass) {
+		var templateEncoded bool
+		records, templateEncoded = db.valueLogTemplateEncodeRecords(records)
+		if templateEncoded {
+			rawPayloadBytes = 0
+			maxPayloadBytes = 0
+			for i := range records {
+				n := len(records[i].Value)
+				rawPayloadBytes += n
+				if n > maxPayloadBytes {
+					maxPayloadBytes = n
+				}
 			}
 		}
 	}
@@ -18402,7 +18421,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	retainedStorageFirstBatch := db.retainedStorageFirstValueLogAuto(rawPayloadBytes, selectorUnitPayloadBytes, records)
-	autoRawBypass := db.shouldBypassAutoRawValueCompression(dictID, records, selectorUnitPayloadBytes, payloadKindForFallback)
+	autoRawBypass := templateOnly || db.shouldBypassAutoRawValueCompression(dictID, records, selectorUnitPayloadBytes, payloadKindForFallback)
 	writeMode, blockCodec, selectorProbe := vlogWriteOff, db.valueLogBlockCodec, false
 	if !autoRawBypass {
 		writeMode, blockCodec, selectorProbe = db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
@@ -18428,7 +18447,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
 	}
 	forceRetainedStorageFirstBlock := func() {
-		if !retainedStorageFirstBatch || mode == vlogCompressionOff || dictID != 0 {
+		if templateOnly || !retainedStorageFirstBatch || mode == vlogCompressionOff || dictID != 0 {
 			return
 		}
 		writeMode = vlogWriteBlock
@@ -18488,12 +18507,14 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 			blockMode = writeMode == vlogWriteBlock
 		}
 	}
-	switch mode {
-	case vlogCompressionDefault, vlogCompressionDict:
-		db.valueLogDictCollectSamples(records)
-	case vlogCompressionAuto:
-		if db.allowAutoDictSampling(l, writeMode, selectorUnitPayloadBytes) {
+	if !templateOnly {
+		switch mode {
+		case vlogCompressionDefault, vlogCompressionDict:
 			db.valueLogDictCollectSamples(records)
+		case vlogCompressionAuto:
+			if db.allowAutoDictSampling(l, writeMode, selectorUnitPayloadBytes) {
+				db.valueLogDictCollectSamples(records)
+			}
 		}
 	}
 
@@ -19283,8 +19304,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	)
 
 	templatePrepass := false
-	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
+	templateOnly := false
+	if !leafLogAppend && db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
 		if db.valueLogTemplateMode == template.TemplateOnly {
+			templateOnly = true
 			dictID = 0
 			dict = nil
 		} else if db.valueLogTemplateMode == template.TemplatePrepass {
@@ -19292,8 +19315,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 
-	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
-		if payload, ok := db.valueLogTemplateEngine.Encode(nil, value, db.templateStore); ok {
+	if !leafLogAppend && (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
+		if payload, ok := db.valueLogTemplateEngine.Encode(context.Background(), value, db.templateStore); ok {
 			value = payload
 		}
 	}
@@ -19311,7 +19334,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 		return next
 	}
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
+	writeMode, blockCodec, selectorProbe := vlogWriteOff, db.valueLogBlockCodec, false
+	if !templateOnly {
+		writeMode, blockCodec, selectorProbe = db.resolveVlogWriteMode(l, dictID, len(value), len(value), outerLeafPayload)
+	}
 	normalizeNoDictBlockCodec := func() {
 		if writeMode != vlogWriteBlock {
 			return
@@ -19333,7 +19359,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		blockCodec = chooseLargePayloadNoDictBlockCodec(l, db.valueLogBlockCodec)
 	}
 	forceRetainedStorageFirstBlock := func() {
-		if !retainedStorageFirstValue || mode == vlogCompressionOff || dictID != 0 {
+		if templateOnly || !retainedStorageFirstValue || mode == vlogCompressionOff || dictID != 0 {
 			return
 		}
 		writeMode = vlogWriteBlock
@@ -19419,12 +19445,14 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
 	}
-	switch mode {
-	case vlogCompressionDefault, vlogCompressionDict:
-		db.valueLogDictCollectSampleForLane(l, value)
-	case vlogCompressionAuto:
-		if db.allowAutoDictSampling(l, writeMode, len(value)) {
+	if !templateOnly {
+		switch mode {
+		case vlogCompressionDefault, vlogCompressionDict:
 			db.valueLogDictCollectSampleForLane(l, value)
+		case vlogCompressionAuto:
+			if db.allowAutoDictSampling(l, writeMode, len(value)) {
+				db.valueLogDictCollectSampleForLane(l, value)
+			}
 		}
 	}
 

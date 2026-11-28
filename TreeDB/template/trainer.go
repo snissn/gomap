@@ -43,6 +43,7 @@ type pendingPublish struct {
 }
 
 type trainShard struct {
+	engine         *Engine
 	cfg            Config
 	stats          *TemplateStats
 	defCache       *defCache
@@ -53,7 +54,9 @@ type trainShard struct {
 	maxBuckets int
 	bucketSeq  uint64
 
-	pending []pendingPublish
+	pending            []pendingPublish
+	stagedStore        StagedFlusher
+	stagedUndurableCnt atomic.Int64
 }
 
 func newTrainer(e *Engine) *trainer {
@@ -89,6 +92,7 @@ func newTrainer(e *Engine) *trainer {
 			limit = 1
 		}
 		shards[i] = trainShard{
+			engine:         e,
 			cfg:            cfg,
 			stats:          &e.stats,
 			defCache:       e.defCache,
@@ -210,6 +214,9 @@ func (s *trainShard) run(done <-chan struct{}, wg *sync.WaitGroup) {
 			return
 		case <-ticker.C:
 			s.flushPublishes(context.Background())
+			if s.stagedUndurableCnt.Load() > 0 && s.stagedStore != nil {
+				_ = s.stagedStore.FlushStagedTemplateOps(true)
+			}
 		case task := <-s.in:
 			s.process(task)
 		}
@@ -249,7 +256,7 @@ func (s *trainShard) process(task trainTask) {
 	if b.publishPending {
 		return
 	}
-	if cfg.CooldownValues > 0 && b.samplesSeen-b.lastPublishSample < cfg.CooldownValues {
+	if cfg.CooldownValues > 0 && b.templatesPublished > 0 && b.samplesSeen-b.lastPublishSample < cfg.CooldownValues {
 		return
 	}
 	if cfg.MaxTemplatesPerBucket > 0 && b.templatesPublished >= cfg.MaxTemplatesPerBucket {
@@ -325,6 +332,57 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if ss, ok := store.(StagingStore); ok {
+		if sf, ok := store.(StagedFlusher); ok {
+			s.stagedStore = sf
+		}
+		for i := range items {
+			item := items[i]
+			def := item.def
+			var (
+				idVal        atomic.Uint64
+				durable      atomic.Bool
+				activateOnce sync.Once
+				decOnce      sync.Once
+			)
+			decStaged := func() {
+				decOnce.Do(func() {
+					s.stagedUndurableCnt.Add(-1)
+				})
+			}
+			activate := func() {
+				if id := idVal.Load(); id != 0 && durable.Load() {
+					activateOnce.Do(func() {
+						s.activatePublished(id, def)
+					})
+				}
+			}
+			s.stagedUndurableCnt.Add(1)
+			id, err := ss.StageTemplateDef(ctx, item.defBytes, item.routeFPs, func() {
+				decStaged()
+				durable.Store(true)
+				activate()
+			})
+			if err != nil {
+				decStaged()
+				s.stats.PublishErrors.Add(1)
+				if item.bucket != nil {
+					item.bucket.publishPending = false
+				}
+				continue
+			}
+			if item.bucket != nil {
+				item.bucket.lastPublishSample = item.samplesSeen
+				item.bucket.templatesPublished++
+				item.bucket.publishPending = false
+			}
+			s.totalTemplates.Add(1)
+			s.stats.TemplatesPublished.Add(1)
+			idVal.Store(id)
+			activate()
+		}
+		return
+	}
 	if bp, ok := store.(BatchPublisher); ok && len(items) > 1 {
 		specs := make([]PublishSpec, len(items))
 		for i := range items {
@@ -358,12 +416,20 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 	}
 }
 
-func (s *trainShard) onPublished(id uint64, pub pendingPublish) {
-	if id != 0 {
-		if cache := s.defCache; cache != nil {
-			cache.Add(id, pub.def)
-		}
+func (s *trainShard) activatePublished(id uint64, def TemplateDef) {
+	if id == 0 {
+		return
 	}
+	if cache := s.defCache; cache != nil {
+		cache.Add(id, def)
+	}
+	if e := s.engine; e != nil {
+		e.recordRecent(def, id)
+	}
+}
+
+func (s *trainShard) onPublished(id uint64, pub pendingPublish) {
+	s.activatePublished(id, pub.def)
 	if pub.bucket != nil {
 		pub.bucket.lastPublishSample = pub.samplesSeen
 		pub.bucket.templatesPublished++

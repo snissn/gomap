@@ -557,6 +557,16 @@ func (db *DB) EnsureSystemTemplateLookup() {
 	db.valueLogManager.SetTemplateLookup(db.LookupSystemTemplateDef, db.defaultTemplateDecodeOpts)
 }
 
+// HasSystemTemplateLookup reports whether the backend value-log manager has
+// template definition decoding installed (either explicitly configured or
+// auto-enabled because persisted template definitions exist in SystemRootPageID).
+func (db *DB) HasSystemTemplateLookup() bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return db.valueLogManager.PreparedReadProfile().HasTemplateLookup
+}
+
 // LookupSystemTemplateDef resolves template definition bytes for templateID
 // from SystemRootPageID (supporting direct inline, 2 KiB chunked inline, and
 // raw value-log pointer entries) with an in-memory immutable cache.

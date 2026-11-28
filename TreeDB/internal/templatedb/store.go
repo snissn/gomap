@@ -67,6 +67,10 @@ type Store struct {
 	cfg              Config
 	pointerThreshold atomic.Int64
 	mu               sync.Mutex
+
+	unsyncedCount atomic.Int32
+	unsyncedMu    sync.RWMutex
+	unsyncedIDs   map[uint64]int
 }
 
 // New wraps an existing KV handle (primarily for in-memory unit tests).
@@ -131,6 +135,65 @@ func (s *Store) GetTemplateDef(_ context.Context, id uint64) ([]byte, error) {
 	return val, nil
 }
 
+// FlushStagedTemplateOps flushes any pending staged or unsynced template
+// definitions in the backend SystemRootPageID to durable storage.
+func (s *Store) FlushStagedTemplateOps(sync bool) error {
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	if !s.backend.HasPendingStagedSystemOps() && !s.backend.HasUnsyncedSystemOps() {
+		return nil
+	}
+	return s.backend.FlushStagedSystemOps(sync)
+}
+
+func (s *Store) markTemplateUnsynced(id uint64) {
+	if s == nil || id == 0 {
+		return
+	}
+	s.unsyncedMu.Lock()
+	if s.unsyncedIDs == nil {
+		s.unsyncedIDs = make(map[uint64]int)
+	}
+	s.unsyncedIDs[id]++
+	s.unsyncedCount.Add(1)
+	s.unsyncedMu.Unlock()
+}
+
+func (s *Store) markTemplateDurable(id uint64) {
+	if s == nil || id == 0 {
+		return
+	}
+	s.unsyncedMu.Lock()
+	if n := s.unsyncedIDs[id]; n > 1 {
+		s.unsyncedIDs[id] = n - 1
+		s.unsyncedCount.Add(-1)
+	} else if n == 1 {
+		delete(s.unsyncedIDs, id)
+		s.unsyncedCount.Add(-1)
+	}
+	s.unsyncedMu.Unlock()
+}
+
+func (s *Store) filterDurableCandidates(cands []template.Candidate) []template.Candidate {
+	if s == nil || len(cands) == 0 || s.unsyncedCount.Load() == 0 {
+		return cands
+	}
+	s.unsyncedMu.RLock()
+	defer s.unsyncedMu.RUnlock()
+	if len(s.unsyncedIDs) == 0 {
+		return cands
+	}
+	kept := cands[:0]
+	for _, c := range cands {
+		if s.unsyncedIDs[c.ID] > 0 {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept
+}
+
 // GetCandidates loads the candidate list for a fingerprint.
 func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template.Candidate, error) {
 	if s == nil {
@@ -157,6 +220,7 @@ func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template
 	if err != nil {
 		return nil, err
 	}
+	cands = s.filterDurableCandidates(cands)
 	if max > 0 && len(cands) > max {
 		cands = cands[:max]
 	}
@@ -375,7 +439,22 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 					registerStageBarrier = true
 					return id, nil
 				}
-				if err := s.backend.StageSystemOps(ops, onDurable); err != nil {
+				cb := onDurable
+				if !alreadyStored {
+					s.markTemplateUnsynced(id)
+					stagedID := id
+					userCB := onDurable
+					cb = func() {
+						s.markTemplateDurable(stagedID)
+						if userCB != nil {
+							userCB()
+						}
+					}
+				}
+				if err := s.backend.StageSystemOps(ops, cb); err != nil {
+					if !alreadyStored {
+						s.markTemplateDurable(id)
+					}
 					return 0, err
 				}
 				return id, nil
