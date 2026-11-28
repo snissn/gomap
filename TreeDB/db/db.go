@@ -241,6 +241,7 @@ type DB struct {
 	systemVLogNextRID              uint64
 	systemRootMutationFenceMu      sync.RWMutex
 	systemRootMutationFence        func() (func() error, error)
+	systemMetaPublishMu            sync.RWMutex
 	stagedSystemOpsCount           atomic.Int32
 	stagedSystemSyncWaitersCount   atomic.Int32
 	stagedSystemInFlightUnsynced   atomic.Int32

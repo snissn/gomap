@@ -1286,7 +1286,20 @@ its optional raw receipt is available. A pager-backed index alone cannot
 identify that role: ordered multi-root groups use the same index layout and
 retain their existing bounded predecessor/producer projection when their
 collection-descriptor transitions are completely covered. Missing coverage or
-invalid tracking still uses the exact scanner. PRIMARY-only replacements also
-retain their existing root-bound unchanged materialized-base proof; a real DATA
-materialization still requires its complete candidate projection. The existing publication,
-pinning and retirement owners remain authoritative.
+invalid tracking still uses the exact scanner. PRIMARY-only replacements also retain their existing root-bound unchanged
+materialized-base proof; a real DATA materialization still requires its
+complete candidate projection. The existing publication, pinning and retirement
+owners remain authoritative.
+
+## System metadata pointer reclamation (`SystemMetadataGC`)
+
+Dictionaries and templates stored in `SystemRootPageID` via raw lane-254
+(`SystemValueLogLaneID`) `ValuePtr` records remain pinned in `value_vlog` until
+`DB.SystemMetadataGC` proves them unreachable from all ordinary `value_vlog` and
+`leaf_vlog` segments, active `dict/current*` markers, staged system ops, caller
+pins, and session-recent grace windows. Deleting those `FlagPointer` keys
+decrements `valueLogRefTracker` in the same `SystemRootPageID` commit; once
+both dual-meta recovery slots advance past the pre-GC root, ordinary
+`ValueLogGC` deletes any lane-254 segment with no remaining live references.
+See [storage format](storage-format.md#systemrootpageid-dictionary-and-template-garbage-collection).
+

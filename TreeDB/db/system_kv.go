@@ -955,20 +955,21 @@ func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) error {
 }
 
 func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (commitSeq uint64, accepted bool, physicallyDurable bool, retErr error) {
-	commitSeq, accepted, physicallyDurable, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, 0, nil)
+	commitSeq, accepted, physicallyDurable, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, false, 0, 0, nil)
 	return commitSeq, accepted, physicallyDurable, retErr
 }
 
 // applySystemOpsDirectIfCommitSeq applies ops to SystemRootPageID only if
-// db.meta.CommitSeq still equals wantSeq (and preCommitCheck, when non-nil,
-// returns true) while db.writeMu is held. If the guard fails, it returns
-// stale=true with zero mutations.
-func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq uint64, sync bool, preCommitCheck func() bool) (stale bool, err error) {
-	_, _, _, stale, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, wantSeq, preCommitCheck)
+// db.meta.CommitSeq still equals wantSeq and db.meta.SystemRootPageID still
+// equals wantSystemRoot (and preCommitCheck, when non-nil, returns true) while
+// db.writeMu is held. If the guard fails, it returns stale=true with zero
+// mutations.
+func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq, wantSystemRoot uint64, sync bool, preCommitCheck func() bool) (stale bool, err error) {
+	_, _, _, stale, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, true, wantSeq, wantSystemRoot, preCommitCheck)
 	return stale, err
 }
 
-func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, wantSeq uint64, preCommitCheck func() bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, retErr error) {
+func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, checkGuard bool, wantSeq, wantSystemRoot uint64, preCommitCheck func() bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, retErr error) {
 	if db == nil {
 		return 0, false, false, false, ErrClosed
 	}
@@ -1015,7 +1016,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
-	if wantSeq != 0 && baseSeq != wantSeq {
+	if checkGuard && (baseSeq != wantSeq || baseSystemRoot != wantSystemRoot) {
 		return 0, false, false, true, nil
 	}
 	if preCommitCheck != nil && !preCommitCheck() {
@@ -1159,6 +1160,17 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 		return nil
 	}
 	cloned := cloneSystemKVOps(ops)
+	// Serialize staging against destructive SystemMetadataGC so a staged
+	// activation marker (e.g. dict/current* or template/fp/*) cannot be queued
+	// concurrently with GC deleting the referenced definition.
+	db.systemMetaPublishMu.RLock()
+	defer db.systemMetaPublishMu.RUnlock()
+	if err := db.validateStagedSystemOpReferencesLocked(cloned); err != nil {
+		if len(pendingPtrs) > 0 {
+			db.releasePendingValueLogAppendPtrCounts(pendingPtrs)
+		}
+		return err
+	}
 	db.stagedSystemOpsMu.Lock()
 	if db.closing.Load() {
 		db.stagedSystemOpsMu.Unlock()
@@ -1175,6 +1187,91 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 	db.updateStagedSystemOpsCountLocked()
 	db.stagedSystemOpsMu.Unlock()
 	db.recordRecentSystemMetadataIDs(cloned)
+	return nil
+}
+
+// validateStagedSystemOpReferencesLocked verifies that any dict/current* or
+// template/fp/* activation queued in ops refers to a definition either created
+// in ops, already queued in stagedSystemOps, or currently present in
+// SystemRootPageID. Callers must hold db.systemMetaPublishMu.RLock().
+func (db *DB) validateStagedSystemOpReferencesLocked(ops []SystemKVOp) error {
+	var definedDicts map[uint64]struct{}
+	var definedTpls map[uint64]struct{}
+	var refDicts []uint64
+	var refTpls []uint64
+	for _, op := range ops {
+		if op.Delete {
+			continue
+		}
+		switch {
+		case bytes.HasPrefix(op.Key, systemDictBytesPrefix):
+			if id, ok := parseSystemDictBytesKey(op.Key); ok {
+				if definedDicts == nil {
+					definedDicts = make(map[uint64]struct{}, 2)
+				}
+				definedDicts[id] = struct{}{}
+			}
+		case bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix):
+			if !op.IsPointer && len(op.Value) == 8 {
+				if id := binary.BigEndian.Uint64(op.Value); id != 0 {
+					refDicts = append(refDicts, id)
+				}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateDefPrefix):
+			if id, ok := parseSystemTemplateDefKey(op.Key); ok {
+				if definedTpls == nil {
+					definedTpls = make(map[uint64]struct{}, 2)
+				}
+				definedTpls[id] = struct{}{}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateFPPrefix):
+			if !op.IsPointer && len(op.Value) > 0 {
+				cands, err := decodeSystemTemplateFPCandidates(op.Value)
+				if err != nil {
+					return err
+				}
+				for _, c := range cands {
+					if c.id != 0 {
+						refTpls = append(refTpls, c.id)
+					}
+				}
+			}
+		}
+	}
+	if len(refDicts) == 0 && len(refTpls) == 0 {
+		return nil
+	}
+	stagedDicts, stagedTpls := db.snapshotStagedSystemMetadataIDs()
+	for _, id := range refDicts {
+		if _, ok := definedDicts[id]; ok {
+			continue
+		}
+		if _, ok := stagedDicts[id]; ok {
+			continue
+		}
+		raw, err := db.GetSystem(SystemDictBytesKey(id))
+		if err != nil {
+			return err
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("treedb: cannot stage current marker for missing dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+	}
+	for _, id := range refTpls {
+		if _, ok := definedTpls[id]; ok {
+			continue
+		}
+		if _, ok := stagedTpls[id]; ok {
+			continue
+		}
+		raw, err := db.GetSystem(SystemTemplateDefKey(id))
+		if err != nil {
+			return err
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("treedb: cannot stage routing entry for missing template %d: %w", id, templ.ErrMissingTemplate)
+		}
+	}
 	return nil
 }
 

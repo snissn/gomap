@@ -99,6 +99,13 @@ func (db *DB) systemMetadataGC(ctx context.Context, opts SystemMetadataGCOptions
 			db.maintenanceMu.Unlock()
 		}
 		if err != nil {
+			if errors.Is(err, ErrRecoverableRootSetStale) || errors.Is(err, errDurableRootCandidateStale) {
+				if attempt == maxStaleRetries {
+					stats.AbortedStale = true
+					return stats, nil
+				}
+				continue
+			}
 			return stats, err
 		}
 
@@ -139,12 +146,27 @@ func (db *DB) systemMetadataGC(ctx context.Context, opts SystemMetadataGCOptions
 				}
 			}
 		}
-		stale, commitErr := db.applySystemOpsDirectIfCommitSeq(ops, plan.scannedSeq, !opts.SkipSync, preCommitCheck)
+		// Hold systemMetaPublishMu exclusively across staged-op re-verification,
+		// commit publication, and cache eviction so StageSystemOps cannot queue
+		// an activation marker referencing a definition being deleted here.
+		db.systemMetaPublishMu.Lock()
+		stale, commitErr := db.applySystemOpsDirectIfCommitSeq(ops, plan.scannedSeq, plan.scannedSystemRoot, !opts.SkipSync, preCommitCheck)
+		if commitErr == nil && !stale {
+			db.EvictSystemDictCache(plan.report.ReclaimableDictIDs)
+			db.EvictSystemTemplateCache(plan.report.ReclaimableTemplateIDs)
+			db.forgetRecentSystemMetadataIDs(plan.report.ReclaimableDictIDs, plan.report.ReclaimableTemplateIDs)
+		}
+		db.systemMetaPublishMu.Unlock()
 		if finish != nil {
 			commitErr = errors.Join(commitErr, finish())
 		}
 		if commitErr != nil {
-			return stats, commitErr
+			if errors.Is(commitErr, ErrRecoverableRootSetStale) || errors.Is(commitErr, errDurableRootCandidateStale) {
+				stale = true
+				commitErr = nil
+			} else {
+				return stats, commitErr
+			}
 		}
 		if stale {
 			if attempt == maxStaleRetries {
@@ -153,11 +175,6 @@ func (db *DB) systemMetadataGC(ctx context.Context, opts SystemMetadataGCOptions
 			}
 			continue
 		}
-
-		// Evict deleted IDs from in-memory caches after durable publication.
-		db.EvictSystemDictCache(plan.report.ReclaimableDictIDs)
-		db.EvictSystemTemplateCache(plan.report.ReclaimableTemplateIDs)
-		db.forgetRecentSystemMetadataIDs(plan.report.ReclaimableDictIDs, plan.report.ReclaimableTemplateIDs)
 
 		stats.DictsDeleted = len(plan.report.ReclaimableDictIDs)
 		stats.DictKeysDeleted = built.dictKeysDeleted

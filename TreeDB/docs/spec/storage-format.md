@@ -4995,3 +4995,42 @@ Both recoverable roots retain authority until convergence succeeds; reader,
 prepared-publication and current-writer pins continue to govern physical source
 unlink. See [write path and durability](write-path-and-durability.md) and
 [value-log lifecycle](value-log-lifecycle.md).
+
+### `SystemRootPageID` dictionary and template garbage collection
+
+Dictionaries (`dict/bytes/<id>`, `dict/chunk/<id>/<idx>`, `dict/hash/<sha256>`,
+`dict/k/<id>`, `dict/leafmode/<id>`) and templates (`template/def/<id>`,
+`template/chunk/<id>/<idx>`, `template/fp/<fp>`) stored in `SystemRootPageID`
+are persistent compression metadata and may be reclaimed only by
+`DB.SystemMetadataGC` once unreachable:
+
+1. **Reachability and CRC-verified scanning**: `SystemMetadataAudit` and
+   `SystemMetadataGC` capture the bounded `RecoverableRootSet` under
+   `maintenanceMu` and scan all on-disk ordinary `value_vlog` and `leaf_vlog`
+   segments (excluding raw lane-254 `SystemValueLogLaneID` segments, which carry
+   only `dictID=0, templateID=0` payloads). Both dict-only and full template
+   scans verify every record's CRC32C and outer header invariants (including
+   nonzero RID on ungrouped records) so corruption fails closed rather than
+   omitting live references.
+2. **Protection roots**: A definition is retained if referenced by any scanned
+   segment, targeted by `dict/current` or `dict/current/*`, present in
+   `stagedSystemOps`, listed in caller-supplied `ProtectedDictIDs` /
+   `ProtectedTemplateIDs`, or within the bounded session-recent grace window
+   (`KeepRecentPublishedDicts` / `KeepRecentPublishedTemplates`, capped at
+   `MaxKeepRecentPublishedSystemMetaIDs`; values above the cap are rejected).
+3. **Snapshot-bound commit guard and staging serialization**: Destructive
+   deletion binds its commit guard directly to the inventoried stable
+   snapshot's `(CommitSeq, SystemRootPageID)` and holds `systemMetaPublishMu`
+   exclusively across staged-op re-verification, `SystemRootPageID` deletion
+   publication, and in-memory cache eviction (`systemDictCache`,
+   `systemTemplateCache`, `valuelog.EvictDictCodecs`, and
+   `valuelog.Manager.EvictTemplateDefs`). `StageSystemOps` acquires
+   `systemMetaPublishMu` shared and rejects staging `dict/current*` or
+   `template/fp/*` activations whose target definitions are absent from both the
+   staged batch and `SystemRootPageID`. On intervening commits, GC retries once
+   and otherwise fails closed (`AbortedStale=true`) with zero deletions.
+4. **Lane-254 pointer reclamation**: Deleting a `FlagPointer` dictionary or
+   template entry updates `valueLogRefTracker` via `CollectOldPointerRefs`. Once
+   both dual-meta slots advance past the pre-GC `SystemRootPageID`, subsequent
+   `ValueLogGC` reclaims any now-unreferenced lane-254 segment automatically.
+

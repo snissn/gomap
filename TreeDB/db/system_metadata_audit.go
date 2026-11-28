@@ -570,11 +570,12 @@ func (db *DB) SystemMetadataAudit(ctx context.Context, opts SystemMetadataAuditO
 }
 
 type systemMetadataAuditPlan struct {
-	report     SystemMetadataAuditReport
-	inv        *systemMetadataInventory
-	scannedSeq uint64
-	deadDicts  map[uint64]struct{}
-	deadTpls   map[uint64]struct{}
+	report            SystemMetadataAuditReport
+	inv               *systemMetadataInventory
+	scannedSeq        uint64
+	scannedSystemRoot uint64
+	deadDicts         map[uint64]struct{}
+	deadTpls          map[uint64]struct{}
 }
 
 func (db *DB) buildSystemMetadataAuditPlanWithMaintenanceLockHeld(ctx context.Context, opts SystemMetadataAuditOptions, requireMaintenanceReady bool) (*systemMetadataAuditPlan, error) {
@@ -601,17 +602,26 @@ func (db *DB) buildSystemMetadataAuditPlanWithMaintenanceLockHeld(ctx context.Co
 	}
 	defer recoverableRoots.Release()
 
-	scannedSeq := db.currentCommitSeq()
+	// Bind scannedSeq and scannedSystemRoot directly to the exact snapshot
+	// inventoried below so any intervening publication forces a stale retry.
+	var scannedSeq, scannedSystemRoot uint64
+	if recoverableRoots.stableSnapshot != nil && recoverableRoots.stableSnapshot.state != nil {
+		scannedSeq = recoverableRoots.stableSnapshot.state.CommitSeq
+		scannedSystemRoot = recoverableRoots.stableSnapshot.state.SystemRootPageID
+	} else {
+		return nil, fmt.Errorf("treedb: missing stable snapshot state for system metadata audit")
+	}
 	inv, err := inspectSystemMetadataInventory(recoverableRoots.stableSnapshot)
 	if err != nil {
 		return nil, err
 	}
 
 	plan := &systemMetadataAuditPlan{
-		inv:        inv,
-		scannedSeq: scannedSeq,
-		deadDicts:  make(map[uint64]struct{}),
-		deadTpls:   make(map[uint64]struct{}),
+		inv:               inv,
+		scannedSeq:        scannedSeq,
+		scannedSystemRoot: scannedSystemRoot,
+		deadDicts:         make(map[uint64]struct{}),
+		deadTpls:          make(map[uint64]struct{}),
 	}
 	report := &plan.report
 	report.DictsTotal = len(inv.dicts)

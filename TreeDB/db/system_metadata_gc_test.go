@@ -3,6 +3,7 @@ package db_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -376,5 +377,57 @@ func TestSystemMetadataGC_ConcurrentWritersRace(t *testing.T) {
 	}
 	if _, err := d.LookupSystemDictBytes(curID); err != nil {
 		t.Fatalf("LookupSystemDictBytes(current=%d) post-race: %v", curID, err)
+	}
+}
+
+func TestSystemMetadataGC_StagingSerializationAndDanglingReject(t *testing.T) {
+	dir := t.TempDir()
+	d, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	ctx := context.Background()
+	dstore := dictdb.New(d)
+
+	dict1ID, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, "stage-guard-1", 601))
+	if err != nil {
+		t.Fatalf("PutDictBytes(1): %v", err)
+	}
+	dict2ID, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, "stage-guard-2", 602))
+	if err != nil {
+		t.Fatalf("PutDictBytes(2): %v", err)
+	}
+
+	// Stage a dict/current marker for dict1ID; SystemMetadataGC must preserve dict1ID
+	// while deleting unreferenced dict2ID.
+	curVal1 := make([]byte, 8)
+	binary.BigEndian.PutUint64(curVal1, dict1ID)
+	if err := d.StageSystemOps([]db.SystemKVOp{{Key: []byte("dict/current"), Value: curVal1}}, nil); err != nil {
+		t.Fatalf("StageSystemOps(dict1): %v", err)
+	}
+
+	stats, err := d.SystemMetadataGC(ctx, db.SystemMetadataGCOptions{
+		Audit: db.SystemMetadataAuditOptions{KeepRecentPublishedDicts: -1},
+	})
+	if err != nil {
+		t.Fatalf("SystemMetadataGC: %v", err)
+	}
+	if stats.DictsDeleted != 1 {
+		t.Fatalf("expected exactly 1 dict deleted (dict2), got %+v", stats)
+	}
+	if _, err := d.LookupSystemDictBytes(dict1ID); err != nil {
+		t.Fatalf("staged dict1ID=%d was unexpectedly deleted: %v", dict1ID, err)
+	}
+	if _, err := d.LookupSystemDictBytes(dict2ID); !errors.Is(err, valuelog.ErrMissingDict) {
+		t.Fatalf("dict2ID=%d expected ErrMissingDict, got %v", dict2ID, err)
+	}
+
+	// Attempting to stage a dict/current marker referencing the just-deleted dict2ID
+	// must fail closed with ErrMissingDict rather than queueing a dangling activation.
+	curVal2 := make([]byte, 8)
+	binary.BigEndian.PutUint64(curVal2, dict2ID)
+	if err := d.StageSystemOps([]db.SystemKVOp{{Key: []byte("dict/current"), Value: curVal2}}, nil); !errors.Is(err, valuelog.ErrMissingDict) {
+		t.Fatalf("StageSystemOps(deleted dict2) err=%v want ErrMissingDict", err)
 	}
 }
