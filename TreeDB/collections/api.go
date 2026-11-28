@@ -5542,7 +5542,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		return nil, true, err
 	}
 	switch normalizedDocumentFormat(plannerOptions.documentFormat) {
-	case DocumentFormatJSON, DocumentFormatBSON:
+	case DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
 	default:
 		return nil, false, nil
 	}
@@ -5560,9 +5560,14 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if err != nil {
 		return nil, true, err
 	}
-	preparedDocuments, _, _, _, err := prepareInsertDocuments(documents, plannerOptions)
+	prepareStart := time.Now()
+	preparedDocuments, templateRecords, learnedTemplates, _, err := prepareInsertDocuments(documents, plannerOptions)
+	prepareElapsed := time.Since(prepareStart)
 	if err != nil {
 		return nil, true, err
+	}
+	if len(templateRecords) > 0 {
+		return nil, false, nil
 	}
 	entries := make([]noIndexBatchEntry, len(preparedDocuments))
 	for i := range preparedDocuments {
@@ -5608,7 +5613,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		return nil, false, nil
 	}
 	switch normalizedDocumentFormat(currentOptions.documentFormat) {
-	case DocumentFormatJSON, DocumentFormatBSON:
+	case DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
 	default:
 		return nil, false, nil
 	}
@@ -5645,10 +5650,12 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	domain.setBufferedCountLocked(domain.count + len(entries))
 	domain.writeGeneration++
 	domain.notePrimaryWriteKeysLocked(resultIDs, domain.writeGeneration)
+	execOpts.templateEncoder.learnTemplateV1Templates(c, learnedTemplates)
 	c.recordInsertBatchStats(CollectionInsertStats{
-		Documents: len(entries),
-		Indexes:   0,
-		Runs:      1,
+		Documents:        len(entries),
+		Indexes:          0,
+		Runs:             1,
+		PrepareDocuments: prepareElapsed,
 	}, execOpts)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), true, nil
 }
@@ -12531,6 +12538,10 @@ type insertBatchExecutionOptions struct {
 	insertStats              *CollectionInsertStats
 	trustedFloat32Projection *trustedFloat32Projection
 	prepared                 *PreparedInsertBatch
+	templateEncoder          *TemplateV1Encoder
+	rawCommandDocuments      [][]byte
+	learnedTemplates         []templateV1LearnedTemplate
+	prepareDocumentsElapsed  time.Duration
 }
 
 func (c *Collection) recordInsertBatchStats(stats CollectionInsertStats, execOpts insertBatchExecutionOptions) {
@@ -13036,6 +13047,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 		if err != nil {
 			return nil, err
 		}
+		plannerOptions.learnTemplateIDs = templateEncoder != nil
+		plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 	}
 	commandWALNoIndexBufferEnabled := c.canUseCommandWALNoIndexInsertBuffer(meta, plannerOptions.documentFormat, commandWALIntent)
 	commandWALNoIndexBufferedMode := c.canBufferCommandWALNoIndexInsertBatch(meta, plannerOptions.documentFormat, commandWALIntent, len(documents))
@@ -13130,6 +13143,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 		}
 	}
+	execOpts.templateEncoder = templateEncoder
 	if !commandWALActive &&
 		len(meta.Indexes) == 0 &&
 		len(meta.TextIndexes) == 0 &&
@@ -13143,15 +13157,42 @@ func (c *Collection) insertBatchOnceWithLockState(
 			if err != nil {
 				return nil, err
 			}
+			plannerOptions.learnTemplateIDs = templateEncoder != nil
+			plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 		}
 	}
 	plannerOptions.typedProjection = execOpts.trustedFloat32Projection
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode && execOpts.splitInsert == nil {
-		if plannerOptions.documentFormat == DocumentFormatJSON && !commandWALNoIndexBufferedMode {
+	if len(meta.Indexes) == 0 && !commandWALIndexedBufferedMode && execOpts.splitInsert == nil && !commandWALNoIndexBufferedMode {
+		docFormat := normalizedDocumentFormat(plannerOptions.documentFormat)
+		switch docFormat {
+		case DocumentFormatJSON:
 			runTestBeforeInsertBatchPlanningHook()
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
+		case DocumentFormatBSON, DocumentFormatTemplateV1:
+			if execOpts.prepared == nil && !columnStoreWriteEnabled(meta) {
+				prepareStart := time.Now()
+				preparedDocs, templateRecords, learnedTemplates, _, prepErr := prepareInsertDocuments(documents, plannerOptions)
+				prepareElapsed := time.Since(prepareStart)
+				if prepErr != nil {
+					closePlanningSnapshot()
+					if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+						return nil, mutationNotAcceptedError(prepErr)
+					}
+					return nil, prepErr
+				}
+				if len(templateRecords) == 0 {
+					noIndexOpts := execOpts
+					noIndexOpts.learnedTemplates = learnedTemplates
+					noIndexOpts.prepareDocumentsElapsed = prepareElapsed
+					if docFormat == DocumentFormatTemplateV1 {
+						noIndexOpts.rawCommandDocuments = documents
+					}
+					runTestBeforeInsertBatchPlanningHook()
+					return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, preparedDocs, commandWALIntent, noIndexOpts)
+				}
+			}
 		}
 	}
 
@@ -13692,12 +13733,10 @@ func shouldUseDirectBufferedInsertAccumulators(documentCount int) bool {
 	return documentCount > 0 && documentCount <= DefaultIndexedWriteMemtableAccumulatorBatchDocuments
 }
 
-func canBufferNoIndexInsertBatchFormat(format DocumentFormat, trustedValidBSON bool) bool {
+func canBufferNoIndexInsertBatchFormat(format DocumentFormat, _ bool) bool {
 	switch normalizedDocumentFormat(format) {
-	case DocumentFormatJSON:
+	case DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
 		return true
-	case DocumentFormatBSON:
-		return trustedValidBSON
 	default:
 		return false
 	}
@@ -14067,8 +14106,9 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	stats := CollectionInsertStats{
-		Documents: len(documents),
-		Indexes:   len(c.meta.Indexes),
+		Documents:        len(documents),
+		Indexes:          len(c.meta.Indexes),
+		PrepareDocuments: execOpts.prepareDocumentsElapsed,
 	}
 	if prepared := execOpts.prepared; prepared != nil && !sameCollectionMeta(preparedInsertSchemaMeta(c.meta), prepared.meta) {
 		_ = snap.Close()
@@ -14201,11 +14241,23 @@ func (c *Collection) insertBatchNoIndex(
 		if poolWALBuffers {
 			docsLease = acquireCommandWALDocs(len(entries))
 			defer releaseCommandWALDocs(docsLease)
-			commandDocuments = docsLease.docs[:len(entries)]
-			for i := range entries {
-				commandDocuments[i] = commitlog.CollectionDocument{ID: entries[i].id, Document: entries[i].document}
+			if len(execOpts.rawCommandDocuments) > 0 {
+				commandDocuments, err = collectionDocumentsFromBatchInputInto(docsLease.docs, ids, execOpts.rawCommandDocuments)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				commandDocuments = docsLease.docs[:len(entries)]
+				for i := range entries {
+					commandDocuments[i] = commitlog.CollectionDocument{ID: entries[i].id, Document: entries[i].document}
+				}
 			}
 			docsLease.docs = commandDocuments
+		} else if len(execOpts.rawCommandDocuments) > 0 {
+			commandDocuments, err = collectionDocumentsFromBatchInput(ids, execOpts.rawCommandDocuments)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			commandDocuments = collectionDocumentsFromNoIndexEntries(entries)
 		}
@@ -14525,6 +14577,7 @@ func (c *Collection) insertBatchNoIndex(
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, c.meta, entries)
+	execOpts.templateEncoder.learnTemplateV1Templates(c, execOpts.learnedTemplates)
 	c.recordInsertBatchStats(stats, execOpts)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }

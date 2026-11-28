@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -185,7 +187,36 @@ type templateV1ParsedInsertDocument struct {
 	records            []templateV1Record
 }
 
-const templateV1StoredDocumentOffset = -1
+const (
+	templateV1StoredDocumentOffset = -1
+	parallelTemplateV1PrepareMin   = 2048
+)
+
+type lockedTemplateV1Resolver struct {
+	mu       sync.Mutex
+	delegate templateV1Resolver
+}
+
+func (r *lockedTemplateV1Resolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
+	r.mu.Lock()
+	tpl, err := r.delegate.lookupTemplateV1(id)
+	r.mu.Unlock()
+	return tpl, err
+}
+
+func (r *lockedTemplateV1Resolver) lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error) {
+	r.mu.Lock()
+	tpl, err := r.delegate.lookupTemplateV1ByHash(hash)
+	r.mu.Unlock()
+	return tpl, err
+}
+
+func (r *lockedTemplateV1Resolver) nextTemplateV1ID() (uint64, error) {
+	r.mu.Lock()
+	id, err := r.delegate.nextTemplateV1ID()
+	r.mu.Unlock()
+	return id, err
+}
 
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver, collectLearned bool, allowStored bool) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
 	return prepareTemplateV1InsertDocumentsWithScratch(documents, fallback, collectLearned, allowStored, nil)
@@ -202,13 +233,22 @@ func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback te
 		}
 	}
 	var pendingRecords []templateV1Record
+	allStored := len(documents) > 0
+	allHash := len(documents) > 0
 	for i, document := range documents {
 		next, err := parseTemplateV1InsertDocument(document, allowStored)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
-		pendingRecords = append(pendingRecords, next.records...)
+		if len(next.records) > 0 {
+			pendingRecords = append(pendingRecords, next.records...)
+		}
 		hashDocumentOffsets[i] = next.hashDocumentOffset
+		if next.hashDocumentOffset == templateV1StoredDocumentOffset {
+			allHash = false
+		} else {
+			allStored = false
+		}
 	}
 
 	memory, publishRecords, learnedTemplates, err := assignTemplateV1RecordIDs(pendingRecords, fallback, collectLearned)
@@ -225,6 +265,150 @@ func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback te
 			scratch.templatePrepared = prepared
 		}
 	}
+
+	// Parallel conversion/validation path for large batches once template IDs
+	// have been assigned into resolver. Each worker caches its last resolved
+	// template locally so the shared locked resolver is touched at most once
+	// per distinct template.
+	if len(documents) >= parallelTemplateV1PrepareMin && resolver != nil && (allStored || allHash) {
+		workers := runtime.GOMAXPROCS(0)
+		if maxWorkers := len(documents) / 1024; workers > maxWorkers {
+			workers = maxWorkers
+		}
+		if workers > 1 {
+			lockedRes := &lockedTemplateV1Resolver{delegate: resolver}
+			chunkSize := (len(documents) + workers - 1) / workers
+			if allStored {
+				copy(prepared, documents)
+				errs := make([]error, workers)
+				var wg sync.WaitGroup
+				for w := 0; w < workers; w++ {
+					lo := w * chunkSize
+					if lo >= len(documents) {
+						break
+					}
+					hi := lo + chunkSize
+					if hi > len(documents) {
+						hi = len(documents)
+					}
+					wg.Add(1)
+					go func(workerIdx, start, end int) {
+						defer wg.Done()
+						errs[workerIdx] = validateTemplateV1PreparedDocuments(documents[start:end], lockedRes)
+					}(w, lo, hi)
+				}
+				wg.Wait()
+				for _, werr := range errs {
+					if werr != nil {
+						return nil, nil, nil, nil, werr
+					}
+				}
+				return prepared, publishRecords, learnedTemplates, resolver, nil
+			}
+			// allHash == true: partition a single reusable conversionArena into
+			// disjoint 3-index sub-slices sized by each chunk's conservative
+			// upper bound so workers write lock-free with zero extra allocations.
+			chunkStarts := make([]int, workers)
+			chunkEnds := make([]int, workers)
+			chunkByteStart := make([]int, workers)
+			chunkByteEnd := make([]int, workers)
+			totalArena := 0
+			activeWorkers := 0
+			for w := 0; w < workers; w++ {
+				lo := w * chunkSize
+				if lo >= len(documents) {
+					break
+				}
+				hi := lo + chunkSize
+				if hi > len(documents) {
+					hi = len(documents)
+				}
+				chunkStarts[w] = lo
+				chunkEnds[w] = hi
+				chunkByteStart[w] = totalArena
+				chunkNeed := estimateTemplateV1ConversionArenaSize(documents[lo:hi], hashDocumentOffsets[lo:hi])
+				totalArena += chunkNeed
+				chunkByteEnd[w] = totalArena
+				activeWorkers++
+			}
+			var conversionArena []byte
+			if scratch != nil && cap(scratch.templateConversionArena) >= totalArena {
+				conversionArena = scratch.templateConversionArena[:totalArena]
+			} else {
+				conversionArena = make([]byte, totalArena)
+			}
+			errs := make([]error, activeWorkers)
+			workerLearned := make([][]templateV1LearnedTemplate, activeWorkers)
+			var wg sync.WaitGroup
+			for w := 0; w < activeWorkers; w++ {
+				wg.Add(1)
+				go func(workerIdx int) {
+					defer wg.Done()
+					lo := chunkStarts[workerIdx]
+					hi := chunkEnds[workerIdx]
+					bLo := chunkByteStart[workerIdx]
+					bHi := chunkByteEnd[workerIdx]
+					localArena := conversionArena[bLo:bLo:bHi]
+					var localLearned []templateV1LearnedTemplate
+					var localLearnedSet map[templateV1LearnedTemplate]struct{}
+					if collectLearned {
+						localLearnedSet = make(map[templateV1LearnedTemplate]struct{}, 4)
+					}
+					var lastHash [32]byte
+					var lastTpl *templateV1Template
+					for i := lo; i < hi; i++ {
+						nextArena, stored, nextLearned, tpl, convErr := appendTemplateV1InsertDocumentToStoredCached(
+							localArena,
+							documents[i][hashDocumentOffsets[i]:],
+							lockedRes,
+							localLearned,
+							localLearnedSet,
+							collectLearned,
+							lastHash,
+							lastTpl,
+						)
+						if convErr != nil {
+							errs[workerIdx] = convErr
+							return
+						}
+						if tpl != nil {
+							lastHash = tpl.hash
+							lastTpl = tpl
+						}
+						localArena = nextArena
+						localLearned = nextLearned
+						prepared[i] = stored
+					}
+					workerLearned[workerIdx] = localLearned
+				}(w)
+			}
+			wg.Wait()
+			if scratch != nil {
+				scratch.templateConversionArena = conversionArena[:0]
+			}
+			for _, werr := range errs {
+				if werr != nil {
+					return nil, nil, nil, nil, werr
+				}
+			}
+			if collectLearned {
+				seen := make(map[templateV1LearnedTemplate]struct{}, len(learnedTemplates)+activeWorkers)
+				for _, l := range learnedTemplates {
+					seen[l] = struct{}{}
+				}
+				for _, wl := range workerLearned {
+					for _, l := range wl {
+						if _, ok := seen[l]; !ok {
+							seen[l] = struct{}{}
+							learnedTemplates = append(learnedTemplates, l)
+						}
+					}
+				}
+			}
+			return prepared, publishRecords, learnedTemplates, resolver, nil
+		}
+	}
+
 	validatePrepared := make([][]byte, 0)
 	arenaNeed := estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets)
 	var conversionArena []byte
@@ -275,20 +459,21 @@ func prepareTemplateV1InsertDocumentsWithScratch(documents [][]byte, fallback te
 }
 
 func parseTemplateV1InsertDocument(raw []byte, allowStored bool) (templateV1ParsedInsertDocument, error) {
-	switch {
-	case hasTemplateV1Magic(raw, templateV1StoredMagic):
-		if !allowStored {
-			return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 stored documents require InsertBatchWithTemplateV1Encoder")
+	if len(raw) >= 4 && raw[0] == 'T' && raw[1] == 'D' && raw[2] == '1' {
+		switch raw[3] {
+		case 'H':
+			if len(raw) < len(templateV1InsertDocumentMagic)+32 {
+				return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+			}
+			return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
+		case 'D':
+			if !allowStored {
+				return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 stored documents require InsertBatchWithTemplateV1Encoder")
+			}
+			return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
 		}
-		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
-	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
-		if len(raw) < len(templateV1InsertDocumentMagic)+32 {
-			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
-		}
-		return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
-	default:
-		return parseTemplateV1InsertEnvelope(raw)
 	}
+	return parseTemplateV1InsertEnvelope(raw)
 }
 
 func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, error) {
