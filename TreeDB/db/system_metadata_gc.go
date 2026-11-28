@@ -147,18 +147,33 @@ func (db *DB) systemMetadataGC(ctx context.Context, opts SystemMetadataGCOptions
 			}
 		}
 		// Hold systemMetaPublishMu exclusively across staged-op re-verification,
-		// commit publication, and cache eviction so StageSystemOps cannot queue
-		// an activation marker referencing a definition being deleted here.
+		// in-memory SystemRootPageID activation, and cache eviction so
+		// StageSystemOps cannot queue an activation marker referencing a definition
+		// being deleted here. Eviction and unlock happen inside onAccepted right
+		// after activation and before waiting on physical root publication, so
+		// synchronous durability callbacks dispatched by the publication coordinator
+		// or postWork cannot deadlock if they call StageSystemOps.
 		db.systemMetaPublishMu.Lock()
-		stale, commitErr := db.applySystemOpsDirectIfCommitSeq(ops, plan.scannedSeq, plan.scannedSystemRoot, !opts.SkipSync, preCommitCheck)
-		if commitErr == nil && !stale {
+		publishLocked := true
+		onAccepted := func() {
 			db.EvictSystemDictCache(plan.report.ReclaimableDictIDs)
 			db.EvictSystemTemplateCache(plan.report.ReclaimableTemplateIDs)
 			db.forgetRecentSystemMetadataIDs(plan.report.ReclaimableDictIDs, plan.report.ReclaimableTemplateIDs)
+			if publishLocked {
+				db.systemMetaPublishMu.Unlock()
+				publishLocked = false
+			}
 		}
-		db.systemMetaPublishMu.Unlock()
+		stale, postWork, commitErr := db.applySystemOpsDirectIfCommitSeq(ops, plan.scannedSeq, plan.scannedSystemRoot, !opts.SkipSync, preCommitCheck, onAccepted)
+		if publishLocked {
+			db.systemMetaPublishMu.Unlock()
+			publishLocked = false
+		}
 		if finish != nil {
 			commitErr = errors.Join(commitErr, finish())
+		}
+		if postWork != nil {
+			postWork()
 		}
 		if commitErr != nil {
 			if errors.Is(commitErr, ErrRecoverableRootSetStale) || errors.Is(commitErr, errDurableRootCandidateStale) {

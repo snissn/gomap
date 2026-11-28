@@ -60,7 +60,11 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte, level zstd.Encoder
 	defer c.mu.Unlock()
 	if elem, ok := c.items[key]; ok {
 		c.ll.MoveToFront(elem)
-		return elem.Value.(*dictCodecEntry)
+		entry := elem.Value.(*dictCodecEntry)
+		if c == dictCodecs {
+			dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
+		}
+		return entry
 	}
 	// Copy dict bytes so pooled encoders/decoders never reference an ephemeral slice.
 	dictCopy := append([]byte(nil), dict...)
@@ -115,6 +119,9 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte, level zstd.Encoder
 			delete(c.items, old.key)
 		}
 	}
+	if c == dictCodecs {
+		dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
+	}
 	return entry
 }
 
@@ -131,11 +138,7 @@ func getDictCodecsWithOpts(dictID uint64, dict []byte, level zstd.EncoderLevel, 
 	if fast := dictCodecsFast.Load(); fast != nil && fast.entry != nil && fast.key == key {
 		return fast.entry
 	}
-	entry := dictCodecs.getOrAdd(dictID, dict, level, noEntropy)
-	if entry != nil {
-		dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
-	}
-	return entry
+	return dictCodecs.getOrAdd(dictID, dict, level, noEntropy)
 }
 
 // EvictDictCodecs removes cached zstd encoder/decoder entries for the given

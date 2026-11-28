@@ -535,3 +535,126 @@ func TestSystemMetadataGC_DirectActivationWithLeafVlogSystemLeaves(t *testing.T)
 		t.Fatalf("SetCurrent with leaf_vlog system leaves: %v", err)
 	}
 }
+
+func TestSystemMetadataGC_OnDurableCallbackCanStageWithoutDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	d, err := db.Open(db.Options{
+		Dir:        dir,
+		Durability: db.DurabilityWALOnRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	ctx := context.Background()
+	dstore := dictdb.New(d)
+
+	deadDictID, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, "cb-dead-dict", 801))
+	if err != nil {
+		t.Fatalf("PutDictBytes: %v", err)
+	}
+	_ = deadDictID
+
+	// Stage a batch with an onDurable callback that calls StageSystemOps, then
+	// flush unsynced so the callback waits for the next synchronous commit.
+	var cbRan atomic.Bool
+	var cbErr atomic.Value
+	if err := d.StageSystemOps([]db.SystemKVOp{{Key: []byte("meta/pre-gc"), Value: []byte("1")}}, func() {
+		if err := d.StageSystemOps([]db.SystemKVOp{{Key: []byte("meta/from-callback"), Value: []byte("ok")}}, nil); err != nil {
+			cbErr.Store(err)
+		}
+		cbRan.Store(true)
+	}); err != nil {
+		t.Fatalf("StageSystemOps(pre-gc): %v", err)
+	}
+	if err := d.FlushStagedSystemOps(false); err != nil {
+		t.Fatalf("FlushStagedSystemOps(false): %v", err)
+	}
+
+	// Synchronous SystemMetadataGC commits with sync=true, triggering the pending
+	// onDurable callback. Because postWork runs after releasing systemMetaPublishMu,
+	// staging from the callback must succeed without deadlocking.
+	stats, err := d.SystemMetadataGC(ctx, db.SystemMetadataGCOptions{
+		Audit: db.SystemMetadataAuditOptions{KeepRecentPublishedDicts: -1},
+	})
+	if err != nil {
+		t.Fatalf("SystemMetadataGC: %v", err)
+	}
+	if stats.DictsDeleted != 1 {
+		t.Fatalf("expected 1 dead dict deleted, got %+v", stats)
+	}
+	if !cbRan.Load() {
+		t.Fatalf("expected pending onDurable callback to run on synchronous GC commit")
+	}
+	if v := cbErr.Load(); v != nil {
+		t.Fatalf("onDurable callback StageSystemOps failed: %v", v)
+	}
+	if err := d.SetSync([]byte("flush-cb"), []byte("1")); err != nil {
+		t.Fatalf("SetSync(flush-cb): %v", err)
+	}
+	got, err := d.GetSystem([]byte("meta/from-callback"))
+	if err != nil || string(got) != "ok" {
+		t.Fatalf("GetSystem(meta/from-callback) = %q, %v; want \"ok\", nil", got, err)
+	}
+}
+
+func TestSystemMetadataGC_ConcurrentLookupDoesNotResurrectDeletedCache(t *testing.T) {
+	dir := t.TempDir()
+	d, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	ctx := context.Background()
+	dstore := dictdb.New(d)
+	tstore := templatedb.NewBackend(d, templatedb.Config{})
+	tcfg := templ.NormalizeConfig(templ.Config{})
+
+	dictID, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, "no-resurrect-dict", 802))
+	if err != nil {
+		t.Fatalf("PutDictBytes: %v", err)
+	}
+	tplBytes, err := templ.EncodeTemplateDef(templ.TemplateDef{
+		Kind:    templ.TemplateAnchors,
+		Anchors: [][]byte{[]byte("no-resurrect-anchor-a-"), []byte("-no-resurrect-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef: %v", err)
+	}
+	tplID, err := tstore.PutTemplateDef(ctx, tplBytes, nil)
+	if err != nil {
+		t.Fatalf("PutTemplateDef: %v", err)
+	}
+
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			_, _ = d.LookupSystemDictBytes(dictID)
+			_, _ = d.LookupSystemTemplateDef(tplID)
+		}
+	}()
+
+	stats, err := d.SystemMetadataGC(ctx, db.SystemMetadataGCOptions{
+		Audit: db.SystemMetadataAuditOptions{
+			KeepRecentPublishedDicts:     -1,
+			KeepRecentPublishedTemplates: -1,
+		},
+	})
+	stop.Store(true)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("SystemMetadataGC: %v", err)
+	}
+	if stats.DictsDeleted != 1 || stats.TemplatesDeleted != 1 {
+		t.Fatalf("expected 1 dict and 1 template deleted, got %+v", stats)
+	}
+	if _, err := d.LookupSystemDictBytes(dictID); !errors.Is(err, valuelog.ErrMissingDict) {
+		t.Fatalf("post-GC LookupSystemDictBytes(%d) err=%v want ErrMissingDict (cache resurrected)", dictID, err)
+	}
+	if _, err := d.LookupSystemTemplateDef(tplID); !errors.Is(err, templ.ErrMissingTemplate) {
+		t.Fatalf("post-GC LookupSystemTemplateDef(%d) err=%v want ErrMissingTemplate (cache resurrected)", tplID, err)
+	}
+}

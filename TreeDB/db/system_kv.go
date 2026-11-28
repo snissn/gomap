@@ -371,12 +371,19 @@ func (db *DB) LookupSystemDictBytes(dictID uint64) ([]byte, error) {
 	if cached, ok := db.systemDictCache.Load(dictID); ok {
 		return cached.([]byte), nil
 	}
+	epochBefore := db.systemMetaGCEpoch.Load()
 	raw, err := db.loadSystemDictBytesUncached(dictID)
 	if err != nil {
 		return nil, err
 	}
-	actual, _ := db.systemDictCache.LoadOrStore(dictID, raw)
-	return actual.([]byte), nil
+	db.systemMetaCacheMu.RLock()
+	if db.systemMetaGCEpoch.Load() == epochBefore {
+		actual, _ := db.systemDictCache.LoadOrStore(dictID, raw)
+		db.systemMetaCacheMu.RUnlock()
+		return actual.([]byte), nil
+	}
+	db.systemMetaCacheMu.RUnlock()
+	return raw, nil
 }
 
 func (db *DB) cacheSystemDictBytes(dictID uint64, dictBytes []byte) {
@@ -563,12 +570,19 @@ func (db *DB) LookupSystemTemplateDef(templateID uint64) ([]byte, error) {
 	if cached, ok := db.systemTemplateCache.Load(templateID); ok {
 		return cached.([]byte), nil
 	}
+	epochBefore := db.systemMetaGCEpoch.Load()
 	raw, err := db.loadSystemTemplateDefUncached(templateID)
 	if err != nil {
 		return nil, err
 	}
-	actual, _ := db.systemTemplateCache.LoadOrStore(templateID, raw)
-	return actual.([]byte), nil
+	db.systemMetaCacheMu.RLock()
+	if db.systemMetaGCEpoch.Load() == epochBefore {
+		actual, _ := db.systemTemplateCache.LoadOrStore(templateID, raw)
+		db.systemMetaCacheMu.RUnlock()
+		return actual.([]byte), nil
+	}
+	db.systemMetaCacheMu.RUnlock()
+	return raw, nil
 }
 
 func (db *DB) loadSystemTemplateDefUncached(templateID uint64) ([]byte, error) {
@@ -955,7 +969,7 @@ func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) error {
 }
 
 func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (commitSeq uint64, accepted bool, physicallyDurable bool, retErr error) {
-	commitSeq, accepted, physicallyDurable, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, false, 0, 0, nil)
+	commitSeq, accepted, physicallyDurable, _, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, false, 0, 0, nil, nil, false)
 	return commitSeq, accepted, physicallyDurable, retErr
 }
 
@@ -963,33 +977,37 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 // db.meta.CommitSeq still equals wantSeq and db.meta.SystemRootPageID still
 // equals wantSystemRoot (and preCommitCheck, when non-nil, returns true) while
 // db.writeMu is held. If the guard fails, it returns stale=true with zero
-// mutations.
-func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq, wantSystemRoot uint64, sync bool, preCommitCheck func() bool) (stale bool, err error) {
-	_, _, _, stale, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, true, wantSeq, wantSystemRoot, preCommitCheck)
-	return stale, err
+// mutations. onAccepted (when non-nil) runs immediately after the new
+// SystemRootPageID is installed in memory and before waiting for physical
+// publication so callers can evict caches and release systemMetaPublishMu
+// before any durability callbacks execute. Post-commit work is returned as
+// postWork so callers can run it after releasing outer maintenance fences.
+func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq, wantSystemRoot uint64, sync bool, preCommitCheck func() bool, onAccepted func()) (stale bool, postWork func(), err error) {
+	_, _, _, stale, postWork, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, true, wantSeq, wantSystemRoot, preCommitCheck, onAccepted, true)
+	return stale, postWork, err
 }
 
-func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, checkGuard bool, wantSeq, wantSystemRoot uint64, preCommitCheck func() bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, retErr error) {
+func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, checkGuard bool, wantSeq, wantSystemRoot uint64, preCommitCheck func() bool, onAccepted func(), deferPostWork bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, postWork func(), retErr error) {
 	if db == nil {
-		return 0, false, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if db.closing.Load() {
-		return 0, false, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if db.readOnly {
-		return 0, false, false, false, ErrReadOnly
+		return 0, false, false, false, nil, ErrReadOnly
 	}
 	if len(ops) == 0 {
-		return 0, false, false, false, nil
+		return 0, false, false, false, nil, nil
 	}
 	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(ops)
 	db.recordRecentSystemMetadataIDs(sortedOps)
 	if len(sortedOps) == 0 {
-		return 0, false, false, false, nil
+		return 0, false, false, false, nil, nil
 	}
 	if sync && hasPointer {
 		if err := db.syncSystemValueLogWriterIfOpen(); err != nil {
-			return 0, false, false, false, err
+			return 0, false, false, false, nil, err
 		}
 	}
 
@@ -1001,13 +1019,13 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 		}
 	}()
 	if db.closing.Load() {
-		return 0, false, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return 0, false, false, false, err
+		return 0, false, false, false, nil, err
 	}
 	if db.readOnly {
-		return 0, false, false, false, ErrReadOnly
+		return 0, false, false, false, nil, ErrReadOnly
 	}
 
 	db.mu.RLock()
@@ -1017,13 +1035,13 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 	db.mu.RUnlock()
 
 	if checkGuard && (baseSeq != wantSeq || baseSystemRoot != wantSystemRoot) {
-		return 0, false, false, true, nil
+		return 0, false, false, true, nil, nil
 	}
 	if preCommitCheck != nil && !preCommitCheck() {
-		return 0, false, false, true, nil
+		return 0, false, false, true, nil, nil
 	}
 	if err := db.validateDirectSystemOpReferencesLocked(baseSystemRoot, sortedOps); err != nil {
-		return 0, false, false, false, err
+		return 0, false, false, false, nil, err
 	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
@@ -1034,7 +1052,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false,
 	)
 	if err != nil {
-		return 0, false, false, false, err
+		return 0, false, false, false, nil, err
 	}
 	defer func() {
 		if vlogRefDelta != nil {
@@ -1047,13 +1065,17 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		return 0, false, false, false, errors.New("treedb: concurrent modification detected during system KV publish")
+		if checkGuard {
+			return 0, false, false, true, nil, nil
+		}
+		return 0, false, false, false, nil, errors.New("treedb: concurrent modification detected during system KV publish")
 	}
 
 	var finalizeOpts finalizeCommitOptions
 	if db.privateCOWOwner != nil {
 		finalizeOpts.privateCOWRewrite = newPrivateCOWRewriteFinalization(db.privateCOWOwner, nil)
 	}
+	finalizeOpts.onAccepted = onAccepted
 	forceRefresh := hasPointer || len(touchedValueLogSegments) > 0
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments,
@@ -1066,13 +1088,20 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 		nil,
 	)
 	if err != nil {
-		return post.commitSeq, post.accepted, post.physicallyDurable, false, err
+		return post.commitSeq, post.accepted, post.physicallyDurable, false, nil, err
 	}
 	vlogRefDelta = nil
-	db.finalizeCommitPostWork(post)
+	if deferPostWork {
+		postCopy := post
+		postWork = func() {
+			db.finalizeCommitPostWork(postCopy)
+		}
+	} else {
+		db.finalizeCommitPostWork(post)
+	}
 	if hasPointer {
 		if err := db.RefreshValueLogSet(); err != nil {
-			return post.commitSeq, post.accepted, post.physicallyDurable, false, err
+			return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, err
 		}
 	}
 	for _, op := range sortedOps {
@@ -1081,7 +1110,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 			break
 		}
 	}
-	return post.commitSeq, post.accepted, post.physicallyDurable, false, nil
+	return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, nil
 }
 
 type stagedSystemOpBatch struct {
@@ -1797,25 +1826,33 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 
 // EvictSystemDictCache removes the given dictionary IDs from the DB's
 // in-memory dictionary byte cache and the global value-log zstd codec cache.
+// Holding systemMetaCacheMu and advancing systemMetaGCEpoch ensures concurrent
+// uncached lookups that read a pre-GC snapshot cannot resurrect deleted entries.
 func (db *DB) EvictSystemDictCache(dictIDs []uint64) {
 	if db == nil || len(dictIDs) == 0 {
 		return
 	}
+	db.systemMetaCacheMu.Lock()
+	db.systemMetaGCEpoch.Add(1)
 	for _, id := range dictIDs {
 		if id != 0 {
 			db.systemDictCache.Delete(id)
 		}
 	}
 	valuelog.EvictDictCodecs(dictIDs)
+	db.systemMetaCacheMu.Unlock()
 }
 
 // EvictSystemTemplateCache removes the given template IDs from the DB's
 // in-memory template byte cache and the value-log manager's decoded template
-// definition cache.
+// definition cache. Holding systemMetaCacheMu and advancing systemMetaGCEpoch
+// ensures concurrent uncached lookups cannot resurrect deleted entries.
 func (db *DB) EvictSystemTemplateCache(templateIDs []uint64) {
 	if db == nil || len(templateIDs) == 0 {
 		return
 	}
+	db.systemMetaCacheMu.Lock()
+	db.systemMetaGCEpoch.Add(1)
 	for _, id := range templateIDs {
 		if id != 0 {
 			db.systemTemplateCache.Delete(id)
@@ -1824,6 +1861,7 @@ func (db *DB) EvictSystemTemplateCache(templateIDs []uint64) {
 	if db.valueLogManager != nil {
 		db.valueLogManager.EvictTemplateDefs(templateIDs)
 	}
+	db.systemMetaCacheMu.Unlock()
 }
 
 func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool, bool) {

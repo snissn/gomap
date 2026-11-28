@@ -115,6 +115,10 @@ type finalizeCommitOptions struct {
 	// the finalizer and clears the caller's ownership flag exactly once. It is
 	// required whenever durablePublishLocked is true.
 	durablePublishRelease func()
+	// onAccepted runs once right after the new root state is installed in memory
+	// and durablePublishMu is released, before waiting for physical root
+	// publication or dispatching post-commit durability callbacks.
+	onAccepted func()
 	// rootPublicationBuilder is an admitted builder lease acquired before any
 	// caller-owned durable publication lock. The finalizer consumes its final
 	// handle atomically with the visible candidate handoff.

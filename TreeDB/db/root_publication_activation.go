@@ -1548,6 +1548,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		pack.afterActivation()
 	}
 	releaseDurablePublish()
+	if opts.onAccepted != nil {
+		opts.onAccepted()
+	}
 	if reportErr != nil {
 		db.reportError(reportErr)
 	}
