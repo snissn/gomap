@@ -371,12 +371,19 @@ func (db *DB) LookupSystemDictBytes(dictID uint64) ([]byte, error) {
 	if cached, ok := db.systemDictCache.Load(dictID); ok {
 		return cached.([]byte), nil
 	}
+	epochBefore := db.systemMetaGCEpoch.Load()
 	raw, err := db.loadSystemDictBytesUncached(dictID)
 	if err != nil {
 		return nil, err
 	}
-	actual, _ := db.systemDictCache.LoadOrStore(dictID, raw)
-	return actual.([]byte), nil
+	db.systemMetaCacheMu.RLock()
+	if db.systemMetaGCEpoch.Load() == epochBefore {
+		actual, _ := db.systemDictCache.LoadOrStore(dictID, raw)
+		db.systemMetaCacheMu.RUnlock()
+		return actual.([]byte), nil
+	}
+	db.systemMetaCacheMu.RUnlock()
+	return raw, nil
 }
 
 func (db *DB) cacheSystemDictBytes(dictID uint64, dictBytes []byte) {
@@ -563,12 +570,19 @@ func (db *DB) LookupSystemTemplateDef(templateID uint64) ([]byte, error) {
 	if cached, ok := db.systemTemplateCache.Load(templateID); ok {
 		return cached.([]byte), nil
 	}
+	epochBefore := db.systemMetaGCEpoch.Load()
 	raw, err := db.loadSystemTemplateDefUncached(templateID)
 	if err != nil {
 		return nil, err
 	}
-	actual, _ := db.systemTemplateCache.LoadOrStore(templateID, raw)
-	return actual.([]byte), nil
+	db.systemMetaCacheMu.RLock()
+	if db.systemMetaGCEpoch.Load() == epochBefore {
+		actual, _ := db.systemTemplateCache.LoadOrStore(templateID, raw)
+		db.systemMetaCacheMu.RUnlock()
+		return actual.([]byte), nil
+	}
+	db.systemMetaCacheMu.RUnlock()
+	return raw, nil
 }
 
 func (db *DB) loadSystemTemplateDefUncached(templateID uint64) ([]byte, error) {
@@ -955,26 +969,45 @@ func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) error {
 }
 
 func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (commitSeq uint64, accepted bool, physicallyDurable bool, retErr error) {
+	commitSeq, accepted, physicallyDurable, _, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, false, 0, 0, nil, nil, false)
+	return commitSeq, accepted, physicallyDurable, retErr
+}
+
+// applySystemOpsDirectIfCommitSeq applies ops to SystemRootPageID only if
+// db.meta.CommitSeq still equals wantSeq and db.meta.SystemRootPageID still
+// equals wantSystemRoot (and preCommitCheck, when non-nil, returns true) while
+// db.writeMu is held. If the guard fails, it returns stale=true with zero
+// mutations. onAccepted (when non-nil) runs immediately after the new
+// SystemRootPageID is installed in memory and before waiting for physical
+// publication so callers can evict caches and release systemMetaPublishMu
+// before any durability callbacks execute. Post-commit work is returned as
+// postWork so callers can run it after releasing outer maintenance fences.
+func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq, wantSystemRoot uint64, sync bool, preCommitCheck func() bool, onAccepted func()) (stale bool, postWork func(), err error) {
+	_, _, _, stale, postWork, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, true, wantSeq, wantSystemRoot, preCommitCheck, onAccepted, true)
+	return stale, postWork, err
+}
+
+func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, checkGuard bool, wantSeq, wantSystemRoot uint64, preCommitCheck func() bool, onAccepted func(), deferPostWork bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, postWork func(), retErr error) {
 	if db == nil {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if db.closing.Load() {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if db.readOnly {
-		return 0, false, false, ErrReadOnly
+		return 0, false, false, false, nil, ErrReadOnly
 	}
 	if len(ops) == 0 {
-		return 0, false, false, nil
+		return 0, false, false, false, nil, nil
 	}
-	sortedOps, hasPointer := normalizeSystemKVOps(ops)
+	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(ops)
 	db.recordRecentSystemMetadataIDs(sortedOps)
 	if len(sortedOps) == 0 {
-		return 0, false, false, nil
+		return 0, false, false, false, nil, nil
 	}
 	if sync && hasPointer {
 		if err := db.syncSystemValueLogWriterIfOpen(); err != nil {
-			return 0, false, false, err
+			return 0, false, false, false, nil, err
 		}
 	}
 
@@ -986,13 +1019,13 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 		}
 	}()
 	if db.closing.Load() {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, nil, ErrClosed
 	}
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return 0, false, false, err
+		return 0, false, false, false, nil, err
 	}
 	if db.readOnly {
-		return 0, false, false, ErrReadOnly
+		return 0, false, false, false, nil, ErrReadOnly
 	}
 
 	db.mu.RLock()
@@ -1001,15 +1034,25 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
+	if checkGuard && (baseSeq != wantSeq || baseSystemRoot != wantSystemRoot) {
+		return 0, false, false, true, nil, nil
+	}
+	if preCommitCheck != nil && !preCommitCheck() {
+		return 0, false, false, true, nil, nil
+	}
+	if err := db.validateDirectSystemOpReferencesLocked(baseSystemRoot, sortedOps); err != nil {
+		return 0, false, false, false, nil, err
+	}
+
 	systemOpts := systemRootOrderedPublishOptions(db)
 
-	trackValueLogRefs := hasPointer && db.valueLogRefTracker != nil
+	trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
 	iter := newSystemKVOpIterator(sortedOps)
 	newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(
 		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false,
 	)
 	if err != nil {
-		return 0, false, false, err
+		return 0, false, false, false, nil, err
 	}
 	defer func() {
 		if vlogRefDelta != nil {
@@ -1022,13 +1065,17 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		return 0, false, false, errors.New("treedb: concurrent modification detected during system KV publish")
+		if checkGuard {
+			return 0, false, false, true, nil, nil
+		}
+		return 0, false, false, false, nil, errors.New("treedb: concurrent modification detected during system KV publish")
 	}
 
 	var finalizeOpts finalizeCommitOptions
 	if db.privateCOWOwner != nil {
 		finalizeOpts.privateCOWRewrite = newPrivateCOWRewriteFinalization(db.privateCOWOwner, nil)
 	}
+	finalizeOpts.onAccepted = onAccepted
 	forceRefresh := hasPointer || len(touchedValueLogSegments) > 0
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments,
@@ -1041,13 +1088,20 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 		nil,
 	)
 	if err != nil {
-		return post.commitSeq, post.accepted, post.physicallyDurable, err
+		return post.commitSeq, post.accepted, post.physicallyDurable, false, nil, err
 	}
 	vlogRefDelta = nil
-	db.finalizeCommitPostWork(post)
+	if deferPostWork {
+		postCopy := post
+		postWork = func() {
+			db.finalizeCommitPostWork(postCopy)
+		}
+	} else {
+		db.finalizeCommitPostWork(post)
+	}
 	if hasPointer {
 		if err := db.RefreshValueLogSet(); err != nil {
-			return post.commitSeq, post.accepted, post.physicallyDurable, err
+			return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, err
 		}
 	}
 	for _, op := range sortedOps {
@@ -1056,7 +1110,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 			break
 		}
 	}
-	return post.commitSeq, post.accepted, post.physicallyDurable, nil
+	return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, nil
 }
 
 type stagedSystemOpBatch struct {
@@ -1138,6 +1192,17 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 		return nil
 	}
 	cloned := cloneSystemKVOps(ops)
+	// Serialize staging against destructive SystemMetadataGC so a staged
+	// activation marker (e.g. dict/current* or template/fp/*) cannot be queued
+	// concurrently with GC deleting the referenced definition.
+	db.systemMetaPublishMu.RLock()
+	defer db.systemMetaPublishMu.RUnlock()
+	if err := db.validateStagedSystemOpReferencesLocked(cloned); err != nil {
+		if len(pendingPtrs) > 0 {
+			db.releasePendingValueLogAppendPtrCounts(pendingPtrs)
+		}
+		return err
+	}
 	db.stagedSystemOpsMu.Lock()
 	if db.closing.Load() {
 		db.stagedSystemOpsMu.Unlock()
@@ -1154,6 +1219,217 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 	db.updateStagedSystemOpsCountLocked()
 	db.stagedSystemOpsMu.Unlock()
 	db.recordRecentSystemMetadataIDs(cloned)
+	return nil
+}
+
+// validateDirectSystemOpReferencesLocked verifies inside db.writeMu against
+// baseSystemRoot that any dict/current* or template/fp/* activation in ops
+// references a definition either written in ops (and not deleted) or present
+// in baseSystemRoot. This prevents direct publishes (PublishDict, SetCurrent,
+// PutTemplateDef) from committing a dangling activation after a concurrent
+// SystemMetadataGC deletes an unreferenced definition.
+func (db *DB) validateDirectSystemOpReferencesLocked(baseSystemRoot uint64, ops []SystemKVOp) error {
+	var definedDicts, deletedDicts map[uint64]struct{}
+	var definedTpls, deletedTpls map[uint64]struct{}
+	var refDicts, refTpls []uint64
+	for _, op := range ops {
+		switch {
+		case bytes.HasPrefix(op.Key, systemDictBytesPrefix):
+			if id, ok := parseSystemDictBytesKey(op.Key); ok {
+				if op.Delete {
+					if deletedDicts == nil {
+						deletedDicts = make(map[uint64]struct{}, 2)
+					}
+					deletedDicts[id] = struct{}{}
+				} else {
+					if definedDicts == nil {
+						definedDicts = make(map[uint64]struct{}, 2)
+					}
+					definedDicts[id] = struct{}{}
+				}
+			}
+		case !op.Delete && (bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix)):
+			if !op.IsPointer && len(op.Value) == 8 {
+				if id := binary.BigEndian.Uint64(op.Value); id != 0 {
+					refDicts = append(refDicts, id)
+				}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateDefPrefix):
+			if id, ok := parseSystemTemplateDefKey(op.Key); ok {
+				if op.Delete {
+					if deletedTpls == nil {
+						deletedTpls = make(map[uint64]struct{}, 2)
+					}
+					deletedTpls[id] = struct{}{}
+				} else {
+					if definedTpls == nil {
+						definedTpls = make(map[uint64]struct{}, 2)
+					}
+					definedTpls[id] = struct{}{}
+				}
+			}
+		case !op.Delete && bytes.HasPrefix(op.Key, systemTemplateFPPrefix):
+			if !op.IsPointer && len(op.Value) > 0 {
+				cands, err := decodeSystemTemplateFPCandidates(op.Value)
+				if err != nil {
+					return err
+				}
+				for _, c := range cands {
+					if c.id != 0 {
+						refTpls = append(refTpls, c.id)
+					}
+				}
+			}
+		}
+	}
+	if len(refDicts) == 0 && len(refTpls) == 0 {
+		return nil
+	}
+	var tr *tree.Tree
+	if baseSystemRoot != 0 {
+		idx := db.idx.Load()
+		if idx == nil || idx.pager == nil {
+			return ErrClosed
+		}
+		var set *valuelog.Set
+		if db.valueLogManager != nil {
+			set = db.valueLogManager.CurrentSetNoRefresh()
+			defer func() {
+				if set != nil {
+					_ = db.valueLogManager.Release(set)
+				}
+			}()
+		}
+		tr = tree.New(idx.pager, newValueReader(set), baseSystemRoot)
+	}
+	entryExists := func(key []byte) (bool, error) {
+		if tr == nil {
+			return false, nil
+		}
+		entry, err := tr.GetEntry(key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return entry.Flags&node.FlagTombstone == 0, nil
+	}
+	for _, id := range refDicts {
+		if _, deleted := deletedDicts[id]; deleted {
+			return fmt.Errorf("treedb: cannot activate deleted dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+		if _, defined := definedDicts[id]; defined {
+			continue
+		}
+		ok, err := entryExists(SystemDictBytesKey(id))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("treedb: cannot activate missing dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+	}
+	for _, id := range refTpls {
+		if _, deleted := deletedTpls[id]; deleted {
+			return fmt.Errorf("treedb: cannot index deleted template %d: %w", id, templ.ErrMissingTemplate)
+		}
+		if _, defined := definedTpls[id]; defined {
+			continue
+		}
+		ok, err := entryExists(SystemTemplateDefKey(id))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("treedb: cannot index missing template %d: %w", id, templ.ErrMissingTemplate)
+		}
+	}
+	return nil
+}
+
+// validateStagedSystemOpReferencesLocked verifies that any dict/current* or
+// template/fp/* activation queued in ops refers to a definition either created
+// in ops, already queued in stagedSystemOps, or currently present in
+// SystemRootPageID. Callers must hold db.systemMetaPublishMu.RLock().
+func (db *DB) validateStagedSystemOpReferencesLocked(ops []SystemKVOp) error {
+	var definedDicts map[uint64]struct{}
+	var definedTpls map[uint64]struct{}
+	var refDicts []uint64
+	var refTpls []uint64
+	for _, op := range ops {
+		if op.Delete {
+			continue
+		}
+		switch {
+		case bytes.HasPrefix(op.Key, systemDictBytesPrefix):
+			if id, ok := parseSystemDictBytesKey(op.Key); ok {
+				if definedDicts == nil {
+					definedDicts = make(map[uint64]struct{}, 2)
+				}
+				definedDicts[id] = struct{}{}
+			}
+		case bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix):
+			if !op.IsPointer && len(op.Value) == 8 {
+				if id := binary.BigEndian.Uint64(op.Value); id != 0 {
+					refDicts = append(refDicts, id)
+				}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateDefPrefix):
+			if id, ok := parseSystemTemplateDefKey(op.Key); ok {
+				if definedTpls == nil {
+					definedTpls = make(map[uint64]struct{}, 2)
+				}
+				definedTpls[id] = struct{}{}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateFPPrefix):
+			if !op.IsPointer && len(op.Value) > 0 {
+				cands, err := decodeSystemTemplateFPCandidates(op.Value)
+				if err != nil {
+					return err
+				}
+				for _, c := range cands {
+					if c.id != 0 {
+						refTpls = append(refTpls, c.id)
+					}
+				}
+			}
+		}
+	}
+	if len(refDicts) == 0 && len(refTpls) == 0 {
+		return nil
+	}
+	stagedDicts, stagedTpls := db.snapshotStagedSystemMetadataIDs()
+	for _, id := range refDicts {
+		if _, ok := definedDicts[id]; ok {
+			continue
+		}
+		if _, ok := stagedDicts[id]; ok {
+			continue
+		}
+		raw, err := db.GetSystem(SystemDictBytesKey(id))
+		if err != nil {
+			return err
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("treedb: cannot stage current marker for missing dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+	}
+	for _, id := range refTpls {
+		if _, ok := definedTpls[id]; ok {
+			continue
+		}
+		if _, ok := stagedTpls[id]; ok {
+			continue
+		}
+		raw, err := db.GetSystem(SystemTemplateDefKey(id))
+		if err != nil {
+			return err
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("treedb: cannot stage routing entry for missing template %d: %w", id, templ.ErrMissingTemplate)
+		}
+	}
 	return nil
 }
 
@@ -1368,7 +1644,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		return nil, nil
 	}
 	allOps := flattenStagedSystemOpBatches(drained)
-	sortedOps, hasPointer := normalizeSystemKVOps(allOps)
+	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(allOps)
 	if len(sortedOps) == 0 {
 		db.completeStagedSystemOpBatches(drained, baseSeq, sync)
 		return nil, nil
@@ -1380,7 +1656,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		}
 	}
 	systemOpts := systemRootOrderedPublishOptions(db)
-	trackValueLogRefs := hasPointer && db.valueLogRefTracker != nil
+	trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
 	iter := newSystemKVOpIterator(sortedOps)
 	newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefsAndAllocator(
 		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false, alloc,
@@ -1548,7 +1824,47 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 	return nil
 }
 
-func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool) {
+// EvictSystemDictCache removes the given dictionary IDs from the DB's
+// in-memory dictionary byte cache and the global value-log zstd codec cache.
+// Holding systemMetaCacheMu and advancing systemMetaGCEpoch ensures concurrent
+// uncached lookups that read a pre-GC snapshot cannot resurrect deleted entries.
+func (db *DB) EvictSystemDictCache(dictIDs []uint64) {
+	if db == nil || len(dictIDs) == 0 {
+		return
+	}
+	db.systemMetaCacheMu.Lock()
+	db.systemMetaGCEpoch.Add(1)
+	for _, id := range dictIDs {
+		if id != 0 {
+			db.systemDictCache.Delete(id)
+		}
+	}
+	valuelog.EvictDictCodecs(dictIDs)
+	db.systemMetaCacheMu.Unlock()
+}
+
+// EvictSystemTemplateCache removes the given template IDs from the DB's
+// in-memory template byte cache and the value-log manager's decoded template
+// definition cache. Holding systemMetaCacheMu and advancing systemMetaGCEpoch
+// ensures concurrent uncached lookups cannot resurrect deleted entries.
+func (db *DB) EvictSystemTemplateCache(templateIDs []uint64) {
+	if db == nil || len(templateIDs) == 0 {
+		return
+	}
+	db.systemMetaCacheMu.Lock()
+	db.systemMetaGCEpoch.Add(1)
+	for _, id := range templateIDs {
+		if id != 0 {
+			db.systemTemplateCache.Delete(id)
+		}
+	}
+	if db.valueLogManager != nil {
+		db.valueLogManager.EvictTemplateDefs(templateIDs)
+	}
+	db.systemMetaCacheMu.Unlock()
+}
+
+func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool, bool) {
 	type indexedOp struct {
 		op  SystemKVOp
 		idx int
@@ -1565,17 +1881,20 @@ func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool) {
 	})
 	out := make([]SystemKVOp, 0, len(list))
 	hasPointer := false
+	hasDelete := false
 	for i := 0; i < len(list); i++ {
 		if i+1 < len(list) && bytes.Equal(list[i].op.Key, list[i+1].op.Key) {
 			continue
 		}
 		op := list[i].op
-		if op.IsPointer && !op.Delete {
+		if op.Delete {
+			hasDelete = true
+		} else if op.IsPointer {
 			hasPointer = true
 		}
 		out = append(out, op)
 	}
-	return out, hasPointer
+	return out, hasPointer, hasDelete
 }
 
 type systemKVOpIterator struct {

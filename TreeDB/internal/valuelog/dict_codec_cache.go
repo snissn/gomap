@@ -60,7 +60,11 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte, level zstd.Encoder
 	defer c.mu.Unlock()
 	if elem, ok := c.items[key]; ok {
 		c.ll.MoveToFront(elem)
-		return elem.Value.(*dictCodecEntry)
+		entry := elem.Value.(*dictCodecEntry)
+		if c == dictCodecs {
+			dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
+		}
+		return entry
 	}
 	// Copy dict bytes so pooled encoders/decoders never reference an ephemeral slice.
 	dictCopy := append([]byte(nil), dict...)
@@ -115,6 +119,9 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte, level zstd.Encoder
 			delete(c.items, old.key)
 		}
 	}
+	if c == dictCodecs {
+		dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
+	}
 	return entry
 }
 
@@ -131,9 +138,35 @@ func getDictCodecsWithOpts(dictID uint64, dict []byte, level zstd.EncoderLevel, 
 	if fast := dictCodecsFast.Load(); fast != nil && fast.entry != nil && fast.key == key {
 		return fast.entry
 	}
-	entry := dictCodecs.getOrAdd(dictID, dict, level, noEntropy)
-	if entry != nil {
-		dictCodecsFast.Store(&dictCodecsFastEntry{key: key, entry: entry})
+	return dictCodecs.getOrAdd(dictID, dict, level, noEntropy)
+}
+
+// EvictDictCodecs removes cached zstd encoder/decoder entries for the given
+// dictionary IDs from the global dict codec cache and single-entry fast slot.
+func EvictDictCodecs(dictIDs []uint64) {
+	if len(dictIDs) == 0 || dictCodecs == nil {
+		return
 	}
-	return entry
+	idSet := make(map[uint64]struct{}, len(dictIDs))
+	for _, id := range dictIDs {
+		if id != 0 {
+			idSet[id] = struct{}{}
+		}
+	}
+	if len(idSet) == 0 {
+		return
+	}
+	dictCodecs.mu.Lock()
+	for k, elem := range dictCodecs.items {
+		if _, ok := idSet[k.dictID]; ok {
+			dictCodecs.ll.Remove(elem)
+			delete(dictCodecs.items, k)
+		}
+	}
+	if fast := dictCodecsFast.Load(); fast != nil {
+		if _, ok := idSet[fast.key.dictID]; ok {
+			dictCodecsFast.Store(nil)
+		}
+	}
+	dictCodecs.mu.Unlock()
 }

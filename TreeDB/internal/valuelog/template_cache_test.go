@@ -59,3 +59,21 @@ func TestTemplateDefCacheDisabled(t *testing.T) {
 		t.Fatalf("unexpected stats for nil cache")
 	}
 }
+
+func TestTemplateDefCacheDeleteAndEvictDictCodecs(t *testing.T) {
+	c := newTemplateDefCache(4)
+	def1 := templ.TemplateDef{Kind: templ.TemplateAnchors, Anchors: [][]byte{[]byte("A")}}
+	def2 := templ.TemplateDef{Kind: templ.TemplateAnchors, Anchors: [][]byte{[]byte("B")}}
+	c.Add(1, def1)
+	c.Add(2, def2)
+	c.Delete([]uint64{1})
+	if _, ok := c.Get(1); ok {
+		t.Fatalf("expected id=1 to be deleted from templateDefCache")
+	}
+	if _, ok := c.Get(2); !ok {
+		t.Fatalf("expected id=2 to remain in templateDefCache")
+	}
+	// Verify EvictDictCodecs handles empty/non-existent IDs cleanly.
+	EvictDictCodecs(nil)
+	EvictDictCodecs([]uint64{999999})
+}

@@ -241,6 +241,9 @@ type DB struct {
 	systemVLogNextRID              uint64
 	systemRootMutationFenceMu      sync.RWMutex
 	systemRootMutationFence        func() (func() error, error)
+	systemMetaPublishMu            sync.RWMutex
+	systemMetaCacheMu              sync.RWMutex
+	systemMetaGCEpoch              atomic.Uint64
 	stagedSystemOpsCount           atomic.Int32
 	stagedSystemSyncWaitersCount   atomic.Int32
 	stagedSystemInFlightUnsynced   atomic.Int32
@@ -4759,6 +4762,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if hasInlineManifest {
 		db.inlineLeafManifest = nil
 		_ = inline.update.finish(true)
+	}
+	releaseDurablePublish()
+	if opts.onAccepted != nil {
+		opts.onAccepted()
 	}
 
 	return post, nil

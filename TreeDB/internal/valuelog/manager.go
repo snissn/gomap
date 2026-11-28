@@ -1920,6 +1920,20 @@ func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOpti
 	}
 }
 
+// EvictTemplateDefs removes the given template IDs from the manager's decoded
+// template definition cache.
+func (m *Manager) EvictTemplateDefs(ids []uint64) {
+	if m == nil || len(ids) == 0 {
+		return
+	}
+	m.mu.RLock()
+	cache := m.templateDefCache
+	m.mu.RUnlock()
+	if cache != nil {
+		cache.Delete(ids)
+	}
+}
+
 func (m *Manager) SetGroupedFrameCacheEntries(entries int) {
 	if entries < 0 {
 		entries = 0
