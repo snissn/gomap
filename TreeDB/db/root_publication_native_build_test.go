@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -274,4 +275,324 @@ func TestNativeNoTouchPointerPinCustody(t *testing.T) {
 			}
 		})
 	}
+}
+
+type countingColdScanValueLogAppender struct {
+	ValueLogAppender
+	calls     int
+	maxBatch  int
+	totalVals int
+}
+
+func (c *countingColdScanValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	c.calls++
+	if len(values) > c.maxBatch {
+		c.maxBatch = len(values)
+	}
+	c.totalVals += len(values)
+	return c.ValueLogAppender.AppendValues(values)
+}
+
+func TestBuildNativeOrderedRootColdScanBatchesValueLogAppends(t *testing.T) {
+	for _, immutable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("immutable=%t", immutable), func(t *testing.T) {
+			database, err := Open(Options{
+				Dir:                    t.TempDir(),
+				Durability:             DurabilityWALOffRelaxed,
+				DisableBackgroundPrune: true,
+				ValueLog:               ValueLogOptions{PointerThreshold: 128},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			inner, err := newReplayInlineAppender(database, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer inner.close()
+			counting := &countingColdScanValueLogAppender{ValueLogAppender: inner}
+			database.SetValueLogAppender(counting)
+			defer database.SetValueLogAppender(nil)
+
+			// Seed one pre-existing pointer to interleave FlagPointer with inline and newly-pointerized values.
+			preValue := bytes.Repeat([]byte("pre-ptr-"), 32)
+			prePtrs, err := database.AppendValueLogValues([][]byte{preValue})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.ReleaseValueLogValues(prePtrs)
+			if err := inner.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.RefreshValueLogSet(); err != nil {
+				t.Fatal(err)
+			}
+			counting.calls = 0
+			counting.maxBatch = 0
+			counting.totalVals = 0
+
+			basis := database.AcquireSnapshot()
+			defer basis.Close()
+			group, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer group.Close()
+
+			const totalRows = 300
+			type wantEntry struct {
+				key string
+				val []byte
+				rev page.EntryRevision
+			}
+			want := make([]wantEntry, 0, totalRows)
+			largeCount := 0
+			for i := 0; i < totalRows; i++ {
+				k := fmt.Sprintf("k-%04d", i)
+				rev := page.EntryRevision(100 + i)
+				switch i % 5 {
+				case 0:
+					want = append(want, wantEntry{key: k, val: []byte(fmt.Sprintf("small-%04d", i)), rev: rev})
+				case 4:
+					want = append(want, wantEntry{key: k, val: preValue, rev: rev})
+				default:
+					val := bytes.Repeat([]byte{byte('a' + (i % 26))}, 512)
+					copy(val, []byte(fmt.Sprintf("large-%04d:", i)))
+					want = append(want, wantEntry{key: k, val: val, rev: rev})
+					largeCount++
+				}
+			}
+
+			root, err := group.BuildNativeOrderedRootColdScan(OrderedRootColdScanPublishInput{
+				EntryCount:           totalRows,
+				CheckInlineThreshold: true,
+				ImmutableSlices:      immutable,
+				Scan: func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error {
+					keyBuf := make([]byte, 0, 32)
+					valBuf := make([]byte, 0, 1024)
+					for i, e := range want {
+						var k, v []byte
+						if immutable {
+							k = []byte(e.key)
+							v = e.val
+						} else {
+							keyBuf = append(keyBuf[:0], e.key...)
+							valBuf = append(valBuf[:0], e.val...)
+							k = keyBuf
+							v = valBuf
+						}
+						if i%5 == 4 {
+							if err := emit(k, nil, prePtrs[0], node.FlagPointer, e.rev); err != nil {
+								return err
+							}
+						} else {
+							if err := emit(k, v, page.ValuePtr{}, node.FlagInline, e.rev); err != nil {
+								return err
+							}
+						}
+						if !immutable {
+							// Clobber reusable scratch immediately after emit to prove defensive copying.
+							for j := range keyBuf {
+								keyBuf[j] = 'X'
+							}
+							for j := range valBuf {
+								valBuf[j] = 'Y'
+							}
+						}
+					}
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("BuildNativeOrderedRootColdScan: %v", err)
+			}
+			if counting.totalVals != largeCount {
+				t.Fatalf("total appended values=%d want=%d", counting.totalVals, largeCount)
+			}
+			if counting.calls != 1 || counting.maxBatch != largeCount {
+				t.Fatalf("expected batched value-log append (calls=1, maxBatch=%d), got calls=%d maxBatch=%d", largeCount, counting.calls, counting.maxBatch)
+			}
+			if err := inner.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.RefreshValueLogSet(); err != nil {
+				t.Fatal(err)
+			}
+			if err := group.WithNativeConstructionRoots([]uint64{root}, func(readers []iterator.UnsafeIterator) error {
+				it := readers[0]
+				idx := 0
+				for ; it.Valid(); it.Next() {
+					if idx >= len(want) {
+						return fmt.Errorf("extra entry at idx=%d key=%q", idx, string(it.UnsafeKey()))
+					}
+					e := want[idx]
+					if string(it.UnsafeKey()) != e.key {
+						return fmt.Errorf("idx=%d key=%q want=%q", idx, string(it.UnsafeKey()), e.key)
+					}
+					if !bytes.Equal(it.UnsafeValue(), e.val) {
+						return fmt.Errorf("idx=%d key=%q value mismatch len=%d want=%d", idx, e.key, len(it.UnsafeValue()), len(e.val))
+					}
+					_, _, _, rev := iterator.UnsafeEntryWithRevision(it)
+					if rev != e.rev {
+						return fmt.Errorf("idx=%d key=%q rev=%d want=%d", idx, e.key, rev, e.rev)
+					}
+					idx++
+				}
+				if err := it.Error(); err != nil {
+					return err
+				}
+				if idx != len(want) {
+					return fmt.Errorf("read %d entries want %d", idx, len(want))
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("verify built root: %v", err)
+			}
+		})
+	}
+
+	t.Run("multi-batch-and-oversized-value", func(t *testing.T) {
+		database, err := Open(Options{
+			Dir:                    t.TempDir(),
+			Durability:             DurabilityWALOffRelaxed,
+			DisableBackgroundPrune: true,
+			ValueLog:               ValueLogOptions{PointerThreshold: 128},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer database.Close()
+		inner, err := newReplayInlineAppender(database, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inner.close()
+		counting := &countingColdScanValueLogAppender{ValueLogAppender: inner}
+		database.SetValueLogAppender(counting)
+		defer database.SetValueLogAppender(nil)
+
+		basis := database.AcquireSnapshot()
+		defer basis.Close()
+		group, err := database.BeginRootPublicationBuildGroupFromSnapshot(basis)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer group.Close()
+
+		// 10 x 512 KiB (= 5 MiB -> triggers multiple 2 MiB batch flushes) + 1 x 2.5 MiB oversized value.
+		const mediumRows = 10
+		const mediumSize = 512 << 10
+		const oversizedSize = (2 << 20) + (512 << 10)
+		type row struct {
+			key string
+			val []byte
+		}
+		want := make([]row, 0, mediumRows+1)
+		for i := 0; i < mediumRows; i++ {
+			v := bytes.Repeat([]byte{byte('a' + i)}, mediumSize)
+			copy(v, []byte(fmt.Sprintf("med-%02d:", i)))
+			want = append(want, row{key: fmt.Sprintf("m-%02d", i), val: v})
+		}
+		bigVal := bytes.Repeat([]byte{'Z'}, oversizedSize)
+		copy(bigVal, []byte("big-oversized:"))
+		want = append(want, row{key: "z-big", val: bigVal})
+
+		root, err := group.BuildNativeOrderedRootColdScan(OrderedRootColdScanPublishInput{
+			EntryCount:           len(want),
+			CheckInlineThreshold: true,
+			ImmutableSlices:      false,
+			Scan: func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error {
+				keyBuf := make([]byte, 0, 32)
+				valBuf := make([]byte, 0, oversizedSize)
+				for i, r := range want {
+					keyBuf = append(keyBuf[:0], r.key...)
+					valBuf = append(valBuf[:0], r.val...)
+					if err := emit(keyBuf, valBuf, page.ValuePtr{}, node.FlagInline, page.EntryRevision(1+i)); err != nil {
+						return err
+					}
+					for j := range keyBuf {
+						keyBuf[j] = '!'
+					}
+					valBuf[0] = '!'
+					valBuf[len(valBuf)-1] = '!'
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildNativeOrderedRootColdScan multi-batch: %v", err)
+		}
+		if counting.totalVals != len(want) {
+			t.Fatalf("total appended=%d want=%d", counting.totalVals, len(want))
+		}
+		if counting.calls < 3 || counting.maxBatch < 2 {
+			t.Fatalf("expected >=3 batched calls with maxBatch>=2, got calls=%d maxBatch=%d", counting.calls, counting.maxBatch)
+		}
+		if err := inner.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.RefreshValueLogSet(); err != nil {
+			t.Fatal(err)
+		}
+		if err := group.WithNativeConstructionRoots([]uint64{root}, func(readers []iterator.UnsafeIterator) error {
+			it := readers[0]
+			idx := 0
+			for ; it.Valid(); it.Next() {
+				if string(it.UnsafeKey()) != want[idx].key || !bytes.Equal(it.UnsafeValue(), want[idx].val) {
+					return fmt.Errorf("mismatch at idx=%d key=%q", idx, string(it.UnsafeKey()))
+				}
+				idx++
+			}
+			if err := it.Error(); err != nil {
+				return err
+			}
+			if idx != len(want) {
+				return fmt.Errorf("read %d want %d", idx, len(want))
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("verify multi-batch root: %v", err)
+		}
+	})
+
+	t.Run("error-while-buffered-cleans-pins", func(t *testing.T) {
+		database, err := Open(Options{
+			Dir:                    t.TempDir(),
+			Durability:             DurabilityWALOffRelaxed,
+			DisableBackgroundPrune: true,
+			ValueLog:               ValueLogOptions{PointerThreshold: 128},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer database.Close()
+		// No appender set -> flushPending must fail cleanly when appending buffered values.
+		group, err := database.BeginRootPublicationBuildGroup()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = group.BuildNativeOrderedRootColdScan(OrderedRootColdScanPublishInput{
+			EntryCount:           4,
+			CheckInlineThreshold: true,
+			ImmutableSlices:      true,
+			Scan: func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error {
+				for i := 0; i < 4; i++ {
+					if err := emit([]byte(fmt.Sprintf("err-%02d", i)), bytes.Repeat([]byte("v"), 512), page.ValuePtr{}, node.FlagInline, page.EntryRevision(i+1)); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		})
+		if !errors.Is(err, ErrValueLogAppenderUnavailable) || !group.failed {
+			t.Fatalf("expected ErrValueLogAppenderUnavailable + failed group, got err=%v failed=%t", err, group.failed)
+		}
+		if err := group.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if len(database.pendingValueLogAppendPtrs()) != 0 || len(database.pendingValueLogAppendFileIDs()) != 0 {
+			t.Fatal("failed cold scan leaked append pins")
+		}
+	})
 }

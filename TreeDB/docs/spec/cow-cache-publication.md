@@ -59,7 +59,8 @@ field and satisfy the consistency checks. It is not a process RSS quota.
 | `MaxInFlightBytes` | 64 MiB | Preparations and outstanding external leases |
 
 The standalone Mongo opener supplies an explicit product bundle: 512 MiB
-in-flight and 1 GiB total/retired, with the other limits above. Half the in-flight
+in-flight, 256 MiB per generation, 1 GiB total/retired, 128 sources, and 256
+generations, with the other limits above. Half the in-flight
 budget remains reserved for physical maintenance; the producer partition covers
 overlapping ordinary BSON/command/COW images for 16 MiB documents and byte-bounded
 wire-sized insert groups. This does not change core defaults or qualify earlier

@@ -29,7 +29,11 @@ func TestCOWNativeConstructionPressureThresholds(t *testing.T) {
 	if base.underPressure(limits) {
 		t.Fatal("construction below watermark requested maintenance")
 	}
-	for _, kind := range []string{"in-flight", "total", "sources", "raw-bytes", "raw-sources", "raw-generations"} {
+	for _, kind := range []string{
+		"in-flight", "total", "sources", "raw-bytes",
+		"raw-total-bytes", "raw-retired-bytes", "raw-retired-overflow-sum1", "raw-retired-overflow-sum2",
+		"raw-sources", "raw-generations",
+	} {
 		t.Run(kind, func(t *testing.T) {
 			s := base
 			switch kind {
@@ -41,6 +45,65 @@ func TestCOWNativeConstructionPressureThresholds(t *testing.T) {
 				s.semantic.Sources = s.semantic.MaxSources
 			case "raw-bytes":
 				s.stats.ReservedBytes = limits.MaxInFlightBytes - limits.MaxInFlightBytes/4
+				if s.nonReservationPressure(limits) || s.totalSoftPressure(limits) {
+					t.Fatal("raw-bytes tripped non-reservation or total pressure")
+				}
+			case "raw-total-bytes":
+				watermark := limits.MaxTotalBytes - limits.MaxTotalBytes/4
+				s.stats.TotalBytes = watermark - 1
+				if s.underPressure(limits) {
+					t.Fatal("below total-bytes watermark requested maintenance")
+				}
+				s.stats.TotalBytes = watermark
+				if !s.totalSoftPressure(limits) || s.totalHardPressure(limits) || s.reservationSoftPressure(limits) {
+					t.Fatalf("unexpected total-bytes soft/hard state at watermark=%d", watermark)
+				}
+				s.stats.TotalBytes = limits.MaxTotalBytes - limits.MaxTotalBytes/8
+				if !s.totalHardPressure(limits) {
+					t.Fatal("hard total-bytes watermark did not trip totalHardPressure")
+				}
+				s.stats.TotalBytes = watermark
+			case "raw-retired-bytes":
+				watermark := limits.MaxRetiredBytes - limits.MaxRetiredBytes/4
+				// Keep ReservedBytes well below MaxInFlightBytes*3/4 so reservationSoftPressure stays false.
+				s.stats.HistoryBytes = watermark - 101
+				s.stats.ReservedBytes = 50
+				s.stats.DeferredBytes = 50
+				if s.underPressure(limits) {
+					t.Fatal("below retired-bytes watermark requested maintenance")
+				}
+				s.stats.DeferredBytes = 51
+				if s.reservationSoftPressure(limits) {
+					t.Fatal("test fixture accidentally tripped reservationSoftPressure")
+				}
+				if !s.totalSoftPressure(limits) || s.totalHardPressure(limits) {
+					t.Fatal("retired-bytes watermark did not trip soft-only totalSoftPressure")
+				}
+				hardWatermark := limits.MaxRetiredBytes - limits.MaxRetiredBytes/8
+				s.stats.HistoryBytes = hardWatermark - 101
+				if !s.totalHardPressure(limits) {
+					t.Fatal("hard retired-bytes watermark did not trip totalHardPressure")
+				}
+				s.stats.HistoryBytes = watermark - 101
+			case "raw-retired-overflow-sum1":
+				s.stats.HistoryBytes = ^uint64(0)
+				s.stats.ReservedBytes = 1
+				if s.reservationSoftPressure(limits) {
+					t.Fatal("test fixture accidentally tripped reservationSoftPressure")
+				}
+				if !s.totalSoftPressure(limits) || !s.totalHardPressure(limits) {
+					t.Fatal("HistoryBytes+ReservedBytes wrap-around did not trip total pressure")
+				}
+			case "raw-retired-overflow-sum2":
+				s.stats.HistoryBytes = 1
+				s.stats.ReservedBytes = 0
+				s.stats.DeferredBytes = ^uint64(0)
+				if s.reservationSoftPressure(limits) {
+					t.Fatal("test fixture accidentally tripped reservationSoftPressure")
+				}
+				if !s.totalSoftPressure(limits) || !s.totalHardPressure(limits) {
+					t.Fatal("used+DeferredBytes wrap-around did not trip total pressure")
+				}
 			case "raw-sources":
 				s.stats.Sources = limits.MaxSources
 			case "raw-generations":

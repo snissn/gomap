@@ -93,7 +93,10 @@ type NativeProducerObservation struct {
 	LogicalSequence uint64
 	Basis           StateToken
 	Semantic        NativeSemanticProducerPressure
+	TotalBytes      uint64
+	HistoryBytes    uint64
 	ReservedBytes   uint64
+	DeferredBytes   uint64
 	Sources         int
 	Generations     int
 	UnderPressure   bool

@@ -169,6 +169,7 @@ func (b *nativeDomainBuild) buildColdScan(coldScanner nativeOrderedRootColdScann
 		StoragePolicy:        b.source.storagePolicy,
 		EntryCount:           entryCount,
 		CheckInlineThreshold: checkInlineThreshold,
+		ImmutableSlices:      true,
 		Scan: func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error {
 			var scanErr error
 			root.ScanOwned(func(row memtable.COWRecord) bool {

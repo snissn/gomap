@@ -87,9 +87,86 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 	baseInlineThreshold := group.db.InlineThreshold()
 	hasDomainInlineThresholds := len(group.db.valueLogDomainThresholds) > 0
 	const maxInlineBase = page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize
+	const (
+		coldScanVlogBatchMaxRecords = 2048
+		coldScanVlogBatchMaxBytes   = 2 << 20
+	)
+	type coldScanPendingEntry struct {
+		key       []byte
+		val       []byte
+		ptr       page.ValuePtr
+		flags     byte
+		rev       page.EntryRevision
+		needsVlog bool
+	}
 	root, err := bulk.BuildWithScan(func(emit bulk.EntryEmitter) error {
 		var emptyBytes [0]byte
-		return input.Scan(func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error {
+		var (
+			pending          []coldScanPendingEntry
+			pendingVlogVals  [][]byte
+			pendingVlogBytes int
+			pendingArena     []byte
+		)
+		clonePending := func(src []byte) []byte {
+			if input.ImmutableSlices || len(src) == 0 {
+				return src
+			}
+			start := len(pendingArena)
+			pendingArena = append(pendingArena, src...)
+			return pendingArena[start:len(pendingArena):len(pendingArena)]
+		}
+		flushPending := func() error {
+			if len(pending) == 0 {
+				return nil
+			}
+			var ptrs []page.ValuePtr
+			if len(pendingVlogVals) > 0 {
+				var appendErr error
+				ptrs, appendErr = group.appendNativeValueLogValuesLocked(pendingVlogVals)
+				if appendErr != nil {
+					clear(pending)
+					clear(pendingVlogVals)
+					pending = pending[:0]
+					pendingVlogVals = pendingVlogVals[:0]
+					pendingVlogBytes = 0
+					pendingArena = pendingArena[:0]
+					return appendErr
+				}
+			}
+			vlogIdx := 0
+			var emitErr error
+			for i := range pending {
+				entry := &pending[i]
+				if entry.needsVlog {
+					ptr := ptrs[vlogIdx]
+					vlogIdx++
+					if refDelta != nil {
+						refDelta.add(ptr.FileID, 1)
+					}
+					if emitErr = emit(entry.key, nil, ptr, node.FlagPointer, entry.rev); emitErr != nil {
+						break
+					}
+					continue
+				}
+				if entry.flags&node.FlagPointer != 0 {
+					if emitErr = emit(entry.key, nil, entry.ptr, node.FlagPointer, entry.rev); emitErr != nil {
+						break
+					}
+					continue
+				}
+				if emitErr = emit(entry.key, entry.val, page.ValuePtr{}, node.FlagInline, entry.rev); emitErr != nil {
+					break
+				}
+			}
+			clear(pending)
+			clear(pendingVlogVals)
+			pending = pending[:0]
+			pendingVlogVals = pendingVlogVals[:0]
+			pendingVlogBytes = 0
+			pendingArena = pendingArena[:0]
+			return emitErr
+		}
+		scanErr := input.Scan(func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error {
 			if len(key) == 0 {
 				key = emptyBytes[:]
 			}
@@ -101,7 +178,19 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 				if refDelta != nil {
 					refDelta.add(ptr.FileID, 1)
 				}
-				return emit(key, nil, ptr, node.FlagPointer, rev)
+				if len(pending) == 0 {
+					return emit(key, nil, ptr, node.FlagPointer, rev)
+				}
+				pending = append(pending, coldScanPendingEntry{
+					key:   clonePending(key),
+					ptr:   ptr,
+					flags: node.FlagPointer,
+					rev:   rev,
+				})
+				if len(pending) >= coldScanVlogBatchMaxRecords {
+					return flushPending()
+				}
+				return nil
 			}
 			if len(val) == 0 {
 				val = emptyBytes[:]
@@ -117,20 +206,70 @@ func (group *RootPublicationBuildGroup) BuildNativeOrderedRootColdScan(input Ord
 				}
 			}
 			if len(val) > threshold {
-				var values [1][]byte
-				values[0] = val
-				ptrs, appendErr := group.appendNativeValueLogValuesLocked(values[:])
-				if appendErr != nil {
-					return appendErr
+				if len(pending) == 0 && len(val) >= coldScanVlogBatchMaxBytes {
+					var single [1][]byte
+					single[0] = val
+					ptrs, appendErr := group.appendNativeValueLogValuesLocked(single[:])
+					if appendErr != nil {
+						return appendErr
+					}
+					ptr = ptrs[0]
+					if refDelta != nil {
+						refDelta.add(ptr.FileID, 1)
+					}
+					return emit(key, nil, ptr, node.FlagPointer, rev)
 				}
-				ptr = ptrs[0]
-				if refDelta != nil {
-					refDelta.add(ptr.FileID, 1)
+				if len(pendingVlogVals) > 0 && pendingVlogBytes+len(val) > coldScanVlogBatchMaxBytes {
+					if err := flushPending(); err != nil {
+						return err
+					}
+					if len(val) >= coldScanVlogBatchMaxBytes {
+						var single [1][]byte
+						single[0] = val
+						ptrs, appendErr := group.appendNativeValueLogValuesLocked(single[:])
+						if appendErr != nil {
+							return appendErr
+						}
+						ptr = ptrs[0]
+						if refDelta != nil {
+							refDelta.add(ptr.FileID, 1)
+						}
+						return emit(key, nil, ptr, node.FlagPointer, rev)
+					}
 				}
-				return emit(key, nil, ptr, node.FlagPointer, rev)
+				valCopy := clonePending(val)
+				pending = append(pending, coldScanPendingEntry{
+					key:       clonePending(key),
+					rev:       rev,
+					needsVlog: true,
+				})
+				pendingVlogVals = append(pendingVlogVals, valCopy)
+				pendingVlogBytes += len(valCopy)
+				if len(pending) >= coldScanVlogBatchMaxRecords || pendingVlogBytes >= coldScanVlogBatchMaxBytes {
+					return flushPending()
+				}
+				return nil
 			}
-			return emit(key, val, page.ValuePtr{}, node.FlagInline, rev)
+			if len(pending) == 0 {
+				return emit(key, val, page.ValuePtr{}, node.FlagInline, rev)
+			}
+			pending = append(pending, coldScanPendingEntry{
+				key:   clonePending(key),
+				val:   clonePending(val),
+				flags: node.FlagInline,
+				rev:   rev,
+			})
+			if len(pending) >= coldScanVlogBatchMaxRecords {
+				return flushPending()
+			}
+			return nil
 		})
+		if scanErr != nil {
+			clear(pending)
+			clear(pendingVlogVals)
+			return scanErr
+		}
+		return flushPending()
 	}, group.tracker, group.idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.leafPrefixCompression,
 		LeafColumnar:          opts.leafColumnar,

@@ -314,14 +314,16 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 			return obsErr
 		}
 		limits := db.cow.budget.Limits()
-		if !observed.reservationSoftPressure(limits) {
+		if !observed.softBytesPressure(limits) {
 			if db.cow.reservationDrainFloor.Load() != 0 {
 				db.cow.reservationDrainFloor.Store(0)
 			}
 			return nil
 		}
-		if floor := db.cow.reservationDrainFloor.Load(); floor != 0 && observed.stats.ReservedBytes < floor {
-			return nil
+		if !observed.totalSoftPressure(limits) {
+			if floor := db.cow.reservationDrainFloor.Load(); floor != 0 && observed.stats.ReservedBytes < floor {
+				return nil
+			}
 		}
 	} else if waitedForFlushMu && mode == cowSynchronousPressureMaterialization && projected == nil {
 		if db.closing.Load() {

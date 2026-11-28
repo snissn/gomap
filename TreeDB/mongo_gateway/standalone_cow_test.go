@@ -612,3 +612,86 @@ func TestStandaloneNativeDictionaryCachePolicy(t *testing.T) {
 		s = nil
 	}
 }
+
+func TestStandaloneInsertWith32SecondaryIndexes(t *testing.T) {
+	dir := t.TempDir()
+	opts := StandaloneOptions{
+		Dir:                      dir,
+		Profile:                  treedb.ProfileCommandWALRelaxed,
+		DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}
+	s, err := OpenStandaloneServer(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if s != nil {
+			if err := s.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	if s.Options.COWMemtableLimits.MaxSources < 128 || s.Options.COWMemtableLimits.MaxGenerations < 256 {
+		t.Fatalf("standalone source/generation limits too small for 32+ indexes: %+v", s.Options.COWMemtableLimits)
+	}
+	indexes := make([]collections.IndexDefinition, 0, 33)
+	indexes = append(indexes, collections.IndexDefinition{Name: "age_1", Field: "age", ValueType: collections.IndexValueBSONOrderedV2})
+	for i := 0; i < 32; i++ {
+		name := fmt.Sprintf("f%02d", i)
+		indexes = append(indexes, collections.IndexDefinition{Name: name + "_1", Field: name, ValueType: collections.IndexValueBSONOrderedV2})
+	}
+	if _, err := s.Collections.CreateCollection(&collections.CollectionMeta{
+		Name:    "db.wide32",
+		Indexes: indexes,
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Collections.OpenCollection("db.wide32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 500
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		id := fmt.Sprintf("wide-%05d", i)
+		ids[i] = []byte(id)
+		doc := bson.D{{Key: "_id", Value: id}, {Key: "age", Value: int32(20 + (i % 50))}}
+		for f := 0; f < 32; f++ {
+			doc = append(doc, bson.E{Key: fmt.Sprintf("f%02d", f), Value: fmt.Sprintf("v-%02d-%05d", f, i)})
+		}
+		docs[i], err = bson.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.InsertBatchValidatedBSONNoResultIDs(ids, docs); err != nil {
+		t.Fatalf("InsertBatchValidatedBSONNoResultIDs with 32 secondary + 1 range indexes: %v", err)
+	}
+	if err := s.Backend.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s = nil
+
+	s, err = OpenStandaloneServer(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	c, err = s.Collections.OpenCollection("db.wide32")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+	got, err := c.Get(ids[count-1])
+	if err != nil || !bytes.Equal(got, docs[count-1]) {
+		t.Fatalf("reopen Get: len=%d want=%d err=%v", len(got), len(docs[count-1]), err)
+	}
+	// Verify lookup on the 32nd secondary index after reopen.
+	matches, err := c.FindByIndexValue("f31_1", bson.Raw(docs[count-1]).Lookup("f31"))
+	if err != nil || len(matches) != 1 || !bytes.Equal(matches[0], ids[count-1]) {
+		t.Fatalf("reopen FindByIndexValue(f31_1): matches=%q err=%v", matches, err)
+	}
+}

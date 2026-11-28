@@ -259,7 +259,11 @@ type OrderedRootColdScanPublishInput struct {
 	StoragePolicy        OrderedRootStoragePolicy
 	EntryCount           int
 	CheckInlineThreshold bool
-	Scan                 func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error
+	// ImmutableSlices indicates that key/val slices passed to emit remain
+	// valid and unmodified for the entire duration of Scan, allowing batched
+	// value-log appends to borrow them directly without defensive copying.
+	ImmutableSlices bool
+	Scan            func(emit func(key, val []byte, ptr page.ValuePtr, flags byte, rev page.EntryRevision) error) error
 }
 
 type OrderedRootDeltaBatchPublishInput struct {
