@@ -1051,24 +1051,30 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		targetFrontierBytes := entry.frontier.Bytes
+		if token.frontier.Bytes > targetFrontierBytes {
+			targetFrontierBytes = token.frontier.Bytes
+		}
+		replaceRepresentative := !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace()
+		targetToken := existing
+		if replaceRepresentative {
+			targetToken = token
+		}
+		if err := advanceTokenIdentityPinFrontier(targetToken, targetFrontierBytes); err != nil {
+			return err
+		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
-			if err := advanceTokenIdentityPinFrontier(token, entry.frontier.Bytes); err != nil {
-				return err
-			}
+		if replaceRepresentative {
 			entry.token = token
 			entry.pins = nil
 			entry.pinIndex = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
-			if err := advanceTokenIdentityPinFrontier(existing, entry.frontier.Bytes); err != nil {
-				return err
-			}
 			token.releaseFrom(ResourceOwnerBuilder)
 		}
 		return nil
@@ -1114,16 +1120,25 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		targetFrontierBytes := entry.frontier.Bytes
+		if token.frontier.Bytes > targetFrontierBytes {
+			targetFrontierBytes = token.frontier.Bytes
+		}
+		replaceRepresentative := !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace()
+		targetToken := existing
+		if replaceRepresentative {
+			targetToken = token
+		}
+		if err := advanceTokenIdentityPinFrontier(targetToken, targetFrontierBytes); err != nil {
+			return err
+		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
-			if err := advanceTokenIdentityPinFrontier(token, entry.frontier.Bytes); err != nil {
-				return err
-			}
+		if replaceRepresentative {
 			// Preserve the one namespace-creation obligation independently of
 			// insertion order by making its exact-handle token representative.
 			entry.token = token
@@ -1132,9 +1147,6 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 			entry.pinIndex = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
-			if err := advanceTokenIdentityPinFrontier(existing, entry.frontier.Bytes); err != nil {
-				return err
-			}
 			token.releaseFrom(ResourceOwnerBuilder)
 		}
 		return nil

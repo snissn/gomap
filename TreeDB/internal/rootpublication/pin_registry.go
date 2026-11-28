@@ -131,14 +131,125 @@ func (registry *IdentityPinRegistry) closeDirectoryAuthorityLocked(link stableNa
 }
 
 type identityPinState struct {
-	pins          uint64
-	observers     uint64
-	deleting      bool
-	retired       bool
-	truncating    bool
-	truncateLimit uint64
-	frontierPins  map[uint64]uint64
-	zero          chan struct{}
+	pins                uint64
+	observers           uint64
+	deleting            bool
+	retired             bool
+	truncating          bool
+	truncateLimit       uint64
+	singleFrontier      uint64
+	singleFrontierCount uint64
+	frontierPins        registryTable[uint64, uint64]
+	zero                chan struct{}
+}
+
+func (state *identityPinState) addFrontierPinLocked(registry *IdentityPinRegistry, frontierBytes uint64) error {
+	if frontierBytes == 0 {
+		return nil
+	}
+	if state.frontierPins.count == 0 {
+		if state.singleFrontierCount == 0 {
+			state.singleFrontier = frontierBytes
+			state.singleFrontierCount = 1
+			return nil
+		}
+		if state.singleFrontier == frontierBytes {
+			if state.singleFrontierCount == ^uint64(0) {
+				return retainedalloc.ErrCapacity
+			}
+			state.singleFrontierCount++
+			return nil
+		}
+		if state.frontierPins.owner == nil {
+			state.frontierPins.owner = &registry.metadata
+			state.frontierPins.hash = registryUint64Hash
+		}
+		if err := state.frontierPins.set(state.singleFrontier, state.singleFrontierCount); err != nil {
+			state.frontierPins.close()
+			return err
+		}
+		if err := state.frontierPins.set(frontierBytes, 1); err != nil {
+			state.frontierPins.close()
+			return err
+		}
+		state.singleFrontier = 0
+		state.singleFrontierCount = 0
+		return nil
+	}
+	if count, ok := state.frontierPins.lookup(frontierBytes); ok {
+		if count == ^uint64(0) {
+			return retainedalloc.ErrCapacity
+		}
+		if err := state.frontierPins.set(frontierBytes, count+1); err != nil {
+			return err
+		}
+		return nil
+	}
+	return state.frontierPins.set(frontierBytes, 1)
+}
+
+func (state *identityPinState) removeFrontierPinLocked(frontierBytes uint64) {
+	if frontierBytes == 0 {
+		return
+	}
+	if state.frontierPins.count == 0 {
+		if state.singleFrontier == frontierBytes && state.singleFrontierCount > 0 {
+			state.singleFrontierCount--
+			if state.singleFrontierCount == 0 {
+				state.singleFrontier = 0
+			}
+		}
+		return
+	}
+	count, ok := state.frontierPins.lookup(frontierBytes)
+	if !ok {
+		return
+	}
+	if count <= 1 {
+		state.frontierPins.remove(frontierBytes)
+		if state.frontierPins.count == 0 {
+			state.frontierPins.close()
+		}
+		return
+	}
+	if err := state.frontierPins.set(frontierBytes, count-1); err != nil {
+		panic("frontier pin decrement update refused")
+	}
+}
+
+func (state *identityPinState) replaceFrontierPinLocked(registry *IdentityPinRegistry, oldFrontier, newFrontier uint64) error {
+	if state.frontierPins.count == 0 && oldFrontier > 0 && state.singleFrontier == oldFrontier && state.singleFrontierCount == 1 {
+		state.singleFrontier = newFrontier
+		return nil
+	}
+	if err := state.addFrontierPinLocked(registry, newFrontier); err != nil {
+		return err
+	}
+	state.removeFrontierPinLocked(oldFrontier)
+	return nil
+}
+
+func (state *identityPinState) hasFrontierAboveLocked(keepBytes uint64) bool {
+	if state.frontierPins.count == 0 {
+		return state.singleFrontierCount > 0 && state.singleFrontier > keepBytes
+	}
+	blocked := false
+	state.frontierPins.all(func(pinnedBytes, count uint64) bool {
+		if count > 0 && pinnedBytes > keepBytes {
+			blocked = true
+			return false
+		}
+		return true
+	})
+	return blocked
+}
+
+func registryUint64Hash(v uint64) uint64 {
+	v ^= v >> 30
+	v *= 0xbf58476d1ce4e5b9
+	v ^= v >> 27
+	v *= 0x94d049bb133111eb
+	return v ^ (v >> 31)
 }
 
 // IdentityDeleteLease excludes later pins until deletion commits or aborts.
@@ -263,14 +374,11 @@ func (registry *IdentityPinRegistry) PinWithFrontier(identity StableIdentity, fr
 	if state.pins == ^uint64(0) || registry.activePins == ^uint64(0) {
 		return nil, retainedalloc.ErrCapacity
 	}
+	if err := state.addFrontierPinLocked(registry, frontierBytes); err != nil {
+		return nil, err
+	}
 	state.pins++
 	registry.activePins++
-	if frontierBytes > 0 {
-		if state.frontierPins == nil {
-			state.frontierPins = make(map[uint64]uint64)
-		}
-		state.frontierPins[frontierBytes]++
-	}
 	return &IdentityPin{registry: registry, identity: identity, state: state, frontierBytes: frontierBytes}, nil
 }
 
@@ -299,17 +407,9 @@ func (pin *IdentityPin) AdvanceFrontier(frontierBytes uint64) error {
 	if state.deleting || (state.truncating && frontierBytes > state.truncateLimit) {
 		return ErrResourceDeletionInProgress
 	}
-	if pin.frontierBytes > 0 && state.frontierPins != nil {
-		if count := state.frontierPins[pin.frontierBytes]; count <= 1 {
-			delete(state.frontierPins, pin.frontierBytes)
-		} else {
-			state.frontierPins[pin.frontierBytes] = count - 1
-		}
+	if err := state.replaceFrontierPinLocked(registry, pin.frontierBytes, frontierBytes); err != nil {
+		return err
 	}
-	if state.frontierPins == nil {
-		state.frontierPins = make(map[uint64]uint64)
-	}
-	state.frontierPins[frontierBytes]++
 	pin.frontierBytes = frontierBytes
 	return nil
 }
@@ -318,6 +418,12 @@ func (pin *IdentityPin) AdvanceFrontier(frontierBytes uint64) error {
 // producer observation. Its source pin keeps this same state alive even after
 // the producer has consumed its final observation.
 func (pin *IdentityPin) clone() (*IdentityPin, error) {
+	return pin.cloneWithFrontier(0)
+}
+
+// cloneWithFrontier atomically clones this pin while protecting at least
+// max(pin.frontierBytes, frontierBytes) bytes under the registry lock.
+func (pin *IdentityPin) cloneWithFrontier(frontierBytes uint64) (*IdentityPin, error) {
 	if pin == nil {
 		return nil, ErrResourceOwnership
 	}
@@ -326,6 +432,10 @@ func (pin *IdentityPin) clone() (*IdentityPin, error) {
 	if pin.released || pin.registry == nil || pin.state == nil {
 		return nil, ErrResourceOwnership
 	}
+	target := pin.frontierBytes
+	if frontierBytes > target {
+		target = frontierBytes
+	}
 	registry := pin.registry
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -333,21 +443,18 @@ func (pin *IdentityPin) clone() (*IdentityPin, error) {
 	if state != pin.state || state.pins == 0 || state.retired {
 		return nil, ErrResourceConflict
 	}
-	if state.deleting || (state.truncating && pin.frontierBytes > state.truncateLimit) {
+	if state.deleting || (state.truncating && target > state.truncateLimit) {
 		return nil, ErrResourceDeletionInProgress
 	}
 	if state.pins == ^uint64(0) || registry.activePins == ^uint64(0) {
 		return nil, retainedalloc.ErrCapacity
 	}
+	if err := state.addFrontierPinLocked(registry, target); err != nil {
+		return nil, err
+	}
 	state.pins++
 	registry.activePins++
-	if pin.frontierBytes > 0 {
-		if state.frontierPins == nil {
-			state.frontierPins = make(map[uint64]uint64)
-		}
-		state.frontierPins[pin.frontierBytes]++
-	}
-	return &IdentityPin{registry: registry, identity: pin.identity, state: state, frontierBytes: pin.frontierBytes}, nil
+	return &IdentityPin{registry: registry, identity: pin.identity, state: state, frontierBytes: target}, nil
 }
 
 func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
@@ -370,16 +477,7 @@ func (registry *IdentityPinRegistry) releaseWithFrontier(identity StableIdentity
 	}
 	state.pins--
 	registry.activePins--
-	if frontierBytes > 0 && state.frontierPins != nil {
-		if count := state.frontierPins[frontierBytes]; count <= 1 {
-			delete(state.frontierPins, frontierBytes)
-		} else {
-			state.frontierPins[frontierBytes] = count - 1
-		}
-		if len(state.frontierPins) == 0 {
-			state.frontierPins = nil
-		}
-	}
+	state.removeFrontierPinLocked(frontierBytes)
 	if state.pins == 0 {
 		if state.zero != nil {
 			close(state.zero)
@@ -520,11 +618,9 @@ func (registry *IdentityPinRegistry) BeginTruncateAt(identity StableIdentity, na
 		registry.deleteIdleStateLocked(identity, state)
 		return nil, ErrResourcePinned
 	}
-	for pinnedBytes, count := range state.frontierPins {
-		if count > 0 && pinnedBytes > keepBytes {
-			registry.deleteIdleStateLocked(identity, state)
-			return nil, ErrResourcePinned
-		}
+	if state.hasFrontierAboveLocked(keepBytes) {
+		registry.deleteIdleStateLocked(identity, state)
+		return nil, ErrResourcePinned
 	}
 	if err := registry.namespaces.set(namespace, true); err != nil {
 		registry.deleteIdleStateLocked(identity, state)
@@ -929,6 +1025,9 @@ func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) (*iden
 
 func (registry *IdentityPinRegistry) deleteIdleStateLocked(identity StableIdentity, state *identityPinState) {
 	if state != nil && state.pins == 0 && state.observers == 0 && !state.deleting && !state.truncating {
+		if state.frontierPins.owner != nil {
+			state.frontierPins.close()
+		}
 		registry.states.remove(identity)
 		registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(identityPinState{}))))
 		registry.closeIfIdleLocked()
@@ -958,10 +1057,15 @@ func (lease *IdentityTruncateLease) Abort()  { lease.release() }
 func (lease *IdentityTruncateLease) Commit() { lease.release() }
 
 func advanceTokenIdentityPinFrontier(token *StableResourceToken, frontierBytes uint64) error {
-	if token == nil || token.identityPin == nil || frontierBytes == 0 {
+	if frontierBytes == 0 {
 		return nil
 	}
-	return token.identityPin.AdvanceFrontier(frontierBytes)
+	for cur := token; cur != nil; cur = cur.importedSource {
+		if cur.identityPin != nil {
+			return cur.identityPin.AdvanceFrontier(frontierBytes)
+		}
+	}
+	return nil
 }
 
 func (lease *IdentityDeleteLease) Abort() {
