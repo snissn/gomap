@@ -35,9 +35,9 @@ following the storage streamlining rearchitecture:
 - **Execution Discipline**: Three sequential runs on a quiet host with
   disposable DB directories and isolated Docker MongoDB containers:
   - Relaxed (`/tmp/gomap_deep_bench_s21_relaxed`):
-    `./scripts/treedb_benchmark_run_report.sh --out-dir /tmp/gomap_deep_bench_s21_relaxed --tier pr --durability-tier relaxed --indexes "0 1 2" --collection-docs 100000 --collection-profile-benchtime 100000x --collection-profile-count 1 --mongo-docs 100000 --mongo-load-scaling-docs 100000 --mongo-treedb-open-mode standalone --skip-raw --skip-load-modes`
-  - Fast (`/tmp/gomap_deep_bench_s21_fast`): same flags with `--durability-tier fast`
-  - Durable (`/tmp/gomap_deep_bench_s21_durable`): same flags with `--durability-tier durable`
+    `scripts/treedb_benchmark_run_report.sh --out /tmp/gomap_deep_bench_s21_relaxed --tier pr --durability-tier relaxed --collection-docs 100000 --mongo-docs 100000 --mongo-treedb-open-mode standalone --skip-raw --skip-load-modes --skip-collection-profiles`
+  - Fast (`/tmp/gomap_deep_bench_s21_fast`): same flags with `--out /tmp/gomap_deep_bench_s21_fast --durability-tier fast`
+  - Durable (`/tmp/gomap_deep_bench_s21_durable`): same flags with `--out /tmp/gomap_deep_bench_s21_durable --durability-tier durable`
 
 ---
 
