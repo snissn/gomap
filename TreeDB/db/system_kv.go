@@ -1137,8 +1137,9 @@ type stagedSystemOpBatch struct {
 }
 
 type inFlightStagedSystemOps struct {
-	token   uint64
-	batches []stagedSystemOpBatch
+	token    uint64
+	batches  []stagedSystemOpBatch
+	barriers []func()
 }
 
 type stagedSystemSyncWaiter struct {
@@ -1213,11 +1214,20 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 			return nil
 		}
 		db.stagedSystemOpsMu.Lock()
-		if len(db.stagedSystemOps) > 0 || len(db.stagedSystemOpsInFlight) > 0 || db.stagedSystemInFlightUnsynced.Load() > 0 {
+		if len(db.stagedSystemOps) > 0 {
 			db.stagedSystemOps = append(db.stagedSystemOps, stagedSystemOpBatch{
 				onDurable: onDurable,
 			})
 			db.updateStagedSystemOpsCountLocked()
+			db.stagedSystemOpsMu.Unlock()
+			return nil
+		}
+		if len(db.stagedSystemOpsInFlight) > 0 {
+			// Attach the callback-only barrier directly to the newest in-flight
+			// drained publication so a concurrent FlushStagedSystemOps cannot
+			// drain and fire it before the in-flight batch commits and syncs.
+			last := &db.stagedSystemOpsInFlight[len(db.stagedSystemOpsInFlight)-1]
+			last.barriers = append(last.barriers, onDurable)
 			db.stagedSystemOpsMu.Unlock()
 			return nil
 		}
@@ -1667,13 +1677,16 @@ func (db *DB) HasStagedSystemOps() bool {
 	return has
 }
 
-func (db *DB) removeInFlightStagedSystemOpsLocked(token uint64) {
+func (db *DB) removeInFlightStagedSystemOpsLocked(token uint64) []func() {
 	if token == 0 || len(db.stagedSystemOpsInFlight) == 0 {
-		return
+		return nil
 	}
+	var barriers []func()
 	kept := db.stagedSystemOpsInFlight[:0]
 	for _, entry := range db.stagedSystemOpsInFlight {
-		if entry.token != token {
+		if entry.token == token {
+			barriers = append(barriers, entry.barriers...)
+		} else {
 			kept = append(kept, entry)
 		}
 	}
@@ -1683,6 +1696,7 @@ func (db *DB) removeInFlightStagedSystemOpsLocked(token uint64) {
 		db.stagedSystemOpsInFlight = kept
 	}
 	db.stagedSystemOpsInFlightCount.Store(int32(len(db.stagedSystemOpsInFlight)))
+	return barriers
 }
 
 func (db *DB) drainStagedSystemOps() ([]stagedSystemOpBatch, uint64) {
@@ -1714,8 +1728,8 @@ func (db *DB) requeueStagedSystemOpBatches(batches []stagedSystemOpBatch, token 
 		return
 	}
 	db.stagedSystemOpsMu.Lock()
-	db.removeInFlightStagedSystemOpsLocked(token)
-	if len(batches) == 0 {
+	barriers := db.removeInFlightStagedSystemOpsLocked(token)
+	if len(batches) == 0 && len(barriers) == 0 {
 		db.stagedSystemOpsMu.Unlock()
 		return
 	}
@@ -1724,8 +1738,13 @@ func (db *DB) requeueStagedSystemOpBatches(batches []stagedSystemOpBatch, token 
 		db.releaseStagedSystemOpBatchPins(batches)
 		return
 	}
-	combined := make([]stagedSystemOpBatch, 0, len(batches)+len(db.stagedSystemOps))
+	combined := make([]stagedSystemOpBatch, 0, len(batches)+len(barriers)+len(db.stagedSystemOps))
 	combined = append(combined, batches...)
+	for _, fn := range barriers {
+		if fn != nil {
+			combined = append(combined, stagedSystemOpBatch{onDurable: fn})
+		}
+	}
 	combined = append(combined, db.stagedSystemOps...)
 	db.stagedSystemOps = combined
 	db.updateStagedSystemOpsCountLocked()
@@ -1810,22 +1829,24 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, token
 	}
 	db.releaseStagedSystemOpBatchPins(batches)
 	if !db.requiresSyncForSystemDictActivation() {
+		var barriers []func()
 		if token != 0 {
 			db.stagedSystemOpsMu.Lock()
-			db.removeInFlightStagedSystemOpsLocked(token)
+			barriers = db.removeInFlightStagedSystemOpsLocked(token)
 			db.stagedSystemOpsMu.Unlock()
 		}
-		cbs := make([]func(), 0, len(batches))
+		cbs := make([]func(), 0, len(batches)+len(barriers))
 		for _, b := range batches {
 			if b.onDurable != nil {
 				cbs = append(cbs, b.onDurable)
 			}
 		}
+		cbs = append(cbs, barriers...)
 		runStagedSystemCallbacks(cbs)
 		return
 	}
 	db.stagedSystemOpsMu.Lock()
-	db.removeInFlightStagedSystemOpsLocked(token)
+	barriers := db.removeInFlightStagedSystemOpsLocked(token)
 	durableSeq := db.stagedSystemDurableSeq.Load()
 	if physicallyDurable {
 		durableSeq = db.advanceStagedSystemDurableSeqLocked(commitSeq)
@@ -1839,6 +1860,7 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, token
 				ready = append(ready, b.onDurable)
 			}
 		}
+		ready = append(ready, barriers...)
 		db.stagedSystemOpsMu.Unlock()
 		runStagedSystemCallbacks(ready)
 		return
@@ -1848,6 +1870,14 @@ func (db *DB) completeStagedSystemOpBatches(batches []stagedSystemOpBatch, token
 			db.stagedSystemSyncWaiters = append(db.stagedSystemSyncWaiters, stagedSystemSyncWaiter{
 				commitSeq: commitSeq,
 				onDurable: b.onDurable,
+			})
+		}
+	}
+	for _, fn := range barriers {
+		if fn != nil {
+			db.stagedSystemSyncWaiters = append(db.stagedSystemSyncWaiters, stagedSystemSyncWaiter{
+				commitSeq: commitSeq,
+				onDurable: fn,
 			})
 		}
 	}

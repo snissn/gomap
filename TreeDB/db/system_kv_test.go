@@ -1626,6 +1626,20 @@ func TestGetSystemIncludingStaged_PreservesInFlightVisibilityAcrossDrain(t *test
 		t.Fatalf("LookupSystemTemplateDefIncludingStaged(tplA) while in-flight = %q, %v", gotDefA, err)
 	}
 
+	// Register a callback-only barrier while A is drained and still in flight.
+	// A concurrent FlushStagedSystemOps(true) must NOT drain or fire that barrier
+	// before A itself commits and becomes durable.
+	var barrierFired bool
+	if err := d.StageSystemOps(nil, func() { barrierFired = true }); err != nil {
+		t.Fatalf("StageSystemOps(barrier while in-flight): %v", err)
+	}
+	if err := d.FlushStagedSystemOps(true); err != nil {
+		t.Fatalf("FlushStagedSystemOps(true) while A in-flight: %v", err)
+	}
+	if barrierFired {
+		t.Fatalf("callback-only barrier fired prematurely before in-flight A committed")
+	}
+
 	// Staging a newer update B referencing both tplA (in-flight!) and tplB
 	// while A is in-flight must succeed and take precedence over A.
 	if err := d.StageSystemOps([]SystemKVOp{
@@ -1639,10 +1653,17 @@ func TestGetSystemIncludingStaged_PreservesInFlightVisibilityAcrossDrain(t *test
 		t.Fatalf("GetSystemIncludingStaged with newer staged B = %x, %v; want %x, nil", got, err, candAB)
 	}
 
-	// Completing A clears its in-flight token without disturbing staged B.
-	d.completeStagedSystemOpBatches(drained, token, 1, true)
+	// Completing A unsynced parks its attached barrier at A's commitSeq until sync.
+	d.completeStagedSystemOpBatches(drained, token, 5, false)
 	if d.stagedSystemOpsInFlightCount.Load() != 0 {
 		t.Fatalf("expected stagedSystemOpsInFlightCount=0 after complete, got %d", d.stagedSystemOpsInFlightCount.Load())
+	}
+	if barrierFired {
+		t.Fatalf("callback-only barrier fired before in-flight A's commitSeq was synced")
+	}
+	d.notifySystemOpsSyncedThrough(5)
+	if !barrierFired {
+		t.Fatalf("expected callback-only barrier to fire once in-flight A's commitSeq synced")
 	}
 	got, err = d.GetSystemIncludingStaged(fpKey)
 	if err != nil || !bytes.Equal(got, candAB) {
