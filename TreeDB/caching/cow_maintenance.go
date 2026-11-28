@@ -52,6 +52,10 @@ func (db *DB) BeginSystemRootMutation() (func() error, error) {
 	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
 	}
+	if db.closing.Load() {
+		db.checkpointMu.Unlock()
+		return nil, backenddb.ErrClosed
+	}
 	db.maintenanceActive.Store(true)
 	db.maintenanceOwnerGID.Store(gid)
 	db.checkpointMu.Unlock()
@@ -64,6 +68,11 @@ func (db *DB) BeginSystemRootMutation() (func() error, error) {
 	}
 
 	db.flushMu.Lock()
+	if db.closing.Load() {
+		db.flushMu.Unlock()
+		releaseMaintenance()
+		return nil, backenddb.ErrClosed
+	}
 	db.writeMu.Lock()
 	db.writeMu.Unlock()
 	if err := db.completeCOWHandoff(); err != nil {
@@ -84,10 +93,9 @@ func (db *DB) BeginSystemRootMutation() (func() error, error) {
 			db.flushMu.Unlock()
 			releaseMaintenance()
 		}()
-		if db.closing.Load() {
-			return nil
-		}
-		reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false))
+		// Once admitted under flushMu, Close waits on flushMu before running
+		// closeCOWFrontier(), so always reconcile and refresh the COW basis.
+		reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(true))
 		return db.finishCOWBackendMaintenance(reconcileErr)
 	}, nil
 }
