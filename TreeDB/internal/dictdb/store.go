@@ -212,6 +212,117 @@ func (s *Store) PublishDict(_ context.Context, dictBytes []byte, k int, class st
 	return dictID, nil
 }
 
+// StagePublishDict queues dictBytes, optional k (> 0), and class/global current
+// markers for atomic piggybacking into the next maindb user-root flush or
+// checkpoint commit (zero standalone fsync or COW write fence). For standalone
+// stores created via Open, it falls back to immediate PublishDict.
+func (s *Store) StagePublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool, onDurable func(uint64)) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if s.ownsBackend {
+		dictID, err := s.PublishDict(ctx, dictBytes, k, class, alsoSetGlobal)
+		if err != nil {
+			return 0, err
+		}
+		if onDurable != nil {
+			onDurable(dictID)
+		}
+		return dictID, nil
+	}
+	if k != 0 && (k < dictKMin || k > dictKMax) {
+		return 0, fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	if dictBytes == nil {
+		dictBytes = []byte{}
+	}
+	checksum := sha256.Sum256(dictBytes)
+	hKey := hashKey(checksum)
+
+	dictID, needWriteBytes, needWriteHash, err := s.resolvePublishIdentityLocked(hKey, checksum, dictBytes)
+	if err != nil {
+		return 0, err
+	}
+
+	var ops []db.SystemKVOp
+	if needWriteBytes {
+		payloadOps, err := s.buildDictPayloadOpsLocked(dictID, checksum, dictBytes)
+		if err != nil {
+			return 0, err
+		}
+		ops = append(ops, payloadOps...)
+	}
+
+	valBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(valBuf, dictID)
+	if needWriteHash {
+		ops = append(ops, db.SystemKVOp{Key: hKey, Value: valBuf})
+	}
+	if k > 0 && dictID != 0 {
+		ops = append(ops, db.SystemKVOp{Key: kKey(dictID), Value: []byte{byte(k)}})
+	}
+	cKey := currentKeyForClass(class)
+	ops = append(ops, db.SystemKVOp{Key: cKey, Value: valBuf})
+	if alsoSetGlobal && !bytes.Equal(cKey, currentKey()) {
+		ops = append(ops, db.SystemKVOp{Key: currentKey(), Value: valBuf})
+	}
+	var cb func()
+	if onDurable != nil {
+		id := dictID
+		cb = func() { onDurable(id) }
+	}
+	if err := s.backend.StageSystemOps(ops, cb); err != nil {
+		return 0, err
+	}
+	return dictID, nil
+}
+
+// StageSetK queues a K-parameter update for atomic piggybacking into the next
+// maindb flush or checkpoint commit. For standalone stores, it applies
+// immediately via SetK.
+func (s *Store) StageSetK(ctx context.Context, dictID uint64, k int, onDurable func()) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	if s.ownsBackend {
+		if err := s.SetK(ctx, dictID, k); err != nil {
+			return err
+		}
+		if onDurable != nil {
+			onDurable()
+		}
+		return nil
+	}
+	if dictID == 0 {
+		return fmt.Errorf("dictdb: invalid dict id 0")
+	}
+	if k < dictKMin || k > dictKMax {
+		return fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	return s.backend.StageSystemOps([]db.SystemKVOp{{
+		Key:   kKey(dictID),
+		Value: []byte{byte(k)},
+	}}, onDurable)
+}
+
+// HasStagedOps reports whether this store has staged system operations awaiting
+// piggybacked commit or durability sync.
+func (s *Store) HasStagedOps() bool {
+	if s == nil || s.backend == nil || s.ownsBackend {
+		return false
+	}
+	return s.backend.HasStagedSystemOps()
+}
+
+// FlushStagedOps commits and (when sync is true) syncs any staged dictionary
+// operations that have not yet been piggybacked onto a user flush/checkpoint.
+func (s *Store) FlushStagedOps(sync bool) error {
+	if s == nil || s.backend == nil || s.ownsBackend {
+		return nil
+	}
+	return s.backend.FlushStagedSystemOps(sync)
+}
+
 // PublishRewriteLeafDict atomically persists dictBytes (deduped by hash), sets
 // the class current marker, and records the leaf payload mode in a single
 // SystemRootPageID commit (replacing three sequential WriteSync calls).

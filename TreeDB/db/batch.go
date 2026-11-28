@@ -368,6 +368,9 @@ func (b *Batch) writeWithCommandWALIntentPreflight(sync bool, intent *commandWAL
 }
 
 func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) (bool, error) {
+	if b.db.stagedSystemOpsCount.Load() > 0 {
+		return false, nil
+	}
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
@@ -798,6 +801,36 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	var piggybacked *piggybackedSystemOps
+	piggybackedCommitted := false
+	defer func() {
+		if piggybacked != nil && !piggybackedCommitted {
+			b.db.requeuePiggybackedSystemOps(piggybacked)
+		}
+	}()
+	if b.db.stagedSystemOpsCount.Load() > 0 {
+		piggybacked, err = b.db.preparePiggybackedSystemOpsLocked(sysRoot, baseSeq, sync, nil)
+		if err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+			b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
+			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+			return err
+		}
+		if piggybacked != nil {
+			sysRoot = piggybacked.newSystemRoot
+			retired = append(retired, piggybacked.retired...)
+			mergeOrderedRootPublishMetrics(&metrics, piggybacked.metrics)
+			if len(piggybacked.touchedValueLogSegments) > 0 {
+				touchedValueLogSegments = append(append([]uint32(nil), touchedValueLogSegments...), piggybacked.touchedValueLogSegments...)
+			}
+			if piggybacked.vlogRefDelta != nil {
+				mergeValueLogRefDeltaInto(&vlogRefDelta, piggybacked.vlogRefDelta)
+				releaseValueLogRefDelta(piggybacked.vlogRefDelta)
+				piggybacked.vlogRefDelta = nil
+			}
+		}
+	}
+
 	b.db.writeMu.Unlock()
 	rootLocksReleased = true
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
@@ -810,9 +843,10 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	defer publishPrepareGuard.Release()
 	releaseRootSerialization := func() {}
 	guardedPublishStart := time.Now()
+	forceValueLogRefresh := b.db.indexOuterLeavesInValueLog || (piggybacked != nil && piggybacked.hasPointer)
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation, negativeCoverage: negativeCoverage})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -838,9 +872,13 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		opts.recordVacuumMutation = recordVacuumMutation
 		opts.conditionalMutation = conditionalMutation
 		opts.negativeCoverage = negativeCoverage
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, nil, nil, opts)
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
+	if post.accepted && piggybacked != nil {
+		piggybackedCommitted = true
+		b.db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, sync)
+	}
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)

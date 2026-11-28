@@ -522,6 +522,17 @@ func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCo
 	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, false, true)
 }
 
+func (db *DB) backendHasPendingStagedSystemOps() bool {
+	if db == nil || db.backend == nil {
+		return false
+	}
+	checker, ok := db.backend.(interface{ HasPendingStagedSystemOps() bool })
+	if !ok {
+		return false
+	}
+	return checker.HasPendingStagedSystemOps()
+}
+
 func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool, syncCommandWAL bool) (retErr error) {
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
@@ -536,7 +547,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		return backenddb.ErrClosed
 	}
 	target := rootpublication.SealedPrefix{LogicalSequence: cut.frozenLogicalSeq, CanonicalLSN: cut.frozenCommandLSN}
-	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) {
+	if !forceIdle && len(cut.frozen) == 0 && (c.prefix == nil || target == c.prefix.LogicalFrontiers().S) && !db.backendHasPendingStagedSystemOps() {
 		return c.releaseCut(cut)
 	}
 	maxCap := db.cowFrozenFlushChunkLimit(c.maintenance)

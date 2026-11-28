@@ -236,6 +236,10 @@ type DB struct {
 	systemVLogNextRID              uint64
 	systemRootMutationFenceMu      sync.RWMutex
 	systemRootMutationFence        func() (func() error, error)
+	stagedSystemOpsCount           atomic.Int32
+	stagedSystemOpsMu              sync.Mutex
+	stagedSystemOps                []stagedSystemOpBatch
+	stagedSystemSyncWaiters        []stagedSystemSyncWaiter
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -3796,6 +3800,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	}
 	db.stopCommitCombiner()
 	db.pruner.Stop()
+	db.clearStagedSystemOpsOnClose()
 	if err := db.closeSystemValueLogWriter(); err != nil {
 		cleanupFailed(err)
 	}
@@ -4739,9 +4744,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	post.kickPrune = db.pruner.Enabled()
 	post.doPrune = !post.kickPrune
+	post.sync = sync
 	if debugTiming {
 		post.debug = true
-		post.sync = sync
 		post.start = start
 		post.durSync1 = durSync1
 		post.durMeta = durMeta
@@ -4763,6 +4768,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
+	if post.sync {
+		db.notifySystemOpsSyncedThrough(post.commitSeq)
+	}
 
 	if post.vlogRefDelta != nil {
 		defer releaseValueLogRefDelta(post.vlogRefDelta)
@@ -5242,6 +5250,11 @@ func (db *DB) checkpointWithCommandWALCleanup(maintenanceAlreadyHeld, cleanupCom
 	if db == nil {
 		return ErrClosed
 	}
+	if db.stagedSystemOpsCount.Load() > 0 && db.privateCOWOwner == nil {
+		if err := db.flushStagedSystemOpsDirect(true); err != nil {
+			return err
+		}
+	}
 	for {
 		if !db.commandWAL {
 			if err := db.drainNoWALSyncPublishBarriers(); err != nil {
@@ -5322,6 +5335,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 		if err := runtime.coordinator.WaitThrough(context.Background(), visibleCommitSeq); err != nil {
 			return publicRootPublicationErrorV1(err)
 		}
+		db.notifySystemOpsSyncedThrough(visibleCommitSeq)
 		if err := db.syncPendingLeafLogDirIfNeeded(); err != nil {
 			return err
 		}
@@ -5401,6 +5415,10 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL
 	} else if err := idx.pager.Sync(); err != nil {
 		return err
 	}
+	db.mu.RLock()
+	syncedSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	db.notifySystemOpsSyncedThrough(syncedSeq)
 	if cleanupCommandWAL && (rotatedCommandWAL || commandWALPrefixAdvanced) {
 		// The cleanup proof independently rejects new appends and namespace
 		// changes. Drop write/publish admission before maintenance cleanup to

@@ -518,6 +518,44 @@ func (group *RootPublicationBuildGroup) hasExactCapturedCoverage(intent *command
 
 func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool) error {
 	db := group.db
+	var piggybacked *piggybackedSystemOps
+	piggybackedCommitted := false
+	defer func() {
+		if piggybacked != nil && !piggybackedCommitted {
+			db.requeuePiggybackedSystemOps(piggybacked)
+		}
+	}()
+	if db.stagedSystemOpsCount.Load() > 0 &&
+		group.nativeResources == nil &&
+		len(group.nativeRequirements.ScopedFields) == 0 &&
+		len(group.nativeRequirements.Obligations) == 0 &&
+		len(group.nativeRequirements.Streams) == 0 &&
+		group.nativeRequirementsFallback == nil {
+		var err error
+		piggybacked, err = db.preparePiggybackedSystemOpsLocked(group.systemRoot, group.baseSeq, syncWrite, group.tracker)
+		if err != nil {
+			return err
+		}
+		if piggybacked != nil {
+			group.systemRoot = piggybacked.newSystemRoot
+			group.retired = append(group.retired, piggybacked.retired...)
+			mergeOrderedRootPublishMetrics(&group.metrics, piggybacked.metrics)
+			for _, fileID := range piggybacked.touchedValueLogSegments {
+				if fileID == 0 {
+					continue
+				}
+				if group.touchedValueLogSegments == nil {
+					group.touchedValueLogSegments = make(map[uint32]struct{})
+				}
+				group.touchedValueLogSegments[fileID] = struct{}{}
+			}
+			if piggybacked.vlogRefDelta != nil {
+				group.mergeValueLogRefDeltaLocked(piggybacked.vlogRefDelta)
+				releaseValueLogRefDelta(piggybacked.vlogRefDelta)
+				piggybacked.vlogRefDelta = nil
+			}
+		}
+	}
 	group.releaseWriteLocked()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(syncWrite)
 	if err != nil {
@@ -681,9 +719,10 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	group.outerLeafSegmentsAdded = false
 	group.vlogRefDeltaUncovered = false
 	group.nativeRequirementsFallback = nil // finalize borrows the original captured fallback only synchronously
+	forceValueLogRefresh := db.indexOuterLeavesInValueLog || (piggybacked != nil && piggybacked.hasPointer)
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
-		group.touchedValueLogSegmentSliceLocked(), db.indexOuterLeavesInValueLog,
+		group.touchedValueLogSegmentSliceLocked(), forceValueLogRefresh,
 		group.vlogRefDelta, nil, nil, opts,
 	)
 	// finalizeCommitLockedWithOptions always consumes or releases its builder
@@ -691,6 +730,10 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	group.builder = nil
 	if post.accepted {
 		group.physicalSeal = post.physicalSeal
+		if piggybacked != nil {
+			piggybackedCommitted = true
+			db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, syncWrite)
+		}
 	}
 	if err != nil {
 		// The authenticated cut's coverage intent refers to an already

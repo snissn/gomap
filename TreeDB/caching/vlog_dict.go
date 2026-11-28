@@ -156,6 +156,15 @@ type dictStorePublisher interface {
 	PublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool) (uint64, error)
 }
 
+type dictStoreStager interface {
+	StagePublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool, onDurable func(uint64)) (uint64, error)
+	StageSetK(ctx context.Context, dictID uint64, k int, onDurable func()) error
+	HasStagedOps() bool
+	FlushStagedOps(sync bool) error
+}
+
+const valueLogDictStagedIdleFlushDelay = 150 * time.Millisecond
+
 func (db *DB) valueLogDictTrainingEnabled() bool {
 	// Dict training is enabled when TrainBytes > 0. caching.Open defaults this
 	// to a safe value for dict/auto compression modes so "turning it on" does
@@ -935,14 +944,9 @@ func (db *DB) ensureValueLogDictTrainer() {
 			return nil
 		}
 		tr.SetOnAccept(func(_ *compression.ActiveProfile) {
-			// Avoid contending on ext4 JBD2 with an active Checkpoint() flush;
-			// Checkpoint clears checkpointing and kicks valueLogDictLoop on exit
-			// so the trained dictionary publishes immediately after the barrier.
-			if db.deferValueLogDictPublishDuringCheckpoint() {
-				return
-			}
-			// Publish accepted profiles immediately so short ingest benchmarks can
-			// start writing dict frames before teardown.
+			// Stage or publish accepted profiles immediately so active flushes
+			// and checkpoints piggyback them with zero extra fsyncs, and short
+			// ingest benchmarks start writing dict frames before teardown.
 			db.applyValueLogDictProfileForClass(class)
 			db.valueLogDictKick()
 		})
@@ -1024,7 +1028,15 @@ func (db *DB) QuiesceValueLogDictTraining() {
 	// the trainers are detached. Drain it before returning. Later periodic-loop
 	// attempts see no trainer and cannot mutate the dictionary store.
 	db.valueLogDictApplyMu.Lock()
+	db.valueLogDictTrainerMu.RLock()
+	store := db.dictStore
+	db.valueLogDictTrainerMu.RUnlock()
 	db.valueLogDictApplyMu.Unlock()
+	if stager, ok := store.(dictStoreStager); ok && stager.HasStagedOps() && !db.closing.Load() {
+		if err := stager.FlushStagedOps(true); err != nil {
+			db.reportValueLogDictPublishError(err)
+		}
+	}
 }
 
 func (db *DB) valueLogDictCandidateK() []int {
@@ -1069,6 +1081,65 @@ func (db *DB) valueLogDictLoop() {
 	defer db.wg.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	var idleTimer *time.Timer
+	var idleC <-chan time.Time
+	stopIdleTimer := func() {
+		if idleTimer == nil {
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer = nil
+		idleC = nil
+	}
+	defer stopIdleTimer()
+	armIdleTimerIfStaged := func() {
+		db.valueLogDictTrainerMu.RLock()
+		store := db.dictStore
+		db.valueLogDictTrainerMu.RUnlock()
+		stager, ok := store.(dictStoreStager)
+		if !ok || !stager.HasStagedOps() {
+			db.valueLogDictStagedAtUnixNano.Store(0)
+			stopIdleTimer()
+			return
+		}
+		stagedAt := db.valueLogDictStagedAtUnixNano.Load()
+		if stagedAt == 0 {
+			stagedAt = time.Now().UnixNano()
+			db.valueLogDictStagedAtUnixNano.CompareAndSwap(0, stagedAt)
+		}
+		remaining := valueLogDictStagedIdleFlushDelay - time.Since(time.Unix(0, stagedAt))
+		if remaining <= 0 {
+			if !db.checkpointing.Load() && !db.closing.Load() {
+				if err := stager.FlushStagedOps(true); err != nil {
+					db.reportValueLogDictPublishError(err)
+				}
+			}
+			if !stager.HasStagedOps() {
+				db.valueLogDictStagedAtUnixNano.Store(0)
+				stopIdleTimer()
+				return
+			}
+			remaining = valueLogDictStagedIdleFlushDelay
+		}
+		if idleTimer == nil {
+			idleTimer = time.NewTimer(remaining)
+			idleC = idleTimer.C
+		} else {
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(remaining)
+			idleC = idleTimer.C
+		}
+	}
 
 	for {
 		select {
@@ -1076,11 +1147,15 @@ func (db *DB) valueLogDictLoop() {
 			return
 		case <-ticker.C:
 		case <-db.valueLogDictKickCh:
+		case <-idleC:
+			idleTimer = nil
+			idleC = nil
 		}
 		db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
 		if db.dictClassMode() == vlogDictClassModeSplitOuterLeaf {
 			db.applyValueLogDictProfileForClass(vlogDictClassOuterLeaf)
 		}
+		armIdleTimerIfStaged()
 	}
 }
 
@@ -1098,55 +1173,8 @@ func (db *DB) applyValueLogDictProfile() {
 	db.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
 }
 
-// EnterCheckpointDictDeferral extends background dictionary-publication
-// deferral across multi-stage public checkpoints (cached flush, fallback
-// convergence, and command-WAL cleanup) so dictdb fsyncs do not collide on
-// ext4 JBD2 with checkpoint barriers. Pairs with LeaveCheckpointDictDeferral.
-func (db *DB) EnterCheckpointDictDeferral() {
-	if db == nil {
-		return
-	}
-	db.valueLogDictDeferDepth.Add(1)
-}
-
-// LeaveCheckpointDictDeferral releases one nesting level acquired by
-// EnterCheckpointDictDeferral and immediately kicks valueLogDictLoop if a
-// trained dictionary was deferred and no checkpoint scope remains active.
-func (db *DB) LeaveCheckpointDictDeferral() {
-	if db == nil {
-		return
-	}
-	if db.valueLogDictDeferDepth.Add(-1) <= 0 {
-		db.maybeKickDeferredValueLogDictPublish()
-	}
-}
-
-func (db *DB) maybeKickDeferredValueLogDictPublish() {
-	if db == nil || db.checkpointing.Load() || db.valueLogDictDeferDepth.Load() > 0 {
-		return
-	}
-	if db.valueLogDictPublishDeferred.Swap(false) {
-		db.valueLogDictKick()
-	}
-}
-
-func (db *DB) deferValueLogDictPublishDuringCheckpoint() bool {
-	if db == nil || (!db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0) {
-		return false
-	}
-	db.valueLogDictPublishDeferred.Store(true)
-	if !db.checkpointing.Load() && db.valueLogDictDeferDepth.Load() <= 0 {
-		db.maybeKickDeferredValueLogDictPublish()
-		return false
-	}
-	return true
-}
-
 func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	if db == nil {
-		return
-	}
-	if db.deferValueLogDictPublishDuringCheckpoint() {
 		return
 	}
 	// Profile application is a check-then-publish transaction: the applied hash
@@ -1202,6 +1230,9 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 		if curK := int(db.valueLogDictCurrentKByClass[class].Load()); curK == profileK {
 			return
 		}
+		if int(db.valueLogDictStagedKByClass[class].Load()) == profileK {
+			return
+		}
 		if !db.valueLogAutotuneShouldSwitch(candidate, ioNsPerStoredByte) {
 			return
 		}
@@ -1215,26 +1246,43 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			if dictID == 0 {
 				return
 			}
+			applyKLocal := func() {
+				db.valueLogDictStagedKByClass[class].CompareAndSwap(uint32(profileK), 0)
+				db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
+				if class == vlogDictClassSingleValue {
+					db.valueLogDictCurrentK.Store(uint32(profileK))
+				}
+				db.valueLogDictKMu.Lock()
+				if db.valueLogDictKCache == nil {
+					db.valueLogDictKCache = make(map[uint64]int)
+				}
+				db.valueLogDictKCache[dictID] = profileK
+				db.valueLogDictKMu.Unlock()
+				db.valueLogDictLastKUpdateUnixNano.Store(time.Now().UnixNano())
+				log.Printf("treedb: value-log dict updated class=%s dict_id=%d k=%d", vlogDictClassSuffix(class), dictID, profileK)
+				db.valueLogAutotuneRecordSwitch(candidate)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if stager, ok := store.(dictStoreStager); ok {
+				db.valueLogDictStagedKByClass[class].Store(uint32(profileK))
+				if err := stager.StageSetK(ctx, dictID, profileK, applyKLocal); err != nil {
+					db.valueLogDictStagedKByClass[class].CompareAndSwap(uint32(profileK), 0)
+					db.reportValueLogDictPublishError(err)
+					return
+				}
+				db.valueLogDictStagedAtUnixNano.CompareAndSwap(0, time.Now().UnixNano())
+				return
+			}
 			if err := ks.SetK(ctx, dictID, profileK); err != nil {
 				db.reportValueLogDictPublishError(err)
 				return
 			}
-			db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
-			if class == vlogDictClassSingleValue {
-				db.valueLogDictCurrentK.Store(uint32(profileK))
-			}
-			db.valueLogDictKMu.Lock()
-			if db.valueLogDictKCache == nil {
-				db.valueLogDictKCache = make(map[uint64]int)
-			}
-			db.valueLogDictKCache[dictID] = profileK
-			db.valueLogDictKMu.Unlock()
-			db.valueLogDictLastKUpdateUnixNano.Store(time.Now().UnixNano())
-			log.Printf("treedb: value-log dict updated class=%s dict_id=%d k=%d", vlogDictClassSuffix(class), dictID, profileK)
+			applyKLocal()
 		}
-		db.valueLogAutotuneRecordSwitch(candidate)
+		return
+	}
+	if db.valueLogDictStagedHashByClass[class].Load() == profile.DictHash {
 		return
 	}
 	minSavings := db.valueLogDictMinSavingsRatio()
@@ -1253,30 +1301,77 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 	defer cancel()
 	classMode := db.dictClassMode()
 	publishedViaGlobalCurrent := false
+	publishK := 0
+	if _, hasK := store.(dictStoreK); hasK {
+		publishK = profileK
+	}
+	targetClass := ""
+	alsoSetGlobal := true
+	if classMode == vlogDictClassModeSplitOuterLeaf {
+		_, hasClassWriter := store.(dictStoreWriterByClass)
+		_, hasClassReader := store.(dictStoreCurrentByClass)
+		if hasClassWriter && hasClassReader {
+			targetClass = vlogDictClassSuffix(class)
+			alsoSetGlobal = class == vlogDictClassSingleValue
+			publishedViaGlobalCurrent = alsoSetGlobal
+		} else {
+			publishedViaGlobalCurrent = true
+		}
+	} else {
+		publishedViaGlobalCurrent = true
+	}
+	activatePublished := func(dictID uint64) {
+		// Make new dictionaries visible to the write path once durable in
+		// SystemRootPageID. We intentionally avoid per-write reads
+		// (currentDictID refreshes only every N uses), so activation updates
+		// the cached current ID atomically.
+		db.valueLogDictStagedHashByClass[class].CompareAndSwap(profile.DictHash, 0)
+		classIdx := int(class)
+		if classIdx < 0 || classIdx >= vlogDictClassCount {
+			classIdx = int(vlogDictClassSingleValue)
+		}
+		db.dictCurrentCachedByClass[classIdx].Store(dictID)
+		db.dictCurrentOpsByClass[classIdx].Store(0)
+		if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
+			db.dictCurrentCached.Store(dictID)
+			db.dictCurrentOps.Store(0)
+		}
+		db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)
+		db.valueLogDictLastAppliedDictIDByClass[class].Store(dictID)
+		db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
+		if class == vlogDictClassSingleValue {
+			db.valueLogDictLastAppliedDictHash.Store(profile.DictHash)
+			db.valueLogDictLastAppliedDictID.Store(dictID)
+			db.valueLogDictCurrentK.Store(uint32(profileK))
+		}
+		db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
+
+		// Reset shared ratio tracking only when the publish updates the global current.
+		// In split mode, a class-specific publish should not wipe the shared window.
+		if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
+			db.valueLogDictMetrics.SetSlab(1)
+			db.valueLogDictMetrics.Reset(1)
+		}
+
+		log.Printf("treedb: value-log dict published class=%s dict_id=%d k=%d payload_ratio=%.3f total_ratio=%.3f",
+			vlogDictClassSuffix(class), dictID, profileK, profile.PayloadRatio, profile.TotalRatio)
+		db.valueLogAutotuneRecordSwitch(candidate)
+	}
+	if stager, ok := store.(dictStoreStager); ok {
+		db.valueLogDictStagedHashByClass[class].Store(profile.DictHash)
+		if _, err := stager.StagePublishDict(ctx, profile.Dict, publishK, targetClass, alsoSetGlobal, activatePublished); err != nil {
+			db.valueLogDictStagedHashByClass[class].CompareAndSwap(profile.DictHash, 0)
+			db.reportValueLogDictPublishError(err)
+			return
+		}
+		db.valueLogDictStagedAtUnixNano.CompareAndSwap(0, time.Now().UnixNano())
+		return
+	}
 	var (
 		dictID uint64
 		err    error
 	)
 	if publisher, ok := store.(dictStorePublisher); ok {
-		publishK := 0
-		if _, hasK := store.(dictStoreK); hasK {
-			publishK = profileK
-		}
-		targetClass := ""
-		alsoSetGlobal := true
-		if classMode == vlogDictClassModeSplitOuterLeaf {
-			_, hasClassWriter := store.(dictStoreWriterByClass)
-			_, hasClassReader := store.(dictStoreCurrentByClass)
-			if hasClassWriter && hasClassReader {
-				targetClass = vlogDictClassSuffix(class)
-				alsoSetGlobal = class == vlogDictClassSingleValue
-				publishedViaGlobalCurrent = alsoSetGlobal
-			} else {
-				publishedViaGlobalCurrent = true
-			}
-		} else {
-			publishedViaGlobalCurrent = true
-		}
 		dictID, err = publisher.PublishDict(ctx, profile.Dict, publishK, targetClass, alsoSetGlobal)
 		if err != nil {
 			db.reportValueLogDictPublishError(err)
@@ -1327,39 +1422,7 @@ func (db *DB) applyValueLogDictProfileForClass(class vlogDictClass) {
 			publishedViaGlobalCurrent = true
 		}
 	}
-	// Make new dictionaries visible to the write path immediately. We intentionally
-	// avoid per-write dictdb reads (currentDictID refreshes only every N uses), so
-	// a background publish must also refresh the cached current ID.
-	classIdx := int(class)
-	if classIdx < 0 || classIdx >= vlogDictClassCount {
-		classIdx = int(vlogDictClassSingleValue)
-	}
-	db.dictCurrentCachedByClass[classIdx].Store(dictID)
-	db.dictCurrentOpsByClass[classIdx].Store(0)
-	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
-		db.dictCurrentCached.Store(dictID)
-		db.dictCurrentOps.Store(0)
-	}
-	db.valueLogDictLastAppliedDictHashByClass[class].Store(profile.DictHash)
-	db.valueLogDictLastAppliedDictIDByClass[class].Store(dictID)
-	db.valueLogDictCurrentKByClass[class].Store(uint32(profileK))
-	if class == vlogDictClassSingleValue {
-		db.valueLogDictLastAppliedDictHash.Store(profile.DictHash)
-		db.valueLogDictLastAppliedDictID.Store(dictID)
-		db.valueLogDictCurrentK.Store(uint32(profileK))
-	}
-	db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
-
-	// Reset shared ratio tracking only when the publish updates the global current.
-	// In split mode, a class-specific publish should not wipe the shared window.
-	if class == vlogDictClassSingleValue || classMode != vlogDictClassModeSplitOuterLeaf || publishedViaGlobalCurrent {
-		db.valueLogDictMetrics.SetSlab(1)
-		db.valueLogDictMetrics.Reset(1)
-	}
-
-	log.Printf("treedb: value-log dict published class=%s dict_id=%d k=%d payload_ratio=%.3f total_ratio=%.3f",
-		vlogDictClassSuffix(class), dictID, profileK, profile.PayloadRatio, profile.TotalRatio)
-	db.valueLogAutotuneRecordSwitch(candidate)
+	activatePublished(dictID)
 }
 
 func (db *DB) valueLogDictPaused() bool {

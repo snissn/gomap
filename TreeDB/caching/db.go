@@ -9633,17 +9633,18 @@ type DB struct {
 	valueLogDictMetricsMinRecords  int
 	valueLogDictMetricsPauseBytes  int
 
-	valueLogDictTrainerMu       sync.RWMutex
-	valueLogDictApplyMu         sync.Mutex
-	valueLogDictQuiesceMu       sync.Mutex
-	valueLogDictQuiesced        atomic.Bool
-	valueLogDictPublishDeferred atomic.Bool
-	valueLogDictDeferDepth      atomic.Int32
-	valueLogDictTrainer         *compression.Trainer
-	valueLogDictTrainerByClass  [vlogDictClassCount]*compression.Trainer
-	valueLogDictKickCh          chan struct{}
-	valueLogDictMetrics         compression.Metrics
-	valueLogDictFrames          struct {
+	valueLogDictTrainerMu         sync.RWMutex
+	valueLogDictApplyMu           sync.Mutex
+	valueLogDictQuiesceMu         sync.Mutex
+	valueLogDictQuiesced          atomic.Bool
+	valueLogDictStagedHashByClass [vlogDictClassCount]atomic.Uint64
+	valueLogDictStagedKByClass    [vlogDictClassCount]atomic.Uint32
+	valueLogDictStagedAtUnixNano  atomic.Int64
+	valueLogDictTrainer           *compression.Trainer
+	valueLogDictTrainerByClass    [vlogDictClassCount]*compression.Trainer
+	valueLogDictKickCh            chan struct{}
+	valueLogDictMetrics           compression.Metrics
+	valueLogDictFrames            struct {
 		total     atomic.Uint64
 		attempted atomic.Uint64
 		kept      atomic.Uint64
@@ -26453,7 +26454,6 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
-		db.maybeKickDeferredValueLogDictPublish()
 	}()
 	endWriteCutover := func() {
 		db.checkpointMu.Lock()
