@@ -65,7 +65,6 @@ var raftSnapshotMainDBEntriesV1 = []string{
 }
 
 var raftSnapshotSideStoreEntriesV1 = []string{
-	"dictdb",
 	"templatedb",
 }
 

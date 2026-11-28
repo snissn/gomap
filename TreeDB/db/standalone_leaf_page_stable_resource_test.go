@@ -517,8 +517,6 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	dictionaryProvider := newTestStableDictionaryProvider(t, dictID, dictionary)
-	db.SetStableDictionaryResourceProvider(dictionaryProvider)
 	templateCfg, templateProvider := stableLeafTemplateFixture(t, pageBytes)
 	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
 	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
@@ -556,7 +554,6 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 		}
 	}
 	for _, field := range []rootpublication.ReachabilityField{
-		rootpublication.ReachabilityDictionaryGeneration,
 		rootpublication.ReachabilityTemplateGeneration,
 		rootpublication.ReachabilityOuterLeafRawPointer,
 	} {
@@ -564,12 +561,12 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 			t.Fatalf("stable dictionary+template closure missing %s: %v", field, fields)
 		}
 	}
-	if dictionaryProvider.captureCalls.Load() != 1 || templateProvider.captureCalls.Load() != 1 {
-		t.Fatalf("capture calls dictionary=%d template=%d want 1 each", dictionaryProvider.captureCalls.Load(), templateProvider.captureCalls.Load())
+	if templateProvider.captureCalls.Load() != 1 {
+		t.Fatalf("capture calls template=%d want 1", templateProvider.captureCalls.Load())
 	}
 }
 
-func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *testing.T) {
+func TestStandaloneStableLeafRewriteCapturesOnlyEmittedTemplateAuthority(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		configure    func(*testing.T, *rewriteWriter)
@@ -598,8 +595,6 @@ func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *te
 				t.Fatal(err)
 			}
 			const dictID = uint64(7304)
-			dictionaryProvider := newTestStableDictionaryProvider(t, dictID, []byte("provider-dictionary-that-must-not-be-captured"))
-			database.SetStableDictionaryResourceProvider(dictionaryProvider)
 			writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
 			writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 			writer.SetLeafDictMode(dictID, []byte("configured-dictionary-not-emitted"), false)
@@ -619,9 +614,6 @@ func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *te
 				t.Fatal("stable append returned nil resources")
 			}
 			defer resources.Release()
-			if got := dictionaryProvider.captureCalls.Load(); got != 0 {
-				t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
-			}
 			var hasDictionary, hasTemplate bool
 			diagnostics, err := resources.AcquirePhysicalDiagnostics()
 			if err != nil {
@@ -645,15 +637,13 @@ func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *te
 	}
 }
 
-func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(t *testing.T) {
+func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedTemplateAuthority(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	const dictID = uint64(7305)
-	dictionaryProvider := newTestStableDictionaryProvider(t, dictID, []byte("provider-dictionary-that-must-not-be-captured"))
-	database.SetStableDictionaryResourceProvider(dictionaryProvider)
 	pageBytes := buildRewriteLeafPageFixture(t, "edb")
 	cfg, templateProvider := stableLeafTemplateFixture(t, pageBytes)
 	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
@@ -682,9 +672,6 @@ func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(
 	if len(ptrs) != len(pages) {
 		t.Fatalf("stable wide batch pointers=%d want %d", len(ptrs), len(pages))
 	}
-	if got := dictionaryProvider.captureCalls.Load(); got != 0 {
-		t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
-	}
 	var hasDictionary, hasTemplate bool
 	diagnostics, err := resources.AcquirePhysicalDiagnostics()
 	if err != nil {
@@ -703,122 +690,6 @@ func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(
 	}
 	if hasDictionary || !hasTemplate {
 		t.Fatalf("closure dictionary=%v template=%v want dictionary=false template=true", hasDictionary, hasTemplate)
-	}
-}
-
-func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pageBytes := buildRewriteLeafPageFixture(t, "stable-a")
-	pages := [][]byte{
-		pageBytes,
-		buildRewriteLeafPageFixture(t, "stable-b"),
-		buildRewriteLeafPageFixture(t, "stable-c"),
-	}
-	compact := make([][]byte, len(pages))
-	for i := range pages {
-		compact[i], _, err = valuelog.MaybeCompactLeafLogPayload(pages[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	const dictID = uint64(7301)
-	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
-		ID: uint32(dictID), Contents: compact, History: append([]byte(nil), compact[0]...),
-		Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
-	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
-	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
-	writer.blockCompression = true
-	writer.SetLeafDictMode(dictID, dictionary, false)
-	db.SetLeafPageLog(writer)
-	// Production installs the rewrite leaf log before caching.SetDictStore can
-	// publish its dictionary authority. The stable append must consult the DB's
-	// current provider rather than retaining the nil provider seen at install.
-	db.SetStableDictionaryResourceProvider(provider)
-	t.Cleanup(func() {
-		_ = db.Close()
-		_ = writer.Close()
-	})
-
-	stable := db.leafPageLog.(LeafPageStableLog)
-	_, resources, err := stable.AppendLeafPageWithStableResources(pageBytes)
-	if err != nil {
-		t.Fatalf("stable dictionary rewrite: %v", err)
-	}
-	if resources == nil {
-		t.Fatal("stable dictionary rewrite returned nil resources")
-	}
-	defer resources.Release()
-	var hasDictionary, hasOuterLeaf bool
-	diagnostics, err := resources.AcquirePhysicalDiagnostics()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := diagnostics.CloseWithError(); err != nil {
-			t.Error(err)
-		}
-	}()
-	for _, descriptor := range diagnostics.Physical() {
-		for _, field := range descriptor.ReachabilityFields() {
-			switch field {
-			case rootpublication.ReachabilityDictionaryGeneration:
-				hasDictionary = true
-			case rootpublication.ReachabilityOuterLeafRawPointer:
-				hasOuterLeaf = true
-			}
-		}
-	}
-	if !hasDictionary || !hasOuterLeaf || provider.captureCalls.Load() != 1 {
-		t.Fatalf("stable rewrite closure dictionary=%v outer-leaf=%v captureCalls=%d", hasDictionary, hasOuterLeaf, provider.captureCalls.Load())
-	}
-}
-
-func TestStandaloneStableLeafRewriteRejectsDictionaryAuthorityMismatchBeforeMutation(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const dictID = uint64(7302)
-	provider := newTestStableDictionaryProvider(t, dictID, []byte("different-provider-dictionary"))
-	db.SetStableDictionaryResourceProvider(provider)
-	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
-	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
-	writer.blockCompression = true
-	writer.SetLeafDictMode(dictID, []byte("writer-selected-dictionary"), false)
-	db.SetLeafPageLog(writer)
-	t.Cleanup(func() {
-		_ = db.Close()
-		_ = writer.Close()
-	})
-	before, err := os.ReadDir(LeafLogDirPath(dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stable := db.leafPageLog.(LeafPageStableLog)
-	_, resources, err := stable.AppendLeafPageWithStableResources(buildRewriteLeafPageFixture(t, "mismatch"))
-	if resources != nil {
-		resources.Release()
-		t.Fatal("dictionary mismatch returned resources")
-	}
-	if !errors.Is(err, rootpublication.ErrResourceConflict) {
-		t.Fatalf("stable mismatch error=%v want resource conflict", err)
-	}
-	after, err := os.ReadDir(LeafLogDirPath(dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after) != len(before) || writer.leafW != nil {
-		t.Fatalf("dictionary mismatch mutated leaf writer: before=%d after=%d writer=%v", len(before), len(after), writer.leafW)
 	}
 }
 

@@ -691,8 +691,6 @@ func TestLeafGenerationPack_UsesOuterLeafDict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	dictionaryProvider := newTestStableDictionaryProvider(t, dictID, dictBytes)
-	db.SetStableDictionaryResourceProvider(dictionaryProvider)
 	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
 	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 	db.SetLeafPageLog(leafLog)
@@ -722,9 +720,6 @@ func TestLeafGenerationPack_UsesOuterLeafDict(t *testing.T) {
 	}
 	if len(stats.CreatedFileIDs) == 0 {
 		t.Fatalf("CreatedFileIDs empty, stats=%+v", stats)
-	}
-	if calls := dictionaryProvider.captureCalls.Load(); calls == 0 {
-		t.Fatal("packed production path did not capture dictionary authority")
 	}
 
 	header := readFirstLeafGenerationFrameHeader(t, dir, stats.CreatedFileIDs[0])

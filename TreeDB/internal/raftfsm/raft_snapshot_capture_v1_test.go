@@ -24,43 +24,19 @@ func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing
 	sourceDir := filepath.Join(sourceRoot, "maindb")
 	ctx := context.Background()
 
-	dictDir := filepath.Join(sourceRoot, "dictdb")
-	dictStore, err := dictdb.Open(dictDir, backenddb.Options{ChunkSize: 64 * 1024, DisableBackgroundPrune: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dictBytes := bytes.Repeat([]byte("captured-pointer-dictionary|"), 512)
-	dictID, err := dictStore.PutDictBytes(ctx, dictBytes)
-	if err != nil {
-		_ = dictStore.Close()
-		t.Fatal(err)
-	}
-	resources, err := dictStore.CaptureDictionaryResources(ctx, dictID)
-	if err != nil {
-		_ = dictStore.Close()
-		t.Fatal(err)
-	}
-	if got := resources.Len(); got != 2 {
-		resources.Release()
-		_ = dictStore.Close()
-		t.Fatalf("dictionary physical closure=%d want index and value-log segment", got)
-	}
-	resources.Release()
-	if err := dictStore.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
-	closeSides, err := wireRaftSnapshotSideStoreLookupsV1(sourceRoot, &opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeSides()
 	sourceDB, err := backenddb.Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sourceDB.Close()
+	dictStore := dictdb.New(sourceDB)
+	dictStore.SetPointerThreshold(1)
+	dictBytes := bytes.Repeat([]byte("captured-pointer-dictionary|"), 512)
+	dictID, err := dictStore.PutDictBytes(ctx, dictBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceRoot, false)
 	defer source.Close()
 	doc := []byte(`{"_id":"u-large","payload":"` + string(bytes.Repeat([]byte("d"), 8192)) + `"}`)
@@ -73,7 +49,7 @@ func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing
 	defer captured.Release()
 	ready, err := captured.Materialize()
 	if err != nil {
-		t.Fatalf("materialize pointer-backed side store: %v", err)
+		t.Fatalf("materialize pointer-backed dictionary snapshot: %v", err)
 	}
 	defer ready.Release()
 
@@ -90,17 +66,12 @@ func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing
 	}
 
 	reopen := backenddb.Options{Dir: targetDir, ReadOnly: true, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
-	closeReopenedSides, err := wireRaftSnapshotSideStoreLookupsV1(targetRoot, &reopen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeReopenedSides()
 	reopened, err := backenddb.Open(reopen)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	gotDict, err := reopen.ValueLog.DictLookup(dictID)
+	gotDict, err := reopened.LookupSystemDictBytes(dictID)
 	if err != nil || !bytes.Equal(gotDict, dictBytes) {
 		t.Fatalf("reopened dictionary length=%d want=%d err=%v", len(gotDict), len(dictBytes), err)
 	}
@@ -292,7 +263,7 @@ func TestCapturedRaftSnapshotV1UnregisteredSideStoreRefuses(t *testing.T) {
 	source := openRaftSnapshotFSMForTest(t, database, dir, true)
 	defer source.Close()
 	applySnapshotSourceEntries(t, source, []byte(`{"_id":"u-large","name":"before"}`))
-	side := filepath.Join(snapshotSideStoreRootV1(source.db.Dir()), "dictdb")
+	side := filepath.Join(snapshotSideStoreRootV1(source.db.Dir()), "templatedb")
 	if err := os.MkdirAll(side, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +357,7 @@ func TestCapturedRaftSnapshotV1SideDirectoryWithoutIndexRefusesContents(t *testi
 			source := openRaftSnapshotFSMForTest(t, database, dir, true)
 			defer source.Close()
 			applySnapshotSourceEntries(t, source, []byte(`{"_id":"u-large","name":"before"}`))
-			side := filepath.Join(snapshotSideStoreRootV1(dir), "dictdb")
+			side := filepath.Join(snapshotSideStoreRootV1(dir), "templatedb")
 			if err := os.MkdirAll(side, 0700); err != nil {
 				t.Fatal(err)
 			}

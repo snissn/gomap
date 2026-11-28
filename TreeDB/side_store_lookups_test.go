@@ -2,95 +2,58 @@ package treedb
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
 
-func TestWireSideStoreLookups_ReadOnlyDoesNotExposeDictWrites(t *testing.T) {
+func TestOpenBackend_ReadOnlyResolvesInMainDBDictWithoutWrites(t *testing.T) {
 	root := t.TempDir()
-	dictDir := filepath.Join(root, "dictdb")
-	dictBackend, err := db.Open(db.Options{Dir: dictDir})
+	opened, err := Open(Options{Dir: root})
 	if err != nil {
-		t.Fatalf("open dictdb: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
-	store := dictdb.New(dictBackend)
+	store := dictdb.New(opened.backend)
 	dictID, err := store.PutDictBytes(context.Background(), []byte("maintenance dictionary"))
 	if err != nil {
+		_ = opened.Close()
 		t.Fatal(err)
 	}
-	if err := dictBackend.Close(); err != nil {
-		t.Fatalf("close dictdb: %v", err)
+	if err := opened.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 
-	opts := &Options{ReadOnly: true}
-	cleanup, provider, err := wireSideStoreLookups(root, opts)
+	ro, cleanup, err := OpenBackend(Options{Dir: root, ReadOnly: true})
 	if err != nil {
-		t.Fatalf("wireSideStoreLookups: %v", err)
+		t.Fatalf("OpenBackend(ReadOnly): %v", err)
 	}
 	defer func() { _ = cleanup() }()
 
-	if provider == nil {
-		t.Fatal("dictionary owner did not expose stable authority")
-	}
-	resources, err := provider.CaptureDictionaryResources(context.Background(), dictID)
-	if runtime.GOOS == "windows" {
-		// Reopened read-only owners cannot supply create-only namespace evidence.
-		if !errors.Is(err, ErrNamespacePersistenceUnsupported) || resources != nil {
-			t.Fatalf("read-only dictionary capture: resources=%v err=%v, want nil authority and typed namespace refusal", resources, err)
-		}
-	} else {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resources == nil || resources.Len() == 0 {
-			t.Fatal("empty dictionary authority")
-		}
-		resources.Release()
-	}
-	if opts.ValueLog.DictLookup == nil {
-		t.Fatal("expected DictLookup to be wired")
-	}
-	if got, err := opts.ValueLog.DictLookup(dictID); err != nil || string(got) != "maintenance dictionary" {
+	got, err := ro.LookupSystemDictBytes(dictID)
+	if err != nil || string(got) != "maintenance dictionary" {
 		t.Fatalf("read-only dictionary lookup: got=%q err=%v", got, err)
 	}
-	if opts.ValueLog.DictCurrentForClass == nil {
-		t.Fatal("expected DictCurrentForClass to be wired")
-	}
-	if opts.ValueLog.DictLeafPayloadMode == nil {
-		t.Fatal("expected DictLeafPayloadMode to be wired")
-	}
-	if opts.ValueLog.DictPut != nil {
-		t.Fatal("expected DictPut to stay nil for read-only dictdb")
-	}
-	if opts.ValueLog.DictSetCurrentForClass != nil {
-		t.Fatal("expected DictSetCurrentForClass to stay nil for read-only dictdb")
-	}
-	if opts.ValueLog.DictSetLeafPayloadMode != nil {
-		t.Fatal("expected DictSetLeafPayloadMode to stay nil for read-only dictdb")
-	}
-	if _, ok, err := opts.ValueLog.DictLeafPayloadMode(context.Background(), 0); err != nil || ok {
-		t.Fatalf("DictLeafPayloadMode(dict=0) = (_, %v, %v), want (_, false, nil)", ok, err)
+	roStore := dictdb.New(ro)
+	if _, err := roStore.PutDictBytes(context.Background(), []byte("blocked write")); err == nil {
+		t.Fatal("expected read-only PutDictBytes to fail")
 	}
 }
 
-func TestWireSideStoreLookups_DoesNotPropagateCommandWAL(t *testing.T) {
+func TestWireSideStoreLookups_DoesNotPropagateCommandWALToTemplateDB(t *testing.T) {
 	root := t.TempDir()
-	dictDir := filepath.Join(root, "dictdb")
-	dictBackend, err := db.Open(db.Options{Dir: dictDir})
+	templateDir := filepath.Join(root, "templatedb")
+	templateBackend, err := db.Open(db.Options{Dir: templateDir})
 	if err != nil {
-		t.Fatalf("open dictdb: %v", err)
+		t.Fatalf("open templatedb: %v", err)
 	}
-	if err := dictBackend.Close(); err != nil {
-		t.Fatalf("close dictdb: %v", err)
+	if err := templateBackend.Close(); err != nil {
+		t.Fatalf("close templatedb: %v", err)
 	}
 
 	opts := &Options{CommandWAL: true}
-	cleanup, _, err := wireSideStoreLookups(root, opts)
+	cleanup, err := wireSideStoreLookups(root, opts)
 	if err != nil {
 		t.Fatalf("wireSideStoreLookups: %v", err)
 	}
@@ -99,48 +62,42 @@ func TestWireSideStoreLookups_DoesNotPropagateCommandWAL(t *testing.T) {
 	if !opts.CommandWAL {
 		t.Fatal("wireSideStoreLookups cleared main DB CommandWAL option")
 	}
-	cfg, ok, err := db.LoadFormatConfig(dictDir)
+	cfg, ok, err := db.LoadFormatConfig(templateDir)
 	if err != nil {
-		t.Fatalf("LoadFormatConfig(dictdb): %v", err)
+		t.Fatalf("LoadFormatConfig(templatedb): %v", err)
 	}
 	if !ok {
-		t.Fatalf("expected dictdb format.json to exist at %s", filepath.Join(dictDir, "format.json"))
+		t.Fatalf("expected templatedb format.json to exist at %s", filepath.Join(templateDir, "format.json"))
 	}
 	if cfg.RequiresCommandWALV1() {
-		t.Fatal("dictdb inherited command_wal_v1 required feature from main DB options")
+		t.Fatal("templatedb inherited command_wal_v1 required feature from main DB options")
 	}
 }
 
 func TestWireSideStoreLookupsLockedReadOnlySnapshotOwners(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"dictdb", "templatedb"} {
-		owner, err := db.Open(db.Options{Dir: filepath.Join(root, name)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := owner.SetSync([]byte("fixture"), []byte("stable")); err != nil {
-			t.Fatal(err)
-		}
-		if err := owner.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	opts := &Options{ReadOnly: true}
-	cleanup, _, err := wireSideStoreLookups(root, opts)
+	templateDir := filepath.Join(root, "templatedb")
+	owner, err := db.Open(db.Options{Dir: templateDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
-	if opts.PhysicalSnapshotSideStoreCapture == nil {
-		t.Fatal("owners did not register capture")
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
 	}
-	for _, name := range []string{"dictdb", "templatedb"} {
-		cut, err := opts.PhysicalSnapshotSideStoreCapture(context.Background(), name)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if err := cut.Close(); err != nil {
-			t.Fatal(err)
-		}
+	opts := &Options{ReadOnly: true}
+	cleanup, err := wireSideStoreLookups(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cleanup() }()
+	if opts.PhysicalSnapshotSideStoreCapture == nil {
+		t.Fatal("expected PhysicalSnapshotSideStoreCapture to be wired for templatedb")
+	}
+	cut, err := opts.PhysicalSnapshotSideStoreCapture(context.Background(), "templatedb")
+	if err != nil {
+		t.Fatalf("capture templatedb cut: %v", err)
+	}
+	if err := cut.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

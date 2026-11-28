@@ -10,7 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -30,7 +29,6 @@ func TestStableProducerConstructorPolicyAcceptsCanonicalSpecs(t *testing.T) {
 		rootpublication.ReachabilityOuterLeafRawPointer:        valuelog.NewStableOuterLeafRawResourceToken,
 		rootpublication.ReachabilityOuterLeafPackedPointer:     db.NewStableOuterLeafResourceToken,
 		rootpublication.ReachabilityOuterLeafGeneration:        db.NewStableOuterLeafResourceToken,
-		rootpublication.ReachabilityDictionaryGeneration:       dictdb.NewStableDictionaryResourceToken,
 		rootpublication.ReachabilityTemplateGeneration:         templatedb.NewStableTemplateResourceToken,
 		rootpublication.ReachabilityColumnManifest:             collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityTypedColumnMultipart:       collections.NewStableColumnAssetResourceToken,

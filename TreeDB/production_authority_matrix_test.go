@@ -28,7 +28,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
@@ -60,7 +59,6 @@ var productionAuthorityWitnesses = []productionAuthorityWitness{
 	{rootpublication.ReachabilityOuterLeafRawPointer, rootpublication.ResourceOuterLeafLog, "authoritative", captureProductionRawOuterLeafAuthority},
 	{rootpublication.ReachabilityOuterLeafPackedPointer, rootpublication.ResourceOuterLeafPack, "authoritative", captureProductionPackedOuterLeafAuthority},
 	{rootpublication.ReachabilityOuterLeafGeneration, rootpublication.ResourceOuterLeafManifest, "authoritative", captureProductionOuterLeafGenerationAuthority},
-	{rootpublication.ReachabilityDictionaryGeneration, rootpublication.ResourceDictionary, "authoritative-transitive", captureProductionDictionaryAuthority},
 	{rootpublication.ReachabilityTemplateGeneration, rootpublication.ResourceTemplate, "authoritative-transitive", captureProductionTemplateAuthority},
 	{rootpublication.ReachabilityColumnManifest, rootpublication.ResourceColumnAsset, "authoritative", captureProductionColumnManifestAuthority},
 	{rootpublication.ReachabilityTypedColumnMultipart, rootpublication.ResourceTypedColumnAsset, "authoritative", captureProductionTypedColumnMultipartAuthority},
@@ -95,7 +93,6 @@ var productionAuthorityBehaviorWitnesses = []productionAuthorityBehaviorWitness{
 	{rootpublication.ReachabilityOuterLeafRawPointer, rootpublication.ResourceMutableAppend, "db.LeafPageStableLog.AppendLeafPageWithStableResources", "TestLeafPageStableWrapperRejectsMalformedProviderAuthority"},
 	{rootpublication.ReachabilityOuterLeafPackedPointer, rootpublication.ResourceImmutable, "(*db.DB).PrepareLeafGenerationPackStableClosure", "TestLeafGenerationPackPromotionAuthorityRejectsMalformedPointers"},
 	{rootpublication.ReachabilityOuterLeafGeneration, rootpublication.ResourceImmutable, "(*db.DB).PrepareLeafGenerationManifestStableClosure", "TestStableLeafGenerationManifestDestinationRebindFailsClosed"},
-	{rootpublication.ReachabilityDictionaryGeneration, rootpublication.ResourceImmutable, "(*dictdb.Store).CaptureDictionaryResources", "TestCaptureDictionaryResourcesRejectsEachMissingPointerChild"},
 	{rootpublication.ReachabilityTemplateGeneration, rootpublication.ResourceImmutable, "(*templatedb.Store).CaptureTemplateResources", "TestCaptureTemplateResourcesRejectsEachMissingPointerChild"},
 	{rootpublication.ReachabilityColumnManifest, rootpublication.ResourceMutableAppend, "collections.AppendColumnPhysicalAssetsWithStableResources", "TestStableColumnPreparedValidationRejectsEachMissingProductionObligation"},
 	{rootpublication.ReachabilityTypedColumnMultipart, rootpublication.ResourceMutableAppend, "collections.AppendColumnPhysicalAssetsWithStableResources", "TestStableColumnPreparedValidationRejectsEachMissingProductionObligation"},
@@ -115,12 +112,6 @@ var productionAuthorityBehaviorWitnesses = []productionAuthorityBehaviorWitness{
 // Keep the package and test names explicit: this matrix must not derive its
 // coverage from the canonical inventory or merely discover source symbols.
 var productionAuthorityCompositeOmissionWitnesses = []productionAuthorityCompositeOmissionWitness{
-	{
-		name:        "dictionary-index-and-value-log",
-		packagePath: "./internal/dictdb",
-		testName:    "TestCaptureDictionaryResourcesRejectsEachMissingPointerChild",
-		fields:      []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
-	},
 	{
 		name:        "template-index-and-value-log",
 		packagePath: "./internal/templatedb",
@@ -166,6 +157,7 @@ var productionAuthorityNegativeWitnesses = []productionAuthorityNegativeWitness{
 	{rootpublication.ReachabilityUserRoot, rootpublication.ResourceIndex, "adjacent-root-publication", backenddb.NewStableDBResourceToken},
 	{rootpublication.ReachabilitySystemRoot, rootpublication.ResourceIndex, "adjacent-root-publication", backenddb.NewStableDBResourceToken},
 	{rootpublication.ReachabilityFreelist, rootpublication.ResourceIndex, "adjacent-freelist-publication", backenddb.NewStableDBResourceToken},
+	{rootpublication.ReachabilityDictionaryGeneration, rootpublication.ResourceDictionary, "adjacent-root-publication", rejectProductionDictionaryAuthority},
 	{rootpublication.ReachabilityCollectionSystemRoot, rootpublication.ResourceIndex, "adjacent-root-publication", collections.NewStableCollectionResourceToken},
 	{rootpublication.ReachabilityCollectionPrimaryRoot, rootpublication.ResourceIndex, "adjacent-root-publication", collections.NewStableCollectionResourceToken},
 	{rootpublication.ReachabilityCollectionTemplateRoot, rootpublication.ResourceIndex, "adjacent-root-publication", collections.NewStableCollectionResourceToken},
@@ -186,6 +178,10 @@ var productionAuthorityNegativeWitnesses = []productionAuthorityNegativeWitness{
 
 func rejectProductionLegacySlabAuthority(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerLegacyExcluded, spec, "explicit-legacy-exclusion")
+}
+
+func rejectProductionDictionaryAuthority(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerDictionary, spec, "adjacent-root-publication")
 }
 
 func rejectProductionRaftSnapshotAuthority(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
@@ -359,30 +355,6 @@ func captureProductionOuterLeafGenerationAuthority(t productionAuthorityContext)
 		return nil, err
 	}
 	return resources, nil
-}
-
-func captureProductionDictionaryAuthority(t productionAuthorityContext) (*rootpublication.StableResourceSet, error) {
-	t.Helper()
-	database, err := Open(Options{Dir: t.TempDir()})
-	if err != nil {
-		return nil, err
-	}
-	store := dictdb.New(database.backend)
-	t.Cleanup(func() {
-		// Stop the public DB's cached maintenance before the borrowed store
-		// closes their shared backend; still release the store's writer.
-		_ = database.Close()
-		_ = store.Close()
-	})
-	dictionary := make([]byte, 4096)
-	for i := range dictionary {
-		dictionary[i] = byte(i*31 + 7)
-	}
-	dictionaryID, err := store.PutDictBytes(context.Background(), dictionary)
-	if err != nil {
-		return nil, err
-	}
-	return store.CaptureDictionaryResources(context.Background(), dictionaryID)
 }
 
 func captureProductionTemplateAuthority(t productionAuthorityContext) (*rootpublication.StableResourceSet, error) {
@@ -681,8 +653,8 @@ func TestProductionAuthorityNegativeRegistryExactEquality(t *testing.T) {
 }
 
 func TestProductionAuthorityBehaviorRegistryExactEquality(t *testing.T) {
-	if len(productionAuthorityBehaviorWitnesses) != 16 {
-		t.Fatalf("literal behavior rows=%d want 16", len(productionAuthorityBehaviorWitnesses))
+	if len(productionAuthorityBehaviorWitnesses) != 15 {
+		t.Fatalf("literal behavior rows=%d want 15", len(productionAuthorityBehaviorWitnesses))
 	}
 	positive := make(map[rootpublication.ReachabilityField]productionAuthorityWitness, len(productionAuthorityWitnesses))
 	for _, witness := range productionAuthorityWitnesses {
@@ -799,7 +771,6 @@ func TestProductionAuthorityExecutableCompositeOmissionMatrix(t *testing.T) {
 	}
 
 	wantFields := []rootpublication.ReachabilityField{
-		rootpublication.ReachabilityDictionaryGeneration,
 		rootpublication.ReachabilityTemplateGeneration,
 		rootpublication.ReachabilityColumnManifest,
 		rootpublication.ReachabilityTypedColumnMultipart,
@@ -885,8 +856,8 @@ func productionAuthorityTestFunctionNames(t testing.TB) map[string]struct{} {
 }
 
 func TestProductionAuthorityRealProducerCaptureMatrix(t *testing.T) {
-	if len(productionAuthorityWitnesses) != 16 || len(productionAuthorityNegativeWitnesses) != 20 {
-		t.Fatalf("literal matrix positives=%d negatives=%d want 16/20", len(productionAuthorityWitnesses), len(productionAuthorityNegativeWitnesses))
+	if len(productionAuthorityWitnesses) != 15 || len(productionAuthorityNegativeWitnesses) != 21 {
+		t.Fatalf("literal matrix positives=%d negatives=%d want 15/21", len(productionAuthorityWitnesses), len(productionAuthorityNegativeWitnesses))
 	}
 	supported := 0
 	for _, witness := range productionAuthorityWitnesses {
@@ -911,15 +882,15 @@ func TestProductionAuthorityRealProducerCaptureMatrix(t *testing.T) {
 			assertProductionAuthorityReleaseToZero(t, resources)
 		})
 	}
-	want := 16
+	want := 15
 	if runtime.GOOS == "darwin" {
-		want = 15
+		want = 14
 	}
 	if runtime.GOOS != "darwin" && (!rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported()) {
-		want = 15
+		want = 14
 	}
 	if runtime.GOOS == "linux" {
-		want = 16
+		want = 15
 	}
 	if supported != want {
 		t.Fatalf("supported real producer rows=%d want %d on %s", supported, want, runtime.GOOS)

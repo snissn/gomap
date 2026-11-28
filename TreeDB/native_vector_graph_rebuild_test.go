@@ -506,7 +506,7 @@ func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) boo
 		}
 		return false
 	}
-	for _, side := range []string{layout.dictdbDir, layout.templatedbDir} {
+	for _, side := range []string{layout.templatedbDir} {
 		if side == "" {
 			continue
 		}

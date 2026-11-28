@@ -194,7 +194,6 @@ type DB struct {
 	cowTxnWrite                          func(*caching.Batch, bool) error
 	cached                               *caching.DB
 	backend                              *db.DB
-	dictdb                               *db.DB
 	templateDB                           *DB
 	writePath                            writePathInfo
 	lifecycleMu                          sync.RWMutex
@@ -919,7 +918,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
-	dictdbDir := layout.dictdbDir
 	templatedbDir := layout.templatedbDir
 
 	// Apply persisted index encoding knobs so tools and apps can open existing
@@ -981,26 +979,9 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		)
 	}
 
-	// Dict compression requires a persistent dict store so dictionaries can be
-	// published and older dict-compressed frames remain decodable.
-	//
-	// DisableSideStores removes dictdb/templatedb plumbing. When it is enabled,
-	// auto compression automatically runs in a no-dict configuration by
-	// disabling dictionary training so block/off decisions can continue to work.
-	if opts.DisableSideStores {
-		switch opts.ValueLog.Compression {
-		case ValueLogCompressionDict:
-			return nil, fmt.Errorf("treedb: dict compression requires side stores (dictdb); set DisableSideStores=false")
-		case ValueLogCompressionAuto:
-			// Side stores disabled means we cannot publish dictionaries. In this
-			// configuration auto mode behaves as "no-dict auto" (block/off only).
-			if opts.ValueLog.DictTrain.TrainBytes >= 0 {
-				train := opts.ValueLog.DictTrain
-				train.TrainBytes = -1
-				opts.ValueLog.DictTrain = train
-			}
-		}
-	}
+	// Dictionaries live directly inside maindb's SystemRootPageID (always in
+	// index.db pager pages via ApplySystemOps), so dictionary compression works
+	// regardless of DisableSideStores.
 
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
@@ -1009,20 +990,12 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 			}
 			return nil, err
 		}
-		if !opts.DisableSideStores {
-			if _, err := os.Stat(dictdbDir); err != nil {
+		if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
+			if _, err := os.Stat(templatedbDir); err != nil {
 				if os.IsNotExist(err) {
-					return nil, fmt.Errorf("treedb: dictdb directory missing for read-only open: %s", dictdbDir)
+					return nil, fmt.Errorf("treedb: templatedb directory missing for read-only open: %s", templatedbDir)
 				}
 				return nil, err
-			}
-			if opts.ValueLog.TemplateMode != template.TemplateOff {
-				if _, err := os.Stat(templatedbDir); err != nil {
-					if os.IsNotExist(err) {
-						return nil, fmt.Errorf("treedb: templatedb directory missing for read-only open: %s", templatedbDir)
-					}
-					return nil, err
-				}
 			}
 		}
 	} else {
@@ -1030,78 +1003,16 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		if maindbDir != rootDir {
 			dirs = append(dirs, maindbDir)
 		}
-		if !opts.DisableSideStores {
-			dirs = append(dirs, dictdbDir)
-			if opts.ValueLog.TemplateMode != template.TemplateOff {
-				dirs = append(dirs, templatedbDir)
-			}
+		if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
+			dirs = append(dirs, templatedbDir)
 		}
 		if err := ensureOpenStorageLayoutDirs(0o755, filepath.Join(maindbDir, "index.db"), dirs...); err != nil {
 			return nil, fmt.Errorf("treedb: ensure public storage layout: %w", err)
 		}
 	}
 
-	var dictBackend *db.DB
-	var dictStore *dictdb.Store
 	var templateDB *DB
 	var templateStore *templatedb.Store
-	if !opts.DisableSideStores {
-		dictOpts := opts
-		dictOpts.PhysicalSnapshotSideStoreCapture = nil
-		dictOpts.NegativeLookupFilterBytes = 0
-		dictOpts.Dir = dictdbDir
-		dictOpts.ResolvedProfile = ""
-		dictOpts.DeprecatedProfileAlias = ""
-		dictOpts.UnsafeBenchmarkProfile = false
-		dictOpts.CommandWAL = false
-		// Side stores are opened via the backend (no caching layer). They must
-		// not inherit outer-leaf-in-value-log from the main DB, since that mode
-		// requires a leaf-page log wired by the cached layer.
-		dictOpts.IndexOuterLeavesInValueLog = false
-		dictOpts.FreshSystemPagerLeaves = false
-		dictOpts.FreshRelaxedStandaloneWALStream = false
-		dictOpts.DisableBackgroundPrune = true
-		dictOpts.ValueLog.DictLookup = nil
-		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
-		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
-		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
-		dictOpts.ValueLog.ForcePointers = false
-		// Avoid inheriting pointer/domain placement rules from the main DB. Side
-		// stores keep small values inline by default.
-		dictOpts.ValueLog.PointerThreshold = 0
-		dictOpts.ValueLog.DomainInlineThresholds = nil
-		dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
-		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
-		dictOpts.ChunkSize = dictChunkSize
-		var err error
-		dictBackend, err = db.Open(dictOpts)
-		if err != nil {
-			return nil, err
-		}
-		dictStore = dictdb.New(dictBackend)
-
-		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-			return dictStore.GetDictBytes(context.Background(), dictID)
-		}
-		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
-			return dictStore.GetCurrentForClass(ctx, class)
-		}
-		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
-			return dictStore.GetLeafPayloadMode(ctx, dictID)
-		}
-		if !opts.ReadOnly {
-			opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
-				return dictStore.PutDictBytes(ctx, dictBytes)
-			}
-			opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
-				return dictStore.SetCurrentForClass(ctx, class, dictID)
-			}
-			opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
-				return dictStore.SetLeafPayloadMode(ctx, dictID, useRawPages)
-			}
-		}
-	}
-
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.PhysicalSnapshotSideStoreCapture = nil
@@ -1113,9 +1024,9 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		templateOpts.CommandWAL = false
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
-		// Like dictdb, templatedb is an internal side store; avoid inheriting the
-		// main DB's outer-leaf value-log layout (not needed here, and it adds
-		// unnecessary value-log churn).
+		// templatedb is an internal side store; avoid inheriting the main DB's
+		// outer-leaf value-log layout (not needed here, and it adds unnecessary
+		// value-log churn).
 		templateOpts.IndexOuterLeavesInValueLog = false
 		templateOpts.FreshSystemPagerLeaves = false
 		templateOpts.FreshRelaxedStandaloneWALStream = false
@@ -1136,9 +1047,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		var err error
 		templateDB, err = openResolved(templateOpts)
 		if err != nil {
-			if dictBackend != nil {
-				_ = dictBackend.Close()
-			}
 			return nil, err
 		}
 
@@ -1159,15 +1067,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	previousSideCapture := opts.PhysicalSnapshotSideStoreCapture
 	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
 		switch name {
-		case "dictdb":
-			if dictBackend != nil {
-				if !opts.ReadOnly {
-					if err := dictBackend.Checkpoint(); err != nil {
-						return nil, err
-					}
-				}
-				return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
-			}
 		case "templatedb":
 			if templateDB != nil {
 				if err := templateDB.beginPublicOperation(); err != nil {
@@ -1211,17 +1110,16 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	opts.Dir = maindbDir
 	backend, err := openBackend(opts)
 	if err != nil {
-		if dictBackend != nil {
-			_ = dictBackend.Close()
-		}
 		if templateDB != nil {
 			_ = templateDB.Close()
 		}
 		return nil, err
 	}
+	dictStore := dictdb.New(backend)
+	wireMainBackendDictCallbacks(backend, dictStore, opts.ReadOnly)
 
 	if opts.ReadOnly {
-		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
+		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -1239,9 +1137,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if nativeSemanticOwner {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
-			if dictBackend != nil {
-				_ = dictBackend.Close()
-			}
 			if templateDB != nil {
 				_ = templateDB.Close()
 			}
@@ -1342,9 +1237,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
-		if dictBackend != nil {
-			_ = dictBackend.Close()
-		}
 		if templateDB != nil {
 			_ = templateDB.Close()
 		}
@@ -1355,9 +1247,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()
-			if dictBackend != nil {
-				_ = dictBackend.Close()
-			}
 			if templateDB != nil {
 				_ = templateDB.Close()
 			}
@@ -1365,9 +1254,10 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		}
 	}
 
+	backend.SetSystemRootMutationHook(cached.RunSystemRootMutation)
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	backend.SetPostValueLogGCHook(func() error {
 		return cached.ReconcileRetiredValueLogReader()
 	})
@@ -2019,6 +1909,9 @@ func (db *DB) Close() error {
 	}
 
 	// Close cached layer first if present
+	if db.backend != nil {
+		db.backend.SetSystemRootMutationHook(nil)
+	}
 	if db.cached != nil {
 		if db.commandWALCached {
 			if e := db.checkpointCachedForPublicCommandWAL(); e != nil {
@@ -2039,10 +1932,6 @@ func (db *DB) Close() error {
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
-	}
-	if db.dictdb != nil {
-		err = errors.Join(err, db.dictdb.Close())
-		db.dictdb = nil
 	}
 	if db.templateDB != nil {
 		err = errors.Join(err, db.templateDB.Close())
@@ -3110,7 +2999,7 @@ func VacuumIndexOffline(opts Options) error {
 		}
 	}
 
-	sideCleanup, _, err := wireSideStoreLookups(layout.rootDir, &opts)
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return err
 	}

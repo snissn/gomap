@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
 
 // OpenBackend opens the TreeDB backend directly (no caching layer) while wiring
@@ -43,7 +44,7 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	}
 
 	var closers []func() error
-	sideCleanup, dictionaryResources, err := wireSideStoreLookups(layout.rootDir, &opts)
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,8 +58,7 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 		}
 		return nil, nil, err
 	}
-	// Lookup bytes and their durable authority must share the maintenance lifetime.
-	backend.SetStableDictionaryResourceProvider(dictionaryResources)
+	wireMainBackendDictCallbacks(backend, dictdb.New(backend), opts.ReadOnly)
 	closers = append(closers, backend.Close)
 
 	cleanup := func() error {

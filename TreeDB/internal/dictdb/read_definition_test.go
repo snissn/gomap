@@ -12,17 +12,28 @@ import (
 )
 
 func TestCOWDictionaryReadDefinitionOwnsBytesAndPhysicalPin(t *testing.T) {
-	for _, pointer := range []bool{false, true} {
-		t.Run(map[bool]string{false: "inline", true: "pointer"}[pointer], func(t *testing.T) {
+	cases := []struct {
+		name             string
+		payload          []byte
+		pointerThreshold int
+		wantPointer      bool
+	}{
+		{name: "inline", payload: []byte("dictionary")},
+		{name: "chunked", payload: bytes.Repeat([]byte("chunked-dictionary-payload|"), 200)},
+		{name: "pointer", payload: bytes.Repeat([]byte("dictionary-payload|"), 100), pointerThreshold: 1, wantPointer: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			s, err := Open(t.TempDir(), db.Options{ChunkSize: 65536, Durability: db.DurabilityWALOffRelaxed})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			want := []byte("dictionary")
-			if pointer {
-				want = bytes.Repeat([]byte("dictionary-payload|"), 100)
+			if tc.pointerThreshold > 0 {
+				s.SetPointerThreshold(tc.pointerThreshold)
 			}
+			want := tc.payload
+			pointer := tc.wantPointer
 			id, err := s.PutDictBytes(context.Background(), want)
 			if err != nil {
 				t.Fatal(err)
@@ -103,9 +114,12 @@ func dictionarySourceIdentityForTest(t *testing.T, s *Store, id uint64) rootpubl
 	t.Helper()
 	snapshot := s.backend.AcquireSnapshot()
 	defer snapshot.Close()
-	entry, err := snapshot.GetEntryExact(bytesKey(id))
+	entry, ok, err := s.backend.GetSystemEntry(db.SystemDictBytesKey(id))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("missing system dict entry %d", id)
 	}
 	_, identity, err := snapshot.PinnedValueLogFile(entry.ValuePtr.FileID)
 	if err != nil {

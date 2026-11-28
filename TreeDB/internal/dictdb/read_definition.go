@@ -44,7 +44,8 @@ type DictionaryReadDefinition struct {
 	releaseOwner, releaseSnapshot, releaseBytes func()
 	keyScratch                                  [page.PageSize]byte
 	leafScratch                                 [page.PageSize]byte
-	key                                         [len("bytes/") + 8]byte
+	key                                         [len("dict/bytes/") + 8]byte
+	chunkKey                                    [len("dict/chunk/") + 8 + 1 + 4]byte
 	once, captureOnce                           sync.Once
 	preparedCloseErr                            error
 	preparedSnapshotErr                         error
@@ -171,11 +172,11 @@ func (d *DictionaryReadDefinition) ClosePreparedRead() error {
 }
 
 // AcquireDictionaryReadDefinition is the built-in provider's pure, bounded
-// read capability. Its append-only bytes/<hash ID> entries and SHA identity
-// check permit old cuts to resolve the same definition after marker changes.
-// admit transfers one independently owned release function on each successful
-// stage; all partial stages are released on refusal. No allocating GetDictBytes,
-// durable CaptureDictionaryResources, checkpoint, or namespace proof is used.
+// read capability backed by maindb's SystemRootPageID. Its append-only
+// dict/bytes/<hash ID> entries and SHA identity check permit old cuts to
+// resolve the same definition after marker changes. admit transfers one
+// independently owned release function on each successful stage; all partial
+// stages are released on refusal.
 func (s *Store) AcquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error)) (*DictionaryReadDefinition, error) {
 	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, false, nil)
 }
@@ -222,9 +223,9 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		return failDictionaryReadDefinition(d, err, deferred)
 	}
 	d.metadata = nil
-	copy(d.key[:], "bytes/")
-	binary.BigEndian.PutUint64(d.key[len("bytes/"):], id)
-	entry, err := d.snapshot.GetEntryExactWithFixedScratch(d.key[:], d.keyScratch[:], d.leafScratch[:], nil)
+	copy(d.key[:], "dict/bytes/")
+	binary.BigEndian.PutUint64(d.key[len("dict/bytes/"):], id)
+	entry, err := d.snapshot.GetSystemEntryExactWithFixedScratch(d.key[:], d.keyScratch[:], d.leafScratch[:])
 	if err != nil {
 		return failDictionaryReadDefinition(d, err, deferred)
 	}
@@ -232,14 +233,60 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		return failDictionaryReadDefinition(d, tree.ErrKeyNotFound, deferred)
 	}
 	if entry.Flags&node.FlagPointer == 0 {
-		if uint64(len(entry.Value)) > limits.MaxValueBytes {
-			return failDictionaryReadDefinition(d, ErrReadDefinitionCapacity, deferred)
+		if len(entry.Value) == 0 {
+			return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
 		}
-		d.releaseBytes, err = admit(DictionaryReadAllocationSizes{Definition: uint64(len(entry.Value))})
-		if err != nil {
-			return failDictionaryReadDefinition(d, err, deferred)
+		switch entry.Value[0] {
+		case db.SystemDictEncodingInline:
+			raw := entry.Value[1:]
+			if uint64(len(raw)) > limits.MaxValueBytes {
+				return failDictionaryReadDefinition(d, ErrReadDefinitionCapacity, deferred)
+			}
+			d.releaseBytes, err = admit(DictionaryReadAllocationSizes{Definition: uint64(len(raw))})
+			if err != nil {
+				return failDictionaryReadDefinition(d, err, deferred)
+			}
+			d.Bytes = append([]byte(nil), raw...)
+		case db.SystemDictEncodingChunked:
+			chunkCount, totalLen, wantSum, decErr := db.DecodeSystemDictChunkHeader(entry.Value)
+			if decErr != nil {
+				return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
+			}
+			if uint64(totalLen) > limits.MaxValueBytes {
+				return failDictionaryReadDefinition(d, ErrReadDefinitionCapacity, deferred)
+			}
+			if binary.BigEndian.Uint64(wantSum[:8]) != id {
+				return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
+			}
+			d.releaseBytes, err = admit(DictionaryReadAllocationSizes{Definition: uint64(totalLen)})
+			if err != nil {
+				return failDictionaryReadDefinition(d, err, deferred)
+			}
+			buf := make([]byte, 0, totalLen)
+			copy(d.chunkKey[:], "dict/chunk/")
+			binary.BigEndian.PutUint64(d.chunkKey[len("dict/chunk/"):], id)
+			d.chunkKey[len("dict/chunk/")+8] = '/'
+			for i := uint32(0); i < chunkCount; i++ {
+				binary.BigEndian.PutUint32(d.chunkKey[len("dict/chunk/")+9:], i)
+				chunkEntry, chunkErr := d.snapshot.GetSystemEntryExactWithFixedScratch(d.chunkKey[:], d.keyScratch[:], d.leafScratch[:])
+				if chunkErr != nil {
+					return failDictionaryReadDefinition(d, chunkErr, deferred)
+				}
+				if chunkEntry.Flags&(node.FlagTombstone|node.FlagPointer) != 0 {
+					return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
+				}
+				if uint64(len(buf))+uint64(len(chunkEntry.Value)) > uint64(totalLen) {
+					return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
+				}
+				buf = append(buf, chunkEntry.Value...)
+			}
+			if uint32(len(buf)) != totalLen || sha256.Sum256(buf) != wantSum {
+				return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
+			}
+			d.Bytes = buf
+		default:
+			return failDictionaryReadDefinition(d, ErrReadDefinitionIdentity, deferred)
 		}
-		d.Bytes = append([]byte(nil), entry.Value...)
 	} else {
 		file, identity, err := d.snapshot.PinnedValueLogSegment(entry.ValuePtr.FileID)
 		if err != nil {

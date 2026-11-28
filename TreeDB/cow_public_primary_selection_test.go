@@ -63,14 +63,8 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
-				if database.dictdb == nil {
-					t.Fatal("default dictionary side store absent")
-				}
-				if state := database.dictdb.State(); primaryarena.IsPage(state.RootPageID) {
-					t.Fatal("automatic main PRIMARY selection leaked into dictdb")
-				}
-				if _, err := os.Stat(filepath.Join(opts.Dir, "dictdb", "index.db.primary")); !os.IsNotExist(err) {
-					t.Fatalf("default dict PRIMARY: %v", err)
+				if _, err := os.Stat(filepath.Join(opts.Dir, "dictdb")); !os.IsNotExist(err) {
+					t.Fatalf("unexpected dictdb side-store directory: %v", err)
 				}
 				if database.templateDB != nil {
 					t.Fatal("default disabled template policy changed")

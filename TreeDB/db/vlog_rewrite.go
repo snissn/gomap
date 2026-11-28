@@ -741,6 +741,10 @@ func resolveRewriteLeafDictUseRawPages(dictLeafPayloadMode func(context.Context,
 }
 
 func prepareRewriteLeafDict(p *pager.Pager, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, cfg compression.TrainConfig) (uint64, []byte, bool, error) {
+	return prepareRewriteLeafDictWithAtomicPublish(p, state, currentForClass, dictLeafPayloadMode, dictLookup, dictPut, dictSetCurrentForClass, dictSetLeafPayloadMode, nil, cfg)
+}
+
+func prepareRewriteLeafDictWithAtomicPublish(p *pager.Pager, state *DBState, currentForClass func(context.Context, string) (uint64, error), dictLeafPayloadMode func(context.Context, uint64) (bool, bool, error), dictLookup valuelog.DictLookup, dictPut func(context.Context, []byte) (uint64, error), dictSetCurrentForClass func(context.Context, string, uint64) error, dictSetLeafPayloadMode func(context.Context, uint64, bool) error, dictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error), cfg compression.TrainConfig) (uint64, []byte, bool, error) {
 	if p == nil || state == nil {
 		return 0, nil, false, nil
 	}
@@ -798,6 +802,13 @@ func prepareRewriteLeafDict(p *pager.Pager, state *DBState, currentForClass func
 	if err != nil || len(dictBytes) == 0 {
 		return 0, nil, false, err
 	}
+	if dictPublishRewriteLeaf != nil {
+		dictID, err := dictPublishRewriteLeaf(context.Background(), dictBytes, "outer_leaf", false)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		return dictID, dictBytes, false, nil
+	}
 	dictID, err := dictPut(context.Background(), dictBytes)
 	if err != nil {
 		return 0, nil, false, err
@@ -824,7 +835,7 @@ func (db *DB) prepareCurrentRewriteLeafDict() (id uint64, data []byte, raw bool,
 	}
 	defer func() { retErr = errors.Join(retErr, snap.Close()) }()
 	db.valueLogStateCaptured("dictionary", snap.state)
-	return prepareRewriteLeafDict(snap.idx.pager, snap.state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
+	return prepareRewriteLeafDictWithAtomicPublish(snap.idx.pager, snap.state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, db.valueLogDictPublishRewriteLeaf, compression.TrainConfig{})
 }
 
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
@@ -1898,7 +1909,15 @@ func (db *DB) valueLogRewriteOnlineWithOwner(ctx context.Context, opts ValueLogR
 			if err != nil {
 				return err
 			}
-			newPtr, err := writer.appendValue(startRID, val)
+			var newPtr page.ValuePtr
+			if root.kind == maintenanceRootSystem {
+				// System-tree value-log pointers (e.g., dicts/templates) must
+				// always remain unencoded (dictID=0, templateID=0) so decoding
+				// never recurses into dictionary/template lookup.
+				newPtr, err = writer.appendRawUnencodedValue(startRID, val)
+			} else {
+				newPtr, err = writer.appendValue(startRID, val)
+			}
 			if err != nil {
 				return err
 			}
@@ -3478,7 +3497,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		}
 	}
 
-	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool) (uint64, error) {
+	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool, rawOnly bool) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
 			ptrMap:              ptrMap,
@@ -3487,6 +3506,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			readValue:           d.valueLogManager.Read,
 			dictLookup:          opts.ValueLog.DictLookup,
 			preferredDictGlobal: preferredDictGlobal,
+			rawOnly:             rawOnly,
 		}
 		if !rewriter.Valid() {
 			if err := rewriter.Error(); err != nil {
@@ -3540,7 +3560,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	buildTree := func(root uint64, useLeafLog bool) (uint64, error) {
 		iter := tree.New(d.Pager(), reader, root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		return buildTreeFromIterator(iter, useLeafLog)
+		return buildTreeFromIterator(iter, useLeafLog, false)
 	}
 	buildCollectionTree := func(root uint64) (uint64, error) {
 		useLeafLog := false
@@ -3591,11 +3611,11 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			if len(replacements) != 0 {
 				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
 			}
-			systemRoot, e := buildTreeFromIterator(system, d.systemRootUsesOuterLeaves())
+			systemRoot, e := buildTreeFromIterator(system, d.systemRootUsesOuterLeaves(), true)
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
-			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog)
+			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog, false)
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
@@ -3657,7 +3677,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			replacements: collectionRootReplacements,
 		}
 	}
-	sysRoot, err := buildTreeFromIterator(sysIter, d.systemRootUsesOuterLeaves())
+	sysRoot, err := buildTreeFromIterator(sysIter, d.systemRootUsesOuterLeaves(), true)
 	if err != nil {
 		_ = closeReplacement()
 		return stats, err
@@ -3850,17 +3870,16 @@ type rewriteWriter struct {
 	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
-	currentPath                      string
-	currentFileID                    uint32
-	leafCurrentPath                  string
-	leafCurrentFileID                uint32
-	stableResourcePins               *rootpublication.IdentityPinRegistry
-	stableResourceMetadata           *retainedalloc.Owner
-	stableRegistryErr                error
-	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
-	leafStaging                      bool
-	leafStagingRoot                  string
-	lastLeafRecordLen                uint32
+	currentPath            string
+	currentFileID          uint32
+	leafCurrentPath        string
+	leafCurrentFileID      uint32
+	stableResourcePins     *rootpublication.IdentityPinRegistry
+	stableResourceMetadata *retainedalloc.Owner
+	stableRegistryErr      error
+	leafStaging            bool
+	leafStagingRoot        string
+	lastLeafRecordLen      uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -3964,20 +3983,6 @@ func (w *rewriteWriter) bindStableResourcePinRegistry(registry *rootpublication.
 	return nil
 }
 
-func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider func() StableDictionaryResourceProvider) error {
-	if w == nil {
-		return fmt.Errorf("%w: standalone leaf writer unavailable", rootpublication.ErrUnresolvedResource)
-	}
-	if provider == nil {
-		return fmt.Errorf("%w: standalone leaf writer requires a dictionary provider resolver", rootpublication.ErrUnresolvedResource)
-	}
-	if w.leafW != nil {
-		return fmt.Errorf("%w: stable dictionary provider resolver installed after writer open", rootpublication.ErrUnresolvedResource)
-	}
-	w.stableDictionaryResourceProvider = provider
-	return nil
-}
-
 func (w *rewriteWriter) bindStableResourceMetadata(owner *retainedalloc.Owner) error {
 	if w == nil {
 		return rootpublication.ErrResourceOwnership
@@ -4044,7 +4049,6 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.ridAlloc = ridAlloc
 	clone.stableResourcePins = w.stableResourcePins
 	clone.stableResourceMetadata = w.stableResourceMetadata
-	clone.stableDictionaryResourceProvider = w.stableDictionaryResourceProvider
 	clone.stableRegistryErr = w.stableRegistryErr
 	clone.blockCompression = w.blockCompression
 	clone.blockCodec = w.blockCodec
@@ -5206,6 +5210,28 @@ func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, er
 	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, 0, nil, rid, value)
 }
 
+func (w *rewriteWriter) appendRawUnencodedValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if err := w.ensureWriter(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := w.flushPendingBatches(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := w.maybeRotateForEstimate(int64(valuelog.HeaderSize + len(value))); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if w.blockCompression {
+		w.w.SetBlockCompression(w.blockCodec, false)
+		defer w.w.SetBlockCompression(w.blockCodec, true)
+	}
+	ptr, err := w.w.Append(0, nil, rid, value)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.records++
+	return ptr, nil
+}
+
 func (w *rewriteWriter) appendSingleValueWithDict(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	return w.appendSingleValueWithDictClass(rewriteTemplateClassPointerValue, dictID, dict, rid, value)
 }
@@ -5554,6 +5580,7 @@ type rewriteIterator struct {
 	preferredDictByFile map[uint32]uint64
 	preferredDictGlobal uint64
 	dictCache           map[uint64]rewriteDictCacheEntry
+	rawOnly             bool
 }
 
 type iteratorWithEntry interface {
@@ -5660,25 +5687,30 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 		}
 	}
 	newPtr := page.ValuePtr{}
-	reencoded, ok, err := it.reencodeGroupedDictFrame(ptr, frameHeader, rids)
-	if err != nil {
-		return page.ValuePtr{}, err
+	var ok bool
+	if !it.rawOnly {
+		var reencoded page.ValuePtr
+		reencoded, ok, err = it.reencodeGroupedDictFrame(ptr, frameHeader, rids)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if !ok {
+			reencoded, ok, err = it.reencodeGroupedBlockFrameWithDict(ptr, frameHeader, rids, offsets)
+		}
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if !ok {
+			reencoded, ok, err = it.reencodeSingleRecord(ptr, frameHeader, rids, offsets, payload)
+		}
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if ok {
+			newPtr = reencoded
+		}
 	}
 	if !ok {
-		reencoded, ok, err = it.reencodeGroupedBlockFrameWithDict(ptr, frameHeader, rids, offsets)
-	}
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	if !ok {
-		reencoded, ok, err = it.reencodeSingleRecord(ptr, frameHeader, rids, offsets, payload)
-	}
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	if ok {
-		newPtr = reencoded
-	} else {
 		newPtr, err = it.writer.appendRaw(raw, ptr.Length)
 		if err != nil {
 			return page.ValuePtr{}, err

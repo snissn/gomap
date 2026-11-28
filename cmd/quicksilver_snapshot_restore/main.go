@@ -27,9 +27,9 @@ func restore(ctx context.Context, root string) ([]string, error) {
 		return nil, err
 	}
 	var stores []string
-	// Restore side-store indexes first so the main manifest binds their final
-	// identities, using the same ordering as production snapshot restoration.
-	for _, name := range []string{"dictdb", "templatedb"} {
+	// Restore side-store index first so the main manifest binds its final
+	// identity, using the same ordering as production snapshot restoration.
+	for _, name := range []string{"templatedb"} {
 		dir := filepath.Join(root, name)
 		if _, err := os.Stat(filepath.Join(dir, "index.db")); os.IsNotExist(err) {
 			continue

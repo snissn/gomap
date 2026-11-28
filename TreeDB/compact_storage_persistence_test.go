@@ -13,7 +13,6 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -409,24 +408,6 @@ func TestCompactStorageExhaustiveCommandWALRandom4KOffline(t *testing.T) {
 					t.Fatal(err)
 				}
 				database = nil
-			}
-			if count == 20000 {
-				// An unresolved packed dependency fails after earlier phases have committed.
-				// Cleanup must release owners so a read-only reopen and a fresh retry work.
-				backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
-				if err != nil {
-					t.Fatal(err)
-				}
-				backend.SetStableDictionaryResourceProvider(nil)
-				stats, compactErr := backend.CompactStorage(context.Background(), backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true})
-				closeErr := cleanup()
-				if !errors.Is(compactErr, rootpublication.ErrUnresolvedResource) || closeErr != nil {
-					t.Fatalf("partial compact: operation=%v cleanup=%v", compactErr, closeErr)
-				}
-				if !compactStoragePublicPhaseSeen(stats.Phases, "value-log-gc") {
-					t.Fatal("failure did not follow committed maintenance phases")
-				}
-				verifyReadOnly()
 			}
 			for pass := 0; pass < 2; pass++ {
 				backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})

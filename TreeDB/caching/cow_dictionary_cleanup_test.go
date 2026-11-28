@@ -81,6 +81,7 @@ func cowDictionaryCleanupStore(t *testing.T, pointer bool) (*dictdb.Store, uint6
 	t.Cleanup(func() { _ = store.Close() })
 	want := []byte("dictionary")
 	if pointer {
+		store.SetPointerThreshold(1)
 		want = bytes.Repeat([]byte("dictionary-payload|"), 100)
 	}
 	id, err := store.PutDictBytes(context.Background(), want)

@@ -556,12 +556,12 @@ func TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots(t *test
 
 func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 	dir := t.TempDir()
-	builder := NewStableResourceSetBuilder(ReachabilityDictionaryGeneration)
+	builder := NewStableResourceSetBuilder(ReachabilityTemplateGeneration)
 	if err := builder.Add(stableTokenFixture(
-		t, dir, "dictionary-7", 7, 4, ReachabilityDictionaryGeneration, "dictionary-7",
+		t, dir, "template-7", 7, 4, ReachabilityTemplateGeneration, "template-7",
 		func(spec *StableResourceSpec) {
-			spec.Kind = ResourceDictionary
-			spec.ResourceID = "dictionary-7"
+			spec.Kind = ResourceTemplate
+			spec.ResourceID = "template-7"
 		},
 	)); err != nil {
 		t.Fatal(err)
@@ -576,8 +576,8 @@ func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 	}
 	source.Release()
 
-	registrar := NewStableCompositeRegistrar(ReachabilityDictionaryGeneration)
-	if err := registrar.RegisterChild(ReachabilityDictionaryGeneration, "dictionary-7", child); err != nil {
+	registrar := NewStableCompositeRegistrar(ReachabilityTemplateGeneration)
+	if err := registrar.RegisterChild(ReachabilityTemplateGeneration, "template-7", child); err != nil {
 		registrar.Abandon()
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer set.Release()
-	if len(ids) != 1 || ids[0].Value() != "dictionary-7" {
+	if len(ids) != 1 || ids[0].Value() != "template-7" {
 		t.Fatalf("shared-root registered IDs=%v", ids)
 	}
 }
