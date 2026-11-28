@@ -205,4 +205,12 @@ func TestBackendSystemRoot_InlineChunkedAndPointerRoundTrip(t *testing.T) {
 	if err != nil || len(candsPtr) != 1 || candsPtr[0].ID != ptrID {
 		t.Fatalf("roStore.GetCandidates(404)=%+v err=%v want [%d]", candsPtr, err, ptrID)
 	}
+	defCount, err := ro.CountSystemPrefix([]byte("template/def/"))
+	if err != nil || defCount != 3 {
+		t.Fatalf("CountSystemPrefix(template/def/)=(%d, %v) want (3, nil)", defCount, err)
+	}
+	fpCount, err := ro.CountSystemPrefix([]byte("template/fp/"))
+	if err != nil || fpCount != 4 {
+		t.Fatalf("CountSystemPrefix(template/fp/)=(%d, %v) want (4, nil)", fpCount, err)
+	}
 }

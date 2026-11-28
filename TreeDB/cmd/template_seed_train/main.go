@@ -61,22 +61,6 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 	}
 }
 
-func countPrefix(db *treedbdb.DB, prefix []byte) (int, error) {
-	it, err := db.Iterator(prefix, prefixEnd(prefix))
-	if err != nil {
-		return 0, err
-	}
-	defer it.Close()
-	n := 0
-	for ; it.Valid(); it.Next() {
-		n++
-	}
-	if err := it.Error(); err != nil {
-		return 0, err
-	}
-	return n, nil
-}
-
 type trainStats struct {
 	scanned   int
 	processed int
@@ -481,7 +465,14 @@ func main() {
 	defer backend.Close()
 	store := templatedb.NewBackend(backend, templatedb.Config{})
 
-	defsBefore, fpsBefore := 0, 0
+	defsBefore, err := backend.CountSystemPrefix([]byte("template/def/"))
+	if err != nil {
+		log.Fatalf("count template defs before: %v", err)
+	}
+	fpsBefore, err := backend.CountSystemPrefix([]byte("template/fp/"))
+	if err != nil {
+		log.Fatalf("count fp lists before: %v", err)
+	}
 
 	cfg := template.Config{
 		MinSavingsBytes:        *minSavings,
@@ -563,8 +554,14 @@ func main() {
 	seedElapsed := time.Since(seedStart)
 
 	statsAfterWait := waitForTrainer(engine, time.Duration(*waitSec)*time.Second)
-	defsAfter := int(statU64(statsAfterWait, "publish_defs_total"))
-	fpsAfter := 0
+	defsAfter, err := backend.CountSystemPrefix([]byte("template/def/"))
+	if err != nil {
+		log.Fatalf("count template defs after: %v", err)
+	}
+	fpsAfter, err := backend.CountSystemPrefix([]byte("template/fp/"))
+	if err != nil {
+		log.Fatalf("count fp lists after: %v", err)
+	}
 
 	probeAttempted := 0
 	probeKept := 0

@@ -136,6 +136,48 @@ func DecodeSystemDictChunkHeader(raw []byte) (chunkCount, totalLen uint32, sum [
 	return chunkCount, totalLen, sum, nil
 }
 
+// CountSystemPrefix counts live keys in SystemRootPageID matching prefix.
+func (db *DB) CountSystemPrefix(prefix []byte) (int, error) {
+	if db == nil || db.closing.Load() {
+		return 0, ErrClosed
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return 0, ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	if snap.state == nil || snap.state.SystemRootPageID == 0 {
+		return 0, nil
+	}
+	var end []byte
+	if len(prefix) > 0 {
+		end = append([]byte(nil), prefix...)
+		for i := len(end) - 1; i >= 0; i-- {
+			if end[i] != 0xFF {
+				end[i]++
+				end = end[:i+1]
+				break
+			}
+			if i == 0 {
+				end = nil
+			}
+		}
+	}
+	it := tree.New(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID).Iterator(prefix, end)
+	if it == nil {
+		return 0, nil
+	}
+	defer func() { _ = it.Close() }()
+	count := 0
+	for ; it.Valid(); it.Next() {
+		count++
+	}
+	if err := it.Error(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // GetSystem reads a value from SystemRootPageID (resolving both inline values
 // and raw value-log pointers). Returns (nil, nil) when key is absent.
 func (db *DB) GetSystem(key []byte) ([]byte, error) {
