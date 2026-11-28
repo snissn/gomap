@@ -1186,9 +1186,35 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 		return ErrReadOnly
 	}
 	if len(ops) == 0 {
-		if onDurable != nil {
-			onDurable()
+		if onDurable == nil {
+			return nil
 		}
+		db.stagedSystemOpsMu.Lock()
+		if len(db.stagedSystemOps) > 0 || db.stagedSystemInFlightUnsynced.Load() > 0 {
+			db.stagedSystemOps = append(db.stagedSystemOps, stagedSystemOpBatch{
+				onDurable: onDurable,
+			})
+			db.updateStagedSystemOpsCountLocked()
+			db.stagedSystemOpsMu.Unlock()
+			return nil
+		}
+		if db.requiresSyncForSystemDictActivation() && len(db.stagedSystemSyncWaiters) > 0 {
+			var maxWaiterSeq uint64
+			for _, w := range db.stagedSystemSyncWaiters {
+				if w.commitSeq > maxWaiterSeq {
+					maxWaiterSeq = w.commitSeq
+				}
+			}
+			db.stagedSystemSyncWaiters = append(db.stagedSystemSyncWaiters, stagedSystemSyncWaiter{
+				commitSeq: maxWaiterSeq,
+				onDurable: onDurable,
+			})
+			db.stagedSystemSyncWaitersCount.Store(int32(len(db.stagedSystemSyncWaiters)))
+			db.stagedSystemOpsMu.Unlock()
+			return nil
+		}
+		db.stagedSystemOpsMu.Unlock()
+		onDurable()
 		return nil
 	}
 	cloned := cloneSystemKVOps(ops)
@@ -1431,6 +1457,141 @@ func (db *DB) validateStagedSystemOpReferencesLocked(ops []SystemKVOp) error {
 		}
 	}
 	return nil
+}
+
+// GetSystemIncludingStaged returns the newest pending staged value for key (if
+// any pending StageSystemOps batch writes or deletes key) and otherwise falls
+// back to GetSystem(key). This allows read-modify-write publishers such as
+// templatedb.StageTemplateDef to merge multiple staged routing updates before a
+// flush commits them.
+func (db *DB) GetSystemIncludingStaged(key []byte) ([]byte, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if db.closing.Load() {
+		return nil, ErrClosed
+	}
+	if db.stagedSystemOpsCount.Load() > 0 {
+		db.stagedSystemOpsMu.Lock()
+		for bi := len(db.stagedSystemOps) - 1; bi >= 0; bi-- {
+			ops := db.stagedSystemOps[bi].ops
+			for oi := len(ops) - 1; oi >= 0; oi-- {
+				op := ops[oi]
+				if !bytes.Equal(op.Key, key) {
+					continue
+				}
+				if op.Delete {
+					db.stagedSystemOpsMu.Unlock()
+					return nil, nil
+				}
+				if !op.IsPointer {
+					cp := append([]byte(nil), op.Value...)
+					db.stagedSystemOpsMu.Unlock()
+					return cp, nil
+				}
+				ptr := op.ValuePtr
+				db.stagedSystemOpsMu.Unlock()
+				return db.readSystemValueLogPointer(ptr)
+			}
+		}
+		db.stagedSystemOpsMu.Unlock()
+	}
+	return db.GetSystem(key)
+}
+
+func (db *DB) readSystemValueLogPointer(ptr page.ValuePtr) ([]byte, error) {
+	if db == nil || db.valueLogManager == nil {
+		return nil, ErrClosed
+	}
+	_ = db.RefreshValueLogSet()
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		return nil, errors.New("treedb: missing value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	val, err := newValueReader(set).Read(ptr)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), val...), nil
+}
+
+// LookupSystemTemplateDefIncludingStaged resolves templateID checking pending
+// staged StageSystemOps batches before falling back to LookupSystemTemplateDef.
+func (db *DB) LookupSystemTemplateDefIncludingStaged(templateID uint64) ([]byte, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if templateID == 0 {
+		return nil, templ.ErrMissingTemplate
+	}
+	if db.stagedSystemOpsCount.Load() > 0 {
+		defKey := SystemTemplateDefKey(templateID)
+		var (
+			found    bool
+			foundOp  SystemKVOp
+			chunkOps map[uint32][]byte
+		)
+		db.stagedSystemOpsMu.Lock()
+		for bi := len(db.stagedSystemOps) - 1; bi >= 0; bi-- {
+			ops := db.stagedSystemOps[bi].ops
+			for oi := len(ops) - 1; oi >= 0; oi-- {
+				op := ops[oi]
+				if !found && bytes.Equal(op.Key, defKey) {
+					found = true
+					foundOp = op
+					if !op.Delete && !op.IsPointer {
+						foundOp.Value = append([]byte(nil), op.Value...)
+					}
+					continue
+				}
+				if !op.Delete && !op.IsPointer {
+					if cid, idx, ok := parseSystemTemplateChunkKey(op.Key); ok && cid == templateID {
+						if chunkOps == nil {
+							chunkOps = make(map[uint32][]byte, 4)
+						}
+						if _, exists := chunkOps[idx]; !exists {
+							chunkOps[idx] = append([]byte(nil), op.Value...)
+						}
+					}
+				}
+			}
+		}
+		db.stagedSystemOpsMu.Unlock()
+		if found {
+			if foundOp.Delete {
+				return nil, templ.ErrMissingTemplate
+			}
+			if foundOp.IsPointer {
+				return db.readSystemValueLogPointer(foundOp.ValuePtr)
+			}
+			if len(foundOp.Value) == 0 {
+				return nil, fmt.Errorf("treedb: template %d empty staged inline entry", templateID)
+			}
+			switch foundOp.Value[0] {
+			case SystemDictEncodingInline:
+				return append([]byte(nil), foundOp.Value[1:]...), nil
+			case SystemDictEncodingChunked:
+				chunkCount, totalLen, wantSum, err := DecodeSystemDictChunkHeader(foundOp.Value)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]byte, 0, totalLen)
+				for i := uint32(0); i < chunkCount; i++ {
+					part, ok := chunkOps[i]
+					if !ok {
+						return nil, fmt.Errorf("treedb: staged template %d missing chunk %d/%d", templateID, i, chunkCount)
+					}
+					out = append(out, part...)
+				}
+				if uint32(len(out)) != totalLen || sha256.Sum256(out) != wantSum {
+					return nil, fmt.Errorf("treedb: staged template %d chunk mismatch", templateID)
+				}
+				return out, nil
+			}
+		}
+	}
+	return db.LookupSystemTemplateDef(templateID)
 }
 
 // HasPendingStagedSystemOps reports whether uncommitted staged SystemRootPageID
@@ -1729,6 +1890,13 @@ func (db *DB) flushStagedSystemOpsDirect(sync bool) error {
 		defer db.stagedSystemInFlightUnsynced.Add(-1)
 	}
 	allOps := flattenStagedSystemOpBatches(drained)
+	if len(allOps) == 0 {
+		db.mu.RLock()
+		curSeq := db.meta.CommitSeq
+		db.mu.RUnlock()
+		db.completeStagedSystemOpBatches(drained, curSeq, false)
+		return nil
+	}
 	commitSeq, accepted, physicallyDurable, err := db.applySystemOpsDirectWithCommitSeq(allOps, sync)
 	if accepted {
 		db.completeStagedSystemOpBatches(drained, commitSeq, physicallyDurable)
@@ -1769,16 +1937,23 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 				db.stagedSystemInFlightUnsynced.Add(1)
 			}
 			allOps := flattenStagedSystemOpBatches(drained)
-			commitSeq, accepted, physicallyDurable, applyErr := db.applySystemOpsDirectWithCommitSeq(allOps, sync)
-			if accepted {
-				db.completeStagedSystemOpBatches(drained, commitSeq, physicallyDurable)
+			if len(allOps) == 0 {
+				db.mu.RLock()
+				curSeq := db.meta.CommitSeq
+				db.mu.RUnlock()
+				db.completeStagedSystemOpBatches(drained, curSeq, false)
 			} else {
-				db.requeueStagedSystemOpBatches(drained)
+				commitSeq, accepted, physicallyDurable, applyErr := db.applySystemOpsDirectWithCommitSeq(allOps, sync)
+				if accepted {
+					db.completeStagedSystemOpBatches(drained, commitSeq, physicallyDurable)
+				} else {
+					db.requeueStagedSystemOpBatches(drained)
+				}
+				err = applyErr
 			}
 			if inFlight {
 				db.stagedSystemInFlightUnsynced.Add(-1)
 			}
-			err = applyErr
 		}
 		if finish != nil {
 			err = errors.Join(err, finish())

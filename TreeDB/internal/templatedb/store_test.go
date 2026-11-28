@@ -279,3 +279,95 @@ func TestStore_StageTemplateDef_PiggybackAndIdempotentCallback(t *testing.T) {
 		t.Fatalf("expected idempotent StageTemplateDef onDurable to run")
 	}
 }
+
+func TestStore_StageTemplateDef_PreservesDurabilityBarrierAndMergesStagedFP(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	store := NewBackend(backend, Config{})
+	ctx := context.Background()
+	tcfg := template.NormalizeConfig(template.Config{})
+	def1, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-merge-1-anchor-a-"), []byte("-stage-merge-1-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(1): %v", err)
+	}
+	def2, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-merge-2-anchor-a-"), []byte("-stage-merge-2-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(2): %v", err)
+	}
+
+	const sharedFP uint64 = 0xfeedface01020304
+	var cb1Fired, cb2Fired, cb3Fired bool
+	id1, err := store.StageTemplateDef(ctx, def1, []uint64{sharedFP}, func() { cb1Fired = true })
+	if err != nil || id1 == 0 {
+		t.Fatalf("StageTemplateDef(def1): id=%d err=%v", id1, err)
+	}
+	// Stage a second distinct template onto the SAME fingerprint BEFORE any flush.
+	id2, err := store.StageTemplateDef(ctx, def2, []uint64{sharedFP}, func() { cb2Fired = true })
+	if err != nil || id2 == 0 || id2 == id1 {
+		t.Fatalf("StageTemplateDef(def2): id=%d id1=%d err=%v", id2, id1, err)
+	}
+
+	// Piggyback both staged templates onto an UNSYNCED user batch in Durable mode.
+	b := backend.NewBatch()
+	if err := b.Set([]byte("u1"), []byte("v1")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if cb1Fired || cb2Fired {
+		t.Fatalf("callbacks fired before durable sync barrier: cb1=%v cb2=%v", cb1Fired, cb2Fired)
+	}
+
+	// Re-staging def1 with no routeFPs while its original commit is still awaiting
+	// the durability sync barrier must NOT invoke cb3 immediately.
+	id1Again, err := store.StageTemplateDef(ctx, def1, nil, func() { cb3Fired = true })
+	if err != nil || id1Again != id1 {
+		t.Fatalf("StageTemplateDef(def1 idempotent): id=%d want %d err=%v", id1Again, id1, err)
+	}
+	if cb3Fired {
+		t.Fatalf("idempotent StageTemplateDef fired callback before durability sync barrier")
+	}
+
+	// Checkpoint syncs the durable barrier and releases all three callbacks.
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if !cb1Fired || !cb2Fired || !cb3Fired {
+		t.Fatalf("expected all callbacks to fire after Checkpoint: cb1=%v cb2=%v cb3=%v", cb1Fired, cb2Fired, cb3Fired)
+	}
+
+	// Both staged templates must be present in the merged sharedFP candidate list.
+	cands, err := store.GetCandidates(ctx, sharedFP, 0)
+	if err != nil {
+		t.Fatalf("GetCandidates: %v", err)
+	}
+	var saw1, saw2 bool
+	for _, c := range cands {
+		if c.ID == id1 {
+			saw1 = true
+		}
+		if c.ID == id2 {
+			saw2 = true
+		}
+	}
+	if !saw1 || !saw2 {
+		t.Fatalf("merged sharedFP candidates missing staged template: got=%+v want both %d and %d", cands, id1, id2)
+	}
+}

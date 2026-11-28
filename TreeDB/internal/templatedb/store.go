@@ -208,7 +208,7 @@ func (s *Store) buildTemplateDefOps(id uint64, defBytes []byte) ([]db.SystemKVOp
 
 func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
 	if s.backend != nil {
-		val, err := s.backend.LookupSystemTemplateDef(id)
+		val, err := s.backend.LookupSystemTemplateDefIncludingStaged(id)
 		if errors.Is(err, template.ErrMissingTemplate) {
 			return nil, nil
 		}
@@ -219,7 +219,7 @@ func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
 
 func (s *Store) getRawFPBytes(fp uint64) ([]byte, error) {
 	if s.backend != nil {
-		return s.backend.GetSystem(db.SystemTemplateFPKey(fp))
+		return s.backend.GetSystemIncludingStaged(db.SystemTemplateFPKey(fp))
 	}
 	return s.kv.Get(fpKey(fp))
 }
@@ -244,6 +244,7 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 	}
 	cfg := NormalizeConfig(s.cfg)
 	var runOnDurableNow bool
+	var registerStageBarrier bool
 	id, err := func() (uint64, error) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -332,7 +333,7 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 			}
 			if stage {
 				if len(ops) == 0 {
-					runOnDurableNow = true
+					registerStageBarrier = true
 					return id, nil
 				}
 				if err := s.backend.StageSystemOps(ops, onDurable); err != nil {
@@ -370,6 +371,12 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 	}()
 	if err != nil {
 		return 0, err
+	}
+	if registerStageBarrier {
+		if err := s.backend.StageSystemOps(nil, onDurable); err != nil {
+			return 0, err
+		}
+		return id, nil
 	}
 	if runOnDurableNow && onDurable != nil {
 		onDurable()
