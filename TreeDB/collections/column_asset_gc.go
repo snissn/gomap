@@ -15,8 +15,14 @@ import (
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
 type ColumnAssetGCOptions struct {
-	DryRun              bool
-	maxReplayAssetBytes int64 // internal bounded epoch input; zero preserves existing callers
+	DryRun bool
+	// TruncateUnpublishedTails enables opt-in recovery of strictly trailing
+	// unpublished append bytes [maxRefEnd..segment.bytes) on canonical regular
+	// .tca segments when reachability fails closed solely due to
+	// unknown_segments. Default false preserves strict fail-closed behavior.
+	// Ignored when DryRun is true.
+	TruncateUnpublishedTails bool
+	maxReplayAssetBytes      int64 // internal bounded epoch input; zero preserves existing callers
 	// Discovery limits have the same semantics as ColumnAssetReachabilityOptions.
 	MaxSegmentEntries   int
 	MaxManifestRecords  int
@@ -374,6 +380,51 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if opts.DryRun {
 			return stats, nil
 		}
+		if opts.TruncateUnpublishedTails && columnAssetGCPlanEligibleForTailTruncation(plan) {
+			truncated, truncErr := c.truncateUnpublishedColumnAssetTails(ctx, plan, planOpts, opts)
+			if truncErr != nil {
+				return stats, truncErr
+			}
+			if truncated {
+				planOpts, err = c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, ColumnAssetReachabilityOptions{
+					MaxSegmentEntries:                     opts.MaxSegmentEntries,
+					MaxManifestRecords:                    opts.MaxManifestRecords,
+					MaxManifestBytes:                      opts.MaxManifestBytes,
+					MaxLifecycleEntries:                   opts.MaxLifecycleEntries,
+					Detailed:                              opts.Detailed,
+					SegmentDetails:                        needSegmentEntries,
+					ProtectCandidateRefsForOlderSnapshots: true,
+					CandidateRefs:                         opts.CandidateRefs,
+					PendingRefs:                           opts.PendingRefs,
+					PreparedRefs:                          opts.PreparedRefs,
+					PreparedQueryRefs:                     opts.PreparedQueryRefs,
+					QuarantineRefs:                        opts.QuarantineRefs,
+					QuarantineSegments:                    opts.QuarantineSegments,
+					PinnedRefs:                            opts.PinnedRefs,
+					releaseVectorPartitionReclaimIDs:      opts.releaseVectorPartitionReclaimIDs,
+				})
+				if err != nil {
+					return stats, err
+				}
+				plan, _, err = c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+					ColumnAssetReachabilityOptions: planOpts,
+				})
+				stats = ColumnAssetGCStats{
+					DryRun:           opts.DryRun,
+					Plan:             plan,
+					SegmentsRetained: columnAssetGCExistingSegmentCount(plan),
+					BytesRetained:    plan.Segments.BytesTotal,
+				}
+				if err != nil {
+					return stats, c.columnAssetGCNormalizeMaintenanceRaceError(err)
+				}
+			}
+		}
+	}
+	if !plan.Complete {
+		if opts.DryRun {
+			return stats, nil
+		}
 		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
@@ -519,6 +570,206 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	return stats, nil
 }
 
+func columnAssetGCPlanEligibleForTailTruncation(plan ColumnAssetReachabilityPlan) bool {
+	return !plan.Complete &&
+		!plan.pinStateIncomplete &&
+		plan.Segments.Unknown > 0 &&
+		plan.Refs.Uncertain == 0 &&
+		plan.Segments.Missing == 0 &&
+		plan.Segments.OutOfBoundsRefs == 0 &&
+		plan.Segments.QuarantineSegmentMismatches == 0 &&
+		plan.MappedResources.UnconvertiblePins == 0
+}
+
+func (c *Collection) truncateUnpublishedColumnAssetTails(
+	ctx context.Context,
+	plan ColumnAssetReachabilityPlan,
+	planOpts ColumnAssetReachabilityOptions,
+	opts ColumnAssetGCOptions,
+) (bool, error) {
+	namespace, err := columnAssetManagerNamespaceForRoot(c.db.ColumnAssetRootDir(), plan.Namespace)
+	if err != nil {
+		return false, err
+	}
+	unknowns := make([]ColumnAssetReachabilitySegmentEntry, 0, plan.Segments.Unknown)
+	for _, entry := range plan.SegmentEntries {
+		if entry.Status != ColumnAssetReachabilitySegmentUnknown {
+			continue
+		}
+		unknowns = append(unknowns, entry)
+	}
+	if len(unknowns) == 0 || len(unknowns) != plan.Segments.Unknown {
+		return false, nil
+	}
+	for _, entry := range unknowns {
+		if !entry.tailTruncateEligible ||
+			entry.FileID == 0 ||
+			entry.tailTruncateEnd <= 0 ||
+			entry.tailTruncateEnd >= entry.Bytes ||
+			entry.Path != columnAssetReachabilitySegmentPath(namespace.SegmentDir, columnAssetSegmentFileName(entry.FileID)) ||
+			!rootpublication.SamePhysicalIdentity(entry.plannedParentIdentity, entry.plannedParentIdentity) ||
+			!rootpublication.SamePhysicalIdentity(entry.plannedChildIdentity, entry.plannedChildIdentity) {
+			// Any non-eligible unknown segment keeps GC strictly fail-closed
+			// without mutating any sibling segment.
+			return false, nil
+		}
+	}
+	// Never truncate trailing bytes while an older reader snapshot is pinned
+	// (or in-flight acquiring an older view) below PlanCommitSeq: superseded
+	// refs on a live segment may still be read by that older snapshot without
+	// appearing in the active manifest. This check runs before
+	// CaptureRecoverableRootSet because CaptureRecoverableRootSet itself
+	// registers a reader-capable pin at the oldest recoverable durable root;
+	// once no older reader pin exists or is in flight at PlanCommitSeq,
+	// monotonic commitSeq prevents any future AcquireSnapshot from observing a
+	// catalog older than PlanCommitSeq, while recoverableRoots plus
+	// maxRecoverableEndByFile protects every durable fallback root.
+	if plan.PlanCommitSeq == 0 || c.columnAssetReachabilityOlderSnapshotPinned(plan.PlanCommitSeq) {
+		return false, nil
+	}
+	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+		return false, err
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return false, fmt.Errorf("%w: destructive column asset GC tail truncation requires exact relative namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	registry := c.db.StableResourceIdentityPinRegistry()
+	if registry == nil {
+		return false, errors.New("collections: stable column segment tail truncation requires identity pin registry")
+	}
+	recoverableRoots, err := c.db.CaptureRecoverableRootSet(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer recoverableRoots.Release()
+	maxRecoverableEndByFile, err := c.pinRecoverableColumnAssetSegmentsWithMaxEnds(ctx, recoverableRoots, planOpts.CandidateRefs, opts, plan.Namespace)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range unknowns {
+		if registry.IsRetired(entry.plannedChildIdentity) {
+			return false, nil
+		}
+		if maxRecoverableEndByFile[entry.FileID] > entry.tailTruncateEnd {
+			return false, nil
+		}
+	}
+
+	validatePlanCurrent := func() error {
+		if err := recoverableRoots.Revalidate(); err != nil {
+			return errors.Join(ErrColumnAssetGCPlanStale, err)
+		}
+		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+		if currentCommitSeq != plan.PlanCommitSeq || currentSystemRoot != plan.SystemRoot {
+			return fmt.Errorf("%w: committed root changed for collection=%q planned_commit_seq=%d current_commit_seq=%d planned_system_root=%d current_system_root=%d",
+				ErrColumnAssetGCPlanStale,
+				plan.Collection,
+				plan.PlanCommitSeq,
+				currentCommitSeq,
+				plan.SystemRoot,
+				currentSystemRoot,
+			)
+		}
+		return nil
+	}
+
+	truncatedAny := false
+	for _, entry := range unknowns {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if err := truncateOneUnpublishedColumnAssetTail(namespace.SegmentDir, entry, registry, validatePlanCurrent); err != nil {
+			if errors.Is(err, rootpublication.ErrResourcePinned) && !truncatedAny {
+				return false, nil
+			}
+			return false, err
+		}
+		truncatedAny = true
+	}
+	return true, nil
+}
+
+func truncateOneUnpublishedColumnAssetTail(
+	segmentDir string,
+	entry ColumnAssetReachabilitySegmentEntry,
+	registry *rootpublication.IdentityPinRegistry,
+	validatePlanCurrent func() error,
+) (retErr error) {
+	lock := columnAssetSegmentWriteLock(entry.Path)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if registry.IsRetired(entry.plannedChildIdentity) {
+		return fmt.Errorf("%w: candidate retired for file_id=%d", ErrColumnAssetGCPlanStale, entry.FileID)
+	}
+	parent, err := rootpublication.OpenStableParent(segmentDir)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, parent.Close()) }()
+
+	parentID, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(parentID, entry.plannedParentIdentity) {
+		return fmt.Errorf("%w: parent directory rebound for file_id=%d", ErrColumnAssetGCPlanStale, entry.FileID)
+	}
+	name := columnAssetSegmentFileName(entry.FileID)
+	child, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, child.Close()) }()
+
+	childID, err := rootpublication.StableIdentityFromFile(child)
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(childID, entry.plannedChildIdentity) {
+		return fmt.Errorf("%w: candidate rebound for file_id=%d", ErrColumnAssetGCPlanStale, entry.FileID)
+	}
+	truncateNamespace := filepath.ToSlash(filepath.Join(filepath.Clean(segmentDir), name))
+	truncateLease, err := registry.BeginTruncateAt(childID, truncateNamespace, uint64(entry.tailTruncateEnd))
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			truncateLease.Abort()
+		}
+	}()
+	if err := rootpublication.ValidateStableChildLink(parent, child, name); err != nil {
+		return err
+	}
+	info, err := child.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != entry.Bytes {
+		return fmt.Errorf("%w: candidate frontier changed for file_id=%d planned_bytes=%d current_bytes=%d",
+			ErrColumnAssetGCPlanStale, entry.FileID, entry.Bytes, info.Size())
+	}
+	if validatePlanCurrent != nil {
+		if err := validatePlanCurrent(); err != nil {
+			return err
+		}
+	}
+	if err := child.Truncate(entry.tailTruncateEnd); err != nil {
+		return err
+	}
+	if err := rootpublication.SyncStableFile(child); err != nil {
+		return err
+	}
+	if err := rootpublication.SyncStableNamespace(parent); err != nil {
+		return err
+	}
+	truncateLease.Commit()
+	committed = true
+	return nil
+}
+
 type recoverableColumnAssetReplayBasis struct {
 	minimumGeneration  uint64
 	appliedCommandLSN  uint64
@@ -565,10 +816,19 @@ func recoverableColumnAssetReplayRefs(
 }
 
 func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef, opts ColumnAssetGCOptions) error {
+	_, err := c.pinRecoverableColumnAssetSegmentsWithMaxEnds(ctx, roots, candidateRefs, opts, "")
+	return err
+}
+
+func (c *Collection) pinRecoverableColumnAssetSegmentsWithMaxEnds(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef, opts ColumnAssetGCOptions, trackNamespace string) (map[uint32]int64, error) {
 	if c == nil || c.db == nil || roots == nil {
-		return backenddb.ErrRecoverableRootSetStale
+		return nil, backenddb.ErrRecoverableRootSetStale
 	}
 	seenPaths := make(map[string]struct{})
+	var maxEndByFile map[uint32]int64
+	if trackNamespace != "" {
+		maxEndByFile = make(map[uint32]int64)
+	}
 	visibleReplayBases := make([]recoverableColumnAssetReplayBasis, 0, 2)
 	// This lower bound is valid only for the supported continuously managed
 	// command-WAL collection. Missing or incompatible roots disable it; never
@@ -578,6 +838,14 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 	var floorMeta *CollectionMeta
 	pinRefs := func(refs []ColumnAssetRef) error {
 		for _, ref := range refs {
+			if trackNamespace != "" && ref.Namespace == trackNamespace && ref.FileID != 0 {
+				if ref.Offset < 0 || ref.Length < 0 || ref.Offset > (1<<63-1)-ref.Length {
+					return fmt.Errorf("collections: invalid recoverable column asset range ref=%+v", ref)
+				}
+				if end := ref.Offset + ref.Length; end > maxEndByFile[ref.FileID] {
+					maxEndByFile[ref.FileID] = end
+				}
+			}
 			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
 			if err != nil {
 				return err
@@ -607,11 +875,11 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 	}
 	for _, root := range roots.Roots() {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		snapshot := roots.AcquireSnapshotForRoot(root)
 		if snapshot == nil {
-			return backenddb.ErrRecoverableRootSetStale
+			return nil, backenddb.ErrRecoverableRootSetStale
 		}
 		// Recoverable roots may intentionally be older than the collection's
 		// current catalog. Loading one is an audit operation: it must not replace
@@ -623,7 +891,7 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 				floorKnown = false
 				continue
 			}
-			return fmt.Errorf("collections: capture recoverable column catalog at commit_seq=%d: %w", root.CommitSeq, err)
+			return nil, fmt.Errorf("collections: capture recoverable column catalog at commit_seq=%d: %w", root.CommitSeq, err)
 		}
 		if catalog == nil {
 			floorKnown = false
@@ -641,7 +909,7 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 			floorKnown = false
 			if cfg.RecoveryAuthoritativeManifest != nil {
 				_ = snapshot.Close()
-				return fmt.Errorf("collections: recoverable column catalog at commit_seq=%d has recovery manifest without active manifest", root.CommitSeq)
+				return nil, fmt.Errorf("collections: recoverable column catalog at commit_seq=%d has recovery manifest without active manifest", root.CommitSeq)
 			}
 			_ = snapshot.Close()
 			continue
@@ -656,7 +924,7 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if cfg.ActiveManifest.Format != columnSourceDirectoryFormatV2 && (opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0) {
 			if err := validateColumnManifestScanBudget(ctx, snapshot, catalog.rootID(rootName), opts.MaxManifestRecords, opts.MaxManifestBytes); err != nil {
 				_ = snapshot.Close()
-				return err
+				return nil, err
 			}
 		}
 		var view columnPhysicalScanSnapshotView
@@ -666,12 +934,40 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		} else {
 			view, viewErr = c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snapshot, catalog, catalog.meta.Name, catalog.rootID(rootName), cfg, true, columnManifestScanAllSidecars())
 		}
+		var capturedBaseRefs []ColumnAssetRef
+		if viewErr == nil && catalog.typedGraphBase != nil {
+			if opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0 {
+				if baseRoot := catalog.typedGraphBase.roots[collectionColumnManifestRootName(catalog.meta.Name)]; baseRoot != 0 {
+					viewErr = validateColumnManifestScanBudget(ctx, snapshot, baseRoot, opts.MaxManifestRecords, opts.MaxManifestBytes)
+				}
+			}
+			if viewErr == nil {
+				requirements, _, reqErr := catalog.typedGraphBase.requirementsAtSnapshot(snapshot)
+				if reqErr != nil {
+					viewErr = reqErr
+				} else if len(requirements.Obligations) != 0 {
+					capturedBaseRefs = make([]ColumnAssetRef, 0, len(requirements.Obligations))
+					for _, obligation := range requirements.Obligations {
+						capturedBaseRefs = append(capturedBaseRefs, ColumnAssetRef{
+							Kind:       ColumnAssetKind(obligation.Kind),
+							Namespace:  obligation.Namespace,
+							Generation: obligation.Generation,
+							PartID:     obligation.PartID,
+							FileID:     uint32(obligation.FileID),
+							Offset:     obligation.Offset,
+							Length:     obligation.Length,
+							Checksum:   obligation.Checksum,
+						})
+					}
+				}
+			}
+		}
 		closeErr := snapshot.Close()
 		if viewErr != nil {
-			return fmt.Errorf("collections: capture recoverable column assets at commit_seq=%d: %w", root.CommitSeq, viewErr)
+			return nil, fmt.Errorf("collections: capture recoverable column assets at commit_seq=%d: %w", root.CommitSeq, viewErr)
 		}
 		if closeErr != nil {
-			return closeErr
+			return nil, closeErr
 		}
 		if !recoverableColumnAssetReplayFloorCompatible(floorKnown, floorMeta, &catalog.meta) {
 			floorKnown = false
@@ -696,7 +992,10 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 			}
 		}
 		if err := pinRefs(columnPhysicalScanSnapshotViewAssetRefs(view)); err != nil {
-			return err
+			return nil, err
+		}
+		if err := pinRefs(capturedBaseRefs); err != nil {
+			return nil, err
 		}
 	}
 	// A durable fallback behind any visible command-WAL frontier can replay
@@ -722,12 +1021,15 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		},
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := pinRefs(replayRefs); err != nil {
-		return err
+		return nil, err
 	}
-	return roots.Revalidate()
+	if err := roots.Revalidate(); err != nil {
+		return nil, err
+	}
+	return maxEndByFile, nil
 }
 
 func recoverableColumnAssetReplayFloorCompatible(managedCommandWAL bool, first, next *CollectionMeta) bool {

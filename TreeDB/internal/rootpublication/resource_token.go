@@ -631,7 +631,7 @@ func initializeStableResourceToken(spec StableResourceSpec, normalized []StableL
 	identity.Generation = spec.Generation
 	var identityPin *IdentityPin
 	if spec.PinRegistry != nil {
-		identityPin, err = spec.PinRegistry.Pin(identity)
+		identityPin, err = spec.PinRegistry.PinWithFrontier(identity, spec.Frontier.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("pin stable resource identity: %w", err)
 		}
@@ -743,7 +743,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 	var identityPin *IdentityPin
 	if token.identityPin != nil {
 		var err error
-		identityPin, err = token.identityPin.clone()
+		identityPin, err = token.identityPin.cloneWithFrontier(frontier.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("pin stable resource identity: %w", err)
 		}

@@ -47,6 +47,13 @@ func newImportedResourceToken(owner *retainedalloc.Owner, source *StableResource
 		allocation.refund()
 		return nil, err
 	}
+	if err = advanceTokenIdentityPinFrontier(source, frontier.Bytes); err != nil {
+		owner.RemovePending(physicalCharge)
+		obligations.release()
+		allocation.drop()
+		allocation.refund()
+		return nil, err
+	}
 	// The caller retains its original directory edge throughout construction.
 	// Admit all new metadata before retaining either original resource. Retain
 	// the producer rope last so no fallible step can require physical rollback.

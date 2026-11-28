@@ -81,3 +81,22 @@ must still require a complete reachability plan. Unknown segments, missing
 segments, out-of-bounds refs, unconvertible mappedresource pins, quarantine
 segment uncertainty, ambiguous publish state, and stale snapshot fences retain
 bytes or return `ErrColumnAssetReachabilityIncomplete`.
+
+Explicit opt-in crash-tail recovery (`ColumnAssetGCOptions.TruncateUnpublishedTails: true`,
+default `false`, ignored on `DryRun`) is permitted only when `unknown_segments > 0`
+is the sole incompleteness cause, exact relative-namespace authority is supported,
+no older reader snapshot is pinned below the plan commit sequence,
+and every unknown segment is a canonical regular `.tca` file with zero interior gaps
+across `[0..maxRefEnd)` and zero active writer ownership, quarantine, in-flight
+`IdentityPinRegistry` frontier pins past `maxRefEnd`, or recoverable-root/captured-base
+refs past `maxRefEnd`. After verifying the older-snapshot fence and capturing
+recoverable roots, each eligible tail acquires an `IdentityPinRegistry.BeginTruncateAt`
+frontier lease and is revalidated against recoverable roots, committed root state,
+exact `(parentIdentity, childIdentity)`, and exact file length under the segment write
+lock before fd-based `ftruncate`, file sync, parent directory sync, and a fresh
+reachability plan for normal fail-closed whole-segment GC. Pre-publish
+stable asset cleanup on abandoned publish plans and failed vector-index rebuilds likewise
+verifies exact `(parentIdentity, childIdentity)`, strict ref contiguity, and exact file
+size (or falls back to quarantine on missing/mismatched identity, non-contiguous refs,
+later appends, ambiguous prefix padding, or post-transfer ambiguity including
+`ErrCommitAmbiguous` and `ErrRecoveryRequired`).

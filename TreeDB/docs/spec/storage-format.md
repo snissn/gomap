@@ -2523,6 +2523,39 @@ assets with no matching typed-column payload. GC/rewrite must enumerate these
 refs from manifest/control roots and snapshots; it must not scan row documents
 to discover typed-storage assets.
 
+By default (`ColumnAssetGCOptions.TruncateUnpublishedTails: false`), `ColumnAssetGC`
+deletes only wholly-reclaimable canonical segments from a complete reachability
+plan and fails closed with `ErrColumnAssetReachabilityIncomplete` whenever any
+segment has unknown bytes. When callers explicitly opt in via
+`ColumnAssetGCOptions.TruncateUnpublishedTails: true` (ignored on `DryRun`) and
+initial planning fails closed solely due to `unknown_segments > 0` (zero
+uncertain refs, missing segments, out-of-bounds refs, quarantine mismatches,
+unconvertible pins, or incomplete pin state), `ColumnAssetGC` may recover
+strictly trailing unpublished append bytes `[maxRefEnd..segment.bytes)` before
+re-planning whole-segment GC only when all of the following hold:
+
+- exact relative-namespace authority is supported (otherwise fail closed with
+  `ErrNamespacePersistenceUnsupported`);
+- no older reader snapshot is pinned (or in flight) below the plan's commit
+  sequence before recoverable-root capture;
+- every `Unknown` segment is a canonical regular `.tca` file with valid captured
+  `(parentIdentity, childIdentity)`, not actively writer-owned or quarantined,
+  with `0 < maxRefEnd < segment.bytes`, zero interior gaps across `[0..maxRefEnd)`
+  after deterministic zero-padding, and zero recoverable-root, historical
+  captured-base, or replay refs extending past `maxRefEnd`;
+- under the storage-mutation barrier, recoverable-root capture, segment write
+  lock, and an exclusive `IdentityPinRegistry.BeginTruncateAt(..., maxRefEnd)`
+  frontier lease (rejecting truncation if any live `StableResourceSet` or active
+  segment appender pins bytes beyond `maxRefEnd`), revalidation confirms
+  recoverable roots, committed root witness, exact `(parentIdentity,
+  childIdentity)`, child link validity, and exact `fileSize == segment.bytes`
+  before fd-based `ftruncate(fd, maxRefEnd)`, `fsync(fd)`, and parent directory
+  sync.
+
+See [`typed-asset-maintenance-1788.md`](typed-asset-maintenance-1788.md) and
+[`typed-column-lifecycle-1954.md`](typed-column-lifecycle-1954.md) for the
+maintenance reachability and pre-publish stable cleanup contracts.
+
 Compatibility typed-row physical part payloads use the `TCPA` envelope:
 
 ```text

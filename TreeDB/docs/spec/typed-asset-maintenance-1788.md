@@ -285,7 +285,43 @@ serving or certify a universal physical capacity bound.
 
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite
-debt and are retained.
+debt and are retained. By default (`ColumnAssetGCOptions.TruncateUnpublishedTails: false`),
+any segment with `UnknownBytes > 0` fails closed with `ErrColumnAssetReachabilityIncomplete`
+and deletes or truncates nothing.
+
+When a caller explicitly opts in via `ColumnAssetGCOptions.TruncateUnpublishedTails: true`
+(ignored when `DryRun: true`) and initial reachability planning fails closed solely
+because `unknown_segments > 0` — with zero `uncertain_refs`, `missing_segments`,
+`out_of_bounds_refs`, `quarantine_segment_mismatches`, `unconvertible_pins`, and no
+incomplete pin state — `ColumnAssetGC` may recover strictly trailing unpublished append
+bytes before re-planning whole-segment reclamation. Tail truncation enforces exact
+relative-namespace authority (`ErrNamespacePersistenceUnsupported` where unavailable)
+and requires EVERY `Unknown` segment in the plan to satisfy all preconditions before
+any file is mutated:
+
+- canonical regular `.tca` segment (`FileID != 0` with exact captured `(parentIdentity, childIdentity)`);
+- no older reader snapshot pinned below `plan.PlanCommitSeq`;
+- not owned by an active writer and not logically quarantined;
+- `maxRefEnd > 0 && maxRefEnd < segment.bytes` with zero interior gaps across
+  `[0..maxRefEnd)` (after deterministic zero-padding) and zero recoverable-root,
+  historical captured-base, or replay refs extending past `maxRefEnd`;
+- no active `IdentityPinRegistry` frontier pin protecting bytes past `maxRefEnd`
+  (enforced atomically by `IdentityPinRegistry.BeginTruncateAt(..., maxRefEnd)`,
+  blocking truncation while any live `StableResourceSet` or active segment
+  appender pins bytes beyond `maxRefEnd`).
+
+Under `withVectorPartitionStorageMutationV1`, the pre-capture older-snapshot fence,
+`CaptureRecoverableRootSet`, recoverable segment pinning, the per-segment write lock,
+and `IdentityPinRegistry.BeginTruncateAt`, each eligible segment revalidates its
+recoverable root closure, committed root witness, exact `(parentIdentity,
+childIdentity)`, linked child authority, and exact `fileSize == segment.bytes` via an
+opened file descriptor before fd-based `ftruncate(fd, maxRefEnd)`, file sync, and
+parent directory sync. `ColumnAssetGC` then re-plans reachability from scratch and
+runs normal fail-closed whole-segment deletion. Any non-eligible unknown segment (such
+as a directory, symlink, interior mid-segment gap, active quarantine/owner, active
+in-flight writer frontier pin, older pinned reader snapshot, or recoverable ref beyond
+`maxRefEnd`) still fails closed with `ErrColumnAssetReachabilityIncomplete` and
+mutates nothing.
 
 `ColumnAssetRewrite` may copy protected manifest refs out of complete mixed
 segments and publish a remapped manifest. It skips any mixed segment that also
@@ -306,9 +342,13 @@ closure if a future writer emits them again.
 
 Authority remains held until the publication backend returns. A command-WAL
 retry prepares and pins its successor before releasing the prior attempt, so a
-failed replacement leaves the prior authority intact. Failure releases pins
-exactly once but retains copied or newly appended segments as persistent GC
-orphans; failure cleanup must not remove a pathname that may have been rebound.
+failed replacement leaves the prior authority intact. Pre-publish failure cleanup
+releases pins exactly once and may reclaim unpublished stable assets only after
+verifying exact `(parentIdentity, childIdentity)`, child link validity, exact file
+size, and (for whole-segment unlinks) an exclusive `IdentityPinRegistry` delete
+lease; failure cleanup must never remove or truncate a pathname that may have been
+rebound, appended to, or ambiguously published, falling back to quarantine or
+persistent GC retention instead.
 
 Explicit stable-authority operations and destructive rewrite fail with the
 typed unsupported-platform error before visibility when exact namespace
