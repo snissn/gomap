@@ -320,11 +320,15 @@ The fixed consequences are:
   Checkpoint teardown may pre-scan read-only closed WAL segments concurrently
   with fallback root convergence, re-validating exact file identity and size
   before consuming cached scan results at cleanup.
-- Value-log dictionary publication to `dictdb` persists dictionary bytes,
-  content hash, frame group size `K`, and class/global current markers in a
-  single atomic `WriteSync` commit; pointer-backed dictionary segments are
-  flushed to the OS before `WriteSync` so the durable-root transaction performs
-  the single authoritative value-log sync before `dictdb/index.db` commits.
+- Value-log dictionary publication persists dictionary bytes (inline or 2 KiB
+  inline chunks by default, or optional raw `dictID=0` `ValuePtr` records in
+  `maindb/value_vlog/`), content hash, frame group size `K`, leaf payload mode,
+  and class/global current markers inside `maindb`'s `SystemRootPageID` in a
+  single atomic `ApplySystemOps` commit with pager-resident system leaves
+  (never in `leaf_vlog`). When a dictionary uses a `ValuePtr` in `maindb/value_vlog/`,
+  the raw `dictID=0` record is flushed and synced before `maindb/index.db`
+  commits, and value-log rewrite preserves `dictID=0, templateID=0` raw
+  encoding for all `SystemRootPageID` pointers.
 - A write or sync error after target-meta bytes may have been dirtied poisons
   the writable handle. Writes, publication, cleanup, GC, rewrite, and
   reclamation fail with the public recovery-required error until reopen.

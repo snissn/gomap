@@ -111,7 +111,11 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
-	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	dictLookup := opts.ValueLog.DictLookup
+	if dictLookup == nil {
+		dictLookup = db.LookupSystemDictBytes
+	}
+	vm.SetDictLookup(dictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
@@ -139,12 +143,13 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		valueLogCompression:            opts.ValueLog.Compression,
 		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
 		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
-		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictLookup:             dictLookup,
 		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
 		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
 		valueLogDictPut:                opts.ValueLog.DictPut,
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
 		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDictPublishRewriteLeaf: opts.ValueLog.DictPublishRewriteLeaf,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafPrefixCompression:          opts.LeafPrefixCompression,
 		indexColumnarLeaves:            opts.IndexColumnarLeaves,
@@ -317,7 +322,11 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
-	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	dictLookup := opts.ValueLog.DictLookup
+	if dictLookup == nil {
+		dictLookup = db.LookupSystemDictBytes
+	}
+	vm.SetDictLookup(dictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
@@ -344,12 +353,13 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		valueLogCompression:            opts.ValueLog.Compression,
 		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
 		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
-		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictLookup:             dictLookup,
 		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
 		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
 		valueLogDictPut:                opts.ValueLog.DictPut,
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
 		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDictPublishRewriteLeaf: opts.ValueLog.DictPublishRewriteLeaf,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafPrefixCompression:          opts.LeafPrefixCompression,
 		indexColumnarLeaves:            opts.IndexColumnarLeaves,

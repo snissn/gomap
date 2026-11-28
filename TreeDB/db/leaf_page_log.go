@@ -263,10 +263,6 @@ type leafPageLogStableRegistryBinder interface {
 	bindStableResourcePinRegistry(*rootpublication.IdentityPinRegistry) error
 }
 
-type leafPageLogStableDictionaryBinder interface {
-	bindStableDictionaryResourceProvider(func() StableDictionaryResourceProvider) error
-}
-
 type leafPageLogRecordLengthProvider interface {
 	LastLeafPageRecordLength() uint32
 }
@@ -1003,9 +999,6 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 		// producer records a typed late-bind failure so ordinary compatibility
 		// may continue while every stable sibling fails closed.
 		_ = binder.bindStableResourcePinRegistry(db.valueLogIdentityPins)
-	}
-	if binder, ok := log.(leafPageLogStableDictionaryBinder); ok {
-		_ = binder.bindStableDictionaryResourceProvider(db.stableDictionaryResourceProvider)
 	}
 	if binder, ok := log.(leafPageLogStableMetadataBinder); ok {
 		if err := binder.bindStableResourceMetadata(db.StableResourceMetadataOwner()); err != nil {

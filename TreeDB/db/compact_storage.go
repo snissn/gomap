@@ -2969,16 +2969,17 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	db.SetLeafPageLog(writer)
 	if writer.blockCompression {
 		leafDictID, leafDictBytes, leafDictUseRawPages, err := db.prepareCurrentRewriteLeafDict()
 		if err != nil {
+			db.SetLeafPageLog(previousLeafPageLog)
 			return nil, nil, errors.Join(err, writer.Close())
 		}
 		if leafDictID != 0 && len(leafDictBytes) > 0 {
 			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 	}
-	db.SetLeafPageLog(writer)
 	return writer, &compactStorageLeafPageLogHandoff{
 		db:                  db,
 		writer:              writer,

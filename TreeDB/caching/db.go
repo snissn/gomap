@@ -4574,12 +4574,6 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
-	if setter, ok := db.backend.(interface {
-		SetStableDictionaryResourceProvider(backenddb.StableDictionaryResourceProvider)
-	}); ok {
-		provider, _ := store.(backenddb.StableDictionaryResourceProvider)
-		setter.SetStableDictionaryResourceProvider(provider)
-	}
 	db.dictCurrentCached.Store(0)
 	db.dictCurrentOps.Store(0)
 	for class := 0; class < vlogDictClassCount; class++ {
@@ -8211,9 +8205,11 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	// Publish the maintenance-active flag while checkpointMu is held so Checkpoint
 	// and background maintenance serialize through the same mutex/cond state.
 	db.maintenanceActive.Store(true)
+	db.maintenanceOwnerGID.Store(currentMaintenanceGoroutineID())
 	db.checkpointMu.Unlock()
 	defer func() {
 		db.checkpointMu.Lock()
+		db.maintenanceOwnerGID.Store(0)
 		db.maintenanceActive.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
@@ -9178,13 +9174,6 @@ type DictStore interface {
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
-// stableDictionaryResourceProvider is optional so lightweight/test dictionary
-// stores do not need publication authority. Stable append paths fail closed for
-// a selected non-zero dictionary when the provider is absent.
-type stableDictionaryResourceProvider interface {
-	CaptureDictionaryResources(ctx context.Context, dictID uint64) (*rootpublication.StableResourceSet, error)
-}
-
 type dictStoreCurrentByClass interface {
 	GetCurrentForClass(ctx context.Context, class string) (uint64, error)
 }
@@ -9407,6 +9396,7 @@ type DB struct {
 	checkpointWriteCutoverActive    atomic.Bool
 	checkpointPostFrontierAdmission atomic.Bool
 	maintenanceActive               atomic.Bool
+	maintenanceOwnerGID             atomic.Uint64
 	maintenancePhase                atomic.Uint32
 
 	// Level 0 (Memory)
@@ -18530,40 +18520,6 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	}
 	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || retainedStorageFirstBlockAttempt)
-	if capture != nil && dictID != 0 {
-		provider, ok := db.dictStore.(stableDictionaryResourceProvider)
-		if !ok {
-			return nil, nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
-		}
-		var dictionaryResources *rootpublication.StableResourceSet
-		var captureErr error
-		if capture.metadata != nil {
-			if selected, ok := db.dictStore.(backenddb.StableDictionaryMetadataResourceProvider); ok {
-				dictionaryResources, captureErr = selected.CaptureDictionaryResourcesWithMetadata(context.Background(), dictID, capture.metadata)
-			} else {
-				original, originalErr := provider.CaptureDictionaryResources(context.Background(), dictID)
-				if originalErr != nil {
-					captureErr = originalErr
-				} else {
-					dictionaryResources, captureErr = rootpublication.ImportStableResourceSetMetadata(capture.metadata, original)
-				}
-				original.Release()
-			}
-		} else {
-			dictionaryResources, captureErr = provider.CaptureDictionaryResources(context.Background(), dictID)
-		}
-		if captureErr != nil {
-			return nil, nil, captureErr
-		}
-		if captureErr := backenddb.ValidateStableDictionaryResourceClosure(dictionaryResources, dictID, dict); captureErr != nil {
-			dictionaryResources.Release()
-			return nil, nil, captureErr
-		}
-		if captureErr := capture.mergeChild(dictionaryResources); captureErr != nil {
-			dictionaryResources.Release()
-			return nil, nil, captureErr
-		}
-	}
 
 	// Prepared block frames are appended through the same ordered writer path as
 	// dictionary frames. Physical append and segment ownership stay serialized.

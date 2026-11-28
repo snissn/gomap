@@ -83,8 +83,5 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 	for _, path := range valueFiles {
 		checkFilePerms(path)
 	}
-
-	checkFilePerms(filepath.Join(dir, "dictdb", "index.db"))
-	checkFilePerms(filepath.Join(dir, "dictdb", "LOCK"))
-	checkDirPermsIfExists(filepath.Join(dir, "dictdb", "wal"))
+	_ = checkDirPermsIfExists
 }

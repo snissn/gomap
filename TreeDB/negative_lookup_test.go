@@ -17,12 +17,6 @@ func TestNegativeLookupCachedMutableQueuedAndCheckpoint(t *testing.T) {
 	if got := d.backend.Stats()["treedb.negative_lookup_filter.active_bytes"]; got != "1024" {
 		t.Fatal("main filter bytes", got)
 	}
-	if d.dictdb == nil {
-		t.Fatal("side store not opened")
-	}
-	if got := d.dictdb.Stats()["treedb.negative_lookup_filter.active_bytes"]; got != "0" {
-		t.Fatal("side store inherited main budget", got)
-	}
 	keys := [][]byte{nil, {}, []byte("empty"), {0, 255, 0}, []byte("large")}
 	values := [][]byte{{}, {}, {}, {1, 2, 3}, bytes.Repeat([]byte("v"), 4096)}
 	for phase := 0; phase < 3; phase++ {

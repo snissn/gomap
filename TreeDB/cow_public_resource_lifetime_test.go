@@ -53,7 +53,7 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 				// trainer so it cannot access the store during manual installation.
 				DisableValueLogDictCompression(o)
 			})
-			store := dictdb.New(database.dictdb)
+			store := dictdb.New(database.backend)
 			definition, want := cowPublicOwnedDictionary(t, 'A')
 			id, err := store.PutDictBytes(context.Background(), definition)
 			if err != nil {

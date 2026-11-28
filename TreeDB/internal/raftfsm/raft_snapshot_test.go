@@ -1051,18 +1051,19 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
 	sourceDir := filepath.Join(sourceRoot, "maindb")
-	sourceDict := filepath.Join(sourceRoot, "dictdb")
-	dictBackend, err := backenddb.Open(backenddb.Options{Dir: sourceDict, ChunkSize: 64 * 1024, DisableBackgroundPrune: true})
+	sourceTemplate := filepath.Join(sourceRoot, "templatedb")
+	templateBackend, err := backenddb.Open(backenddb.Options{Dir: sourceTemplate, ChunkSize: 64 * 1024, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dictBytes := []byte("source-side-store")
-	dictID, err := dictdb.New(dictBackend).PutDictBytes(context.Background(), dictBytes)
+	templateBytes := []byte("source-side-store-template")
+	templateStore := templatedb.New(raftSnapshotTemplateBackendKVV1{db: templateBackend}, templatedb.Config{})
+	templateID, err := templateStore.PutTemplateDef(context.Background(), templateBytes, nil)
 	if err != nil {
-		dictBackend.Close()
+		templateBackend.Close()
 		t.Fatal(err)
 	}
-	if err := dictBackend.Close(); err != nil {
+	if err := templateBackend.Close(); err != nil {
 		t.Fatal(err)
 	}
 	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
@@ -1076,6 +1077,11 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sourceDB.Close()
+	dictBytes := []byte("source-in-maindb-dict")
+	dictID, err := dictdb.New(sourceDB).PutDictBytes(context.Background(), dictBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
 	defer sourceFSM.Close()
 	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"u-large","name":"source"}`))
@@ -1103,17 +1109,26 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 	if err := targetFSM.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(targetRoot, "dictdb"), ReadOnly: true, ChunkSize: 64 * 1024})
+	restoredMain, err := backenddb.Open(backenddb.Options{Dir: targetDir, ReadOnly: true, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restored.Close()
-	got, err := dictdb.New(restored).GetDictBytes(context.Background(), dictID)
-	if err != nil || !bytes.Equal(got, dictBytes) {
-		t.Fatalf("restored dictionary=%q err=%v want %q", got, err, dictBytes)
+	defer restoredMain.Close()
+	gotDict, err := restoredMain.LookupSystemDictBytes(dictID)
+	if err != nil || !bytes.Equal(gotDict, dictBytes) {
+		t.Fatalf("restored dictionary=%q err=%v want %q", gotDict, err, dictBytes)
 	}
-	if _, err := os.Stat(staleTemplate); !os.IsNotExist(err) {
-		t.Fatalf("stale target side store exists after restore: err=%v", err)
+	restoredTemplate, err := backenddb.Open(backenddb.Options{Dir: staleTemplate, ReadOnly: true, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoredTemplate.Close()
+	gotTemplate, err := templatedb.New(raftSnapshotTemplateBackendKVV1{db: restoredTemplate}, templatedb.Config{}).GetTemplateDef(context.Background(), templateID)
+	if err != nil || !bytes.Equal(gotTemplate, templateBytes) {
+		t.Fatalf("restored template=%q err=%v want %q", gotTemplate, err, templateBytes)
+	}
+	if _, err := os.Stat(filepath.Join(staleTemplate, "stale")); !os.IsNotExist(err) {
+		t.Fatalf("stale target side store sentinel exists after restore: err=%v", err)
 	}
 }
 
@@ -1247,23 +1262,6 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 	sideRoot := snapshotSideStoreRootV1(mainDir)
 	ctx := context.Background()
 
-	dictBackend, err := backenddb.Open(backenddb.Options{
-		Dir:                    filepath.Join(sideRoot, "dictdb"),
-		DisableBackgroundPrune: true,
-	})
-	if err != nil {
-		t.Fatalf("Open dictdb: %v", err)
-	}
-	dictStore := dictdb.New(dictBackend)
-	dictBytes := []byte("restored-dict")
-	dictID, err := dictStore.PutDictBytes(ctx, dictBytes)
-	if err != nil {
-		t.Fatalf("PutDictBytes: %v", err)
-	}
-	if err := dictBackend.Close(); err != nil {
-		t.Fatalf("Close dictdb: %v", err)
-	}
-
 	templateBackend, err := backenddb.Open(backenddb.Options{
 		Dir:                    filepath.Join(sideRoot, "templatedb"),
 		DisableBackgroundPrune: true,
@@ -1293,16 +1291,6 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 	}
 	defer func() { _ = cleanup() }()
 
-	if opts.ValueLog.DictLookup == nil {
-		t.Fatal("DictLookup was not wired from restored side store")
-	}
-	gotDict, err := opts.ValueLog.DictLookup(dictID)
-	if err != nil {
-		t.Fatalf("DictLookup(%d): %v", dictID, err)
-	}
-	if !bytes.Equal(gotDict, dictBytes) {
-		t.Fatalf("DictLookup(%d)=%q want %q", dictID, gotDict, dictBytes)
-	}
 	if opts.ValueLog.TemplateLookup == nil {
 		t.Fatal("TemplateLookup was not wired from restored side store")
 	}

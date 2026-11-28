@@ -41,9 +41,9 @@ type stats struct {
 }
 
 func main() {
-	walDir := flag.String("wal-dir", "", "Path to maindb/wal directory")
+	walDir := flag.String("wal-dir", "", "Path to maindb/wal, maindb/value_vlog, or maindb/leaf_vlog directory")
 	filesArg := flag.String("files", "", "Comma-separated value-log filenames")
-	dictDir := flag.String("dict-dir", "", "Optional path to dictdb directory (defaults to sibling of maindb under wal root)")
+	dictDir := flag.String("dict-dir", "", "Optional path to TreeDB backend directory containing dictionaries in SystemRootPageID (defaults to parent maindb directory of -wal-dir)")
 	frameMeta := flag.Bool("frame-meta", false, "Also print raw on-disk frame metadata (grouped records, k, dict/block codec)")
 	evalBand := flag.Bool("eval-band", false, "Evaluate codec ratios/encode throughput for selected value length band from decoded records")
 	evalBandMin := flag.Int("eval-band-min", 43000, "Minimum value length for -eval-band")
@@ -198,7 +198,7 @@ func openDictLookup(walDir, dictDirFlag string) (valuelog.DictLookup, func() err
 	opts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
 	backend, err := treedbdb.Open(opts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open dictdb %s: %w", dictDir, err)
+		return nil, nil, fmt.Errorf("open dict backend %s: %w", dictDir, err)
 	}
 	store := dictdb.New(backend)
 	lookup := func(dictID uint64) ([]byte, error) {
@@ -208,9 +208,9 @@ func openDictLookup(walDir, dictDirFlag string) (valuelog.DictLookup, func() err
 }
 
 func defaultDictDir(walDir string) string {
-	// Expected layout: <root>/maindb/wal
-	root := filepath.Dir(filepath.Dir(filepath.Clean(walDir)))
-	return filepath.Join(root, "dictdb")
+	// Dictionaries live in maindb/index.db SystemRootPageID; -wal-dir points at
+	// <root>/maindb/{wal,value_vlog,leaf_vlog}.
+	return filepath.Dir(filepath.Clean(walDir))
 }
 
 func applyFormatConfig(dir string, opts *treedbdb.Options) {

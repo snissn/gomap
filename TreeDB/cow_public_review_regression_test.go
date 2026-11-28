@@ -231,9 +231,17 @@ func TestCOWPublicSelectedSourceRewriteKeepsOldCuts(t *testing.T) {
 					t.Fatalf("ordinary compaction after selected rewrite: %v (phases=%+v)", err, report.Phases)
 				}
 			} else if !packSupported {
-				// The public planner may have no eligible pack work. Unsupported
-				// promotion is required only when a real pack is selected.
-				if len(report.LeafGenerationPacks) == 0 {
+				// Non-exhaustive CompactStorage records unsupported leaf-pack
+				// promotion as a non-fatal skipped phase, or skips planning when
+				// no eligible pack work exists.
+				hasUnsupportedPackPhase := false
+				for _, phase := range report.Phases {
+					if strings.HasPrefix(phase.Name, "leaf-generation-pack-") && phase.Status == CompactStoragePhaseStatusUnsupported {
+						hasUnsupportedPackPhase = true
+						break
+					}
+				}
+				if len(report.LeafGenerationPacks) == 0 && !hasUnsupportedPackPhase {
 					t.Fatal("compaction omitted leaf-pack planning")
 				}
 				for _, pack := range report.LeafGenerationPacks {
@@ -360,12 +368,21 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 			}
 			compaction, err := database.CompactStorage(context.Background(), CompactStorageOptions{})
 			if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
-				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-					t.Fatalf("leaf pack platform refusal: %v", err)
+				hasUnsupportedPackPhase := false
+				for _, phase := range compaction.Phases {
+					if strings.HasPrefix(phase.Name, "leaf-generation-pack-") && phase.Status == CompactStoragePhaseStatusUnsupported {
+						hasUnsupportedPackPhase = true
+						break
+					}
+				}
+				if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) && !(err == nil && hasUnsupportedPackPhase) {
+					t.Fatalf("leaf pack platform refusal: err=%v phases=%+v", err, compaction.Phases)
 				}
 				cowPublicContractSnapshotValue(t, old, "a", value, true)
-				if _, statErr := os.Stat(unusedLeaf); statErr != nil {
-					t.Fatalf("refused pack changed unused leaf: %v", statErr)
+				if err != nil {
+					if _, statErr := os.Stat(unusedLeaf); statErr != nil {
+						t.Fatalf("refused pack changed unused leaf: %v", statErr)
+					}
 				}
 				t.Log("exact-parent pack unavailable; verified typed refusal and retained old cut, reclamation remains unqualified")
 				return

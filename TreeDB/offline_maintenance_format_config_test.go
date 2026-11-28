@@ -58,17 +58,18 @@ func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	// If public offline maintenance reaches side-store wiring, this malformed
-	// dictdb path returns a different error. Index vacuum supports command-WAL
-	// DBs and should reach that validation; value-log rewrite must reject
-	// command-WAL before side-store wiring, even when IgnoreFormatConfig is set.
-	if err := os.MkdirAll(filepath.Join(root, "dictdb", "index.db"), 0o755); err != nil {
-		t.Fatalf("mkdir malformed dictdb index: %v", err)
+	// templatedb path returns a different error. Index vacuum supports
+	// command-WAL DBs and should reach that validation; value-log rewrite must
+	// reject command-WAL before side-store wiring, even when IgnoreFormatConfig
+	// is set.
+	if err := os.MkdirAll(filepath.Join(root, "templatedb", "index.db"), 0o755); err != nil {
+		t.Fatalf("mkdir malformed templatedb index: %v", err)
 	}
 
 	for _, ignoreFormatConfig := range []bool{false, true} {
 		err := treedb.VacuumIndexOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig})
-		if err == nil || errors.Is(err, treedb.ErrCommandWALUnsupported) || !strings.Contains(err.Error(), "dictdb index path is a directory") {
-			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want malformed dictdb error", ignoreFormatConfig, err)
+		if err == nil || errors.Is(err, treedb.ErrCommandWALUnsupported) || !strings.Contains(err.Error(), "templatedb index path is a directory") {
+			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want malformed templatedb error", ignoreFormatConfig, err)
 		}
 		if _, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
 			t.Fatalf("ValueLogRewriteOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)

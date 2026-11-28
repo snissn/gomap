@@ -361,7 +361,7 @@ func (db *DB) CapturePhysicalSnapshotSideStoreV1(ctx context.Context, name strin
 	if db == nil || db.closing.Load() {
 		return nil, ErrClosed
 	}
-	if name != "dictdb" && name != "templatedb" {
+	if name != "templatedb" {
 		return nil, errors.New("treedb: invalid snapshot side-store name")
 	}
 	capture := db.physicalSnapshotSideStoreCapture

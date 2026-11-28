@@ -80,15 +80,10 @@ type leafGenerationPackPromotionAuthority struct {
 	moveNoReplace           func(*os.File, *os.File, string, *os.File, string) (bool, error)
 }
 
-func (authority *leafGenerationPackPromotionAuthority) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
-	if authority == nil || authority.released || authority.dictionaryResources != nil || len(authority.segments) != 0 {
+func (authority *leafGenerationPackPromotionAuthority) captureDictionary(_ context.Context, _ uint64, _ []byte) error {
+	if authority == nil || authority.released || len(authority.segments) != 0 {
 		return rootpublication.ErrResourceOwnership
 	}
-	resources, err := captureStableDictionaryResourcesForDB(authority.db, ctx, authority.db.stableDictionaryResourceProvider(), dictID, dictionary, authority.metadata)
-	if err != nil {
-		return err
-	}
-	authority.dictionaryResources = resources
 	return nil
 }
 

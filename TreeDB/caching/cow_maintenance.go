@@ -1,11 +1,14 @@
 package caching
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"runtime"
+	"strconv"
 )
 
 // backendMaintenanceError adds no allocations on successful calls while
@@ -29,6 +32,78 @@ func (db *DB) RunBackendMaintenance(fn func() error) error {
 // operation or basis refresh never grants permission to run the settle callback.
 func (db *DB) RunBackendMaintenanceWithPostRefresh(fn, settle func() error) error {
 	return db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{skipCheckpoint: true, afterCOWRefresh: settle}, fn)
+}
+
+// BeginSystemRootMutation acquires the COW maintenance fence around a backend
+// SystemRootPageID-only mutation (such as dictionary publication) so the COW
+// backend basis stays synchronized. When invoked re-entrantly from the active
+// maintenance goroutine (for example during LeafGenerationPack or
+// ValueLogRewriteOnline), it returns (nil, nil) because the caller already
+// holds the maintenance fence and will refresh the COW basis on completion.
+func (db *DB) BeginSystemRootMutation() (func() error, error) {
+	if db == nil || db.cow == nil {
+		return nil, nil
+	}
+	gid := currentMaintenanceGoroutineID()
+	if gid != 0 && db.maintenanceOwnerGID.Load() == gid {
+		return nil, nil
+	}
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() || db.maintenanceActive.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.maintenanceActive.Store(true)
+	db.maintenanceOwnerGID.Store(gid)
+	db.checkpointMu.Unlock()
+	releaseMaintenance := func() {
+		db.checkpointMu.Lock()
+		db.maintenanceOwnerGID.Store(0)
+		db.maintenanceActive.Store(false)
+		db.checkpointCond.Broadcast()
+		db.checkpointMu.Unlock()
+	}
+
+	db.flushMu.Lock()
+	db.writeMu.Lock()
+	db.writeMu.Unlock()
+	if err := db.completeCOWHandoff(); err != nil {
+		db.flushMu.Unlock()
+		releaseMaintenance()
+		return nil, backendMaintenanceError("complete COW handoff", err)
+	}
+	db.cow.refreshRequired.Store(true)
+	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			db.flushMu.Unlock()
+			releaseMaintenance()
+			return nil, backendMaintenanceError("refresh backend value-log set before callback", err)
+		}
+	}
+	return func() error {
+		defer func() {
+			db.flushMu.Unlock()
+			releaseMaintenance()
+		}()
+		if db.closing.Load() {
+			return nil
+		}
+		reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false))
+		return db.finishCOWBackendMaintenance(reconcileErr)
+	}, nil
+}
+
+func currentMaintenanceGoroutineID() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	fields := bytes.Fields(buf[:n])
+	if len(fields) < 2 {
+		return 0
+	}
+	id, err := strconv.ParseUint(string(fields[1]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (db *DB) refreshCOWBackendBasis() error {

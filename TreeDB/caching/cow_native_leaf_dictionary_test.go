@@ -147,6 +147,7 @@ func cowNativePackedDictionaryLeafFixtureWithReadPolicy(t *testing.T, dictionary
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.SetPointerThreshold(1)
 	dictID, err := store.PutDictBytes(context.Background(), dictionary)
 	if err == nil {
 		err = store.SetCurrentForClass(context.Background(), "outer_leaf", dictID)
@@ -479,6 +480,7 @@ func TestCOWNativeDictionaryCacheBidirectionalPolicyAndConstruction(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.SetPointerThreshold(1)
 	if _, err := store.PutDictBytes(context.Background(), bytes.Repeat([]byte("second-real-definition"), 4096)); err != nil {
 		_ = store.Close()
 		t.Fatal(err)

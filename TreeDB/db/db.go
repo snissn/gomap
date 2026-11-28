@@ -227,8 +227,15 @@ type DB struct {
 	valueLogDictPut                func(context.Context, []byte) (uint64, error)
 	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
-	stableDictionaryResourcesMu    sync.RWMutex
-	stableDictionaryResources      StableDictionaryResourceProvider
+	valueLogDictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
+	systemDictCache                sync.Map
+	systemVLogMu                   sync.Mutex
+	systemVLogWriter               *valuelog.Writer
+	systemVLogFileID               uint32
+	systemVLogSeq                  uint32
+	systemVLogNextRID              uint64
+	systemRootMutationFenceMu      sync.RWMutex
+	systemRootMutationFence        func() (func() error, error)
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -1165,6 +1172,10 @@ type ValueLogOptions struct {
 	// DictSetLeafPayloadMode records whether a published leaf dictionary expects
 	// raw 4KiB leaf pages or compact split-leaf payloads.
 	DictSetLeafPayloadMode func(context.Context, uint64, bool) error
+	// DictPublishRewriteLeaf atomically persists a newly trained rewrite leaf
+	// dictionary, marks it current for class, and records its leaf payload mode
+	// in a single system-root commit.
+	DictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
 
 	// DictTrain configures background dictionary training for value-log frame
 	// compression in cached mode.
@@ -2897,7 +2908,11 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
-	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	dictLookup := opts.ValueLog.DictLookup
+	if dictLookup == nil {
+		dictLookup = db.LookupSystemDictBytes
+	}
+	vm.SetDictLookup(dictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
@@ -2929,12 +2944,13 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		valueLogCompression:            opts.ValueLog.Compression,
 		valueLogAutoPolicy:             opts.ValueLog.AutoPolicy,
 		valueLogBlockCodec:             opts.ValueLog.BlockCodec,
-		valueLogDictLookup:             opts.ValueLog.DictLookup,
+		valueLogDictLookup:             dictLookup,
 		valueLogDictCurrentForClass:    opts.ValueLog.DictCurrentForClass,
 		valueLogDictLeafPayloadMode:    opts.ValueLog.DictLeafPayloadMode,
 		valueLogDictPut:                opts.ValueLog.DictPut,
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
 		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDictPublishRewriteLeaf: opts.ValueLog.DictPublishRewriteLeaf,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,
@@ -3072,7 +3088,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		}
 	}
 	if opts.CommandWAL {
-		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, dictLookup); err != nil {
 			return nil, err
 		}
 		// Re-list segments after replay because V2 recovery may repair or remove
@@ -3157,7 +3173,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		// forensic recovery pass must still remove the torn suffix so it is not
 		// rediscovered on every reopen.
 		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal || opts.AllowLegacyCachedRedoJournalReplay {
-			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, dictLookup); err != nil {
 				return nil, err
 			}
 		}
@@ -3167,7 +3183,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	// manifest, and replay producers register newly created segments directly.
 	// Reapply decode hooks without replacing that bounded inventory with a
 	// directory-wide discovery pass.
-	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	vm.SetDictLookup(dictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)
@@ -3780,6 +3796,9 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	}
 	db.stopCommitCombiner()
 	db.pruner.Stop()
+	if err := db.closeSystemValueLogWriter(); err != nil {
+		cleanupFailed(err)
+	}
 	if db.valueLogRefTracker != nil {
 		if err := db.persistValueLogRefTracker(); err != nil {
 			cleanupFailed(err)

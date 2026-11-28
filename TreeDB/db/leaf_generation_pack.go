@@ -88,6 +88,7 @@ type LeafGenerationPackOptions struct {
 	LeafFrameK                 int
 	ProtectedRootIDs           []uint64
 	ProtectedSystemRootIDs     []uint64
+	OnAfterDictPrepare         func() error
 }
 
 // LeafGenerationPackApplyStageStats attributes copy and publication wall time.
@@ -333,9 +334,20 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	var leafDictBytes []byte
 	var leafDictUseRawPages bool
 	if blockCompression {
+		var preSeq uint64
+		if st := db.State(); st != nil {
+			preSeq = st.CommitSeq
+		}
 		leafDictID, leafDictBytes, leafDictUseRawPages, err = db.prepareCurrentRewriteLeafDict()
 		if err != nil {
 			return stats, err
+		}
+		if opts.OnAfterDictPrepare != nil {
+			if st := db.State(); st != nil && st.CommitSeq != preSeq {
+				if err := opts.OnAfterDictPrepare(); err != nil {
+					return stats, err
+				}
+			}
 		}
 	}
 

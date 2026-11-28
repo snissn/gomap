@@ -304,14 +304,14 @@ func rebindSnapshotManifestEntryV1(dir, sideRoot string, entry *rootpublication.
 		if err != nil {
 			return fmt.Errorf("capture dependency namespace identity for %q: %w", entry.Namespace.DiagnosticPath, err)
 		}
-		// Dictionary and template producers derive the namespace epoch from the
+		// Template producers derive the namespace epoch from the
 		// physical parent. Other producers may bind an immutable manifest revision
 		// or asset file generation, which must remain unchanged during restore.
 		syncErr := rootpublication.SyncStableNamespace(parent)
 		parentIdentity, identityErr := rootpublication.StableIdentityFromFile(parent)
 		parentGeneration := entry.Namespace.ParentIdentity.Generation
 		var generationErr error
-		if entry.Kind == rootpublication.ResourceDictionary || entry.Kind == rootpublication.ResourceTemplate {
+		if entry.Kind == rootpublication.ResourceTemplate {
 			parentGeneration, generationErr = rootpublication.StableNamespaceParentGeneration(parent)
 		}
 		closeErr := parent.Close()

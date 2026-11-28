@@ -77,7 +77,7 @@ func TestCOWPublicPackedDictionaryLeafOldCut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := dictdb.New(database.dictdb)
+	store := dictdb.New(database.backend)
 	id, err := store.PutDictBytes(ctx, definition)
 	if err != nil {
 		t.Fatal(err)

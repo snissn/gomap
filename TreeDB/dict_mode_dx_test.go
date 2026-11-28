@@ -5,14 +5,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
 
 func TestOpen_DictAndAutoCompression_RequireSideStoresUnlessTrainingDisabled(t *testing.T) {
-	t.Run("dict_requires_side_stores", func(t *testing.T) {
-		_, err := Open(Options{
+	t.Run("dict_allows_side_stores_disabled", func(t *testing.T) {
+		db, err := Open(Options{
 			Dir:               t.TempDir(),
 			DisableSideStores: true,
 			ValueLog: ValueLogOptions{
@@ -20,8 +19,11 @@ func TestOpen_DictAndAutoCompression_RequireSideStoresUnlessTrainingDisabled(t *
 				Compression:      ValueLogCompressionDict,
 			},
 		})
-		if err == nil || !strings.Contains(err.Error(), "requires side stores") {
-			t.Fatalf("expected side-store error, got %v", err)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
 		}
 	})
 

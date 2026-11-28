@@ -10,7 +10,6 @@ import (
 type openDirLayout struct {
 	rootDir           string
 	mainDir           string
-	dictdbDir         string
 	templatedbDir     string
 	disableSideStores bool
 }
@@ -34,12 +33,11 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 		}, nil
 	}
 
-	// Root layout: <root>/maindb, <root>/dictdb, <root>/templatedb.
+	// Root layout: <root>/maindb, optional <root>/templatedb.
 	if info, err := os.Stat(filepath.Join(clean, "maindb")); err == nil && info.IsDir() {
 		return openDirLayout{
 			rootDir:       clean,
 			mainDir:       filepath.Join(clean, "maindb"),
-			dictdbDir:     filepath.Join(clean, "dictdb"),
 			templatedbDir: filepath.Join(clean, "templatedb"),
 		}, nil
 	}
@@ -52,20 +50,11 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 		if filepath.Base(clean) == "maindb" {
 			parent := filepath.Dir(clean)
 			// Heuristic: treat <root>/maindb as a root-layout main DB dir if the
-			// parent looks like a TreeDB root (has side store dirs).
-			if info, err := os.Stat(filepath.Join(parent, "dictdb")); err == nil && info.IsDir() {
-				return openDirLayout{
-					rootDir:       parent,
-					mainDir:       clean,
-					dictdbDir:     filepath.Join(parent, "dictdb"),
-					templatedbDir: filepath.Join(parent, "templatedb"),
-				}, nil
-			}
+			// parent has templatedb/.
 			if info, err := os.Stat(filepath.Join(parent, "templatedb")); err == nil && info.IsDir() {
 				return openDirLayout{
 					rootDir:       parent,
 					mainDir:       clean,
-					dictdbDir:     filepath.Join(parent, "dictdb"),
 					templatedbDir: filepath.Join(parent, "templatedb"),
 				}, nil
 			}
@@ -84,14 +73,12 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 		return openDirLayout{
 			rootDir:       parent,
 			mainDir:       clean,
-			dictdbDir:     filepath.Join(parent, "dictdb"),
 			templatedbDir: filepath.Join(parent, "templatedb"),
 		}, nil
 	}
 	return openDirLayout{
 		rootDir:       clean,
 		mainDir:       filepath.Join(clean, "maindb"),
-		dictdbDir:     filepath.Join(clean, "dictdb"),
 		templatedbDir: filepath.Join(clean, "templatedb"),
 	}, nil
 }

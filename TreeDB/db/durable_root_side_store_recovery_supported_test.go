@@ -15,20 +15,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
-func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(t *testing.T) {
+func TestDurableRootPublicLayoutTemplateDependencyReopenAndNewestSlotFallback(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")
-	dictDir := filepath.Join(root, "dictdb")
+	templateDir := filepath.Join(root, "templatedb")
 	if err := os.MkdirAll(mainDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(dictDir, 0o700); err != nil {
+	if err := os.MkdirAll(templateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	dictionary := []byte("public-layout dictionary dependency")
-	dictionaryID := uint64(9701)
-	dictionaryProvider := newPublicLayoutDictionaryProviderV1(t, dictDir, dictionaryID, dictionary)
+	templateDef := []byte("public-layout template dependency")
+	templateID := uint64(9701)
+	templateProvider := newPublicLayoutDictionaryProviderV1(t, templateDir, templateID, templateDef)
+	templateProvider.kind = rootpublication.ResourceTemplate
 
 	mainOptions := func() Options {
 		return Options{Dir: mainDir, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true}
@@ -41,11 +42,11 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 	if err := main.SetSync([]byte("fallback"), []byte("root")); err != nil {
 		t.Fatalf("seed fallback generation: %v", err)
 	}
-	resources, err := dictionaryProvider.CaptureDictionaryResources(context.Background(), dictionaryID)
+	resources, err := templateProvider.CaptureDictionaryResources(context.Background(), templateID)
 	if err != nil {
-		t.Fatalf("capture sibling dictionary dependency: %v", err)
+		t.Fatalf("capture sibling template dependency: %v", err)
 	}
-	logical := dictionaryProvider.logicalObligation()
+	logical := templateProvider.logicalObligation()
 	_, roots, err := main.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
 		[]StorageMaintenanceRootDeltaPublishInput{{
@@ -53,7 +54,7 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 			Iter:             mustFrozenRawMemtable(t, "side-layout/root", []byte("published")).NewIterator(nil, nil),
 			DurableResources: resources,
 			DurableResourceRequirements: rootpublication.StableLogicalObligationRequirements{
-				ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityDictionaryGeneration},
+				ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityTemplateGeneration},
 				Obligations:  []rootpublication.StableLogicalObligation{logical},
 			},
 		}},
@@ -66,13 +67,13 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 		},
 	)
 	if err != nil {
-		t.Fatalf("publish sibling dictionary dependency: %v", err)
+		t.Fatalf("publish sibling template dependency: %v", err)
 	}
 	if len(roots) != 1 || roots[0] == 0 {
 		t.Fatalf("published roots=%v", roots)
 	}
 	if err := main.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint sibling dictionary dependency: %v", err)
+		t.Fatalf("checkpoint sibling template dependency: %v", err)
 	}
 	latestCommit := main.State().CommitSeq
 	fallbackSlot := uint64(1) - main.durableRoot.slot
@@ -95,7 +96,7 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 	if err := intact.Close(); err != nil {
 		t.Fatal(err)
 	}
-	replaceFileWithCopyV1(t, filepath.Join(dictDir, indexFileName))
+	replaceFileWithCopyV1(t, filepath.Join(templateDir, indexFileName))
 
 	fallback, err := Open(mainOptions())
 	if err != nil {
@@ -112,8 +113,6 @@ func TestRebindDurableRootSnapshotSideStoreNamespaceMatchesFreshAuthority(t *tes
 		kind      rootpublication.ResourceKind
 		directory bool
 	}{
-		{rootpublication.ResourceDictionary, false},
-		{rootpublication.ResourceDictionary, true},
 		{rootpublication.ResourceTemplate, false},
 		{rootpublication.ResourceTemplate, true},
 	} {

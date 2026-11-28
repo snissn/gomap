@@ -19,23 +19,12 @@ import (
 	"strings"
 )
 
-// StableDictionaryResourceProvider captures the exact durable transitive
-// closure needed to decode one dictionary generation.
-type StableDictionaryResourceProvider interface {
-	CaptureDictionaryResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
-}
-
 // StableTemplateResourceProvider captures the exact durable transitive closure
 // needed to decode one template generation.
 type StableTemplateResourceProvider interface {
 	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
 }
 
-// StableDictionaryMetadataResourceProvider admits new capture metadata using
-// the parent request owner, independent of the child's physical authority.
-type StableDictionaryMetadataResourceProvider interface {
-	CaptureDictionaryResourcesWithMetadata(context.Context, uint64, *retainedalloc.Owner) (*rootpublication.StableResourceSet, error)
-}
 type StableTemplateMetadataResourceProvider interface {
 	CaptureTemplateResourcesWithMetadata(context.Context, uint64, *retainedalloc.Owner) (*rootpublication.StableResourceSet, error)
 }
@@ -122,15 +111,6 @@ func (db *DB) AcquireStableResourceCaptureLease() (*StableResourceCaptureLease, 
 		return nil, err
 	}
 	return &StableResourceCaptureLease{db: db}, nil
-}
-
-// ValidateStableDictionaryResourceClosure binds the bytes selected by an
-// encoder to every physical resource returned by a dictionary provider.
-func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableResourceSet, dictID uint64, dictionary []byte) error {
-	if resources == nil || dictID == 0 || len(dictionary) == 0 {
-		return fmt.Errorf("%w: incomplete dictionary resource closure", rootpublication.ErrUnresolvedResource)
-	}
-	return validateStableEncodedResourceClosure(resources, rootpublication.ReachabilityDictionaryGeneration, dictID, int64(len(dictionary)), sha256.Sum256(dictionary))
 }
 
 // ValidateStableTemplateResourceClosure binds the immutable definition selected
@@ -251,32 +231,6 @@ func validateStableEncodedResourceClosure(resources *rootpublication.StableResou
 	return nil
 }
 
-// SetStableDictionaryResourceProvider installs the authority provider used by
-// rewrite and packed-generation producers. It is separate from DictLookup:
-// bytes alone do not prove durable reachability or deletion safety.
-func (db *DB) SetStableDictionaryResourceProvider(provider StableDictionaryResourceProvider) {
-	if db == nil {
-		return
-	}
-	db.stableDictionaryResourcesMu.Lock()
-	db.stableDictionaryResources = provider
-	db.stableDictionaryResourcesMu.Unlock()
-}
-
-func (db *DB) stableDictionaryResourceProvider() StableDictionaryResourceProvider {
-	if db == nil {
-		return nil
-	}
-	db.stableDictionaryResourcesMu.RLock()
-	provider := db.stableDictionaryResources
-	db.stableDictionaryResourcesMu.RUnlock()
-	return provider
-}
-
-func captureStableDictionaryResources(ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
-	return captureStableDictionaryResourcesForDB(nil, ctx, provider, dictID, dictionary, owners...)
-}
-
 func disposeEncodedCapture(db *DB, resources *rootpublication.StableResourceSet) error {
 	if db != nil {
 		return db.releaseCapturedRootResources(resources)
@@ -285,57 +239,6 @@ func disposeEncodedCapture(db *DB, resources *rootpublication.StableResourceSet)
 		return nil
 	}
 	return resources.ReleaseWithError()
-}
-
-func captureStableDictionaryResourcesForDB(db *DB, ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte, owners ...*retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
-	defer func() {
-		if retErr == nil {
-			return
-		}
-		if result != nil {
-			original := result
-			result = nil
-			retErr = errors.Join(retErr, disposeEncodedCapture(db, original))
-		}
-		if db != nil && rootpublication.IsOriginalCleanupError(retErr) {
-			db.retainResourceCleanupError(retErr)
-		}
-	}()
-
-	if dictID == 0 || len(dictionary) == 0 {
-		return nil, nil
-	}
-	if provider == nil {
-		return nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var resources *rootpublication.StableResourceSet
-	var err error
-	if len(owners) == 0 || owners[0] == nil {
-		resources, err = provider.CaptureDictionaryResources(ctx, dictID)
-	} else {
-		if admitted, ok := provider.(StableDictionaryMetadataResourceProvider); ok {
-			resources, err = admitted.CaptureDictionaryResourcesWithMetadata(ctx, dictID, owners[0])
-		} else {
-			// Retain the original foreign producer's physical/deletion authority;
-			// admit independent metadata before exposing its first selected clone.
-			resources, err = provider.CaptureDictionaryResources(ctx, dictID)
-			if err == nil && resources != nil {
-				original := resources
-				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
-				err = errors.Join(err, disposeEncodedCapture(db, original))
-			}
-		}
-	}
-	if err != nil {
-		return resources, err
-	}
-	if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
-		return resources, err
-	}
-	return resources, nil
 }
 
 func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {

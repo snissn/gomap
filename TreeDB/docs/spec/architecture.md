@@ -12,8 +12,10 @@ The runtime consists of:
   generations.
 - Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay;
   future user-command WAL frames extend this same segment family.
-- Optional side stores:
-  - `dictdb/` for persistent dictionary bytes,
+- Value-log dictionaries persisted inside `maindb/index.db` `SystemRootPageID`
+  (inline/2 KiB chunked entries by default, or optional raw `dictID=0`
+  `ValuePtr` records in `maindb/value_vlog/`).
+- Optional side store:
   - `templatedb/` for template compression definitions.
 
 TreeDB's value log is the only value storage path for values.

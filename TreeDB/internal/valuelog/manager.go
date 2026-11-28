@@ -1595,6 +1595,12 @@ func (m *Manager) PreparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) 
 	return f.preparedRecordDictionaryID(ptr)
 }
 
+// PreparedRecordDictionaryID reads only the fixed record/frame header prefix
+// and returns the dictionary ID (0 when non-dictionary-encoded).
+func (f *File) PreparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
+	return f.preparedRecordDictionaryID(ptr)
+}
+
 func (f *File) preparedRecordDictionaryID(ptr page.ValuePtr) (uint64, error) {
 	if f == nil || f.File == nil || ptr.Offset < valueLogRecordCRCPrefixBytes {
 		return 0, ErrCorrupt

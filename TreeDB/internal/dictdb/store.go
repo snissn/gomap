@@ -7,11 +7,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
+	"math"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -19,14 +17,13 @@ import (
 
 var errStoreUnavailable = errors.New("dictdb: store unavailable")
 
-// Store provides access to dictionary storage backed by a TreeDB backend.
+// Store provides dictionary storage directly inside a TreeDB backend's
+// SystemRootPageID (inline/chunked by default, or optionally backed by raw
+// dictID=0 value-log pointers when PointerThreshold > 0).
 type Store struct {
-	backend *db.DB
-	mu      sync.Mutex
-	dir     string
-	vlog    *valuelog.Writer
-	vlogSeq uint32
-	nextRID uint64
+	backend          *db.DB
+	ownsBackend      bool
+	pointerThreshold atomic.Int64
 }
 
 const (
@@ -34,36 +31,43 @@ const (
 	dictKMax = valuelog.MaxFrameK
 )
 
-// Open opens a dictdb backend at path and returns a Store.
+// Open opens a standalone backend at path and wraps it in a Store.
+// Retained primarily for focused unit tests; production TreeDB wraps maindb
+// directly via New(mainBackend).
 func Open(path string, opts db.Options) (*Store, error) {
 	opts.Dir = path
 	backend, err := db.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{backend: backend, dir: path}, nil
+	return &Store{backend: backend, ownsBackend: true}, nil
 }
 
-// New wraps an existing backend.
+// New wraps an existing TreeDB backend so dictionary metadata and bytes live
+// inside its SystemRootPageID. Closing a Store created with New does not close
+// the underlying main backend.
 func New(backend *db.DB) *Store {
-	var dir string
-	if backend != nil {
-		dir = backend.Dir()
-	}
-	return &Store{backend: backend, dir: dir}
+	return &Store{backend: backend, ownsBackend: false}
 }
 
-// Close closes the underlying backend.
+// SetPointerThreshold configures the byte size above which newly stored
+// dictionaries are placed in maindb's dedicated system value-log lane
+// (dictID=0, templateID=0 raw records referenced by ValuePtr in
+// SystemRootPageID). A value <= 0 keeps all dictionaries inline in
+// SystemRootPageID using 2 KiB chunks (the default).
+func (s *Store) SetPointerThreshold(threshold int) {
+	if s == nil {
+		return
+	}
+	s.pointerThreshold.Store(int64(threshold))
+}
+
+// Close closes the underlying backend if and only if this Store opened it via
+// Open. For Stores created with New(mainBackend), Close is a no-op.
 func (s *Store) Close() error {
-	if s == nil || s.backend == nil {
+	if s == nil || s.backend == nil || !s.ownsBackend {
 		return nil
 	}
-	s.mu.Lock()
-	if s.vlog != nil {
-		_ = s.vlog.Close()
-		s.vlog = nil
-	}
-	s.mu.Unlock()
 	return s.backend.Close()
 }
 
@@ -72,7 +76,7 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
 	}
-	val, err := s.backend.Get(currentKey())
+	val, err := s.backend.GetSystem(currentKey())
 	if err != nil {
 		return 0, err
 	}
@@ -93,12 +97,11 @@ func (s *Store) GetCurrentForClass(ctx context.Context, class string) (uint64, e
 		return 0, errStoreUnavailable
 	}
 	key := currentKeyForClass(class)
-	val, err := s.backend.Get(key)
+	val, err := s.backend.GetSystem(key)
 	if err != nil {
 		return 0, err
 	}
 	if val == nil {
-		// Backward compatibility: fall back to legacy global current marker.
 		return s.GetCurrent(ctx)
 	}
 	if len(val) != 8 {
@@ -107,8 +110,9 @@ func (s *Store) GetCurrentForClass(ctx context.Context, class string) (uint64, e
 	return binary.BigEndian.Uint64(val), nil
 }
 
-// PutDictBytes inserts dict bytes (deduped by hash) and returns its dictID.
-func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, error) {
+// PutDictBytes inserts dict bytes (deduped by hash) into SystemRootPageID and
+// returns its dictID.
+func (s *Store) PutDictBytes(_ context.Context, dictBytes []byte) (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
 	}
@@ -116,11 +120,9 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		dictBytes = []byte{}
 	}
 	checksum := sha256.Sum256(dictBytes)
-	hashKey := hashKey(checksum)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	hKey := hashKey(checksum)
 
-	val, err := s.backend.Get(hashKey)
+	val, err := s.backend.GetSystem(hKey)
 	if err != nil {
 		return 0, err
 	}
@@ -131,10 +133,8 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		return binary.BigEndian.Uint64(val), nil
 	}
 
-	// dictID uses the first 8 bytes of SHA256; verify content on collision.
 	dictID := binary.BigEndian.Uint64(checksum[:8])
-	bytesKey := bytesKey(dictID)
-	existing, err := s.backend.Get(bytesKey)
+	existing, err := s.getDictBytesIfPresent(dictID)
 	if err != nil {
 		return 0, err
 	}
@@ -142,7 +142,7 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		if bytes.Equal(existing, dictBytes) {
 			valBuf := make([]byte, 8)
 			binary.BigEndian.PutUint64(valBuf, dictID)
-			if err := s.backend.SetSync(hashKey, valBuf); err != nil {
+			if err := s.backend.ApplySystemOps([]db.SystemKVOp{{Key: hKey, Value: valBuf}}, true); err != nil {
 				return 0, err
 			}
 			return dictID, nil
@@ -150,67 +150,23 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		return 0, fmt.Errorf("dictdb: dict id collision for %d", dictID)
 	}
 
-	inlineThreshold := s.backend.InlineThreshold()
-	usePointer := len(dictBytes) > inlineThreshold
-
-	batch := s.backend.NewBatch().(*db.Batch)
-	if usePointer {
-		writer, err := s.ensureValueLogWriterLocked()
-		if err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
-		rid := dictID
-		if rid == 0 {
-			s.nextRID++
-			rid = s.nextRID
-		}
-		ptr, err := writer.Append(0, nil, rid, dictBytes)
-		if err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
-		if err := writer.Flush(); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
-		if err := batch.SetPointer(bytesKey, ptr); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
-	} else {
-		if err := batch.Set(bytesKey, dictBytes); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
+	ops, err := s.buildDictPayloadOpsLocked(dictID, checksum, dictBytes)
+	if err != nil {
+		return 0, err
 	}
 	valBuf := make([]byte, 8)
 	binary.BigEndian.PutUint64(valBuf, dictID)
-	if err := batch.Set(hashKey, valBuf); err != nil {
-		_ = batch.Close()
+	ops = append(ops, db.SystemKVOp{Key: hKey, Value: valBuf})
+	if err := s.backend.ApplySystemOps(ops, true); err != nil {
 		return 0, err
-	}
-	if err := batch.WriteSync(); err != nil {
-		_ = batch.Close()
-		return 0, err
-	}
-	if err := batch.Close(); err != nil {
-		return 0, err
-	}
-	if usePointer {
-		if err := s.backend.RefreshValueLogSet(); err != nil {
-			return 0, err
-		}
 	}
 	return dictID, nil
 }
 
 // PublishDict atomically persists dictBytes (deduped by hash), optional frame
 // group size k (> 0), and the class/global current markers in one durable
-// backend commit. When dictBytes is stored as a value-log pointer, the segment
-// is flushed before WriteSync so the backend's durable-root transaction issues
-// a single authoritative fsync of the value-log segment before index commit.
-func (s *Store) PublishDict(ctx context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool) (uint64, error) {
+// maindb SystemRootPageID commit.
+func (s *Store) PublishDict(_ context.Context, dictBytes []byte, k int, class string, alsoSetGlobal bool) (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
 	}
@@ -222,170 +178,219 @@ func (s *Store) PublishDict(ctx context.Context, dictBytes []byte, k int, class 
 	}
 	checksum := sha256.Sum256(dictBytes)
 	hKey := hashKey(checksum)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	var (
-		dictID         uint64
-		needWriteBytes bool
-		needWriteHash  bool
-	)
-	val, err := s.backend.Get(hKey)
+	dictID, needWriteBytes, needWriteHash, err := s.resolvePublishIdentityLocked(hKey, checksum, dictBytes)
 	if err != nil {
 		return 0, err
 	}
-	if val != nil {
-		if len(val) != 8 {
-			return 0, fmt.Errorf("dictdb: invalid hash entry size %d", len(val))
-		}
-		dictID = binary.BigEndian.Uint64(val)
-	} else {
-		dictID = binary.BigEndian.Uint64(checksum[:8])
-		existing, err := s.backend.Get(bytesKey(dictID))
+
+	var ops []db.SystemKVOp
+	if needWriteBytes {
+		payloadOps, err := s.buildDictPayloadOpsLocked(dictID, checksum, dictBytes)
 		if err != nil {
 			return 0, err
 		}
-		if existing != nil {
-			if !bytes.Equal(existing, dictBytes) {
-				return 0, fmt.Errorf("dictdb: dict id collision for %d", dictID)
-			}
-			needWriteHash = true
-		} else {
-			needWriteBytes = true
-			needWriteHash = true
-		}
-	}
-
-	batch := s.backend.NewBatch().(*db.Batch)
-	usePointer := false
-	if needWriteBytes {
-		inlineThreshold := s.backend.InlineThreshold()
-		usePointer = len(dictBytes) > inlineThreshold
-		bKey := bytesKey(dictID)
-		if usePointer {
-			writer, err := s.ensureValueLogWriterLocked()
-			if err != nil {
-				_ = batch.Close()
-				return 0, err
-			}
-			rid := dictID
-			if rid == 0 {
-				s.nextRID++
-				rid = s.nextRID
-			}
-			ptr, err := writer.Append(0, nil, rid, dictBytes)
-			if err != nil {
-				_ = batch.Close()
-				return 0, err
-			}
-			if err := writer.Flush(); err != nil {
-				_ = batch.Close()
-				return 0, err
-			}
-			if err := batch.SetPointer(bKey, ptr); err != nil {
-				_ = batch.Close()
-				return 0, err
-			}
-		} else {
-			if err := batch.Set(bKey, dictBytes); err != nil {
-				_ = batch.Close()
-				return 0, err
-			}
-		}
+		ops = append(ops, payloadOps...)
 	}
 
 	valBuf := make([]byte, 8)
 	binary.BigEndian.PutUint64(valBuf, dictID)
 	if needWriteHash {
-		if err := batch.Set(hKey, valBuf); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
+		ops = append(ops, db.SystemKVOp{Key: hKey, Value: valBuf})
 	}
 	if k > 0 && dictID != 0 {
-		if err := batch.Set(kKey(dictID), []byte{byte(k)}); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
+		ops = append(ops, db.SystemKVOp{Key: kKey(dictID), Value: []byte{byte(k)}})
 	}
 	cKey := currentKeyForClass(class)
-	if err := batch.Set(cKey, valBuf); err != nil {
-		_ = batch.Close()
-		return 0, err
-	}
+	ops = append(ops, db.SystemKVOp{Key: cKey, Value: valBuf})
 	if alsoSetGlobal && !bytes.Equal(cKey, currentKey()) {
-		if err := batch.Set(currentKey(), valBuf); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
+		ops = append(ops, db.SystemKVOp{Key: currentKey(), Value: valBuf})
 	}
-	if err := batch.WriteSync(); err != nil {
-		_ = batch.Close()
+	if err := s.backend.ApplySystemOps(ops, true); err != nil {
 		return 0, err
-	}
-	if err := batch.Close(); err != nil {
-		return 0, err
-	}
-	if usePointer {
-		if err := s.backend.RefreshValueLogSet(); err != nil {
-			return 0, err
-		}
 	}
 	return dictID, nil
 }
 
+// PublishRewriteLeafDict atomically persists dictBytes (deduped by hash), sets
+// the class current marker, and records the leaf payload mode in a single
+// SystemRootPageID commit (replacing three sequential WriteSync calls).
+func (s *Store) PublishRewriteLeafDict(_ context.Context, dictBytes []byte, class string, useRawPages bool) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if dictBytes == nil {
+		dictBytes = []byte{}
+	}
+	checksum := sha256.Sum256(dictBytes)
+	hKey := hashKey(checksum)
+
+	dictID, needWriteBytes, needWriteHash, err := s.resolvePublishIdentityLocked(hKey, checksum, dictBytes)
+	if err != nil {
+		return 0, err
+	}
+
+	var ops []db.SystemKVOp
+	if needWriteBytes {
+		payloadOps, err := s.buildDictPayloadOpsLocked(dictID, checksum, dictBytes)
+		if err != nil {
+			return 0, err
+		}
+		ops = append(ops, payloadOps...)
+	}
+	valBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(valBuf, dictID)
+	if needWriteHash {
+		ops = append(ops, db.SystemKVOp{Key: hKey, Value: valBuf})
+	}
+	if dictID != 0 {
+		ops = append(ops, db.SystemKVOp{Key: currentKeyForClass(class), Value: valBuf})
+		mode := []byte("compact")
+		if useRawPages {
+			mode = []byte("raw")
+		}
+		ops = append(ops, db.SystemKVOp{Key: leafPayloadModeKey(dictID), Value: mode})
+	}
+	if err := s.backend.ApplySystemOps(ops, true); err != nil {
+		return 0, err
+	}
+	return dictID, nil
+}
+
+func (s *Store) resolvePublishIdentityLocked(hKey []byte, checksum [32]byte, dictBytes []byte) (dictID uint64, needWriteBytes, needWriteHash bool, err error) {
+	val, err := s.backend.GetSystem(hKey)
+	if err != nil {
+		return 0, false, false, err
+	}
+	if val != nil {
+		if len(val) != 8 {
+			return 0, false, false, fmt.Errorf("dictdb: invalid hash entry size %d", len(val))
+		}
+		return binary.BigEndian.Uint64(val), false, false, nil
+	}
+	dictID = binary.BigEndian.Uint64(checksum[:8])
+	existing, err := s.getDictBytesIfPresent(dictID)
+	if err != nil {
+		return 0, false, false, err
+	}
+	if existing != nil {
+		if !bytes.Equal(existing, dictBytes) {
+			return 0, false, false, fmt.Errorf("dictdb: dict id collision for %d", dictID)
+		}
+		return dictID, false, true, nil
+	}
+	return dictID, true, true, nil
+}
+
+func (s *Store) buildDictPayloadOpsLocked(dictID uint64, checksum [32]byte, dictBytes []byte) ([]db.SystemKVOp, error) {
+	bKey := db.SystemDictBytesKey(dictID)
+	threshold := int(s.pointerThreshold.Load())
+	if threshold > 0 && len(dictBytes) > threshold {
+		ptr, err := s.backend.AppendRawSystemValueLog(dictID, dictBytes)
+		if err != nil {
+			return nil, err
+		}
+		return []db.SystemKVOp{{Key: bKey, ValuePtr: ptr, IsPointer: true}}, nil
+	}
+	if len(dictBytes) <= db.SystemDictChunkSize {
+		encoded := make([]byte, 1+len(dictBytes))
+		encoded[0] = db.SystemDictEncodingInline
+		copy(encoded[1:], dictBytes)
+		return []db.SystemKVOp{{Key: bKey, Value: encoded}}, nil
+	}
+	if uint64(len(dictBytes)) > math.MaxUint32 || len(dictBytes) > db.MaxSystemDictBytes {
+		return nil, fmt.Errorf("dictdb: dict length %d exceeds max inline chunked size %d", len(dictBytes), db.MaxSystemDictBytes)
+	}
+	chunkCount := uint32((len(dictBytes) + db.SystemDictChunkSize - 1) / db.SystemDictChunkSize)
+	ops := make([]db.SystemKVOp, 0, 1+int(chunkCount))
+	ops = append(ops, db.SystemKVOp{
+		Key:   bKey,
+		Value: db.EncodeSystemDictChunkHeader(chunkCount, uint32(len(dictBytes)), checksum),
+	})
+	for i := uint32(0); i < chunkCount; i++ {
+		start := int(i) * db.SystemDictChunkSize
+		end := start + db.SystemDictChunkSize
+		if end > len(dictBytes) {
+			end = len(dictBytes)
+		}
+		chunk := make([]byte, end-start)
+		copy(chunk, dictBytes[start:end])
+		ops = append(ops, db.SystemKVOp{
+			Key:   db.SystemDictChunkKey(dictID, i),
+			Value: chunk,
+		})
+	}
+	return ops, nil
+}
+
+func (s *Store) getDictBytesIfPresent(dictID uint64) ([]byte, error) {
+	if dictID == 0 {
+		return nil, nil
+	}
+	_, ok, err := s.backend.GetSystemEntry(db.SystemDictBytesKey(dictID))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return s.backend.LookupSystemDictBytes(dictID)
+}
+
+func (s *Store) dictExists(dictID uint64) (bool, error) {
+	if dictID == 0 {
+		return false, nil
+	}
+	_, ok, err := s.backend.GetSystemEntry(db.SystemDictBytesKey(dictID))
+	return ok, err
+}
+
 // SetCurrent marks dictID as the current dictionary.
-func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
+func (s *Store) SetCurrent(_ context.Context, dictID uint64) error {
 	if s == nil || s.backend == nil {
 		return errStoreUnavailable
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if dictID == 0 {
-		// Clear current dict marker.
-		return s.backend.DeleteSync(currentKey())
+		return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: currentKey(), Delete: true}}, true)
 	}
-
-	val, err := s.backend.Get(bytesKey(dictID))
+	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err
 	}
-	if val == nil {
+	if !ok {
 		return fmt.Errorf("dictdb: dict %d not found", dictID)
 	}
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, dictID)
-	return s.backend.SetSync(currentKey(), buf)
+	return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: currentKey(), Value: buf}}, true)
 }
 
 // SetCurrentForClass marks dictID as the current dictionary for a payload class.
 // Empty class and aliases "single"/"default" use the legacy global current key.
-// A dictID of 0 clears the class marker via DeleteSync.
-func (s *Store) SetCurrentForClass(ctx context.Context, class string, dictID uint64) error {
+// A dictID of 0 clears the class marker.
+func (s *Store) SetCurrentForClass(_ context.Context, class string, dictID uint64) error {
 	if s == nil || s.backend == nil {
 		return errStoreUnavailable
 	}
 	key := currentKeyForClass(class)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if dictID == 0 {
-		return s.backend.DeleteSync(key)
+		return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: key, Delete: true}}, true)
 	}
-	val, err := s.backend.Get(bytesKey(dictID))
+	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err
 	}
-	if val == nil {
+	if !ok {
 		return fmt.Errorf("dictdb: dict %d not found", dictID)
 	}
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, dictID)
-	return s.backend.SetSync(key, buf)
+	return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: key, Value: buf}}, true)
 }
 
 // SetK stores the preferred frame group size (K) for dictID.
-func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
+func (s *Store) SetK(_ context.Context, dictID uint64, k int) error {
 	if s == nil || s.backend == nil {
 		return errStoreUnavailable
 	}
@@ -395,27 +400,26 @@ func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
 	if k < dictKMin || k > dictKMax {
 		return fmt.Errorf("dictdb: invalid dict K=%d", k)
 	}
-	// Ensure dict exists (best-effort).
-	val, err := s.backend.Get(bytesKey(dictID))
+	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err
 	}
-	if val == nil {
+	if !ok {
 		return fmt.Errorf("dictdb: dict %d not found", dictID)
 	}
-	return s.backend.SetSync(kKey(dictID), []byte{byte(k)})
+	return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: kKey(dictID), Value: []byte{byte(k)}}}, true)
 }
 
 // GetK loads the preferred frame group size (K) for dictID.
 // Returns 0 when unset.
-func (s *Store) GetK(ctx context.Context, dictID uint64) (int, error) {
+func (s *Store) GetK(_ context.Context, dictID uint64) (int, error) {
 	if s == nil || s.backend == nil {
 		return 0, errStoreUnavailable
 	}
 	if dictID == 0 {
 		return 0, nil
 	}
-	val, err := s.backend.Get(kKey(dictID))
+	val, err := s.backend.GetSystem(kKey(dictID))
 	if err != nil {
 		return 0, err
 	}
@@ -441,7 +445,7 @@ func (s *Store) GetLeafPayloadMode(_ context.Context, dictID uint64) (useRawPage
 	if dictID == 0 {
 		return false, false, nil
 	}
-	val, err := s.backend.Get(leafPayloadModeKey(dictID))
+	val, err := s.backend.GetSystem(leafPayloadModeKey(dictID))
 	if err != nil {
 		return false, false, err
 	}
@@ -467,18 +471,18 @@ func (s *Store) SetLeafPayloadMode(_ context.Context, dictID uint64, useRawPages
 	if dictID == 0 {
 		return nil
 	}
-	val, err := s.backend.Get(bytesKey(dictID))
+	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err
 	}
-	if val == nil {
+	if !ok {
 		return fmt.Errorf("dictdb: dict %d not found", dictID)
 	}
 	mode := []byte("compact")
 	if useRawPages {
 		mode = []byte("raw")
 	}
-	return s.backend.SetSync(leafPayloadModeKey(dictID), mode)
+	return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: leafPayloadModeKey(dictID), Value: mode}}, true)
 }
 
 // GetDictBytes returns the dictionary bytes for dictID.
@@ -486,46 +490,36 @@ func (s *Store) GetDictBytes(_ context.Context, dictID uint64) ([]byte, error) {
 	if s == nil || s.backend == nil {
 		return nil, errStoreUnavailable
 	}
-	val, err := s.backend.Get(bytesKey(dictID))
+	val, err := s.backend.LookupSystemDictBytes(dictID)
 	if err != nil {
 		return nil, err
 	}
-	if val == nil {
-		return nil, fmt.Errorf("dictdb: dict %d not found", dictID)
-	}
-	return val, nil
-}
-
-func bytesKey(dictID uint64) []byte {
-	buf := make([]byte, len("bytes/")+8)
-	copy(buf, "bytes/")
-	binary.BigEndian.PutUint64(buf[len("bytes/"):], dictID)
-	return buf
+	return append([]byte(nil), val...), nil
 }
 
 func hashKey(sum [32]byte) []byte {
-	buf := make([]byte, len("hash/")+len(sum))
-	copy(buf, "hash/")
-	copy(buf[len("hash/"):], sum[:])
+	buf := make([]byte, len("dict/hash/")+len(sum))
+	copy(buf, "dict/hash/")
+	copy(buf[len("dict/hash/"):], sum[:])
 	return buf
 }
 
 func kKey(dictID uint64) []byte {
-	buf := make([]byte, len("k/")+8)
-	copy(buf, "k/")
-	binary.BigEndian.PutUint64(buf[len("k/"):], dictID)
+	buf := make([]byte, len("dict/k/")+8)
+	copy(buf, "dict/k/")
+	binary.BigEndian.PutUint64(buf[len("dict/k/"):], dictID)
 	return buf
 }
 
 func leafPayloadModeKey(dictID uint64) []byte {
-	buf := make([]byte, len("leafmode/")+8)
-	copy(buf, "leafmode/")
-	binary.BigEndian.PutUint64(buf[len("leafmode/"):], dictID)
+	buf := make([]byte, len("dict/leafmode/")+8)
+	copy(buf, "dict/leafmode/")
+	binary.BigEndian.PutUint64(buf[len("dict/leafmode/"):], dictID)
 	return buf
 }
 
 func currentKey() []byte {
-	return []byte("current")
+	return []byte("dict/current")
 }
 
 func currentKeyForClass(class string) []byte {
@@ -533,93 +527,5 @@ func currentKeyForClass(class string) []byte {
 	if class == "" || class == "single" || class == "default" {
 		return currentKey()
 	}
-	return []byte("current/" + class)
-}
-
-func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
-	if s == nil || s.backend == nil {
-		return nil, errStoreUnavailable
-	}
-	if s.vlog != nil {
-		return s.vlog, nil
-	}
-	if s.dir == "" {
-		return nil, fmt.Errorf("dictdb: missing backend dir")
-	}
-	valueLogDir := db.ValueLogDirPath(s.dir)
-	if err := os.MkdirAll(valueLogDir, 0700); err != nil {
-		return nil, err
-	}
-	seq, err := nextValueLogSeq(valueLogDir, 0)
-	if err != nil {
-		return nil, err
-	}
-	fileID, err := valuelog.EncodeFileID(0, seq)
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(valueLogDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
-	writer, err := valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, s.backend.StableResourceIdentityPinRegistry())
-	if err != nil {
-		return nil, err
-	}
-	// Register the producer's newly-created segment before any pointer to it can
-	// enter a durable root. Durable publication deliberately refuses to discover
-	// unreported dependencies by scanning or statting a derived path.
-	if err := s.backend.RegisterValueLogSegment(path, fileID); err != nil {
-		return nil, errors.Join(err, writer.Close())
-	}
-	s.vlog = writer
-	s.vlogSeq = seq
-	return writer, nil
-}
-
-func nextValueLogSeq(dir string, lane uint32) (uint32, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 1, nil
-		}
-		return 0, err
-	}
-	var maxSeq uint32
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "value-") || !strings.HasSuffix(name, ".log") {
-			continue
-		}
-		core := strings.TrimSuffix(strings.TrimPrefix(name, "value-"), ".log")
-		if strings.HasPrefix(core, "l") {
-			parts := strings.SplitN(strings.TrimPrefix(core, "l"), "-", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			laneVal, err := strconv.ParseUint(parts[0], 10, 32)
-			if err != nil || uint32(laneVal) != lane {
-				continue
-			}
-			seqVal, err := strconv.ParseUint(parts[1], 10, 32)
-			if err != nil {
-				continue
-			}
-			if uint32(seqVal) > maxSeq {
-				maxSeq = uint32(seqVal)
-			}
-			continue
-		}
-		if lane != 0 {
-			continue
-		}
-		seqVal, err := strconv.ParseUint(core, 10, 32)
-		if err != nil {
-			continue
-		}
-		if uint32(seqVal) > maxSeq {
-			maxSeq = uint32(seqVal)
-		}
-	}
-	return maxSeq + 1, nil
+	return []byte("dict/current/" + class)
 }

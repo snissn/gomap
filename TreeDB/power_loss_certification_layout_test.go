@@ -56,7 +56,7 @@ func TestPowerLossCertificationFreshCompositeAfterRootSync(t *testing.T) {
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return database },
 		wantOccurrence: 1,
-		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
+		wantStableDirs: []string{".", "db", "db/maindb"},
 	})
 }
 
@@ -75,8 +75,8 @@ func TestPowerLossCertificationFreshCompositeBeforeMainDBParentSync(t *testing.T
 		variantID:      "fresh-layout-composite-owned-init-v2-before-maindb-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 6,
-		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb"},
+		wantOccurrence: 3,
+		wantStableDirs: []string{".", "db", "db/maindb"},
 	})
 }
 
@@ -85,8 +85,8 @@ func TestPowerLossCertificationFreshCompositeAfterMainDBParentSync(t *testing.T)
 		variantID:      "fresh-layout-composite-owned-init-v2-after-maindb-parent-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 6,
-		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
+		wantOccurrence: 3,
+		wantStableDirs: []string{".", "db", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
 	})
 }
 

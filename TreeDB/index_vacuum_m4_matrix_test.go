@@ -581,6 +581,13 @@ func runIndexVacuumM4Lane(t *testing.T, database *DB, opts Options, fixture inde
 		}
 		compactOpts := indexVacuumM4CompactOptions(t, opts.Dir, mode)
 		stats, err := database.CompactStorage(ctx, compactOpts)
+		if err == nil && mode == CompactStorageFull && indexVacuumM4FullNamespaceBoundaryGOOS(runtime.GOOS) {
+			for _, p := range stats.Phases {
+				if strings.HasPrefix(p.Name, "leaf-generation-pack-") && p.Status == CompactStoragePhaseStatusUnsupported {
+					return string(CompactStoragePhaseStatusUnsupported), 0, false, ErrNamespacePersistenceUnsupported
+				}
+			}
+		}
 		phase := indexVacuumM4CompactPhase(stats)
 		if phase.Status == "" {
 			if errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) {

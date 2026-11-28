@@ -320,7 +320,11 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 	}
 	dictdbBytes, err := dirSize(filepath.Join(dir, "dictdb"))
 	if err != nil {
-		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: dictdb size: %w", err)
+		if os.IsNotExist(err) {
+			dictdbBytes = 0
+		} else {
+			return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: dictdb size: %w", err)
+		}
 	}
 
 	rawBytesWarmup := int64(warmupKeys * tc.valueSz)

@@ -56,16 +56,15 @@ func (kv templateBackendKV) AcquireStableTemplateSnapshot() (templatedb.StablePh
 	return acquireStableTemplateSnapshot(kv.db), nil
 }
 
-func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.StableDictionaryResourceProvider, error) {
+func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 	if opts == nil || opts.DisableSideStores {
-		return func() error { return nil }, nil, nil
+		return func() error { return nil }, nil
 	}
 	if rootDir == "" {
-		return nil, nil, fmt.Errorf("treedb: missing root dir for side-store lookup wiring")
+		return nil, fmt.Errorf("treedb: missing root dir for side-store lookup wiring")
 	}
 
 	var closers []func() error
-	var dictionaryResources db.StableDictionaryResourceProvider
 	cleanup := func() error {
 		var first error
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -76,94 +75,6 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 		return first
 	}
 
-	if opts.ValueLog.DictLookup == nil {
-		dictDir := filepath.Join(rootDir, "dictdb")
-		indexPath := filepath.Join(dictDir, "index.db")
-		indexInfo, err := os.Stat(indexPath)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("treedb: stat dictdb index: %w", err)
-			}
-		} else if indexInfo.IsDir() {
-			return nil, nil, fmt.Errorf("treedb: dictdb index path is a directory: %s", indexPath)
-		} else {
-			dictChunk := opts.DictDBChunkSize
-			if dictChunk <= 0 {
-				dictChunk = defaultDictChunkSize
-			}
-			dictOpts := *opts
-			dictOpts.PhysicalSnapshotSideStoreCapture = nil
-			dictOpts.NegativeLookupFilterBytes = 0
-			dictOpts.Dir = dictDir
-			dictOpts.ReadOnly = opts.ReadOnly
-			dictOpts.ChunkSize = dictChunk
-			dictOpts.DisableBackgroundPrune = true
-			dictOpts.IgnoreFormatConfig = false
-			dictOpts.ResolvedProfile = ""
-			dictOpts.DeprecatedProfileAlias = ""
-			dictOpts.UnsafeBenchmarkProfile = false
-			dictOpts.CommandWAL = false
-			// Side stores must never require dict/template lookups themselves.
-			dictOpts.IndexOuterLeavesInValueLog = false
-			dictOpts.ValueLog.DictLookup = nil
-			dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
-			dictOpts.ValueLog.TemplateMode = template.TemplateOff
-			dictOpts.ValueLog.TemplateLookup = nil
-			dictOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
-
-			dictBackend, err := db.Open(dictOpts)
-			if err != nil {
-				return nil, nil, fmt.Errorf("treedb: open dictdb: %w", err)
-			}
-			closers = append(closers, dictBackend.Close)
-			previousCapture := opts.PhysicalSnapshotSideStoreCapture
-			opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
-				if name == "dictdb" {
-					if !dictOpts.ReadOnly {
-						if err := dictBackend.Checkpoint(); err != nil {
-							return nil, err
-						}
-					}
-					return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
-				}
-				if previousCapture != nil {
-					return previousCapture(ctx, name)
-				}
-				return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
-			}
-			store := dictdb.New(dictBackend)
-			dictionaryResources = store
-			opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-				return store.GetDictBytes(context.Background(), dictID)
-			}
-			if opts.ValueLog.DictCurrentForClass == nil {
-				opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
-					return store.GetCurrentForClass(ctx, class)
-				}
-			}
-			if opts.ValueLog.DictLeafPayloadMode == nil {
-				opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
-					return store.GetLeafPayloadMode(ctx, dictID)
-				}
-			}
-			if !dictOpts.ReadOnly && opts.ValueLog.DictPut == nil {
-				opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
-					return store.PutDictBytes(ctx, dictBytes)
-				}
-			}
-			if !dictOpts.ReadOnly && opts.ValueLog.DictSetCurrentForClass == nil {
-				opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
-					return store.SetCurrentForClass(ctx, class, dictID)
-				}
-			}
-			if !dictOpts.ReadOnly && opts.ValueLog.DictSetLeafPayloadMode == nil {
-				opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
-					return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
-				}
-			}
-		}
-	}
-
 	if opts.ValueLog.TemplateLookup == nil {
 		templateDir := filepath.Join(rootDir, "templatedb")
 		indexPath := filepath.Join(templateDir, "index.db")
@@ -171,11 +82,11 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 		if err != nil {
 			if !os.IsNotExist(err) {
 				_ = cleanup()
-				return nil, nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
+				return nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
 			}
 		} else if indexInfo.IsDir() {
 			_ = cleanup()
-			return nil, nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
+			return nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
 		} else {
 			templateChunk := opts.TemplateDBChunkSize
 			if templateChunk <= 0 {
@@ -204,7 +115,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 			templateBackend, err := db.Open(templateOpts)
 			if err != nil {
 				_ = cleanup()
-				return nil, nil, fmt.Errorf("treedb: open templatedb: %w", err)
+				return nil, fmt.Errorf("treedb: open templatedb: %w", err)
 			}
 			closers = append(closers, templateBackend.Close)
 			previousCapture := opts.PhysicalSnapshotSideStoreCapture
@@ -241,7 +152,34 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 		}
 	}
 
-	return cleanup, dictionaryResources, nil
+	return cleanup, nil
+}
+
+func wireMainBackendDictCallbacks(backend *db.DB, store *dictdb.Store, readOnly bool) {
+	if backend == nil || store == nil {
+		return
+	}
+	var (
+		put                func(context.Context, []byte) (uint64, error)
+		setCurrentForClass func(context.Context, string, uint64) error
+		setLeafPayloadMode func(context.Context, uint64, bool) error
+		publishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
+	)
+	if !readOnly {
+		put = store.PutDictBytes
+		setCurrentForClass = store.SetCurrentForClass
+		setLeafPayloadMode = store.SetLeafPayloadMode
+		publishRewriteLeaf = store.PublishRewriteLeafDict
+	}
+	backend.SetDictCallbacks(
+		nil,
+		store.GetCurrentForClass,
+		store.GetLeafPayloadMode,
+		put,
+		setCurrentForClass,
+		setLeafPayloadMode,
+		publishRewriteLeaf,
+	)
 }
 
 func (kv templateBackendKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {

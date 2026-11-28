@@ -9,9 +9,8 @@ import (
 func TestResolveOpenDirLayout_RootDir(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")
-	dictDir := filepath.Join(root, "dictdb")
 	templateDir := filepath.Join(root, "templatedb")
-	for _, dir := range []string{mainDir, dictDir, templateDir} {
+	for _, dir := range []string{mainDir, templateDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -24,7 +23,7 @@ func TestResolveOpenDirLayout_RootDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve root layout: %v", err)
 	}
-	if layout.rootDir != root || layout.mainDir != mainDir || layout.dictdbDir != dictDir || layout.templatedbDir != templateDir || layout.disableSideStores {
+	if layout.rootDir != root || layout.mainDir != mainDir || layout.templatedbDir != templateDir || layout.disableSideStores {
 		t.Fatalf("unexpected root layout: %+v", layout)
 	}
 }
@@ -35,8 +34,8 @@ func TestResolveOpenDirLayout_MainDirWithSideStores(t *testing.T) {
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatalf("mkdir maindb: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
-		t.Fatalf("mkdir dictdb: %v", err)
+	if err := os.MkdirAll(filepath.Join(root, "templatedb"), 0o755); err != nil {
+		t.Fatalf("mkdir templatedb: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write maindb/index.db: %v", err)
@@ -46,7 +45,7 @@ func TestResolveOpenDirLayout_MainDirWithSideStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve main dir layout: %v", err)
 	}
-	if layout.rootDir != root || layout.mainDir != mainDir || layout.dictdbDir != filepath.Join(root, "dictdb") {
+	if layout.rootDir != root || layout.mainDir != mainDir || layout.templatedbDir != filepath.Join(root, "templatedb") {
 		t.Fatalf("unexpected main-dir layout: %+v", layout)
 	}
 }

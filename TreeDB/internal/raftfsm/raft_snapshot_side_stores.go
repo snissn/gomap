@@ -8,7 +8,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -72,87 +71,11 @@ func wireRaftSnapshotSideStoreLookupsV1(rootDir string, opts *backenddb.Options)
 		return first
 	}
 
-	if err := wireRaftSnapshotDictLookupV1(rootDir, opts, &closers); err != nil {
-		_ = cleanup()
-		return nil, err
-	}
 	if err := wireRaftSnapshotTemplateLookupV1(rootDir, opts, &closers); err != nil {
 		_ = cleanup()
 		return nil, err
 	}
 	return cleanup, nil
-}
-
-func wireRaftSnapshotDictLookupV1(rootDir string, opts *backenddb.Options, closers *[]func() error) error {
-	dictDir := filepath.Join(rootDir, "dictdb")
-	indexPath := filepath.Join(dictDir, "index.db")
-	indexInfo, err := os.Stat(indexPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("raftfsm: stat restored dictdb index: %w", err)
-	}
-	if indexInfo.IsDir() {
-		return fmt.Errorf("raftfsm: restored dictdb index path is a directory: %s", indexPath)
-	}
-
-	dictOpts := *opts
-	dictOpts.Dir = dictDir
-	dictOpts.ReadOnly = opts.ReadOnly
-	if dictOpts.ChunkSize <= 0 {
-		dictOpts.ChunkSize = raftSnapshotSideStoreChunkSizeV1
-	}
-	if opts.DictDBChunkSize > 0 {
-		dictOpts.ChunkSize = opts.DictDBChunkSize
-	}
-	dictOpts.DisableBackgroundPrune = true
-	dictOpts.IgnoreFormatConfig = false
-	dictOpts.CommandWAL = false
-	scrubRaftSnapshotSideStoreOptionsV1(&dictOpts)
-
-	dictBackend, err := backenddb.Open(dictOpts)
-	if err != nil {
-		return fmt.Errorf("raftfsm: open restored dictdb: %w", err)
-	}
-	*closers = append(*closers, dictBackend.Close)
-	previousCapture := opts.PhysicalSnapshotSideStoreCapture
-	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*backenddb.PhysicalSnapshotCutV1, error) {
-		if name == "dictdb" {
-			if !dictOpts.ReadOnly {
-				if err := dictBackend.Checkpoint(); err != nil {
-					return nil, err
-				}
-			}
-			return dictBackend.CapturePhysicalSnapshotCutV1(ctx)
-		}
-		if previousCapture != nil {
-			return previousCapture(ctx, name)
-		}
-		return nil, fmt.Errorf("raftfsm: snapshot side store %q has no owner", name)
-	}
-	store := dictdb.New(dictBackend)
-	opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-		return store.GetDictBytes(context.Background(), dictID)
-	}
-	opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
-		return store.GetCurrentForClass(ctx, class)
-	}
-	opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
-		return store.GetLeafPayloadMode(ctx, dictID)
-	}
-	if !dictOpts.ReadOnly {
-		opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
-			return store.PutDictBytes(ctx, dictBytes)
-		}
-		opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
-			return store.SetCurrentForClass(ctx, class, dictID)
-		}
-		opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
-			return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
-		}
-	}
-	return nil
 }
 
 func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, closers *[]func() error) error {

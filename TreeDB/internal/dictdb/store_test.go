@@ -232,7 +232,7 @@ func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	sum := sha256.Sum256([]byte("beta"))
-	if err := store.backend.DeleteSync(hashKey(sum)); err != nil {
+	if err := store.backend.ApplySystemOps([]db.SystemKVOp{{Key: hashKey(sum), Delete: true}}, true); err != nil {
 		t.Fatalf("delete hash: %v", err)
 	}
 	got, err := store.PutDictBytes(ctx, []byte("beta"))
@@ -242,7 +242,7 @@ func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	if got != id {
 		t.Fatalf("expected id %d, got %d", id, got)
 	}
-	val, err := store.backend.Get(hashKey(sum))
+	val, err := store.backend.GetSystem(hashKey(sum))
 	if err != nil {
 		t.Fatalf("get hash: %v", err)
 	}
@@ -251,6 +251,69 @@ func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	}
 	if gotID := binary.BigEndian.Uint64(val); gotID != id {
 		t.Fatalf("expected hash id %d, got %d", id, gotID)
+	}
+}
+
+func TestStorePutGet_ValueLogPointerMode_Reopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	store.SetPointerThreshold(1)
+	ctx := context.Background()
+	payload := bytes.Repeat([]byte("pointer-backed-system-dict|"), 160)
+	id, err := store.PutDictBytes(ctx, payload)
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("put pointer dict: %v", err)
+	}
+	got, err := store.GetDictBytes(ctx, id)
+	if err != nil || !bytes.Equal(got, payload) {
+		_ = store.Close()
+		t.Fatalf("get pointer dict mismatch: len=%d err=%v", len(got), err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+	got2, err := reopen.GetDictBytes(ctx, id)
+	if err != nil || !bytes.Equal(got2, payload) {
+		t.Fatalf("reopen pointer dict mismatch: len=%d err=%v", len(got2), err)
+	}
+}
+
+func TestStorePublishRewriteLeafDictAtomicSingleCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	payload := bytes.Repeat([]byte("rewrite-leaf-dict|"), 200)
+	seqBefore := store.backend.State().CommitSeq
+	id, err := store.PublishRewriteLeafDict(ctx, payload, "outer_leaf", false)
+	if err != nil {
+		t.Fatalf("PublishRewriteLeafDict: %v", err)
+	}
+	if delta := store.backend.State().CommitSeq - seqBefore; delta != 1 {
+		t.Fatalf("PublishRewriteLeafDict CommitSeq delta=%d want 1", delta)
+	}
+	if cur, err := store.GetCurrentForClass(ctx, "outer_leaf"); err != nil || cur != id {
+		t.Fatalf("GetCurrentForClass=(%d,%v) want (%d,nil)", cur, err, id)
+	}
+	if useRaw, ok, err := store.GetLeafPayloadMode(ctx, id); err != nil || !ok || useRaw {
+		t.Fatalf("GetLeafPayloadMode=(%v,%v,%v) want (false,true,nil)", useRaw, ok, err)
+	}
+	if got, err := store.GetDictBytes(ctx, id); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("GetDictBytes mismatch: len=%d err=%v", len(got), err)
 	}
 }
 

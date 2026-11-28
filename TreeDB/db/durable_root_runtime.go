@@ -3383,17 +3383,15 @@ func durableDependencyPathV1(root, relative string) (string, error) {
 	return filepath.Join(root, clean), nil
 }
 
-// durableDependencyPathForKindV1 resolves transitive dictionary/template
-// dependencies against their sibling side-store roots in the public
-// <root>/{maindb,dictdb,templatedb} layout. Other dependencies remain relative
+// durableDependencyPathForKindV1 resolves transitive template
+// dependencies against their sibling side-store root in the public
+// <root>/{maindb,templatedb} layout. Other dependencies remain relative
 // to the publishing backend directory. A non-empty sideRoot is used by
 // snapshot restore while its extracted trees still have staging names.
 func durableDependencyPathForKindV1(mainDir, sideRoot string, kind rootpublication.ResourceKind, relative string) (string, error) {
 	root := mainDir
 	sideName := ""
 	switch kind {
-	case rootpublication.ResourceDictionary:
-		sideName = "dictdb"
 	case rootpublication.ResourceTemplate:
 		sideName = "templatedb"
 	}

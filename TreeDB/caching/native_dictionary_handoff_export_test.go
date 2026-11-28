@@ -196,31 +196,14 @@ func CheckNativeDictionaryHandoffForTest(db *DB, capture backenddb.NativeSemanti
 			receipt.Refunded = provider.releases > 0 && !provider.underGate
 		}
 	}()
-	// Bind the persisted definition's actual producer-owned index/file closure
-	// before entering maintenance. Release this independent diagnostic capture
-	// immediately: it must not supply the paired scope's read or pin authority.
-	resultErr = func() (captureErr error) {
-		resources, err := db.dictStore.(*dictdb.Store).CaptureDictionaryResources(context.Background(), dictID)
+	// Bind the persisted definition's SHA-256 directly from maindb's
+	// SystemRootPageID before entering maintenance.
+	resultErr = func() error {
+		dictBytes, err := db.dictStore.GetDictBytes(context.Background(), dictID)
 		if err != nil {
 			return err
 		}
-		defer func() { captureErr = errors.Join(captureErr, resources.ReleaseWithError()) }()
-		for _, token := range resources.Tokens() {
-			obligations := token.LogicalObligations()
-			if len(obligations) != 1 || obligations[0].Generation != dictID || obligations[0].FileID != dictID || obligations[0].Length == 0 {
-				return errors.New("persisted dictionary closure has the wrong definition identity")
-			}
-			receipt.DictionarySHA256 = obligations[0].Digest
-			switch token.LogicalLane() {
-			case "dictdb/index":
-				receipt.DictionaryIndex = token.Identity()
-			case "dictdb/value-log":
-				receipt.DictionaryFile = token.Identity()
-			}
-		}
-		if receipt.DictionaryIndex.ObjectID == ([16]byte{}) || receipt.DictionaryFile.ObjectID == ([16]byte{}) {
-			return errors.New("actual dictionary index/file identity unavailable")
-		}
+		receipt.DictionarySHA256 = sha256.Sum256(dictBytes)
 		return nil
 	}()
 	if resultErr != nil {
@@ -388,26 +371,35 @@ func CloseNativeDictionaryHandoffTestFixture(db *DB) error {
 func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, *backenddb.DB) {
 	t.Helper()
 	dir := filepath.Dir(original.dir)
-	store, err := dictdb.Open(filepath.Join(dir, "dictdb"), backenddb.Options{ChunkSize: 64 << 10})
-	if err != nil {
-		t.Fatal(err)
-	}
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir: filepath.Join(dir, "maindb"), CommandWAL: true,
 		Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true,
 		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1,
-		ValueLog: backenddb.ValueLogOptions{
-			DictLookup:          func(id uint64) ([]byte, error) { return store.GetDictBytes(context.Background(), id) },
-			DictCurrentForClass: store.GetCurrentForClass,
-			DictLeafPayloadMode: store.GetLeafPayloadMode,
-		},
 	})
 	if err != nil {
-		t.Fatal(errors.Join(err, store.Close()))
+		t.Fatal(err)
 	}
+	store, err := dictdb.Open(filepath.Join(dir, "dictdb"), backenddb.Options{ChunkSize: 64 << 10})
+	if err != nil {
+		t.Fatal(errors.Join(err, backend.Close()))
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	backend.SetDictCallbacks(
+		func(id uint64) ([]byte, error) { return store.GetDictBytes(context.Background(), id) },
+		store.GetCurrentForClass,
+		store.GetLeafPayloadMode,
+		store.PutDictBytes,
+		store.SetCurrentForClass,
+		store.SetLeafPayloadMode,
+		store.PublishRewriteLeafDict,
+	)
 	owner := transactionowner.New()
 	if err := backend.BindPrivateCOWOwner(owner); err != nil {
-		t.Fatal(errors.Join(err, backend.Close(), store.Close()))
+		t.Fatal(errors.Join(err, backend.Close()))
 	}
 	db, err := Open(dir, backend, Options{
 		TransactionOwner: owner, MemtableMode: "cow_ordered", ExternalCommandWAL: true,
@@ -417,7 +409,7 @@ func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, 
 		ValueLogGenerationLeafSegmentTargetBytes: 8 << 20,
 	})
 	if err != nil {
-		t.Fatal(errors.Join(err, backend.Close(), store.Close()))
+		t.Fatal(errors.Join(err, backend.Close()))
 	}
 	db.SetDictStore(store)
 	t.Cleanup(func() {

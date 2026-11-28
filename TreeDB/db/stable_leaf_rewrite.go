@@ -29,33 +29,7 @@ type rewriteStableOuterLeafCapture struct {
 	metadataCharge, tokensCharge, registrationCharge, dictionaryCharge, templateCharge uint64
 }
 
-func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
-	if capture == nil || dictID == 0 || len(dictionary) == 0 {
-		return nil
-	}
-	for _, id := range capture.dictionaryIDs {
-		if id == dictID {
-			return nil
-		}
-	}
-	if err := capture.reserveID(&capture.dictionaryIDs, &capture.dictionaryCharge); err != nil {
-		return err
-	}
-	var provider StableDictionaryResourceProvider
-	if capture.writer != nil && capture.writer.stableDictionaryResourceProvider != nil {
-		provider = capture.writer.stableDictionaryResourceProvider()
-	}
-	resources, err := captureStableDictionaryResources(ctx, provider, dictID, dictionary, capture.metadata)
-	if err != nil {
-		return err
-	}
-	if resources == nil {
-		return fmt.Errorf("%w: dictionary %d has no stable resource closure", rootpublication.ErrUnresolvedResource, dictID)
-	}
-	if err := capture.builder.Merge(resources); err != nil {
-		return errors.Join(err, resources.ReleaseWithError())
-	}
-	capture.dictionaryIDs = append(capture.dictionaryIDs, dictID)
+func (capture *rewriteStableOuterLeafCapture) captureDictionary(_ context.Context, _ uint64, _ []byte) error {
 	return nil
 }
 
