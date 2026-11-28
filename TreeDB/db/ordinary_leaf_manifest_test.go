@@ -758,6 +758,240 @@ func TestBindPublicationLeafManifestPackedProjection(t *testing.T) {
 	}
 }
 
+// TestBindPublicationLeafManifestOuterLeafProjection verifies that
+// bindPublicationLeafManifest projects unreachable retired outer-leaf files
+// across both ResourceOuterLeafLog and ResourceOuterLeafPack (single-kind and
+// mixed) while preserving fail-closed refusal for any reachable omitted file
+// and leaking zero physical pins on both projection and error paths.
+func TestBindPublicationLeafManifestOuterLeafProjection(t *testing.T) {
+	for _, scenario := range []struct {
+		name               string
+		includeLiveRaw     bool
+		includeRetiredRaw  bool
+		includeRetiredPack bool
+		includeLivePack    bool
+		omitLiveFromMan    bool
+		wantErrUnresolved  bool
+	}{
+		{
+			name:              "unreachable_retired_raw_leaf_log_is_projected",
+			includeLiveRaw:    true,
+			includeRetiredRaw: true,
+		},
+		{
+			name:              "reachable_omitted_raw_leaf_log_refuses_publication",
+			includeLiveRaw:    true,
+			omitLiveFromMan:   true,
+			wantErrUnresolved: true,
+		},
+		{
+			name:               "mixed_unreachable_raw_and_pack_are_projected",
+			includeLiveRaw:     true,
+			includeRetiredRaw:  true,
+			includeRetiredPack: true,
+		},
+		{
+			name:              "mixed_unreachable_raw_with_reachable_pack_refuses",
+			includeRetiredRaw: true,
+			includeLivePack:   true,
+			omitLiveFromMan:   true,
+			wantErrUnresolved: true,
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{
+				Dir:                        dir,
+				IndexOuterLeavesInValueLog: true,
+				DisableBackgroundPrune:     true,
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+			leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+			database.SetLeafPageLog(leafLog)
+			registry := database.valueLogIdentityPins
+			t.Cleanup(func() {
+				if database != nil {
+					_ = database.Close()
+				}
+				_ = leafLog.Close()
+				if got := registry.ActivePins(); got != 0 {
+					t.Errorf("retained stable physical pins after close: %d", got)
+				}
+				if err := registry.CleanupError(); err != nil {
+					t.Error(err)
+				}
+			})
+
+			writeLeafGenerationKeys(t, database, "outer-leaf-proj", 256, 'a')
+			livePath, liveTaggedID := currentLeafSegmentOrFatal(t, leafLog)
+			liveRawID := page.ValueLogSegmentID(liveTaggedID)
+
+			retiredRawPath, retiredRawTaggedID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 234)
+			retiredPackPath, retiredPackTaggedID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 235)
+			promotedPath, promotedTaggedID := createLeafGenerationTestSegment(t, LeafLogDirPath(dir), rewriteLeafLogLaneID, 236)
+			if err := os.WriteFile(retiredRawPath, []byte("retired-raw-leaf-segment"), 0o600); err != nil {
+				t.Fatalf("write retired raw leaf: %v", err)
+			}
+			if err := os.WriteFile(retiredPackPath, []byte("retired-pack-segment"), 0o600); err != nil {
+				t.Fatalf("write retired pack: %v", err)
+			}
+			if err := os.WriteFile(promotedPath, []byte("promoted-pack-segment"), 0o600); err != nil {
+				t.Fatalf("write promoted pack: %v", err)
+			}
+			promotedRawID := page.ValueLogSegmentID(promotedTaggedID)
+
+			addOuterLeafToken := func(builder *rootpublication.StableResourceSetBuilder, kind rootpublication.ResourceKind, path string, taggedID uint32) rootpublication.StableIdentity {
+				t.Helper()
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatalf("open %s: %v", path, err)
+				}
+				defer f.Close()
+				logicalLane := "leaf-generation-pack"
+				reachability := rootpublication.ReachabilityOuterLeafPackedPointer
+				if kind == rootpublication.ResourceOuterLeafLog {
+					logicalLane = "db/outer-leaf-raw"
+					reachability = rootpublication.ReachabilityOuterLeafRawPointer
+				}
+				fileIdentity, err := rootpublication.StableIdentityFromFile(f)
+				if err != nil {
+					t.Fatalf("StableIdentityFromFile(%s): %v", path, err)
+				}
+				if err := registry.Observe(fileIdentity); err != nil {
+					t.Fatalf("registry.Observe(%s): %v", path, err)
+				}
+				gen := uint64(taggedID)
+				token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+					Kind:                kind,
+					LogicalLane:         logicalLane,
+					ResourceID:          strconv.FormatUint(gen, 10),
+					Generation:          gen,
+					DiagnosticPath:      filepath.Base(path),
+					File:                f,
+					Frontier:            rootpublication.DurableFrontier{Bytes: 1},
+					Digest:              sha256.Sum256([]byte(path)),
+					Reachability:        reachability,
+					PinRegistry:         registry,
+					OriginalObservation: registry,
+				})
+				if err != nil {
+					t.Fatalf("NewStableResourceToken(%s, %d): %v", kind, taggedID, errors.Join(err, registry.Unobserve(fileIdentity)))
+				}
+				identity := token.Identity()
+				if err := builder.Add(token); err != nil {
+					token.Release()
+					t.Fatalf("builder.Add(%s, %d): %v", kind, taggedID, err)
+				}
+				return identity
+			}
+
+			var liveRawIdentity, retiredRawIdentity, retiredPackIdentity, promotedPackIdentity rootpublication.StableIdentity
+			builder := rootpublication.NewStableResourceSetBuilder()
+			if scenario.includeRetiredRaw {
+				retiredRawIdentity = addOuterLeafToken(builder, rootpublication.ResourceOuterLeafLog, retiredRawPath, retiredRawTaggedID)
+			}
+			if scenario.includeLiveRaw {
+				liveRawIdentity = addOuterLeafToken(builder, rootpublication.ResourceOuterLeafLog, livePath, liveTaggedID)
+			}
+			if scenario.includeRetiredPack {
+				retiredPackIdentity = addOuterLeafToken(builder, rootpublication.ResourceOuterLeafPack, retiredPackPath, retiredPackTaggedID)
+			}
+			if scenario.includeLivePack {
+				_ = addOuterLeafToken(builder, rootpublication.ResourceOuterLeafPack, livePath, liveTaggedID)
+			}
+			promotedPackIdentity = addOuterLeafToken(builder, rootpublication.ResourceOuterLeafPack, promotedPath, promotedTaggedID)
+
+			resources, err := builder.Freeze()
+			if err != nil {
+				builder.Abandon()
+				t.Fatalf("builder.Freeze: %v", err)
+			}
+
+			state := database.state.Load()
+			if state == nil || state.LeafGenerations == nil || state.LeafGenerations.sourceManifest == nil {
+				resources.Release()
+				t.Fatal("missing source leaf-generation manifest")
+			}
+			packManifest := state.LeafGenerations.sourceManifest.clone()
+			if scenario.omitLiveFromMan {
+				for i := range packManifest.Generations {
+					if slices.Contains(packManifest.Generations[i].FileIDs, liveRawID) {
+						packManifest.Generations[i].FileIDs = nil
+					}
+				}
+			}
+
+			cut := errors.New("reached stable manifest preparation after outer-leaf projection")
+			origStore := database.leafGenerationManifestStore
+			stubStore := &leafGenerationManifestStore{
+				leafDir:            LeafLogDirPath(dir),
+				registry:           database.valueLogIdentityPins,
+				mode:               leafGenerationManifestStable,
+				stableCapability:   func() bool { return true },
+				durabilityCounters: origStore.durabilityCounters,
+				hooks: leafGenerationManifestStoreHooks{
+					BeforeTempCreate: func() error {
+						if scenario.includeRetiredRaw {
+							if got := registry.PinCount(retiredRawIdentity); got != 0 {
+								return fmt.Errorf("projected retired raw leaf still pinned at manifest prep: pins=%d", got)
+							}
+						}
+						if scenario.includeRetiredPack {
+							if got := registry.PinCount(retiredPackIdentity); got != 0 {
+								return fmt.Errorf("projected retired pack still pinned at manifest prep: pins=%d", got)
+							}
+						}
+						if scenario.includeLiveRaw {
+							if got := registry.PinCount(liveRawIdentity); got == 0 {
+								return fmt.Errorf("live raw leaf lost pin before manifest prep")
+							}
+						}
+						if got := registry.PinCount(promotedPackIdentity); got != 1 {
+							return fmt.Errorf("promoted pack pin count at manifest prep=%d, want 1 (intermediate set leaked?)", got)
+						}
+						return cut
+					},
+				},
+			}
+			parentDir, err := os.Open(LeafLogDirPath(dir))
+			if err != nil {
+				resources.Release()
+				t.Fatalf("open leaf dir: %v", err)
+			}
+			stubStore.parent = parentDir
+			database.leafGenerationManifestStore = stubStore
+			defer func() {
+				database.leafGenerationManifestStore = origStore
+				_ = parentDir.Close()
+			}()
+
+			next := page.MetaPageBody{
+				CommitSeq:        state.CommitSeq + 1,
+				UserRootPageID:   state.RootPageID,
+				SystemRootPageID: state.SystemRootPageID,
+			}
+			opts := finalizeCommitOptions{
+				packedRootPublication: &packedRootPublication{
+					afterActivation:          func() {},
+					afterManifestPreparation: func() error { return nil },
+				},
+			}
+			_, _, err = database.bindPublicationLeafManifest(resources, database.idx.Load(), next, packManifest, []uint32{promotedRawID}, &opts)
+			if scenario.wantErrUnresolved {
+				want := fmt.Sprintf("publication leaf-generation manifest omits leaf file %d", liveRawID)
+				if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !strings.Contains(err.Error(), want) {
+					t.Fatalf("reachable omitted outer-leaf err=%v, want %q", err, want)
+				}
+			} else if !errors.Is(err, cut) {
+				t.Fatalf("unreachable retired outer-leaf files should have been projected before manifest prep, got err=%v", err)
+			}
+		})
+	}
+}
+
 // TestPackedLeafManifestProjectsGCRetiredPackAcrossConsecutivePacks reproduces
 // the end-to-end Linux sequence: Pack #1 -> overwrite keys -> LeafGenerationGC
 // retires Pack #1 while visibleBase still holds its ResourceOuterLeafPack token
