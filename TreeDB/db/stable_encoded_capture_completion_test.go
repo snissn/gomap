@@ -1,26 +1,16 @@
 package db
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
-	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"github.com/snissn/gomap/TreeDB/page"
 	"os"
 	"testing"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
-
-type partialEncodedTemplateProvider struct {
-	*testStableTemplateProvider
-	resources *rootpublication.StableResourceSet
-	err       error
-}
-
-func (p *partialEncodedTemplateProvider) CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error) {
-	return p.resources, p.err
-}
 
 type partialStableLeafProvider struct {
 	LeafPageLog
@@ -34,12 +24,12 @@ func (p *partialStableLeafProvider) AppendLeafPageWithStableResources([]byte) (p
 func (p *partialStableLeafProvider) AppendPreparedLeafPageChildRefsWithStableResources([][]byte, [][]byte, []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
 	return nil, p.resources, p.err
 }
+
 func TestEncodedProviderErrorDisposesReturnedOriginal(t *testing.T) {
-	for _, route := range []string{"encoded-provider", "production-leaf-wrapper", "production-child-ref-wrapper", "nil-result-cleanup-receipt", "encoded-provider-nil-receipt"} {
+	for _, route := range []string{"production-leaf-wrapper", "production-child-ref-wrapper", "nil-result-cleanup-receipt"} {
 		t.Run(route, func(t *testing.T) {
 			database, path := openDurableRootClosureDB3928(t)
 			owner := database.valueLogIdentityPins.MetadataOwner()
-			provider := newTestStableTemplateProvider(t, []byte("template-partial-original"))
 			file, err := os.Open(path)
 			if err != nil {
 				t.Fatal(err)
@@ -62,11 +52,12 @@ func TestEncodedProviderErrorDisposesReturnedOriginal(t *testing.T) {
 			}
 			operations := &rootCaptureCloseOperations{owner: owner, file: file, charge: charge, registry: database.valueLogIdentityPins, identity: identity}
 			operations.refs.Store(1)
+			payload := []byte("leaf-partial-original")
 			token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
 				MetadataOwner: owner, PinRegistry: database.valueLogIdentityPins, OwnedOperations: operations,
-				Kind: rootpublication.ResourceTemplate, LogicalLane: "templates", ResourceID: "partial-original", Generation: provider.templateID, DiagnosticPath: "original-template",
-				File: file, ContentSynced: true, Frontier: rootpublication.DurableFrontier{Bytes: 4096}, Reachability: rootpublication.ReachabilityTemplateGeneration,
-				LogicalObligations: []rootpublication.StableLogicalObligation{{Class: "template-generation", Kind: "template", Namespace: "test", Generation: provider.templateID, FileID: provider.templateID, Length: int64(len(provider.definition)), Reachability: rootpublication.ReachabilityTemplateGeneration, Digest: sha256.Sum256(provider.definition)}},
+				Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "leaf_vlog", ResourceID: "partial-original", Generation: 1, DiagnosticPath: "original-leaf",
+				File: file, ContentSynced: true, Frontier: rootpublication.DurableFrontier{Bytes: 4096}, Reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+				LogicalObligations: []rootpublication.StableLogicalObligation{{Class: "outer-leaf", Kind: "outer-leaf", Namespace: "test", Generation: 1, FileID: 1, Length: int64(len(payload)), Reachability: rootpublication.ReachabilityOuterLeafRawPointer, Digest: sha256.Sum256(payload)}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -89,34 +80,24 @@ func TestEncodedProviderErrorDisposesReturnedOriginal(t *testing.T) {
 				t.Fatal(err)
 			}
 			first := errors.New("provider returned original with failure")
-			partial := &partialEncodedTemplateProvider{testStableTemplateProvider: provider, resources: original, err: first}
 			prior := errors.New("preexisting unrelated background error")
 			database.retainOriginalCleanupError(prior)
+
+			returned, cause := original, first
+			if route == "nil-result-cleanup-receipt" {
+				returned = nil
+				cause = errors.Join(first, original.ReleaseWithError())
+			}
+			log := &leafPageLogWithRecordLengthHints{db: database, inner: &partialStableLeafProvider{resources: returned, err: cause}}
 			var result *rootpublication.StableResourceSet
-			if route == "encoded-provider" || route == "encoded-provider-nil-receipt" {
-				if route == "encoded-provider-nil-receipt" {
-					partial.resources = nil
-					partial.err = errors.Join(first, original.ReleaseWithError())
-				}
-				result, err = captureStableTemplateResourcesForDB(database, partial, partial, provider.templateID, owner)
+			if route == "production-child-ref-wrapper" {
+				_, result, err = log.AppendPreparedLeafPageChildRefsWithStableResources([][]byte{{1}}, [][]byte{{1}}, nil)
 			} else {
-				returned, cause := original, first
-				if route == "nil-result-cleanup-receipt" {
-					returned = nil
-					cause = errors.Join(first, original.ReleaseWithError())
-				}
-				log := &leafPageLogWithRecordLengthHints{db: database, inner: &partialStableLeafProvider{resources: returned, err: cause}}
-				if route == "production-child-ref-wrapper" {
-					_, result, err = log.AppendPreparedLeafPageChildRefsWithStableResources([][]byte{{1}}, [][]byte{{1}}, nil)
-				} else {
-					_, result, err = log.AppendLeafPageWithStableResources(nil)
-				}
+				_, result, err = log.AppendLeafPageWithStableResources(nil)
 			}
 			if result != nil || !errors.Is(err, first) || !errors.Is(err, os.ErrClosed) || operations.closeCalls.Load() != 1 {
 				t.Fatalf("lost original result=%p err=%v actual Close attempts=%d", result, err, operations.closeCalls.Load())
 			}
-			// The returned original receipt is retained through the existing DB graph.
-
 			if !errors.Is(database.backgroundError(), prior) || !errors.Is(database.backgroundError(), os.ErrClosed) {
 				t.Fatal("DB lost original cleanup custody")
 			}
@@ -130,55 +111,37 @@ func TestEncodedProviderErrorDisposesReturnedOriginal(t *testing.T) {
 	}
 }
 
-func TestSelectedEncodedClosureAdmitsAndPreservesExactBytes(t *testing.T) {
-	provider := newTestStableTemplateProvider(t, []byte("template-selected-original"))
-	original, err := provider.CaptureTemplateResources(context.Background(), provider.templateID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer original.Release()
-	var owner retainedalloc.Owner
-	owner.Initialize(0)
-	selected, err := rootpublication.ImportStableResourceSetMetadata(&owner, original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer selected.Release()
-	budget := &refCountsBudget{cap: 1 << 24}
-	enrollment, err := owner.Enroll(budget)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer enrollment.Close()
-	before := owner.Bytes()
-	budget.cap = budget.bytes
-	if err = ValidateStableTemplateResourceClosure(selected, provider.templateID, provider.definition); !errors.Is(err, retainedalloc.ErrCapacity) || owner.Bytes() != before {
-		t.Fatalf("admission %v bytes=%d/%d", err, owner.Bytes(), before)
-	}
-	budget.cap = 1 << 24
-	if err = ValidateStableTemplateResourceClosure(selected, provider.templateID, provider.definition); err != nil {
-		t.Fatal(err)
-	}
-	if owner.Bytes() != before {
-		t.Fatal("validation scratch retained")
-	}
-	if err = validateStableEncodedResourceClosure(selected, rootpublication.ReachabilityTemplateGeneration, provider.templateID, int64(len(provider.definition)), [32]byte{1}); !errors.Is(err, rootpublication.ErrResourceConflict) {
-		t.Fatalf("changed digest accepted: %v", err)
-	}
-}
-
 // An ordinary refusal with successful cleanup is an operation failure, not
 // fatal physical cleanup debt. The wrapper retains only actual original receipts.
 func TestStableAppendRefusalDoesNotPoisonDB(t *testing.T) {
 	for _, returned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "nil-result", true: "consumed-original"}[returned], func(t *testing.T) {
-			database, _ := openDurableRootClosureDB3928(t)
-			provider := newTestStableTemplateProvider(t, []byte("ordinary-refusal"))
+			database, path := openDurableRootClosureDB3928(t)
 			var resources *rootpublication.StableResourceSet
-			var err error
 			if returned {
-				resources, err = provider.CaptureTemplateResources(context.Background(), provider.templateID)
+				file, err := os.Open(path)
 				if err != nil {
+					t.Fatal(err)
+				}
+				payload := []byte("ordinary-refusal")
+				token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+					Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "leaf_vlog", ResourceID: "ordinary-refusal", Generation: 1, DiagnosticPath: "ordinary-refusal",
+					File: file, ContentSynced: true, Frontier: rootpublication.DurableFrontier{Bytes: 4096}, Reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+					Digest: sha256.Sum256(payload),
+				})
+				_ = file.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer)
+				if err := builder.Add(token); err != nil {
+					token.Release()
+					builder.Abandon()
+					t.Fatal(err)
+				}
+				resources, err = builder.Freeze()
+				if err != nil {
+					builder.Abandon()
 					t.Fatal(err)
 				}
 			}

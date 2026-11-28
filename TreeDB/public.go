@@ -194,7 +194,6 @@ type DB struct {
 	cowTxnWrite                          func(*caching.Batch, bool) error
 	cached                               *caching.DB
 	backend                              *db.DB
-	templateDB                           *DB
 	writePath                            writePathInfo
 	lifecycleMu                          sync.RWMutex
 	commandWALCached                     bool
@@ -894,14 +893,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if chunkSizeDefaulted {
 		opts.ChunkSize = defaultChunkSize
 	}
-	dictChunkSize := opts.DictDBChunkSize
-	if dictChunkSize <= 0 {
-		dictChunkSize = defaultDictChunkSize
-	}
-	templateChunkSize := opts.TemplateDBChunkSize
-	if templateChunkSize <= 0 {
-		templateChunkSize = defaultTemplateChunkSize
-	}
 	if opts.KeepRecent == 0 && !opts.ReadOnly {
 		opts.KeepRecent = 1
 	}
@@ -918,7 +909,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 	rootDir := layout.rootDir
 	maindbDir := layout.mainDir
-	templatedbDir := layout.templatedbDir
 
 	// Apply persisted index encoding knobs so tools and apps can open existing
 	// dirs without needing to re-specify format-affecting flags.
@@ -979,9 +969,9 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		)
 	}
 
-	// Dictionaries live directly inside maindb's SystemRootPageID (always in
-	// index.db pager pages via ApplySystemOps), so dictionary compression works
-	// regardless of DisableSideStores.
+	// Dictionaries and templates live directly inside maindb's SystemRootPageID
+	// (inline/chunked or optional raw value-log pointers), so both work without
+	// separate side-store directories regardless of DisableSideStores.
 
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
@@ -990,105 +980,23 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 			}
 			return nil, err
 		}
-		if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
-			if _, err := os.Stat(templatedbDir); err != nil {
-				if os.IsNotExist(err) {
-					return nil, fmt.Errorf("treedb: templatedb directory missing for read-only open: %s", templatedbDir)
-				}
-				return nil, err
-			}
-		}
 	} else {
 		dirs := []string{rootDir}
 		if maindbDir != rootDir {
 			dirs = append(dirs, maindbDir)
-		}
-		if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
-			dirs = append(dirs, templatedbDir)
 		}
 		if err := ensureOpenStorageLayoutDirs(0o755, filepath.Join(maindbDir, "index.db"), dirs...); err != nil {
 			return nil, fmt.Errorf("treedb: ensure public storage layout: %w", err)
 		}
 	}
 
-	var templateDB *DB
-	var templateStore *templatedb.Store
-	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
-		templateOpts := opts
-		templateOpts.PhysicalSnapshotSideStoreCapture = nil
-		templateOpts.NegativeLookupFilterBytes = 0
-		templateOpts.Dir = templatedbDir
-		templateOpts.ResolvedProfile = ""
-		templateOpts.DeprecatedProfileAlias = ""
-		templateOpts.UnsafeBenchmarkProfile = false
-		templateOpts.CommandWAL = false
-		templateOpts.DisableSideStores = true
-		templateOpts.DisableBackgroundPrune = true
-		// templatedb is an internal side store; avoid inheriting the main DB's
-		// outer-leaf value-log layout (not needed here, and it adds unnecessary
-		// value-log churn).
-		templateOpts.IndexOuterLeavesInValueLog = false
-		templateOpts.FreshSystemPagerLeaves = false
-		templateOpts.FreshRelaxedStandaloneWALStream = false
-		templateOpts.ValueLog.DictLookup = nil
-		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
-		// templatedb uses batch.Set for small routing/index entries. Do not
-		// propagate ForcePointers from the main DB into this internal store.
-		templateOpts.ValueLog.ForcePointers = false
-		templateOpts.ValueLog.PointerThreshold = 0
-		templateOpts.ValueLog.DomainInlineThresholds = nil
-		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
-		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
-		templateOpts.ValueLog.TemplateMode = template.TemplateOff
-		templateOpts.ValueLog.TemplateLookup = nil
-		templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
-		templateOpts.ChunkSize = templateChunkSize
-
-		var err error
-		templateDB, err = openResolved(templateOpts)
-		if err != nil {
-			return nil, err
-		}
-
+	if opts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
 		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
-		templateStore = templatedb.New(templateKV{db: templateDB}, templatedb.Config{
-			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
-			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
-		})
 		decodeOpts := template.DecodeOptions{MaxGaps: tcfg.MaxGaps, MaxDecodedBytes: tcfg.MaxDecodedBytes, DefCacheSize: tcfg.DefCacheSize}
 		if decodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
 			decodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
 		}
-		opts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
-			return templateStore.GetTemplateDef(context.Background(), templateID)
-		}
 		opts.ValueLog.TemplateDecodeOptions = decodeOpts
-	}
-	previousSideCapture := opts.PhysicalSnapshotSideStoreCapture
-	opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
-		switch name {
-		case "templatedb":
-			if templateDB != nil {
-				if err := templateDB.beginPublicOperation(); err != nil {
-					return nil, err
-				}
-				defer templateDB.lifecycleMu.RUnlock()
-				if !opts.ReadOnly {
-					if templateDB.cached != nil {
-						if err := templateDB.checkpointCachedForPublicCommandWAL(); err != nil {
-							return nil, err
-						}
-					} else if err := templateDB.backend.Checkpoint(); err != nil {
-						return nil, err
-					}
-				}
-				return templateDB.backend.CapturePhysicalSnapshotCutV1(ctx)
-			}
-		}
-		if previousSideCapture != nil {
-			return previousSideCapture(ctx, name)
-		}
-		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
 	// COW foreground authority and physical DATA sealing remain distinct. The
 	// existing DATA publisher is shared by cached and ordinary backend callers.
@@ -1110,16 +1018,21 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	opts.Dir = maindbDir
 	backend, err := openBackend(opts)
 	if err != nil {
-		if templateDB != nil {
-			_ = templateDB.Close()
-		}
 		return nil, err
 	}
 	dictStore := dictdb.New(backend)
 	wireMainBackendDictCallbacks(backend, dictStore, opts.ReadOnly)
+	var templateStore *templatedb.Store
+	if opts.ValueLog.TemplateMode != template.TemplateOff {
+		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
+		templateStore = templatedb.NewBackend(backend, templatedb.Config{
+			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
+			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
+		})
+	}
 
 	if opts.ReadOnly {
-		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
+		return &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), backend: backend, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -1137,9 +1050,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	if nativeSemanticOwner {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
-			if templateDB != nil {
-				_ = templateDB.Close()
-			}
 			return nil, err
 		}
 	}
@@ -1237,9 +1147,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
-		if templateDB != nil {
-			_ = templateDB.Close()
-		}
 		return nil, err
 	}
 
@@ -1247,9 +1154,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()
-			if templateDB != nil {
-				_ = templateDB.Close()
-			}
 			return nil, err
 		}
 	}
@@ -1257,7 +1161,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	backend.SetSystemRootMutationFence(cached.BeginSystemRootMutation)
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	backend.SetPostValueLogGCHook(func() error {
 		return cached.ReconcileRetiredValueLogReader()
 	})
@@ -1936,11 +1840,6 @@ func (db *DB) Close() error {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
 	}
-	if db.templateDB != nil {
-		err = errors.Join(err, db.templateDB.Close())
-		db.templateDB = nil
-	}
-
 	return errors.Join(err, db.backgroundError())
 }
 

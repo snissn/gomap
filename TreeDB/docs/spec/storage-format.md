@@ -106,14 +106,14 @@ A TreeDB deployment uses:
 - optional single-group Raft provider state under
   `raftcluster/nodes/<node-id>/groups/<group-id>/` with separate `log/`,
   `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
-- persistent value-log dictionary metadata and payloads stored directly inside
-  `maindb/index.db` `SystemRootPageID` (`dict/bytes/<id>`, 2 KiB inline chunks
-  under `dict/chunk/<id>/<idx>`, or raw `dictID=0` `ValuePtr` records in
+- persistent value-log dictionary and template-definition metadata and payloads
+  stored directly inside `maindb/index.db` `SystemRootPageID` (`dict/bytes/<id>`,
+  `dict/chunk/<id>/<idx>`, `template/def/<id>`, `template/chunk/<id>/<idx>`,
+  `template/fp/<fp>`, or raw `dictID=0` `ValuePtr` records in
   `maindb/value_vlog/` lane `SystemValueLogLaneID`), committed either directly
   via `ApplySystemOps` or piggybacked atomically onto user-root commits via
   `StageSystemOps` (activating only after `index.db` sync whenever command-WAL
-  durability is enabled),
-- optional side-store DB (`templatedb`) using its own `index.db` file.
+  durability is enabled).
 
 ### Vector-partition manifests (`vector_partitions/`)
 

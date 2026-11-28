@@ -1649,7 +1649,7 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 		id    string
 	}
 	children := []childSpec{
-		{ReachabilityTemplateGeneration, ResourceTemplate, "template-9"},
+		{ReachabilityOuterLeafPackedPointer, ResourceOuterLeafPack, "leaf-9"},
 		{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "vector-11"},
 		{ReachabilityColumnManifest, ResourceColumnAsset, "column-13"},
 	}
@@ -1738,10 +1738,10 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 
 func TestCompositeRegistrarRejectsIDUnrelatedToCoveredChildResource(t *testing.T) {
 	dir := t.TempDir()
-	childBuilder := NewStableResourceSetBuilder(ReachabilityTemplateGeneration)
+	childBuilder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
 	if err := childBuilder.Add(stableTokenFixture(
-		t, dir, "template-7", 7, 4, ReachabilityTemplateGeneration, "template-7",
-		func(spec *StableResourceSpec) { spec.Kind = ResourceTemplate },
+		t, dir, "leaf-7", 7, 4, ReachabilityOuterLeafPackedPointer, "leaf-7",
+		func(spec *StableResourceSpec) { spec.Kind = ResourceOuterLeafPack },
 	)); err != nil {
 		t.Fatal(err)
 	}
@@ -1751,9 +1751,9 @@ func TestCompositeRegistrarRejectsIDUnrelatedToCoveredChildResource(t *testing.T
 	}
 	defer child.Release()
 
-	registrar := NewStableCompositeRegistrar(ReachabilityTemplateGeneration)
+	registrar := NewStableCompositeRegistrar(ReachabilityOuterLeafPackedPointer)
 	defer registrar.Abandon()
-	if err := registrar.RegisterChild(ReachabilityTemplateGeneration, "template-999", child); !errors.Is(err, ErrResourceConflict) {
+	if err := registrar.RegisterChild(ReachabilityOuterLeafPackedPointer, "leaf-999", child); !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("RegisterChild error=%v want ErrResourceConflict", err)
 	}
 }

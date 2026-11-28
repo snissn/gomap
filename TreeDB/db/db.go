@@ -229,6 +229,7 @@ type DB struct {
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
 	valueLogDictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
 	systemDictCache                sync.Map
+	systemTemplateCache            sync.Map
 	systemVLogMu                   sync.Mutex
 	systemVLogWriter               *valuelog.Writer
 	systemVLogFileID               uint32
@@ -2920,7 +2921,20 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		dictLookup = db.LookupSystemDictBytes
 	}
 	vm.SetDictLookup(dictLookup)
-	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
+	templateLookup := opts.ValueLog.TemplateLookup
+	if templateLookup == nil {
+		templateLookup = db.LookupSystemTemplateDef
+	}
+	templateDecodeOpts := opts.ValueLog.TemplateDecodeOptions
+	if templateDecodeOpts == (template.DecodeOptions{}) {
+		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
+		templateDecodeOpts = template.DecodeOptions{
+			MaxGaps:         tcfg.MaxGaps,
+			MaxDecodedBytes: tcfg.MaxDecodedBytes,
+			DefCacheSize:    tcfg.DefCacheSize,
+		}
+	}
+	vm.SetTemplateLookup(templateLookup, templateDecodeOpts)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -3191,7 +3205,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	// Reapply decode hooks without replacing that bounded inventory with a
 	// directory-wide discovery pass.
 	vm.SetDictLookup(dictLookup)
-	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
+	vm.SetTemplateLookup(templateLookup, templateDecodeOpts)
 	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)
 	releaseRecoverySet := func() error {

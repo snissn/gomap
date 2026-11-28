@@ -1,33 +1,19 @@
 package db
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/pager"
 	"os"
-	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
-	templ "github.com/snissn/gomap/TreeDB/template"
-	"strings"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
-
-// StableTemplateResourceProvider captures the exact durable transitive closure
-// needed to decode one template generation.
-type StableTemplateResourceProvider interface {
-	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
-}
-
-type StableTemplateMetadataResourceProvider interface {
-	CaptureTemplateResourcesWithMetadata(context.Context, uint64, *retainedalloc.Owner) (*rootpublication.StableResourceSet, error)
-}
 
 // StableResourceCaptureLease admits a producer that must retain DB-scoped
 // physical identity and namespace authority while it constructs a stable
@@ -111,187 +97,6 @@ func (db *DB) AcquireStableResourceCaptureLease() (*StableResourceCaptureLease, 
 		return nil, err
 	}
 	return &StableResourceCaptureLease{db: db}, nil
-}
-
-// ValidateStableTemplateResourceClosure binds the immutable definition selected
-// by an encoder to every physical resource returned by a template provider.
-func ValidateStableTemplateResourceClosure(resources *rootpublication.StableResourceSet, templateID uint64, definition []byte) error {
-	if resources == nil || templateID == 0 || len(definition) == 0 {
-		return fmt.Errorf("%w: incomplete template resource closure", rootpublication.ErrUnresolvedResource)
-	}
-	validID := false
-	for salt := 0; salt <= 255; salt++ {
-		if templ.TemplateID(definition, byte(salt)) == templateID {
-			validID = true
-			break
-		}
-	}
-	if !validID {
-		return fmt.Errorf("%w: template %d does not identify the selected definition", rootpublication.ErrResourceConflict, templateID)
-	}
-	return validateStableEncodedResourceClosure(resources, rootpublication.ReachabilityTemplateGeneration, templateID, int64(len(definition)), sha256.Sum256(definition))
-}
-
-// Every relevant physical descriptor must independently contain the selected
-// immutable bytes. Streaming avoids retaining any inherited logical corpus.
-func validateStableEncodedResourceClosure(resources *rootpublication.StableResourceSet, field rootpublication.ReachabilityField, id uint64, length int64, digest [32]byte) (retErr error) {
-	type key struct {
-		kind           rootpublication.ResourceKind
-		lane, resource string
-		generation     uint64
-	}
-	keyOf := func(descriptor rootpublication.StableResourcePhysicalDescriptor) key {
-		return key{descriptor.Kind, descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.Generation}
-	}
-	metadata := resources.MetadataOwner()
-	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
-	if captureErr != nil {
-		return captureErr
-	}
-	defer func() { retErr = errors.Join(retErr, diagnostics.CloseWithError()) }()
-	type match struct {
-		physical key
-		found    bool
-	}
-	physical := diagnostics.Physical()
-	charge := retainedalloc.AllocationCharge(uint64(len(physical)) * uint64(unsafe.Sizeof(match{})))
-	if metadata != nil {
-		if err := metadata.AddPending(charge); err != nil {
-			return err
-		}
-	}
-	matched := make([]match, 0, len(physical))
-	defer func() {
-		clear(matched)
-		matched = nil
-		if metadata != nil {
-			metadata.RemovePending(charge)
-		}
-	}()
-	for _, descriptor := range physical {
-		for _, reachable := range descriptor.ReachabilityFields() {
-			if reachable == field {
-				matched = append(matched, match{physical: keyOf(descriptor)})
-				break
-			}
-		}
-	}
-	if len(matched) == 0 {
-		return fmt.Errorf("%w: %s %d closure has no resource", rootpublication.ErrUnresolvedResource, field, id)
-	}
-	compare := func(a, b key) int {
-		if a.kind < b.kind {
-			return -1
-		}
-		if a.kind > b.kind {
-			return 1
-		}
-		if a.lane < b.lane {
-			return -1
-		}
-		if a.lane > b.lane {
-			return 1
-		}
-		if a.resource < b.resource {
-			return -1
-		}
-		if a.resource > b.resource {
-			return 1
-		}
-		if a.generation < b.generation {
-			return -1
-		}
-		if a.generation > b.generation {
-			return 1
-		}
-		return 0
-	}
-	slices.SortFunc(matched, func(a, b match) int { return compare(a.physical, b.physical) })
-	visit := func(descriptor rootpublication.StableResourcePhysicalDescriptor, obligation rootpublication.StableLogicalObligation) error {
-		index, relevant := slices.BinarySearchFunc(matched, keyOf(descriptor), func(m match, k key) int { return compare(m.physical, k) })
-		if relevant && obligation.Generation == id && obligation.FileID == id && obligation.Offset == 0 && obligation.Length == length && obligation.Reachability == field && obligation.Digest == digest {
-			matched[index].found = true
-		}
-		return nil
-	}
-	var walkErr error
-	if metadata != nil {
-		walkErr = diagnostics.WalkLogicalObligations(visit)
-	} else {
-		walkErr = resources.WalkLogicalObligations(visit)
-	}
-	if walkErr != nil {
-		return walkErr
-	}
-	for _, entry := range matched {
-		if !entry.found {
-			return fmt.Errorf("%w: %s %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, field, id)
-		}
-	}
-	return nil
-}
-
-func disposeEncodedCapture(db *DB, resources *rootpublication.StableResourceSet) error {
-	if db != nil {
-		return db.releaseCapturedRootResources(resources)
-	}
-	if resources == nil {
-		return nil
-	}
-	return resources.ReleaseWithError()
-}
-
-func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
-	return captureStableTemplateResourcesForDB(nil, provider, store, templateID, owners...)
-}
-
-func captureStableTemplateResourcesForDB(db *DB, provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
-	defer func() {
-		if retErr == nil {
-			return
-		}
-		if result != nil {
-			original := result
-			result = nil
-			retErr = errors.Join(retErr, disposeEncodedCapture(db, original))
-		}
-		if db != nil && rootpublication.IsOriginalCleanupError(retErr) {
-			db.retainResourceCleanupError(retErr)
-		}
-	}()
-
-	if templateID == 0 {
-		return nil, nil
-	}
-	if provider == nil || store == nil {
-		return nil, fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
-	}
-	definition, err := store.GetTemplateDef(context.Background(), templateID)
-	if err != nil {
-		return nil, err
-	}
-	var resources *rootpublication.StableResourceSet
-	if len(owners) == 0 || owners[0] == nil {
-		resources, err = provider.CaptureTemplateResources(context.Background(), templateID)
-	} else {
-		if admitted, ok := provider.(StableTemplateMetadataResourceProvider); ok {
-			resources, err = admitted.CaptureTemplateResourcesWithMetadata(context.Background(), templateID, owners[0])
-		} else {
-			resources, err = provider.CaptureTemplateResources(context.Background(), templateID)
-			if err == nil && resources != nil {
-				original := resources
-				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
-				err = errors.Join(err, disposeEncodedCapture(db, original))
-			}
-		}
-	}
-	if err != nil {
-		return resources, err
-	}
-	if err := ValidateStableTemplateResourceClosure(resources, templateID, definition); err != nil {
-		return resources, err
-	}
-	return resources, nil
 }
 
 func (generation *indexGen) stableIndexNamespaceToken(dir string) (*rootpublication.StableNamespaceToken, error) {

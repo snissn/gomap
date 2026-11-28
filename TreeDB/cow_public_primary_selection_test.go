@@ -66,8 +66,8 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(opts.Dir, "dictdb")); !os.IsNotExist(err) {
 					t.Fatalf("unexpected dictdb side-store directory: %v", err)
 				}
-				if database.templateDB != nil {
-					t.Fatal("default disabled template policy changed")
+				if _, err := os.Stat(filepath.Join(opts.Dir, "templatedb")); !os.IsNotExist(err) {
+					t.Fatalf("unexpected templatedb side-store directory: %v", err)
 				}
 				var mu sync.Mutex
 				var authority []durabilitycut.Event

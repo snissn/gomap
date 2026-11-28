@@ -23,7 +23,6 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
-	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -856,38 +855,6 @@ func resolveMainDBDir(dir string) string {
 	return dir
 }
 
-type templateBackendKV struct {
-	db *treedbdb.DB
-}
-
-func (kv templateBackendKV) Get(key []byte) ([]byte, error) {
-	if kv.db == nil {
-		return nil, nil
-	}
-	return kv.db.Get(key)
-}
-
-func (kv templateBackendKV) SetSync(key, value []byte) error {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.SetSync(key, value)
-}
-
-func (kv templateBackendKV) DeleteSync(key []byte) error {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.DeleteSync(key)
-}
-
-func (kv templateBackendKV) NewBatch() templatedb.Batch {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.NewBatch()
-}
-
 func parseTemplateModeFlag(v string) (template.Mode, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "off", "false", "0":
@@ -933,84 +900,11 @@ func runVlogRewrite(dir string, args []string) {
 		opts.ValueLog.TemplateConfig.ColdSearchProbeEvery = *templateColdSearchProbeEvery
 	}
 
-	var closers []func() error
-	defer func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			_ = closers[i]()
-		}
-	}()
-
-	// Mirror vlog-gc dict lookup wiring so rewrite can decode/validate dict
-	// frames and, when applicable, reuse dict bytes during rewrite re-encoding.
-	dictDir := filepath.Join(rootDir, "dictdb")
-	dictIndexPath := filepath.Join(dictDir, "index.db")
-	if _, err := os.Stat(dictIndexPath); err == nil {
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: false}
-		applyPersistedFormatConfig(dictDir, &dictOpts)
-		dictOpts.DisableBackgroundPrune = true
-		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-		dictBackend, err := treedbdb.Open(dictOpts)
-		if err != nil {
-			fatalf("dictdb open: %v", err)
-		}
-		store := dictdb.New(dictBackend)
-		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-			return store.GetDictBytes(context.Background(), dictID)
-		}
-		opts.ValueLog.DictCurrentForClass = func(ctx context.Context, class string) (uint64, error) {
-			return store.GetCurrentForClass(ctx, class)
-		}
-		opts.ValueLog.DictLeafPayloadMode = func(ctx context.Context, dictID uint64) (bool, bool, error) {
-			return store.GetLeafPayloadMode(ctx, dictID)
-		}
-		opts.ValueLog.DictPut = func(ctx context.Context, dictBytes []byte) (uint64, error) {
-			return store.PutDictBytes(ctx, dictBytes)
-		}
-		opts.ValueLog.DictSetCurrentForClass = func(ctx context.Context, class string, dictID uint64) error {
-			return store.SetCurrentForClass(ctx, class, dictID)
-		}
-		opts.ValueLog.DictSetLeafPayloadMode = func(ctx context.Context, dictID uint64, useRawPages bool) error {
-			return store.SetLeafPayloadMode(ctx, dictID, useRawPages)
-		}
-		closers = append(closers, dictBackend.Close)
-	} else if !os.IsNotExist(err) {
-		fatalf("stat dictdb index: %v", err)
-	}
-
-	templateDir := filepath.Join(rootDir, "templatedb")
-	templateIndexPath := filepath.Join(templateDir, "index.db")
-	if _, err := os.Stat(templateIndexPath); err == nil {
-		templateReadOnly := templateMode == template.TemplateOff
-		templateOpts := treedbdb.Options{Dir: templateDir, ReadOnly: templateReadOnly}
-		applyPersistedFormatConfig(templateDir, &templateOpts)
-		templateOpts.DisableBackgroundPrune = true
-		templateOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-		templateOpts.ValueLog.TemplateMode = template.TemplateOff
-		templateOpts.ValueLog.TemplateLookup = nil
-		templateOpts.ValueLog.TemplateStore = nil
-
-		templateBackend, err := treedbdb.Open(templateOpts)
-		if err != nil {
-			fatalf("templatedb open: %v", err)
-		}
-		closers = append(closers, templateBackend.Close)
-		store := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
-		opts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
-			return store.GetTemplateDef(context.Background(), templateID)
-		}
-		if templateMode != template.TemplateOff {
-			opts.ValueLog.TemplateStore = store
-		}
-		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
-		opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{
-			MaxDecodedBytes: tcfg.MaxDecodedBytes,
-			MaxGaps:         tcfg.MaxGaps,
-			DefCacheSize:    tcfg.DefCacheSize,
-		}
-	} else if !os.IsNotExist(err) {
-		fatalf("stat templatedb index: %v", err)
-	} else if templateMode != template.TemplateOff {
-		fatalf("template-mode=%s requested but templatedb/index.db was not found in %s", *templateModeFlag, templateDir)
+	tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
+	opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{
+		MaxDecodedBytes: tcfg.MaxDecodedBytes,
+		MaxGaps:         tcfg.MaxGaps,
+		DefCacheSize:    tcfg.DefCacheSize,
 	}
 
 	stats, err := treedb.ValueLogRewriteOffline(opts)

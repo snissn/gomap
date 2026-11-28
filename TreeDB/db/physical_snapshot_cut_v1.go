@@ -357,18 +357,11 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 
 // CapturePhysicalSnapshotSideStoreV1 asks the registered store owner to flush
 // and capture its index. It never opens a second owner by pathname.
-func (db *DB) CapturePhysicalSnapshotSideStoreV1(ctx context.Context, name string) (*PhysicalSnapshotCutV1, error) {
+func (db *DB) CapturePhysicalSnapshotSideStoreV1(_ context.Context, _ string) (*PhysicalSnapshotCutV1, error) {
 	if db == nil || db.closing.Load() {
 		return nil, ErrClosed
 	}
-	if name != "templatedb" {
-		return nil, errors.New("treedb: invalid snapshot side-store name")
-	}
-	capture := db.physicalSnapshotSideStoreCapture
-	if capture == nil {
-		return nil, fmt.Errorf("treedb: snapshot side store %q has no registered owner", name)
-	}
-	return capture(ctx, name)
+	return nil, errors.New("treedb: invalid snapshot side-store name")
 }
 
 // ValidateStorageDirectoryV1 binds side-file discovery to the exact directory

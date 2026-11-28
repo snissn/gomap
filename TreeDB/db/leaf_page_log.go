@@ -311,7 +311,13 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 // actual final disposal outcome on the existing DB error graph before losing
 // the wrapper's result alias. The wrapper holds no lock during these callbacks.
 func (l *leafPageLogWithRecordLengthHints) discardStableAppend(resources *rootpublication.StableResourceSet, cause error) error {
-	err := errors.Join(cause, disposeEncodedCapture(l.db, resources))
+	var disposeErr error
+	if l.db != nil {
+		disposeErr = l.db.releaseCapturedRootResources(resources)
+	} else if resources != nil {
+		disposeErr = resources.ReleaseWithError()
+	}
+	err := errors.Join(cause, disposeErr)
 	if l.db != nil && rootpublication.IsOriginalCleanupError(cause) {
 		return l.db.retainResourceCleanupError(err)
 	}

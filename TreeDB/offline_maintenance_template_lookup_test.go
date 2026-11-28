@@ -16,50 +16,8 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-func TestValueLogRewriteOfflineRejectsTemplateActivationBeforeSideStoreOpen(t *testing.T) {
-	root := t.TempDir()
-	database, err := Open(OptionsFor(ProfileNoWALFast, root))
-	if err != nil {
-		t.Fatalf("open main database: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close main database: %v", err)
-	}
-
-	templateDir := filepath.Join(root, "templatedb")
-	templateBackend, err := treedbdb.Open(treedbdb.Options{Dir: templateDir})
-	if err != nil {
-		t.Fatalf("hold templatedb open: %v", err)
-	}
-	defer templateBackend.Close()
-
-	opts := OptionsFor(ProfileNoWALFast, root)
-	opts.IgnoreFormatConfig = true
-	opts.ValueLog.TemplateMode = templ.TemplateOnly
-	_, err = ValueLogRewriteOffline(opts)
-	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
-		t.Fatalf("offline template rewrite error=%v want unresolved authority before side-store open", err)
-	}
-	if err := templateBackend.SetSync([]byte("still-open"), []byte("yes")); err != nil {
-		t.Fatalf("rejected rewrite disturbed held templatedb: %v", err)
-	}
-}
-
-func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T) {
+func TestVacuumIndexOffline_WithTemplateFrames_PreservesSystemTemplateLookup(t *testing.T) {
 	dir := t.TempDir()
-
-	templateDir := filepath.Join(dir, "templatedb")
-	if err := os.MkdirAll(templateDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(templatedb): %v", err)
-	}
-	templateBackend, err := treedbdb.Open(treedbdb.Options{
-		Dir:                    templateDir,
-		DisableBackgroundPrune: true,
-	})
-	if err != nil {
-		t.Fatalf("open templatedb backend: %v", err)
-	}
-	templateStore := templatedb.New(templateBackendKV{db: templateBackend}, templatedb.Config{})
 
 	def := templ.TemplateDef{
 		Kind: templ.TemplateAnchors,
@@ -70,16 +28,27 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 	}
 	defBytes, err := templ.EncodeTemplateDef(def, templ.Config{})
 	if err != nil {
-		_ = templateBackend.Close()
 		t.Fatalf("EncodeTemplateDef: %v", err)
 	}
+
+	mainDir := filepath.Join(dir, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(maindb): %v", err)
+	}
+	writerOpts := OptionsFor(ProfileNoWALFast, mainDir)
+	writerOpts.IndexOuterLeavesInValueLog = false
+	writerOpts.ValueLog.ForcePointers = true
+	writerOpts.ValueLog.PointerThreshold = 1
+	writerOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+	writer, err := treedbdb.Open(writerOpts)
+	if err != nil {
+		t.Fatalf("Open(writer): %v", err)
+	}
+	templateStore := templatedb.NewBackend(writer, templatedb.Config{})
 	templateID, err := templateStore.PutTemplateDef(context.Background(), defBytes, nil)
 	if err != nil {
-		_ = templateBackend.Close()
+		_ = writer.Close()
 		t.Fatalf("PutTemplateDef: %v", err)
-	}
-	if err := templateBackend.Close(); err != nil {
-		t.Fatalf("close templatedb backend: %v", err)
 	}
 
 	plainValue := func(id int) []byte {
@@ -97,19 +66,6 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 		return payload
 	}
 
-	mainDir := filepath.Join(dir, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(maindb): %v", err)
-	}
-	writerOpts := OptionsFor(ProfileNoWALFast, mainDir)
-	writerOpts.IndexOuterLeavesInValueLog = false
-	writerOpts.ValueLog.ForcePointers = true
-	writerOpts.ValueLog.PointerThreshold = 1
-	writerOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-	writer, err := treedbdb.Open(writerOpts)
-	if err != nil {
-		t.Fatalf("Open(writer): %v", err)
-	}
 	valueLogDir := filepath.Join(mainDir, "value_vlog")
 	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
 		_ = writer.Close()

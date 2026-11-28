@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -70,6 +71,35 @@ func SystemDictChunkKey(dictID uint64, chunkIdx uint32) []byte {
 	binary.BigEndian.PutUint64(buf[len("dict/chunk/"):], dictID)
 	buf[len("dict/chunk/")+8] = '/'
 	binary.BigEndian.PutUint32(buf[len("dict/chunk/")+9:], chunkIdx)
+	return buf
+}
+
+// SystemTemplateDefKey returns the canonical system-tree key for templateID's
+// definition payload (inline bytes, chunked-inline header, or raw value-log pointer).
+func SystemTemplateDefKey(templateID uint64) []byte {
+	buf := make([]byte, len("template/def/")+8)
+	copy(buf, "template/def/")
+	binary.BigEndian.PutUint64(buf[len("template/def/"):], templateID)
+	return buf
+}
+
+// SystemTemplateDefChunkKey returns the canonical system-tree key for chunk idx
+// of templateID's definition payload.
+func SystemTemplateDefChunkKey(templateID uint64, chunkIdx uint32) []byte {
+	buf := make([]byte, len("template/chunk/")+8+1+4)
+	copy(buf, "template/chunk/")
+	binary.BigEndian.PutUint64(buf[len("template/chunk/"):], templateID)
+	buf[len("template/chunk/")+8] = '/'
+	binary.BigEndian.PutUint32(buf[len("template/chunk/")+9:], chunkIdx)
+	return buf
+}
+
+// SystemTemplateFPKey returns the canonical system-tree key for a template
+// routing fingerprint's encoded candidate list.
+func SystemTemplateFPKey(fp uint64) []byte {
+	buf := make([]byte, len("template/fp/")+8)
+	copy(buf, "template/fp/")
+	binary.BigEndian.PutUint64(buf[len("template/fp/"):], fp)
 	return buf
 }
 
@@ -420,6 +450,119 @@ func (db *DB) loadSystemDictBytesUncached(dictID uint64) ([]byte, error) {
 	return loadFromTree(tr, reader.Read)
 }
 
+// LookupSystemTemplateDef resolves template definition bytes for templateID
+// from SystemRootPageID (supporting direct inline, 2 KiB chunked inline, and
+// raw value-log pointer entries) with an in-memory immutable cache.
+func (db *DB) LookupSystemTemplateDef(templateID uint64) ([]byte, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if templateID == 0 {
+		return nil, templ.ErrMissingTemplate
+	}
+	if cached, ok := db.systemTemplateCache.Load(templateID); ok {
+		return cached.([]byte), nil
+	}
+	raw, err := db.loadSystemTemplateDefUncached(templateID)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := db.systemTemplateCache.LoadOrStore(templateID, raw)
+	return actual.([]byte), nil
+}
+
+func (db *DB) loadSystemTemplateDefUncached(templateID uint64) ([]byte, error) {
+	if db.closing.Load() {
+		return nil, ErrClosed
+	}
+	loadFromTree := func(tr *tree.Tree, readPtr func(page.ValuePtr) ([]byte, error)) ([]byte, error) {
+		entry, err := tr.GetEntry(SystemTemplateDefKey(templateID))
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				return nil, templ.ErrMissingTemplate
+			}
+			return nil, err
+		}
+		if entry.Flags&node.FlagTombstone != 0 {
+			return nil, templ.ErrMissingTemplate
+		}
+		if entry.Flags&node.FlagPointer != 0 {
+			if readPtr == nil {
+				return nil, fmt.Errorf("treedb: template %d requires value log reader", templateID)
+			}
+			val, err := readPtr(entry.ValuePtr)
+			if err != nil {
+				return nil, err
+			}
+			return append([]byte(nil), val...), nil
+		}
+		if len(entry.Value) == 0 {
+			return nil, fmt.Errorf("treedb: template %d empty inline entry", templateID)
+		}
+		switch entry.Value[0] {
+		case SystemDictEncodingInline:
+			return append([]byte(nil), entry.Value[1:]...), nil
+		case SystemDictEncodingChunked:
+			chunkCount, totalLen, wantSum, err := DecodeSystemDictChunkHeader(entry.Value)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]byte, 0, totalLen)
+			for i := uint32(0); i < chunkCount; i++ {
+				chunkEntry, err := tr.GetEntry(SystemTemplateDefChunkKey(templateID, i))
+				if err != nil {
+					return nil, fmt.Errorf("treedb: template %d chunk %d/%d: %w", templateID, i, chunkCount, err)
+				}
+				if chunkEntry.Flags&(node.FlagTombstone|node.FlagPointer) != 0 {
+					return nil, fmt.Errorf("treedb: template %d chunk %d invalid flags %#x", templateID, i, chunkEntry.Flags)
+				}
+				out = append(out, chunkEntry.Value...)
+			}
+			if uint32(len(out)) != totalLen {
+				return nil, fmt.Errorf("treedb: template %d chunk length mismatch: got=%d want=%d", templateID, len(out), totalLen)
+			}
+			if sha256.Sum256(out) != wantSum {
+				return nil, fmt.Errorf("treedb: template %d chunk sha256 mismatch", templateID)
+			}
+			return out, nil
+		default:
+			return nil, fmt.Errorf("treedb: template %d unsupported encoding tag %#x", templateID, entry.Value[0])
+		}
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap != nil {
+		defer func() { _ = snap.Close() }()
+		if snap.state == nil || snap.state.SystemRootPageID == 0 {
+			return nil, templ.ErrMissingTemplate
+		}
+		tr := tree.New(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+		return loadFromTree(tr, snap.reader.Read)
+	}
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil {
+		return nil, ErrClosed
+	}
+	db.mu.RLock()
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if sysRoot == 0 {
+		return nil, templ.ErrMissingTemplate
+	}
+	var set *valuelog.Set
+	if db.valueLogManager != nil {
+		set = db.valueLogManager.CurrentSetNoRefresh()
+		defer func() {
+			if set != nil {
+				_ = db.valueLogManager.Release(set)
+			}
+		}()
+	}
+	reader := newValueReader(set)
+	tr := tree.New(idx.pager, reader, sysRoot)
+	return loadFromTree(tr, reader.Read)
+}
+
 // SetDictCallbacks updates the backend's dictionary callbacks and refreshes
 // valueLogManager's DictLookup hook. Passing nil for lookup falls back to
 // db.LookupSystemDictBytes.
@@ -655,6 +798,18 @@ func collectPendingSystemValueLogPtrCounts(ops []SystemKVOp) map[page.ValuePtr]i
 		counts[op.ValuePtr]++
 	}
 	return counts
+}
+
+// ReleasePendingSystemKVOps releases GC protection pins for any raw system
+// value-log pointers accumulated in ops when a caller aborts before invoking
+// ApplySystemOps or StageSystemOps.
+func (db *DB) ReleasePendingSystemKVOps(ops []SystemKVOp) {
+	if db == nil || len(ops) == 0 {
+		return
+	}
+	if pendingPtrs := collectPendingSystemValueLogPtrCounts(ops); len(pendingPtrs) > 0 {
+		db.releasePendingValueLogAppendPtrCounts(pendingPtrs)
+	}
 }
 
 // ApplySystemOps atomically applies a batch of inline, pointer, or tombstone

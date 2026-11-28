@@ -21,10 +21,9 @@ A complete restorable root-layout backup includes:
 - future typed external-ref payload files referenced by non-cleaned command WAL
   frames, once a separate authority contract activates them, plus future column
   files referenced by roots;
-- `templatedb/**`, including its `index.db`, `format.json`, `wal/`,
-  `value_vlog/`, `leaf_vlog/`, and cleanup metadata, when template compression
-  is enabled (value-log dictionaries live inside `maindb/index.db`
-  `SystemRootPageID` and backup/restore automatically with `maindb`);
+- value-log dictionaries and template compression definitions live inside
+  `maindb/index.db` `SystemRootPageID` and backup/restore automatically with
+  `maindb`;
 - future column-store directories: parts, manifests, filters, delete bitmaps,
   dictionaries, compression metadata, locator roots, and their cleanup
   manifests;
@@ -36,8 +35,8 @@ present, restore must run existing index-swap recovery before command WAL
 recovery.
 
 Copying only `maindb/index.db` is not a backup. Copying only `maindb` is not a
-complete root-layout backup when `templatedb`, command-WAL external
-refs, or future column external-ref files are enabled.
+complete root-layout backup when command-WAL external refs or future column
+external-ref files are enabled.
 
 The typed `CommandEnvelope.ExternalRefs` section is currently dormant: V1 and
 V2 reject every non-empty section before journal mutation. RawKV `SetRID`

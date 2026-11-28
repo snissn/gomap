@@ -24,8 +24,8 @@ func TestSideStoreChunkSize_NoDictDBCreated(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "dictdb")); !os.IsNotExist(err) {
 		t.Fatalf("expected no dictdb directory, stat err=%v", err)
 	}
-	if db.templateDB != nil {
-		t.Fatalf("expected templatedb to remain disabled")
+	if _, err := os.Stat(filepath.Join(dir, "templatedb")); !os.IsNotExist(err) {
+		t.Fatalf("expected no templatedb directory, stat err=%v", err)
 	}
 }
 
@@ -57,7 +57,7 @@ func TestSideStoreChunkSize_TemplateModeRequestIsIgnored(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "dictdb")); !os.IsNotExist(err) {
 		t.Fatalf("expected no dictdb directory, stat err=%v", err)
 	}
-	if db.templateDB != nil {
-		t.Fatalf("expected templatedb to remain disabled")
+	if _, err := os.Stat(filepath.Join(dir, "templatedb")); !os.IsNotExist(err) {
+		t.Fatalf("expected no templatedb directory, stat err=%v", err)
 	}
 }
