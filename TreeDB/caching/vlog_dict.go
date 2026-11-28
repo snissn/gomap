@@ -21,6 +21,9 @@ func (db *DB) reportValueLogDictPublishError(err error) {
 	if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
 		return
 	}
+	if db.closing.Load() && (errors.Is(err, backenddb.ErrClosed) || errors.Is(err, errDBClosing)) {
+		return
+	}
 	db.reportError(err)
 }
 

@@ -1908,10 +1908,10 @@ func (db *DB) Close() error {
 		db.backend.SetValueLogSegmentRetiredHook(nil)
 	}
 
-	// Close cached layer first if present
-	if db.backend != nil {
-		db.backend.SetSystemRootMutationFence(nil)
-	}
+	// Close cached layer first if present. Keep the system-root mutation fence
+	// installed through the final command-WAL checkpoint and cached.Close() so
+	// background dictionary/template commits cannot mutate SystemRootPageID
+	// unfenced while the COW checkpoint fallback converges.
 	if db.cached != nil {
 		if db.commandWALCached {
 			if e := db.checkpointCachedForPublicCommandWAL(); e != nil {
@@ -1925,6 +1925,9 @@ func (db *DB) Close() error {
 		}
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
+	}
+	if db.backend != nil {
+		db.backend.SetSystemRootMutationFence(nil)
 	}
 	db.closePublicCommandWALGroupCommit()
 
