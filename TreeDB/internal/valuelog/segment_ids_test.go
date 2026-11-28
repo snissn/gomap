@@ -142,4 +142,25 @@ func TestScanSegmentCompressionIDs_DictAndTemplate(t *testing.T) {
 	if _, err := ScanSegmentCompressionIDs(flippedPath, fileID, true, lookup); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("full scan on flipped TM magic err=%v want ErrCorrupt", err)
 	}
+
+	// 5) Clearing FrameFlagCompressed on the dict-compressed frame must fail
+	// closed via CRC verification during dict-only scanning (scanTemplates=false).
+	clearedFlag, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(clearedFlag): %v", err)
+	}
+	// First record ends at HeaderSize + firstValueLen; second record's FrameHeader starts +HeaderSize after that.
+	firstValLen := int(clearedFlag[16]) | int(clearedFlag[17])<<8 | int(clearedFlag[18])<<16 | int(clearedFlag[19])<<24
+	secondFrameFlagsIdx := HeaderSize + firstValLen + HeaderSize + 1
+	if secondFrameFlagsIdx >= len(clearedFlag) || clearedFlag[secondFrameFlagsIdx]&FrameFlagCompressed == 0 {
+		t.Fatalf("unexpected second frame flags at idx=%d (len=%d)", secondFrameFlagsIdx, len(clearedFlag))
+	}
+	clearedFlag[secondFrameFlagsIdx] &^= FrameFlagCompressed
+	clearedFlagPath := filepath.Join(dir, "value-l0-000004.log")
+	if err := os.WriteFile(clearedFlagPath, clearedFlag, 0o600); err != nil {
+		t.Fatalf("WriteFile(clearedFlag): %v", err)
+	}
+	if _, err := ScanSegmentCompressionIDs(clearedFlagPath, fileID, false, nil); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("dict-only scan on cleared FrameFlagCompressed err=%v want ErrCorrupt", err)
+	}
 }

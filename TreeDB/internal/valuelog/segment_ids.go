@@ -25,8 +25,10 @@ type SegmentCompressionIDs struct {
 // the distinct dictionary IDs (and, when scanTemplates is true, template IDs)
 // referenced by its records.
 //
-// When scanTemplates is false, record and frame payload bodies are skipped with
-// io.SeekCurrent without reading or decompressing payload bytes.
+// Both paths verify record CRCs so bit flips in record/frame flags, dictionary
+// IDs, or payload prefixes fail closed with ErrCorrupt. When scanTemplates is
+// false, frame bodies are streamed through CRC verification into a small fixed
+// buffer without decompressing or allocating per-record payloads.
 func ScanSegmentCompressionIDs(path string, fileID uint32, scanTemplates bool, dictLookup DictLookup) (SegmentCompressionIDs, error) {
 	var res SegmentCompressionIDs
 	if path == "" {
@@ -46,25 +48,49 @@ func ScanSegmentCompressionIDs(path string, fileID uint32, scanTemplates bool, d
 		return res, nil
 	}
 	if !scanTemplates {
-		return scanSegmentDictIDsSeek(f, info.Size())
+		return scanSegmentDictIDs(f)
 	}
 	return scanSegmentDictAndTemplateIDs(f, fileID, dictLookup)
 }
 
-func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, error) {
+func discardAndUpdateCRC(r io.Reader, n int64, sum uint32, scratch []byte) (uint32, error) {
+	rem := n
+	for rem > 0 {
+		chunk := len(scratch)
+		if int64(chunk) > rem {
+			chunk = int(rem)
+		}
+		got, err := io.ReadFull(r, scratch[:chunk])
+		if got > 0 {
+			sum = crc.Update(sum, scratch[:got])
+			rem -= int64(got)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return sum, io.ErrUnexpectedEOF
+			}
+			return sum, err
+		}
+	}
+	return sum, nil
+}
+
+func scanSegmentDictIDs(f *os.File) (SegmentCompressionIDs, error) {
 	var res SegmentCompressionIDs
+	br := bufio.NewReaderSize(f, 64<<10)
 	var hdr [HeaderSize]byte
 	var fh [FrameHeaderSize]byte
-	var pos int64
+	scratch := make([]byte, discardScratchSize)
 
-	for pos < fileSize {
-		_, err := io.ReadFull(f, hdr[:])
+	for {
+		_, err := io.ReadFull(br, hdr[:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			return res, err
 		}
+		crcVal := binary.LittleEndian.Uint32(hdr[0:4])
 		if hdr[4] != Version {
 			return res, ErrCorrupt
 		}
@@ -78,21 +104,19 @@ func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, 
 			return res, ErrRecordTooLarge
 		}
 		res.RecordsScanned++
-		pos += HeaderSize
 		valueLen := int64(valueLenU32)
-		if pos+valueLen > fileSize {
-			return res, io.ErrUnexpectedEOF
-		}
+		sum := crc.Update(0, hdr[4:])
 
 		if flags&recordFlagGrouped == 0 {
 			if rid == 0 {
 				return res, ErrCorrupt
 			}
-			if valueLen > 0 {
-				if _, err := f.Seek(valueLen, io.SeekCurrent); err != nil {
-					return res, err
-				}
-				pos += valueLen
+			sum, err = discardAndUpdateCRC(br, valueLen, sum, scratch)
+			if err != nil {
+				return res, err
+			}
+			if sum != crcVal {
+				return res, ErrCorrupt
 			}
 			continue
 		}
@@ -100,15 +124,26 @@ func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, 
 		if valueLen < FrameHeaderSize {
 			return res, ErrCorrupt
 		}
-		if _, err := io.ReadFull(f, fh[:]); err != nil {
+		if _, err := io.ReadFull(br, fh[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				return res, io.ErrUnexpectedEOF
+			}
 			return res, err
 		}
-		pos += FrameHeaderSize
+		sum = crc.Update(sum, fh[:])
 		if fh[0] != FrameVersion {
 			return res, ErrCorrupt
 		}
 		k := int(fh[2])
 		if k <= 0 || k > MaxFrameK {
+			return res, ErrCorrupt
+		}
+		rem := valueLen - FrameHeaderSize
+		sum, err = discardAndUpdateCRC(br, rem, sum, scratch)
+		if err != nil {
+			return res, err
+		}
+		if sum != crcVal {
 			return res, ErrCorrupt
 		}
 		res.FramesScanned++
@@ -119,13 +154,6 @@ func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, 
 				res.DictIDs = make(map[uint64]struct{}, 4)
 			}
 			res.DictIDs[dictID] = struct{}{}
-		}
-		rem := valueLen - FrameHeaderSize
-		if rem > 0 {
-			if _, err := f.Seek(rem, io.SeekCurrent); err != nil {
-				return res, err
-			}
-			pos += rem
 		}
 	}
 	return res, nil
