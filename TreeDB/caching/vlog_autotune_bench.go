@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -78,39 +77,6 @@ type VlogAutotuneBenchResult struct {
 	TrainerStats compression.TrainerStats
 }
 
-type templateBenchKV struct {
-	db *DB
-}
-
-func (kv templateBenchKV) Get(key []byte) ([]byte, error) {
-	return kv.db.Get(key)
-}
-
-func (kv templateBenchKV) SetSync(key, value []byte) error {
-	return kv.db.SetSync(key, value)
-}
-
-func (kv templateBenchKV) DeleteSync(key []byte) error {
-	return kv.db.DeleteSync(key)
-}
-
-func (kv templateBenchKV) NewBatch() templatedb.Batch {
-	b := kv.db.NewBatch()
-	if b == nil {
-		return nil
-	}
-	return templateBenchBatch{b: b}
-}
-
-type templateBenchBatch struct {
-	b *Batch
-}
-
-func (tb templateBenchBatch) Set(key, value []byte) error { return tb.b.Set(key, value) }
-func (tb templateBenchBatch) Delete(key []byte) error     { return tb.b.Delete(key) }
-func (tb templateBenchBatch) WriteSync() error            { return tb.b.WriteSync() }
-func (tb templateBenchBatch) Close() error                { return tb.b.Close() }
-
 func RunVlogAutotuneBench(req VlogAutotuneBenchRequest) (*VlogAutotuneBenchResult, error) {
 	if len(req.Segments) == 0 {
 		return nil, errors.New("no segments")
@@ -121,48 +87,18 @@ func RunVlogAutotuneBench(req VlogAutotuneBenchRequest) (*VlogAutotuneBenchResul
 	}
 	defer os.RemoveAll(root)
 
-	dictdbDir := filepath.Join(root, "dictdb")
-	if err := os.MkdirAll(dictdbDir, 0755); err != nil {
-		return nil, err
-	}
-
 	backend, err := db.Open(db.Options{Dir: root})
 	if err != nil {
 		return nil, err
 	}
 	defer backend.Close()
 
-	dictBackend, err := db.Open(db.Options{Dir: dictdbDir, DisableBackgroundPrune: true})
-	if err != nil {
-		return nil, err
-	}
-	defer dictBackend.Close()
-
-	store := dictdb.New(dictBackend)
+	store := dictdb.New(backend)
 	opts := benchOptionsForMode(req.Mode, req.FixedK)
 	var templateStore *templatedb.Store
 	if opts.ValueLogTemplateMode != template.TemplateOff {
-		templatedbDir := filepath.Join(root, "templatedb")
-		if err := os.MkdirAll(templatedbDir, 0755); err != nil {
-			return nil, err
-		}
-		templateBackend, err := db.Open(db.Options{Dir: templatedbDir, DisableBackgroundPrune: true})
-		if err != nil {
-			return nil, err
-		}
-		defer templateBackend.Close()
-		templateCached, err := Open(templatedbDir, templateBackend, Options{
-			FlushThreshold: 1 << 30,
-			DisableWAL:     true,
-			AllowUnsafe:    true,
-		})
-		if err != nil {
-			_ = templateBackend.Close()
-			return nil, err
-		}
-		defer templateCached.Close()
 		tcfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
-		templateStore = templatedb.New(templateBenchKV{db: templateCached}, templatedb.Config{
+		templateStore = templatedb.NewBackend(backend, templatedb.Config{
 			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
 			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
 		})

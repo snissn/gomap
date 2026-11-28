@@ -3,12 +3,15 @@ package templatedb
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -55,14 +58,18 @@ type Batch interface {
 	Close() error
 }
 
-// Store provides access to template storage backed by a TreeDB public DB.
+// Store provides access to template storage backed either directly by a
+// maindb backend's SystemRootPageID (production via NewBackend) or by an
+// in-memory KV implementation (unit tests via New).
 type Store struct {
-	kv  KV
-	cfg Config
-	mu  sync.Mutex
+	backend          *db.DB
+	kv               KV
+	cfg              Config
+	pointerThreshold atomic.Int64
+	mu               sync.Mutex
 }
 
-// New wraps an existing public DB handle.
+// New wraps an existing KV handle (primarily for in-memory unit tests).
 func New(kv KV, cfg Config) *Store {
 	if kv == nil {
 		return &Store{kv: nil, cfg: NormalizeConfig(cfg)}
@@ -70,7 +77,29 @@ func New(kv KV, cfg Config) *Store {
 	return &Store{kv: kv, cfg: NormalizeConfig(cfg)}
 }
 
-// Close closes the underlying store if it implements io.Closer.
+// NewBackend wraps an existing maindb backend so template definitions and
+// routing candidate lists live directly inside its SystemRootPageID (inline or
+// 2 KiB inline chunks by default, or optional raw dictID=0/templateID=0
+// value-log pointers when PointerThreshold > 0). Closing a Store created with
+// NewBackend is a no-op and does not close the underlying main backend.
+func NewBackend(backend *db.DB, cfg Config) *Store {
+	return &Store{backend: backend, cfg: NormalizeConfig(cfg)}
+}
+
+// SetPointerThreshold configures the byte size above which newly stored
+// template definitions are placed in maindb's dedicated system value-log lane
+// (raw dictID=0, templateID=0 records referenced by ValuePtr in
+// SystemRootPageID). A value <= 0 keeps all definitions inline/chunked in
+// SystemRootPageID (the default).
+func (s *Store) SetPointerThreshold(threshold int) {
+	if s == nil {
+		return
+	}
+	s.pointerThreshold.Store(int64(threshold))
+}
+
+// Close closes the underlying KV store if it implements io.Closer. For Stores
+// created with NewBackend, Close is a no-op.
 func (s *Store) Close() error {
 	if s == nil || s.kv == nil {
 		return nil
@@ -83,7 +112,13 @@ func (s *Store) Close() error {
 
 // GetTemplateDef loads TemplateDefBytes for a template ID.
 func (s *Store) GetTemplateDef(_ context.Context, id uint64) ([]byte, error) {
-	if s == nil || s.kv == nil {
+	if s == nil {
+		return nil, errStoreUnavailable
+	}
+	if s.backend != nil {
+		return s.backend.LookupSystemTemplateDef(id)
+	}
+	if s.kv == nil {
 		return nil, errStoreUnavailable
 	}
 	val, err := s.kv.Get(templateKey(id))
@@ -98,10 +133,20 @@ func (s *Store) GetTemplateDef(_ context.Context, id uint64) ([]byte, error) {
 
 // GetCandidates loads the candidate list for a fingerprint.
 func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template.Candidate, error) {
-	if s == nil || s.kv == nil {
+	if s == nil {
 		return nil, errStoreUnavailable
 	}
-	val, err := s.kv.Get(fpKey(fp))
+	var (
+		val []byte
+		err error
+	)
+	if s.backend != nil {
+		val, err = s.backend.GetSystem(db.SystemTemplateFPKey(fp))
+	} else if s.kv != nil {
+		val, err = s.kv.Get(fpKey(fp))
+	} else {
+		return nil, errStoreUnavailable
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -118,13 +163,73 @@ func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template
 	return cands, nil
 }
 
+func (s *Store) buildTemplateDefOps(id uint64, defBytes []byte) ([]db.SystemKVOp, error) {
+	threshold := int(s.pointerThreshold.Load())
+	if threshold > 0 && len(defBytes) >= threshold {
+		ptr, err := s.backend.AppendRawSystemValueLog(0, defBytes)
+		if err != nil {
+			return nil, err
+		}
+		return []db.SystemKVOp{{
+			Key:       db.SystemTemplateDefKey(id),
+			ValuePtr:  ptr,
+			IsPointer: true,
+		}}, nil
+	}
+	if len(defBytes) <= db.SystemDictChunkSize {
+		buf := make([]byte, 1+len(defBytes))
+		buf[0] = db.SystemDictEncodingInline
+		copy(buf[1:], defBytes)
+		return []db.SystemKVOp{{
+			Key:   db.SystemTemplateDefKey(id),
+			Value: buf,
+		}}, nil
+	}
+	sum := sha256.Sum256(defBytes)
+	chunkCount := uint32((len(defBytes) + db.SystemDictChunkSize - 1) / db.SystemDictChunkSize)
+	ops := make([]db.SystemKVOp, 0, 1+int(chunkCount))
+	ops = append(ops, db.SystemKVOp{
+		Key:   db.SystemTemplateDefKey(id),
+		Value: db.EncodeSystemDictChunkHeader(chunkCount, uint32(len(defBytes)), sum),
+	})
+	for i := uint32(0); i < chunkCount; i++ {
+		start := int(i) * db.SystemDictChunkSize
+		end := start + db.SystemDictChunkSize
+		if end > len(defBytes) {
+			end = len(defBytes)
+		}
+		ops = append(ops, db.SystemKVOp{
+			Key:   db.SystemTemplateDefChunkKey(id, i),
+			Value: append([]byte(nil), defBytes[start:end]...),
+		})
+	}
+	return ops, nil
+}
+
+func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
+	if s.backend != nil {
+		val, err := s.backend.LookupSystemTemplateDef(id)
+		if errors.Is(err, template.ErrMissingTemplate) {
+			return nil, nil
+		}
+		return val, err
+	}
+	return s.kv.Get(templateKey(id))
+}
+
+func (s *Store) getRawFPBytes(fp uint64) ([]byte, error) {
+	if s.backend != nil {
+		return s.backend.GetSystem(db.SystemTemplateFPKey(fp))
+	}
+	return s.kv.Get(fpKey(fp))
+}
+
 // PutTemplateDef stores a template definition and updates routing indices.
 func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
-	if s == nil || s.kv == nil {
+	if s == nil || (s.backend == nil && s.kv == nil) {
 		return 0, errStoreUnavailable
 	}
-	cfg := s.cfg
-	cfg = NormalizeConfig(cfg)
+	cfg := NormalizeConfig(s.cfg)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -142,13 +247,13 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	}
 
 	id := uint64(0)
+	alreadyStored := false
 	for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
 		id = template.TemplateID(defBytes, byte(attempt))
 		if id == 0 {
 			continue
 		}
-		key := templateKey(id)
-		existing, err := s.kv.Get(key)
+		existing, err := s.getExistingTemplateDef(id)
 		if err != nil {
 			return 0, err
 		}
@@ -157,6 +262,7 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 		}
 		if bytes.Equal(existing, defBytes) {
 			// Idempotent publish; still refresh routing lists.
+			alreadyStored = true
 			break
 		}
 		if attempt == cfg.MaxIDAttempts-1 {
@@ -171,7 +277,7 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	candidateSize := len(defBytes)
 	updates := make(map[uint64][]byte, len(routeFPs))
 	for _, fp := range routeFPs {
-		listBytes, err := s.kv.Get(fpKey(fp))
+		listBytes, err := s.getRawFPBytes(fp)
 		if err != nil {
 			return 0, err
 		}
@@ -189,6 +295,27 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 			encoded = encodeCandidates(cands)
 		}
 		updates[fp] = encoded
+	}
+
+	if s.backend != nil {
+		var ops []db.SystemKVOp
+		if !alreadyStored {
+			defOps, err := s.buildTemplateDefOps(id, defBytes)
+			if err != nil {
+				return 0, err
+			}
+			ops = append(ops, defOps...)
+		}
+		for fp, enc := range updates {
+			ops = append(ops, db.SystemKVOp{
+				Key:   db.SystemTemplateFPKey(fp),
+				Value: enc,
+			})
+		}
+		if err := s.backend.ApplySystemOps(ops, true); err != nil {
+			return 0, err
+		}
+		return id, nil
 	}
 
 	batch := s.kv.NewBatch()
@@ -217,9 +344,9 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 //
 // This is an optional acceleration used by the template engine when publishing
 // bursts of templates; it is equivalent to calling PutTemplateDef for each
-// template, but coalesces WriteSync.
+// template, but coalesces WriteSync / ApplySystemOps.
 func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) ([]uint64, error) {
-	if s == nil || s.kv == nil {
+	if s == nil || (s.backend == nil && s.kv == nil) {
 		return nil, errStoreUnavailable
 	}
 	if len(defs) == 0 {
@@ -232,6 +359,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 
 	ids := make([]uint64, len(defs))
 	reserved := make(map[uint64][]byte, len(defs))
+	alreadyStored := make(map[uint64]bool, len(defs))
 
 	type candAdd struct {
 		fp   uint64
@@ -275,13 +403,15 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 				id = 0
 				continue
 			}
-			key := templateKey(id)
-			existing, err := s.kv.Get(key)
+			existing, err := s.getExistingTemplateDef(id)
 			if err != nil {
 				return nil, err
 			}
-			if existing == nil || bytes.Equal(existing, defBytes) {
-				// Free ID, or idempotent publish.
+			if existing == nil {
+				break
+			}
+			if bytes.Equal(existing, defBytes) {
+				alreadyStored[id] = true
 				break
 			}
 			if attempt == cfg.MaxIDAttempts-1 {
@@ -308,10 +438,6 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 	}
 
 	// Coalesce per-fingerprint updates.
-	type fpAdds struct {
-		fp    uint64
-		cands []template.Candidate
-	}
 	fpMap := make(map[uint64][]template.Candidate, len(additions))
 	for _, add := range additions {
 		fpMap[add.fp] = append(fpMap[add.fp], add.cand)
@@ -319,7 +445,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 
 	updates := make(map[uint64][]byte, len(fpMap))
 	for fp, adds := range fpMap {
-		listBytes, err := s.kv.Get(fpKey(fp))
+		listBytes, err := s.getRawFPBytes(fp)
 		if err != nil {
 			return nil, err
 		}
@@ -346,6 +472,34 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 			encoded = encodeCandidates(cands)
 		}
 		updates[fp] = encoded
+	}
+
+	if s.backend != nil {
+		var ops []db.SystemKVOp
+		written := make(map[uint64]bool, len(defs))
+		for i := range defs {
+			id := ids[i]
+			if alreadyStored[id] || written[id] {
+				continue
+			}
+			defOps, err := s.buildTemplateDefOps(id, defs[i].DefBytes)
+			if err != nil {
+				s.backend.ReleasePendingSystemKVOps(ops)
+				return nil, err
+			}
+			ops = append(ops, defOps...)
+			written[id] = true
+		}
+		for fp, enc := range updates {
+			ops = append(ops, db.SystemKVOp{
+				Key:   db.SystemTemplateFPKey(fp),
+				Value: enc,
+			})
+		}
+		if err := s.backend.ApplySystemOps(ops, true); err != nil {
+			return nil, err
+		}
+		return ids, nil
 	}
 
 	batch := s.kv.NewBatch()

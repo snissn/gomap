@@ -33,34 +33,7 @@ func (capture *rewriteStableOuterLeafCapture) captureDictionary(_ context.Contex
 	return nil
 }
 
-func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(store templ.Store, payload []byte) error {
-	if capture == nil {
-		return nil
-	}
-	templateID, err := templ.EncodedPayloadTemplateID(payload)
-	if err != nil {
-		return err
-	}
-	for _, id := range capture.templateIDs {
-		if id == templateID {
-			return nil
-		}
-	}
-	if err := capture.reserveID(&capture.templateIDs, &capture.templateCharge); err != nil {
-		return err
-	}
-	provider, ok := store.(StableTemplateResourceProvider)
-	if !ok {
-		return fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
-	}
-	resources, err := captureStableTemplateResources(provider, store, templateID, capture.metadata)
-	if err != nil {
-		return err
-	}
-	if err := capture.builder.Merge(resources); err != nil {
-		return errors.Join(err, resources.ReleaseWithError())
-	}
-	capture.templateIDs = append(capture.templateIDs, templateID)
+func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(_ templ.Store, _ []byte) error {
 	return nil
 }
 

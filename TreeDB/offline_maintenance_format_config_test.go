@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -48,7 +47,7 @@ func leafFlagsInIndex(t *testing.T, indexPath string) uint16 {
 	return 0
 }
 
-func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
+func TestOfflineMaintenanceCommandWALGate(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
@@ -57,20 +56,8 @@ func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
 	if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
-	// If public offline maintenance reaches side-store wiring, this malformed
-	// templatedb path returns a different error. Index vacuum supports
-	// command-WAL DBs and should reach that validation; value-log rewrite must
-	// reject command-WAL before side-store wiring, even when IgnoreFormatConfig
-	// is set.
-	if err := os.MkdirAll(filepath.Join(root, "templatedb", "index.db"), 0o755); err != nil {
-		t.Fatalf("mkdir malformed templatedb index: %v", err)
-	}
 
 	for _, ignoreFormatConfig := range []bool{false, true} {
-		err := treedb.VacuumIndexOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig})
-		if err == nil || errors.Is(err, treedb.ErrCommandWALUnsupported) || !strings.Contains(err.Error(), "templatedb index path is a directory") {
-			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want malformed templatedb error", ignoreFormatConfig, err)
-		}
 		if _, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
 			t.Fatalf("ValueLogRewriteOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)
 		}

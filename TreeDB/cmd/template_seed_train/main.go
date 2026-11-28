@@ -13,7 +13,6 @@ import (
 	"time"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
@@ -21,36 +20,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 )
-
-type templateBackendKV struct{ db *treedbdb.DB }
-
-func (kv templateBackendKV) Get(key []byte) ([]byte, error) {
-	if kv.db == nil {
-		return nil, nil
-	}
-	return kv.db.Get(key)
-}
-
-func (kv templateBackendKV) SetSync(key, value []byte) error {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.SetSync(key, value)
-}
-
-func (kv templateBackendKV) DeleteSync(key []byte) error {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.DeleteSync(key)
-}
-
-func (kv templateBackendKV) NewBatch() templatedb.Batch {
-	if kv.db == nil {
-		return nil
-	}
-	return kv.db.NewBatch()
-}
 
 func prefixEnd(prefix []byte) []byte {
 	if len(prefix) == 0 {
@@ -90,22 +59,6 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 	if ok {
 		cfg.ApplyToOptions(opts)
 	}
-}
-
-func countPrefix(db *treedbdb.DB, prefix []byte) (int, error) {
-	it, err := db.Iterator(prefix, prefixEnd(prefix))
-	if err != nil {
-		return 0, err
-	}
-	defer it.Close()
-	n := 0
-	for ; it.Valid(); it.Next() {
-		n++
-	}
-	if err := it.Error(); err != nil {
-		return 0, err
-	}
-	return n, nil
 }
 
 type trainStats struct {
@@ -490,34 +443,12 @@ func main() {
 		rootDir = filepath.Dir(rootDir)
 	}
 
-	templateDir := filepath.Join(rootDir, "templatedb")
-	templateOpts := treedbdb.Options{
-		Dir:                    templateDir,
-		DisableBackgroundPrune: true,
-	}
-	applyPersistedFormatConfig(templateDir, &templateOpts)
-	templateOpts.IndexOuterLeavesInValueLog = false
-	templateOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-	templateOpts.ValueLog.DictLookup = nil
-	templateOpts.ValueLog.TemplateMode = template.TemplateOff
-	templateOpts.ValueLog.TemplateLookup = nil
-	templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
-	tmplDB, err := treedbdb.Open(templateOpts)
-	if err != nil {
-		log.Fatalf("open templatedb: %v", err)
-	}
-	defer tmplDB.Close()
-	store := templatedb.New(templateBackendKV{db: tmplDB}, templatedb.Config{})
-
 	backendOpts := treedbdb.Options{
 		Dir:                    mainDir,
-		ReadOnly:               true,
+		ReadOnly:               false,
 		DisableBackgroundPrune: true,
 	}
 	applyPersistedFormatConfig(mainDir, &backendOpts)
-	backendOpts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
-		return store.GetTemplateDef(context.Background(), templateID)
-	}
 	if backendOpts.ValueLog.TemplateDecodeOptions == (template.DecodeOptions{}) {
 		tcfg := template.NormalizeConfig(backendOpts.ValueLog.TemplateConfig)
 		backendOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{
@@ -527,39 +458,18 @@ func main() {
 		}
 	}
 
-	dictDir := filepath.Join(rootDir, "dictdb")
-	dictIndex := filepath.Join(dictDir, "index.db")
-	if info, statErr := os.Stat(dictIndex); statErr == nil && !info.IsDir() {
-		dictOpts := treedbdb.Options{
-			Dir:                        dictDir,
-			ReadOnly:                   true,
-			DisableBackgroundPrune:     true,
-			IndexOuterLeavesInValueLog: false,
-		}
-		applyPersistedFormatConfig(dictDir, &dictOpts)
-		dictOpts.IndexOuterLeavesInValueLog = false
-		dictBackend, err := treedbdb.Open(dictOpts)
-		if err != nil {
-			log.Fatalf("open dictdb: %v", err)
-		}
-		defer dictBackend.Close()
-		dictStore := dictdb.New(dictBackend)
-		backendOpts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-			return dictStore.GetDictBytes(context.Background(), dictID)
-		}
-	}
-
 	backend, err := treedbdb.Open(backendOpts)
 	if err != nil {
 		log.Fatalf("open backend DB: %v", err)
 	}
 	defer backend.Close()
+	store := templatedb.NewBackend(backend, templatedb.Config{})
 
-	defsBefore, err := countPrefix(tmplDB, []byte{1, 't'})
+	defsBefore, err := backend.CountSystemPrefix([]byte("template/def/"))
 	if err != nil {
 		log.Fatalf("count template defs before: %v", err)
 	}
-	fpsBefore, err := countPrefix(tmplDB, []byte{1, 'f'})
+	fpsBefore, err := backend.CountSystemPrefix([]byte("template/fp/"))
 	if err != nil {
 		log.Fatalf("count fp lists before: %v", err)
 	}
@@ -644,11 +554,11 @@ func main() {
 	seedElapsed := time.Since(seedStart)
 
 	statsAfterWait := waitForTrainer(engine, time.Duration(*waitSec)*time.Second)
-	defsAfter, err := countPrefix(tmplDB, []byte{1, 't'})
+	defsAfter, err := backend.CountSystemPrefix([]byte("template/def/"))
 	if err != nil {
 		log.Fatalf("count template defs after: %v", err)
 	}
-	fpsAfter, err := countPrefix(tmplDB, []byte{1, 'f'})
+	fpsAfter, err := backend.CountSystemPrefix([]byte("template/fp/"))
 	if err != nil {
 		log.Fatalf("count fp lists after: %v", err)
 	}

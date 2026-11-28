@@ -64,9 +64,7 @@ var raftSnapshotMainDBEntriesV1 = []string{
 	"vector_partitions",
 }
 
-var raftSnapshotSideStoreEntriesV1 = []string{
-	"templatedb",
-}
+var raftSnapshotSideStoreEntriesV1 []string
 
 // ExportRaftSnapshotV1 exports a production snapshot archive for HashiCorp
 // Raft. The archive contains TreeDB main storage, including persistent

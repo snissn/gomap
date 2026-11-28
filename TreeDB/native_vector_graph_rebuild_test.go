@@ -506,19 +506,6 @@ func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) boo
 		}
 		return false
 	}
-	for _, side := range []string{layout.templatedbDir} {
-		if side == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(side, "index.db")); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		if err := backenddb.RebindDurableRootSnapshotLayoutV1(side, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
 	sideRoot := ""
 	if !layout.disableSideStores {
 		sideRoot = layout.rootDir

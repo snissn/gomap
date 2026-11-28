@@ -255,30 +255,6 @@ func TestCapturedRaftSnapshotV1CanceledMaterializationCleansStage(t *testing.T) 
 	}
 }
 
-func TestCapturedRaftSnapshotV1UnregisteredSideStoreRefuses(t *testing.T) {
-	requireRaftSnapshotExportSupportedV1(t)
-	dir := t.TempDir()
-	database := openRaftSnapshotFSMTestDB(t, dir, true)
-	defer database.Close()
-	source := openRaftSnapshotFSMForTest(t, database, dir, true)
-	defer source.Close()
-	applySnapshotSourceEntries(t, source, []byte(`{"_id":"u-large","name":"before"}`))
-	side := filepath.Join(snapshotSideStoreRootV1(source.db.Dir()), "templatedb")
-	if err := os.MkdirAll(side, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(side, "index.db"), []byte("not an owned index"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot, err := source.CaptureRaftSnapshotV1(); err == nil {
-		snapshot.Release()
-		t.Fatal("unowned side index admitted")
-	}
-	if source.snapshotOperationActive.Load() {
-		t.Fatal("side refusal retained capture")
-	}
-}
-
 func TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission(t *testing.T) {
 	requireRaftSnapshotExportSupportedV1(t)
 	dir := t.TempDir()
@@ -345,48 +321,6 @@ func TestCapturedRaftSnapshotV1FinalizedExpiryAndInstallAdmission(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer next.Release()
-}
-
-func TestCapturedRaftSnapshotV1SideDirectoryWithoutIndexRefusesContents(t *testing.T) {
-	requireRaftSnapshotExportSupportedV1(t)
-	for _, nonempty := range []bool{false, true} {
-		t.Run(map[bool]string{false: "empty", true: "unowned-content"}[nonempty], func(t *testing.T) {
-			dir := t.TempDir()
-			database := openRaftSnapshotFSMTestDB(t, dir, true)
-			defer database.Close()
-			source := openRaftSnapshotFSMForTest(t, database, dir, true)
-			defer source.Close()
-			applySnapshotSourceEntries(t, source, []byte(`{"_id":"u-large","name":"before"}`))
-			side := filepath.Join(snapshotSideStoreRootV1(dir), "templatedb")
-			if err := os.MkdirAll(side, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if nonempty {
-				if err := os.WriteFile(filepath.Join(side, "sentinel"), []byte("unowned"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			snapshot, err := source.ExportRaftSnapshotV1()
-			if nonempty {
-				if err == nil {
-					snapshot.Release()
-					t.Fatal("unowned contents silently omitted")
-				}
-				if source.snapshotOperationActive.Load() {
-					t.Fatal("refusal retained admission")
-				}
-				got, err := os.ReadFile(filepath.Join(side, "sentinel"))
-				if err != nil || string(got) != "unowned" {
-					t.Fatal("refusal mutated side directory")
-				}
-			} else {
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer snapshot.Release()
-			}
-		})
-	}
 }
 
 func TestCapturedRaftSnapshotV1CloseRetainsNamespaceUntilReaderCloses(t *testing.T) {

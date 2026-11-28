@@ -1,9 +1,12 @@
 package templatedb
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -99,5 +102,115 @@ func TestCandidateListEvictionDeterminism(t *testing.T) {
 	}
 	if cands[0].Size > cands[1].Size {
 		t.Fatalf("candidates not ordered by size")
+	}
+}
+
+func TestBackendSystemRoot_InlineChunkedAndPointerRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	store := NewBackend(backend, Config{MaxCandidatesPerFP: 4, MaxCandidateListBytes: 4096})
+
+	// 1) Small inline template definition (<= 2 KiB).
+	inlineDef := bytes.Repeat([]byte("inline-template-anchor-"), 12)
+	inlineID, err := store.PutTemplateDef(ctx, inlineDef, []uint64{101, 202})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("PutTemplateDef(inline): %v", err)
+	}
+
+	// 2) Multi-chunk inline template definition (> 2 KiB).
+	chunkedDef := bytes.Repeat([]byte("chunked-template-anchor-payload-"), 256) // 8 KiB
+	chunkedID, err := store.PutTemplateDef(ctx, chunkedDef, []uint64{101, 303})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("PutTemplateDef(chunked): %v", err)
+	}
+
+	// 3) Optional raw lane-254 value-log pointer template definition.
+	ptrStore := NewBackend(backend, Config{MaxCandidatesPerFP: 4, MaxCandidateListBytes: 4096})
+	ptrStore.SetPointerThreshold(1024)
+	ptrDef := bytes.Repeat([]byte("pointer-template-anchor-payload-"), 256) // 8 KiB
+	ptrID, err := ptrStore.PutTemplateDef(ctx, ptrDef, []uint64{404})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("PutTemplateDef(pointer): %v", err)
+	}
+	entry, ok, err := backend.GetSystemEntry(backenddb.SystemTemplateDefKey(ptrID))
+	if err != nil || !ok {
+		_ = backend.Close()
+		t.Fatalf("GetSystemEntry(pointer): ok=%v err=%v", ok, err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = backend.Close()
+		t.Fatalf("expected pointer-backed template def to set FlagPointer, got flags=%#x", entry.Flags)
+	}
+
+	// Verify ValueLogGC retains the raw system pointer segment.
+	if _, err := backend.ValueLogGC(ctx, backenddb.ValueLogGCOptions{}); err != nil {
+		_ = backend.Close()
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen read-only and verify all 3 encodings + FP routing lists survive.
+	ro, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		ReadOnly:               true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open(ReadOnly): %v", err)
+	}
+	defer func() { _ = ro.Close() }()
+
+	roStore := NewBackend(ro, Config{})
+	for _, tc := range []struct {
+		name string
+		id   uint64
+		want []byte
+	}{
+		{"inline", inlineID, inlineDef},
+		{"chunked", chunkedID, chunkedDef},
+		{"pointer", ptrID, ptrDef},
+	} {
+		gotStore, err := roStore.GetTemplateDef(ctx, tc.id)
+		if err != nil || !bytes.Equal(gotStore, tc.want) {
+			t.Fatalf("%s roStore.GetTemplateDef: len=%d want=%d err=%v", tc.name, len(gotStore), len(tc.want), err)
+		}
+		gotLookup, err := ro.LookupSystemTemplateDef(tc.id)
+		if err != nil || !bytes.Equal(gotLookup, tc.want) {
+			t.Fatalf("%s ro.LookupSystemTemplateDef: len=%d want=%d err=%v", tc.name, len(gotLookup), len(tc.want), err)
+		}
+	}
+
+	cands, err := roStore.GetCandidates(ctx, 101, 0)
+	if err != nil {
+		t.Fatalf("roStore.GetCandidates(101): %v", err)
+	}
+	if len(cands) != 2 || cands[0].ID != inlineID || cands[1].ID != chunkedID {
+		t.Fatalf("roStore.GetCandidates(101)=%+v want [%d %d]", cands, inlineID, chunkedID)
+	}
+	candsPtr, err := roStore.GetCandidates(ctx, 404, 0)
+	if err != nil || len(candsPtr) != 1 || candsPtr[0].ID != ptrID {
+		t.Fatalf("roStore.GetCandidates(404)=%+v err=%v want [%d]", candsPtr, err, ptrID)
+	}
+	defCount, err := ro.CountSystemPrefix([]byte("template/def/"))
+	if err != nil || defCount != 3 {
+		t.Fatalf("CountSystemPrefix(template/def/)=(%d, %v) want (3, nil)", defCount, err)
+	}
+	fpCount, err := ro.CountSystemPrefix([]byte("template/fp/"))
+	if err != nil || fpCount != 4 {
+		t.Fatalf("CountSystemPrefix(template/fp/)=(%d, %v) want (4, nil)", fpCount, err)
 	}
 }

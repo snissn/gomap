@@ -12,11 +12,9 @@ The runtime consists of:
   generations.
 - Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay;
   future user-command WAL frames extend this same segment family.
-- Value-log dictionaries persisted inside `maindb/index.db` `SystemRootPageID`
-  (inline/2 KiB chunked entries by default, or optional raw `dictID=0`
-  `ValuePtr` records in `maindb/value_vlog/`).
-- Optional side store:
-  - `templatedb/` for template compression definitions.
+- Value-log dictionaries and template definitions persisted inside
+  `maindb/index.db` `SystemRootPageID` (inline/2 KiB chunked entries by default,
+  or optional raw `dictID=0` `ValuePtr` records in `maindb/value_vlog/`).
 
 TreeDB's value log is the only value storage path for values.
 
@@ -108,12 +106,6 @@ Default root layout:
     - `value-l<lane>-<seq>.log`
   - `leaf_vlog/`
     - `value-l<lane>-<seq>.log`
-- `<root>/dictdb/`
-  - `index.db`
-  - `LOCK`
-- `<root>/templatedb/` (only when template mode enabled)
-  - `index.db`
-  - `LOCK`
 
 If `DisableSideStores=true`, the main DB is opened directly at `<root>`.
 

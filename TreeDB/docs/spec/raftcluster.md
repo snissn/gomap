@@ -69,8 +69,7 @@ The Raft paths must be distinct from:
 - `<main-db>/value_vlog/`
 - `<main-db>/leaf_vlog/`
 - `<main-db>/column_assets/`
-- `<main-db>/index.db` for flat layouts
-- `<root>/templatedb/` for root/main-DB layouts (value-log dictionaries live inside `maindb/index.db` `SystemRootPageID`)
+- `<main-db>/index.db` for flat layouts (value-log dictionaries and template definitions live inside `maindb/index.db` `SystemRootPageID`)
 
 For `HashicorpRaftProvider`, the Raft log directory stores
 `raft-log.bolt` and the stable metadata directory stores

@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
@@ -199,6 +200,10 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	}
 	if err := db.recover(); err != nil {
 		return nil, err
+	}
+	db.defaultTemplateDecodeOpts = normalizeTemplateDecodeOptions(opts.ValueLog)
+	if opts.ValueLog.TemplateLookup == nil && (opts.ValueLog.TemplateMode != template.TemplateOff || db.hasSystemTemplateDefs(p, vm)) {
+		vm.SetTemplateLookup(db.LookupSystemTemplateDef, db.defaultTemplateDecodeOpts)
 	}
 	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
@@ -409,6 +414,10 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	}
 	if err := db.recover(); err != nil {
 		return nil, err
+	}
+	db.defaultTemplateDecodeOpts = normalizeTemplateDecodeOptions(opts.ValueLog)
+	if opts.ValueLog.TemplateLookup == nil && (opts.ValueLog.TemplateMode != template.TemplateOff || db.hasSystemTemplateDefs(p, vm)) {
+		vm.SetTemplateLookup(db.LookupSystemTemplateDef, db.defaultTemplateDecodeOpts)
 	}
 	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {

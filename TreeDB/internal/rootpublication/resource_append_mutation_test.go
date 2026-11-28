@@ -556,12 +556,12 @@ func TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots(t *test
 
 func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 	dir := t.TempDir()
-	builder := NewStableResourceSetBuilder(ReachabilityTemplateGeneration)
+	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
 	if err := builder.Add(stableTokenFixture(
-		t, dir, "template-7", 7, 4, ReachabilityTemplateGeneration, "template-7",
+		t, dir, "leaf-7", 7, 4, ReachabilityOuterLeafPackedPointer, "leaf-7",
 		func(spec *StableResourceSpec) {
-			spec.Kind = ResourceTemplate
-			spec.ResourceID = "template-7"
+			spec.Kind = ResourceOuterLeafPack
+			spec.ResourceID = "leaf-7"
 		},
 	)); err != nil {
 		t.Fatal(err)
@@ -576,8 +576,8 @@ func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 	}
 	source.Release()
 
-	registrar := NewStableCompositeRegistrar(ReachabilityTemplateGeneration)
-	if err := registrar.RegisterChild(ReachabilityTemplateGeneration, "template-7", child); err != nil {
+	registrar := NewStableCompositeRegistrar(ReachabilityOuterLeafPackedPointer)
+	if err := registrar.RegisterChild(ReachabilityOuterLeafPackedPointer, "leaf-7", child); err != nil {
 		registrar.Abandon()
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer set.Release()
-	if len(ids) != 1 || ids[0].Value() != "template-7" {
+	if len(ids) != 1 || ids[0].Value() != "leaf-7" {
 		t.Fatalf("shared-root registered IDs=%v", ids)
 	}
 }
