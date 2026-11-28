@@ -14,6 +14,8 @@ COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-}"
 SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-}"
 SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-}"
 INDEXES_LIST="${INDEXES_LIST:-0 1 2}"
+MONGO_LOAD_INDEXES_LIST="${MONGO_LOAD_INDEXES_LIST-4 8 16 32}"
+PERSIST_HTML="${PERSIST_HTML:-}"
 RAW_KEYS="${RAW_KEYS:-}"
 COLLECTION_DOCS="${COLLECTION_DOCS:-}"
 MONGO_DOCS="${MONGO_DOCS:-}"
@@ -21,7 +23,7 @@ COLLECTION_BATCH_SIZE="${COLLECTION_BATCH_SIZE:-16000}"
 COLLECTION_PROFILES="${COLLECTION_PROFILES:-true}"
 COLLECTION_PROFILE_BENCHTIME="${COLLECTION_PROFILE_BENCHTIME:-}"
 COLLECTION_PROFILE_COUNT="${COLLECTION_PROFILE_COUNT:-1}"
-MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
+MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-2500}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
 MONGO_LOAD_SCALING_DOCS="${MONGO_LOAD_SCALING_DOCS:-}"
 MONGO_LOAD_SCALING_BATCH_SIZE="${MONGO_LOAD_SCALING_BATCH_SIZE:-1000}"
@@ -197,6 +199,20 @@ while [[ $# -gt 0 ]]; do
     --indexes)
       require_value "$1" "${2-}"
       INDEXES_LIST="$2"
+      shift 2
+      ;;
+    --mongo-load-indexes)
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      MONGO_LOAD_INDEXES_LIST="$2"
+      shift 2
+      ;;
+    --persist-html)
+      require_value "$1" "${2-}"
+      PERSIST_HTML="$2"
       shift 2
       ;;
     --raw-keys)
@@ -678,6 +694,18 @@ mongo_treedb_env_args() {
 run_mongo_full_sweep() {
   bool_true "$SKIP_MONGO" && return 0
   local root="$RUN_ROOT/mongo_gateway_full_sweep_1m_expanded"
+  local load_only_indexes
+  load_only_indexes=$(normalize_list "$MONGO_LOAD_INDEXES_LIST")
+  local max_idx=0
+  for idx in $INDEXES_LIST $load_only_indexes; do
+    if [[ "$idx" =~ ^[0-9]+$ ]] && (( idx > max_idx )); then
+      max_idx=$idx
+    fi
+  done
+  local extra_fields=0
+  if (( max_idx > 3 )); then
+    extra_fields=$max_idx
+  fi
   mongo_treedb_env_args
   run_logged mongo_full_sweep env \
     "${MONGO_TREEDB_ENV_ARGS[@]}" \
@@ -694,6 +722,8 @@ run_mongo_full_sweep() {
       --out "$root" \
       --docs "$MONGO_DOCS" \
       --indexes "$INDEXES_LIST" \
+      --load-only-indexes "$load_only_indexes" \
+      --doc-extra-index-fields "$extra_fields" \
       --reads "$MONGO_READS" \
       --range-reads "$MONGO_RANGE_READS" \
       --updates "$MONGO_UPDATES" \
@@ -812,6 +842,13 @@ render_report() {
     -run-root "$RUN_ROOT" \
     -out "$RUN_ROOT/deep_report.html" \
     -title "$TITLE"
+  if [[ -n "$PERSIST_HTML" && -f "$RUN_ROOT/deep_report.html" ]]; then
+    mkdir -p "$(dirname "$PERSIST_HTML")"
+    if [[ ! "$RUN_ROOT/deep_report.html" -ef "$PERSIST_HTML" ]]; then
+      cp "$RUN_ROOT/deep_report.html" "$PERSIST_HTML"
+    fi
+    echo "persisted benchmark report: $PERSIST_HTML"
+  fi
 }
 
 mkdir -p "$RUN_ROOT"
