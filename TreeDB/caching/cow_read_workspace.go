@@ -3,7 +3,6 @@ package caching
 import (
 	"errors"
 	"fmt"
-	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -166,7 +165,7 @@ func releaseIdleGenericCodecsLocked(shared *cowReadWorkspace) bool {
 	}
 	released := false
 	for i, codec := range shared.codecs {
-		if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
+		if codec != nil && !codec.reusableIdleBlockCodec() {
 			shared.codecs[i] = nil
 			codec.close()
 			released = true
@@ -766,6 +765,18 @@ func (w *cowReadWorkspace) readInspected(f *valuelog.File, ptr page.ValuePtr, sh
 	return f.ReadCOWRecord(ptr, shape, input, raw, w.output, decode)
 }
 
+func (w *cowReadWorkspace) readInspectedAndCache(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, independent *cowCacheDictionaryRead) ([]byte, error) {
+	input, raw, codec, err := w.prepareRead(shape, shape.ValueBytes, independent)
+	if err != nil {
+		return nil, err
+	}
+	var decode valuelog.COWDecodeFunc
+	if codec != nil {
+		decode = codec.decoder.Decode
+	}
+	return f.ReadCOWRecordAndCache(ptr, shape, input, raw, w.output, decode)
+}
+
 func (w *cowReadWorkspace) readPinnedLeaf(record *backenddb.PinnedCOWLeafRead, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
 	input, raw, codec, err := w.prepareRead(record.Shape(), 0, independent)
 	if err != nil {
@@ -908,6 +919,18 @@ func (w *cowReadWorkspace) appendInspected(f *valuelog.File, ptr page.ValuePtr, 
 	return f.AppendCOWRecord(ptr, shape, input, raw, dst, decode)
 }
 
+func (w *cowReadWorkspace) appendInspectedAndCache(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
+	input, raw, codec, err := w.prepareRead(shape, 0, independent)
+	if err != nil {
+		return dst, err
+	}
+	var decode valuelog.COWDecodeFunc
+	if codec != nil {
+		decode = codec.decoder.Decode
+	}
+	return f.AppendCOWRecordAndCache(ptr, shape, input, raw, dst, decode)
+}
+
 func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	w.poolable = false
 	return w.read(ptr.ValuePtr(), true, dst)
@@ -1028,16 +1051,10 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		if native {
-			var laneMu *sync.Mutex
-			var slotReader **cowReadWorkspace
-			var ok bool
-			// Multi-lane spillover slots are reserved for dictionary-compressed
-			// records so non-dictionary reads never retain extra spillover leases.
-			if shape.DictID != 0 {
-				laneMu, slotReader, ok = c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1))
-			} else if c.physicalMu.TryLock() {
-				laneMu, slotReader, ok = &c.physicalMu, &c.physicalReader, true
-			}
+			// Spill compressed outer-leaf misses across all bounded physical lanes
+			// (both dictionary and block codecs) so concurrent cold leaf reads reuse
+			// pre-admitted decoder workspaces instead of allocating temporary ones.
+			laneMu, slotReader, ok := c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1))
 			if ok {
 				// A preceding decoder may have admitted this exact inspected leaf
 				// while we raced. Preserve the original policy before copying a hit.

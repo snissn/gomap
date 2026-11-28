@@ -23,7 +23,7 @@ const (
 	// publication and stays below the fixed byte tranche charged at Prepare.
 	preparedInsertPublisherMaxOutputPages = uint64(237942)
 	preparedInsertPublisherMaxRecordBytes = int64(64 << 20)
-	preparedInsertPublisherMaxCacheBytes  = int64(64 << 20)
+	preparedInsertPublisherMaxCacheBytes  = int64(128 << 20)
 	preparedInsertPublisherFixedBytes     = int64(128 << 20)
 )
 
@@ -89,7 +89,7 @@ func checkPreparedInsertPublicationBase(profile backenddb.PreparedRootPublicatio
 		read.MaxRecordBytes <= 0 || read.MaxRecordBytes > preparedInsertPublisherMaxRecordBytes ||
 		read.RegisteredFiles > preparedInsertPublisherMaxValueLogFiles ||
 		read.GroupedFrameCacheMaxBytes < 0 || read.GroupedFrameCacheMaxBytes > preparedInsertPublisherMaxCacheBytes ||
-		read.GroupedFrameCacheEntries < 0 || read.GroupedFrameCacheEntries > 2048 ||
+		read.GroupedFrameCacheEntries < 0 || read.GroupedFrameCacheEntries > 8192 ||
 		read.GroupedFrameCacheMaxRawBytes < 0 || read.GroupedFrameCacheMaxRawBytes > 1<<20 ||
 		read.HasTemplateLookup {
 		return fmt.Errorf("%w: ordered publisher base exceeds prepared admission", ErrPreparedInsertResourceLimit)

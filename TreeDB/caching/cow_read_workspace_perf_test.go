@@ -628,16 +628,17 @@ func cowStandaloneLimitsForTest() memtable.COWLimits {
 }
 
 type cowDictLeafReadFixture struct {
-	db      *DB
-	backend *backenddb.DB
-	capture *NativeSemanticCapture
-	store   *cowCountingDictProvider
-	rootID  uint64
-	keys    [][]byte
-	want    []byte
-	valPtr  page.ValuePtr
-	valWant []byte
-	dictID  uint64
+	db            *DB
+	backend       *backenddb.DB
+	capture       *NativeSemanticCapture
+	store         *cowCountingDictProvider
+	rootID        uint64
+	keys          [][]byte
+	want          []byte
+	valPtr        page.ValuePtr
+	valWant       []byte
+	reclaimValPtr page.ValuePtr
+	dictID        uint64
 }
 
 func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLimits, numKeys int) *cowDictLeafReadFixture {
@@ -785,6 +786,14 @@ func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLim
 	if err := db.Checkpoint(); err != nil {
 		tb.Fatal(err)
 	}
+	// Write a second dictionary-compressed pointer in a separate checkpoint so
+	// it resides in a distinct grouped frame from dict-value-ptr.
+	if err := db.Set([]byte("dict-value-ptr-reclaim"), valWant); err != nil {
+		tb.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		tb.Fatal(err)
+	}
 	if err := backend.ActivateNativeSemanticOwner(); err != nil {
 		tb.Fatal(err)
 	}
@@ -825,6 +834,10 @@ func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLim
 	if err != nil || ptrEntry.Flags&node.FlagPointer == 0 {
 		tb.Fatalf("expected value pointer entry, got %+v err=%v", ptrEntry, err)
 	}
+	reclaimPtrEntry, err := capture.Snapshot().GetEntryAtRoot(token.RootPageID, []byte("dict-value-ptr-reclaim"))
+	if err != nil || reclaimPtrEntry.Flags&node.FlagPointer == 0 {
+		tb.Fatalf("expected reclaim value pointer entry, got %+v err=%v", reclaimPtrEntry, err)
+	}
 	vf, _, err := capture.Snapshot().PinnedValueLogFile(ptrEntry.ValuePtr.FileID)
 	if err != nil {
 		tb.Fatal(err)
@@ -833,18 +846,30 @@ func newCOWConcurrentDictionaryLeafFixture(tb testing.TB, limits memtable.COWLim
 	if err != nil || !vshape.Compressed || vshape.DictID != dictID {
 		tb.Fatalf("expected dictionary value shape dictID=%d, got %+v err=%v", dictID, vshape, err)
 	}
+	rvf, _, err := capture.Snapshot().PinnedValueLogFile(reclaimPtrEntry.ValuePtr.FileID)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	rvshape, err := valuelog.InspectCOWRecord(rvf, reclaimPtrEntry.ValuePtr, db.cow.readLimits())
+	if err != nil || !rvshape.Compressed || rvshape.DictID != dictID {
+		tb.Fatalf("expected reclaim dictionary value shape dictID=%d, got %+v err=%v", dictID, rvshape, err)
+	}
+	if reclaimPtrEntry.ValuePtr.FileID == ptrEntry.ValuePtr.FileID && reclaimPtrEntry.ValuePtr.Offset == ptrEntry.ValuePtr.Offset {
+		tb.Fatalf("expected distinct grouped frames for dict-value-ptr and dict-value-ptr-reclaim: %+v", reclaimPtrEntry.ValuePtr)
+	}
 
 	return &cowDictLeafReadFixture{
-		db:      db,
-		backend: backend,
-		capture: capture,
-		store:   counting,
-		rootID:  token.RootPageID,
-		keys:    keys,
-		want:    want,
-		valPtr:  ptrEntry.ValuePtr,
-		valWant: valWant,
-		dictID:  dictID,
+		db:            db,
+		backend:       backend,
+		capture:       capture,
+		store:         counting,
+		rootID:        token.RootPageID,
+		keys:          keys,
+		want:          want,
+		valPtr:        ptrEntry.ValuePtr,
+		valWant:       valWant,
+		reclaimValPtr: reclaimPtrEntry.ValuePtr,
+		dictID:        dictID,
 	}
 }
 
@@ -1068,9 +1093,9 @@ func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
 		t.Fatal("failed to prepare empty spillover slot for ErrCOWCapacity reclamation test")
 	}
 	// Leave enough room for dictionary definition (~112 KiB) + overhead, but NOT
-	// enough for a second ~500+ KiB bounded decoder without reclaiming idle lanes.
+	// enough for a second bounded decoder without reclaiming idle lanes.
 	beforeReclaim := budget.Stats()
-	headroom := uint64(256 << 10)
+	headroom := uint64(128 << 10)
 	leaseOverhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	if budget.Limits().MaxInFlightBytes > beforeReclaim.ReservedBytes+headroom+leaseOverhead {
 		reclaimPressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - beforeReclaim.ReservedBytes - headroom - leaseOverhead)
@@ -1087,23 +1112,44 @@ func TestCOWPhysicalDictionaryMultiLaneReuseAndClose(t *testing.T) {
 		// while holding slot1Idx.mu (Lane 0 unlocked and idle with cached dict codec).
 		slot1 := &fix.db.cow.physicalSlots[slot1Idx]
 		slot1.mu.Lock()
-		gotVal, err := fix.capture.cut.basis.readNativeValueWithWorkspace(fix.db.cow, slot1.reader, fix.store, fix.valPtr, nil, false, nil)
+		gotVal, err := fix.capture.cut.basis.readNativeValueWithWorkspace(fix.db.cow, slot1.reader, fix.store, fix.reclaimValPtr, nil, false, nil)
 		slot1.mu.Unlock()
 		reclaimPressure.Close()
 		if err != nil || !bytes.Equal(gotVal, fix.valWant) {
 			t.Fatalf("shared physical lane failed to reclaim idle codecs on ErrCOWCapacity: len=%d err=%v", len(gotVal), err)
 		}
+		// Confirm slot1 actually decoded and Lane 0's idle dict codec was reclaimed.
+		fix.db.cow.physicalMu.Lock()
+		lane0StillHasDict := false
+		if fix.db.cow.physicalReader != nil {
+			for _, c := range fix.db.cow.physicalReader.codecs {
+				if c != nil && c.id == fix.dictID {
+					lane0StillHasDict = true
+				}
+			}
+		}
+		fix.db.cow.physicalMu.Unlock()
+		if lane0StillHasDict {
+			t.Fatal("step 5 did not reclaim idle Lane 0 dictionary codec (possible unintended cache hit)")
+		}
 	}
 
-	// 5b. Contended NativeValueAtPointer with Lane 0 held and exhausted budget
-	// must refuse inspection admission cleanly with ErrCOWCapacity and zero leaks.
+	// 5b. Contended NativeValueAtPointer with all physical lanes held and
+	// exhausted budget must refuse temporary workspace admission cleanly with
+	// ErrCOWCapacity and zero leaks.
 	beforeExhaust := budget.Stats()
 	exhaustPressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - beforeExhaust.ReservedBytes - leaseOverhead)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fix.db.cow.physicalMu.Lock()
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Lock()
+	}
 	_, exhaustErr := fix.capture.NativeValueAtPointer(fix.valPtr, nil)
+	for i := range fix.db.cow.physicalSlots {
+		fix.db.cow.physicalSlots[i].mu.Unlock()
+	}
 	fix.db.cow.physicalMu.Unlock()
 	exhaustPressure.Close()
 	if !errors.Is(exhaustErr, memtable.ErrCOWCapacity) {

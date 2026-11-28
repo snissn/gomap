@@ -766,6 +766,35 @@ func (f *File) readCOWLeafPageFromInput(ptr page.ValuePtr, shape COWRecordShape,
 	return materializeCOWLeafPage(value, pageDst)
 }
 
+// CopyVerifiedCOWGroupedValueCached copies a verified COW grouped value from
+// this pinned segment's decoded grouped-frame cache when its COW certificate
+// satisfies ptr, limits (including dictionary credit dominance), and checkShape.
+// checkShape runs while holding the cache slot's RLock and MUST be lock-free
+// and non-blocking. When useDst && requireDstCap is true, a hit requires
+// cap(dst) >= len(value) so callers with pre-admitted scratch never grow under
+// the slot lock. Any miss or policy mismatch returns hit=false so the caller
+// runs canonical inspection and verification.
+func (f *File) CopyVerifiedCOWGroupedValueCached(
+	ptr page.ValuePtr,
+	limits COWReadLimits,
+	checkShape func(COWRecordShape) bool,
+	dst []byte,
+	useDst bool,
+	requireDstCap bool,
+) ([]byte, bool) {
+	if f == nil || f.ID != ptr.FileID || !page.ValuePtrIsGrouped(ptr) || f.closed.Load() {
+		return nil, false
+	}
+	cache := f.groupedFrameCache.Load()
+	if cache == nil {
+		return nil, false
+	}
+	if err := f.cowCheckReadSource(ptr, limits, false); err != nil {
+		return nil, false
+	}
+	return cache.readCOWVerified(ptr, limits, checkShape, dst, useDst, requireDstCap)
+}
+
 // ReadCOWRecord verifies a managed value and copies it into admitted output
 // scratch while the caller retains the exact registered segment.
 func (f *File) ReadCOWRecord(ptr page.ValuePtr, shape COWRecordShape, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc) ([]byte, error) {
@@ -773,6 +802,22 @@ func (f *File) ReadCOWRecord(ptr page.ValuePtr, shape COWRecordShape, payloadScr
 		return nil, ErrCOWReadCapacity
 	}
 	value, err := f.readCOWRecordValue(ptr, shape, payloadScratch, rawScratch, decode, false)
+	if err != nil {
+		return nil, err
+	}
+	out := outputScratch[:int(shape.ValueBytes):int(shape.ValueBytes)]
+	copy(out, value)
+	return out, nil
+}
+
+// ReadCOWRecordAndCache is like ReadCOWRecord, and on a verified grouped
+// compressed value record admits a cache-owned copy of the decoded raw frame
+// into this segment's bounded grouped-frame cache with a COW certificate.
+func (f *File) ReadCOWRecordAndCache(ptr page.ValuePtr, shape COWRecordShape, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc) ([]byte, error) {
+	if uint64(cap(outputScratch)) < shape.ValueBytes {
+		return nil, ErrCOWReadCapacity
+	}
+	value, err := f.readCOWRecordValueAndCache(ptr, shape, payloadScratch, rawScratch, decode)
 	if err != nil {
 		return nil, err
 	}
@@ -789,6 +834,65 @@ func (f *File) AppendCOWRecord(ptr page.ValuePtr, shape COWRecordShape, payloadS
 		return dst, err
 	}
 	return append(dst, value...), nil
+}
+
+// AppendCOWRecordAndCache is like AppendCOWRecord, and on a verified grouped
+// compressed value record admits a cache-owned copy of the decoded raw frame
+// into this segment's bounded grouped-frame cache with a COW certificate.
+func (f *File) AppendCOWRecordAndCache(ptr page.ValuePtr, shape COWRecordShape, payloadScratch, rawScratch, dst []byte, decode COWDecodeFunc) ([]byte, error) {
+	value, err := f.readCOWRecordValueAndCache(ptr, shape, payloadScratch, rawScratch, decode)
+	if err != nil {
+		return dst, err
+	}
+	return append(dst, value...), nil
+}
+
+func (f *File) readCOWRecordValueAndCache(ptr page.ValuePtr, shape COWRecordShape, payloadScratch, rawScratch []byte, decode COWDecodeFunc) ([]byte, error) {
+	if !cowRecordScratchFits(ptr, shape, payloadScratch, rawScratch, false) {
+		return nil, ErrCOWReadCapacity
+	}
+	if f == nil || f.ID != ptr.FileID {
+		return nil, ErrCOWReadUnsupported
+	}
+	if err := f.cowCheckReadSource(ptr, shape.limits, false); err != nil {
+		return nil, err
+	}
+	var verifiedInput []byte
+	var value []byte
+	var err error
+	if input := f.cowMappedRecordRange(ptr, shape.limits, shape.RecordBytes); input != nil {
+		f.recordPinnedMmapReadHit(ptr.Offset)
+		value, err = decodeCOWRecordInput(ptr, shape, true, false, false, input, nil, payloadScratch, rawScratch, decode)
+		verifiedInput = input
+	} else {
+		f.mmapReadFallbackReadAt.Add(1)
+		inputBuf := payloadScratch[:int(shape.RecordBytes):int(shape.RecordBytes)]
+		readBytes, readErr := f.File.ReadAt(inputBuf, int64(ptr.Offset-4))
+		value, err = decodeCOWRecordInput(ptr, shape, true, false, false, inputBuf[:readBytes:readBytes], readErr, nil, rawScratch, decode)
+		verifiedInput = inputBuf[:readBytes]
+	}
+	if err != nil {
+		return nil, err
+	}
+	if shape.Compressed && page.ValuePtrIsGrouped(ptr) && shape.frame.K > 0 && f.groupedFrameCacheAllowsRaw(int(shape.RawBytes)) {
+		k := int(shape.frame.K)
+		offStart := HeaderSize + FrameHeaderSize + k*8
+		offEnd := offStart + (k+1)*4
+		if len(verifiedInput) >= offEnd && uint64(cap(rawScratch)) >= shape.RawBytes {
+			var offsets [MaxFrameK + 1]uint32
+			for i := 0; i <= k; i++ {
+				offsets[i] = binary.LittleEndian.Uint32(verifiedInput[offStart+i*4:])
+			}
+			rawLen := int(shape.RawBytes)
+			rawCopy := f.takeDecodeScratch(rawLen)
+			rawCopy = rawCopy[:rawLen]
+			copy(rawCopy, rawScratch[:rawLen])
+			if !f.groupedFrameCacheStoreCOWVerified(int64(ptr.Offset-4), shape, offsets, rawCopy, true) {
+				f.releaseDecodeScratch(rawCopy)
+			}
+		}
+	}
+	return value, nil
 }
 
 func (f *File) readCOWRecordValue(ptr page.ValuePtr, shape COWRecordShape, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {

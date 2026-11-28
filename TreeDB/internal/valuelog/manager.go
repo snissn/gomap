@@ -576,6 +576,18 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	return stored
 }
 
+func (f *File) groupedFrameCacheStoreCOWVerified(start int64, shape COWRecordShape, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
+	if f == nil || f.closed.Load() {
+		return false
+	}
+	cache := f.ensureGroupedFrameCache()
+	stored := cache.storeCOWVerified(start, shape, offsets, raw, pooled)
+	if stored && (f.closed.Load() || f.groupedFrameCache.Load() != cache) {
+		cache.clear()
+	}
+	return stored
+}
+
 func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
 	stats := f.groupedFrameCacheDetailedStats()
 	return stats.Hits, stats.Misses, stats.Entries, stats.Capacity
@@ -1547,6 +1559,7 @@ type Manager struct {
 	groupedFrameCacheMaxRaw     int
 	groupedFrameCacheMaxBytes   int64
 	groupedFrameCacheBudget     *groupedFrameCacheBudget
+	groupedFrameEvictCursor     atomic.Uint64
 	currentWritableMmap         atomic.Bool
 	skipCurrentLeafMmapCache    atomic.Bool
 	currentWritableReadBarrier  atomic.Value
@@ -1720,7 +1733,7 @@ func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublicati
 		recoveredStableDeleteDirs:   make(map[string]bool),
 		stableDeleteRecoveryEnabled: recoverStableDeletes,
 	}
-	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
+	m.groupedFrameCacheBudget = newGroupedFrameCacheBudgetWithEvict(defaultGroupedFrameCacheMaxBytes, m.evictGroupedFrameCacheBytes)
 	var err error
 	if refresh {
 		err = m.Refresh()
@@ -1972,13 +1985,59 @@ func (m *Manager) SetGroupedFrameCacheMaxBytes(maxBytes int64) {
 	defer m.mu.Unlock()
 	m.groupedFrameCacheMaxBytes = maxBytes
 	if m.groupedFrameCacheBudget == nil {
-		m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(maxBytes)
+		m.groupedFrameCacheBudget = newGroupedFrameCacheBudgetWithEvict(maxBytes, m.evictGroupedFrameCacheBytes)
 	} else {
 		m.groupedFrameCacheBudget.setLimit(maxBytes)
 	}
 	for _, f := range m.files {
 		f.setGroupedFrameCacheMaxBytes(maxBytes)
 	}
+}
+
+// evictGroupedFrameCacheBytes performs strictly non-blocking eviction across
+// peer files and sibling shards when a store needs space under a saturated
+// manager-wide byte budget. All locks acquired here use TryRLock/TryLock so it
+// can never deadlock with the caller's locked shard, concurrent configuration
+// resets, or peer evictions.
+func (m *Manager) evictGroupedFrameCacheBytes(_ *groupedFrameCache, need int) bool {
+	if m == nil || need <= 0 {
+		return false
+	}
+	if !m.mu.TryRLock() {
+		return false
+	}
+	defer m.mu.RUnlock()
+	if m.closing || len(m.files) == 0 {
+		return false
+	}
+	freed := 0
+	cursor := m.groupedFrameEvictCursor.Add(1)
+	for _, f := range m.files {
+		if f == nil || f.closed.Load() {
+			continue
+		}
+		cache := f.groupedFrameCache.Load()
+		if cache == nil || len(cache.shards) == 0 || cache.retained() == 0 {
+			continue
+		}
+		n := len(cache.shards)
+		start := int(cursor % uint64(n))
+		evicted := 0
+		for i := 0; i < n && evicted < 8; i++ {
+			idx := (start + i) % n
+			if !cache.shards[idx].allocated.Load() {
+				continue
+			}
+			if got := cache.tryEvictOldestFromShard(idx); got > 0 {
+				evicted++
+				freed += got
+				if freed >= need {
+					return true
+				}
+			}
+		}
+	}
+	return freed > 0
 }
 
 func (m *Manager) Close() error {

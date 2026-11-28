@@ -166,3 +166,41 @@ func TestOptionsForSemanticLeafPageReadCacheCallerOverrides(t *testing.T) {
 		}
 	})
 }
+
+func TestOptionsForSemanticGroupedFrameCacheDefaults(t *testing.T) {
+	for _, profile := range []Profile{
+		ProfileCommandWALDurable,
+		ProfileCommandWALRelaxed,
+		ProfileNoWALFast,
+	} {
+		opts := OptionsForSemantic(profile, t.TempDir())
+		if opts.ValueLog.GroupedFrameCacheEntries != defaultSemanticGroupedFrameCacheEntries {
+			t.Fatalf("OptionsForSemantic(%s).ValueLog.GroupedFrameCacheEntries=%d want %d", profile, opts.ValueLog.GroupedFrameCacheEntries, defaultSemanticGroupedFrameCacheEntries)
+		}
+		if opts.ValueLog.GroupedFrameCacheMaxBytes != defaultSemanticGroupedFrameCacheMaxBytes {
+			t.Fatalf("OptionsForSemantic(%s).ValueLog.GroupedFrameCacheMaxBytes=%d want %d", profile, opts.ValueLog.GroupedFrameCacheMaxBytes, defaultSemanticGroupedFrameCacheMaxBytes)
+		}
+	}
+
+	// Verify caller disable (-1) and explicit positive overrides open cleanly.
+	optsOff := OptionsForSemantic(ProfileCommandWALRelaxed, t.TempDir())
+	optsOff.ValueLog.GroupedFrameCacheEntries = -1
+	dbOff, err := Open(optsOff)
+	if err != nil {
+		t.Fatalf("Open(GroupedFrameCacheEntries=-1): %v", err)
+	}
+	if err := dbOff.Close(); err != nil {
+		t.Fatalf("Close(off): %v", err)
+	}
+
+	optsCustom := OptionsForSemantic(ProfileCommandWALRelaxed, t.TempDir())
+	optsCustom.ValueLog.GroupedFrameCacheEntries = 512
+	optsCustom.ValueLog.GroupedFrameCacheMaxBytes = 16 << 20
+	dbCustom, err := Open(optsCustom)
+	if err != nil {
+		t.Fatalf("Open(custom grouped frame cache): %v", err)
+	}
+	if err := dbCustom.Close(); err != nil {
+		t.Fatalf("Close(custom): %v", err)
+	}
+}
