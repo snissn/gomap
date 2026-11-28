@@ -147,6 +147,13 @@ These checked-in reports use different workloads, profiles, and caveats. Treat
 each workload as scoped evidence from its linked benchmark, not as one combined
 benchmark suite.
 
+Latest persistent 3-tier deep benchmark HTML reports (updated in place on each
+deep-bench refresh, currently Sprint 22 commit `db277fee6`):
+
+- [Relaxed WAL Deep Report (`command_wal_relaxed`)](docs/benchmarks/deep_report_relaxed.html)
+- [Fast No-WAL Deep Report (`no_wal_fast`)](docs/benchmarks/deep_report_fast.html)
+- [Durable WAL Deep Report (`command_wal_durable`)](docs/benchmarks/deep_report_durable.html)
+
 ### TreeDB versus Qdrant: same-machine 500K vectors
 
 November 26 post-Sprint 16 comparison on `mikers-B560-DS3H-AC-Y1` (`i5-11400F`,
@@ -235,8 +242,8 @@ retains its original commands, repeats and limitations.
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, November 27 post-PR-4 flat-layout deep benchmark refresh
-(`i5-11400F`, commit `f4f5f5d95`, `100000` documents, batch size `16000`,
+Two secondary indexes, November 28 Sprint 22 deep benchmark refresh
+(`i5-11400F`, commit `db277fee6`, `100000` documents, batch size `16000`,
 `-count 1`, and `command_wal_relaxed` for TreeDB). `docs/sec` is the timed
 insert measurement for the value-log outer-leaf layout. Compacted B/doc uses
 `exhaustive_compact` for TreeDB template-v1 (`24.2` B/doc
@@ -245,20 +252,24 @@ for TreeDB BSON and JSON, and SQLite after `VACUUM`.
 
 | engine / format | layout | docs/sec | compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 909,091 | 23.0 |
-| TreeDB BSON | data and index outer leaves in value log | 882,613 | 25.3 |
-| TreeDB JSON | data and index outer leaves in value log | 808,407 | 34.4 |
-| SQLite native columns | WAL normal | 362,319 | 156.7 |
-| SQLite JSON | WAL normal | 326,904 | 231.7 |
+| TreeDB BSON | data and index outer leaves in value log | 945,180 | 25.3 |
+| TreeDB template-v1 | data and index outer leaves in value log | 874,891 | 23.0 |
+| TreeDB JSON | data and index outer leaves in value log | 856,164 | 34.4 |
+| SQLite native columns | WAL normal | 374,953 | 156.7 |
+| SQLite JSON | WAL normal | 308,547 | 231.7 |
 
-In the same refresh, `no_wal_fast` reached `1,093,374` (`template-v1`),
-`1,041,558` (BSON), and `879,507` (JSON) docs/sec (`3.11x–4.08x` SQLite
-`WAL OFF`), and `command_wal_durable` reached `539,084` / `535,045` /
-`452,899` docs/sec (`1.99x–2.07x` SQLite `WAL FULL`).
+In the same refresh across `0`, `1`, and `2` secondary indexes, TreeDB BSON and
+`template-v1` beat JSON at `1` index in every durability tier (`1,260,716` /
+`1,223,242` vs. `1,058,761` in `relaxed`; `1,345,171` / `1,431,434` vs.
+`1,318,739` in `fast`; `636,132` / `567,215` vs. `522,466` in `durable`),
+`no_wal_fast` reached `2,986,858` (0-index BSON, `5.65x` SQLite native) and
+`1,104,606` (2-index BSON, `2.92x` SQLite native / `3.68x` SQLite JSON), and
+`command_wal_durable` reached `987,167` (0-index BSON) and `590,667` /
+`530,223` (2-index BSON / `template-v1`, `1.85x–2.06x` SQLite `WAL FULL`).
 
 Source:
-[November 27 post-PR-4 deep benchmark refresh](docs/benchmarks/s21_deep_bench_refresh_2026-11-27.md#1-indexed-collection-insert-workload-100k-docs-batch-size-16000)
-(prior [November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#2-indexed-collection-insert-workload)).
+[November 28 Sprint 22 deep benchmark refresh](docs/benchmarks/s22_deep_bench_refresh_2026-11-28.md#1-indexed-collection-insert-workload-100k-docs-batch-size-16000)
+(prior [November 27 post-PR-4 refresh](docs/benchmarks/s21_deep_bench_refresh_2026-11-27.md#1-indexed-collection-insert-workload-100k-docs-batch-size-16000)).
 
 ### Collection Read And Lookup Workload
 
@@ -379,35 +390,46 @@ Source:
 [November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#7-treedb-mongo-gateway-client-shape-workload)
 (prior [June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md)).
 
-### Mongo API Full-Sweep Workload
+### Mongo API Full-Sweep & `0..32` Secondary-Index Workload
 
-November 27 post-PR-4 flat-layout deep benchmark refresh (`i5-11400F`, commit
-`f4f5f5d95`), Docker `mongo:8` baseline, `100000` BSON documents, TreeDB Mongo
-gateway `driver-command-raw`, `command_wal_relaxed`, standalone COW open mode.
-The full-sweep load rows include the additional `age_1` range index even when
-the displayed secondary-index count is `0`. TreeDB physical MiB is the
-post-sweep `checkpoint` physical `du` (prior to offline `exhaustive`
-compaction; `0.06x–0.09x` MongoDB physical `du`).
+November 28 Sprint 22 deep benchmark refresh (`i5-11400F`, commit `db277fee6`),
+Docker `mongo:8` baseline, `100000` BSON documents, TreeDB Mongo gateway
+`driver-command-raw` (prebuilt raw insert commands on both engines, batch size
+`2500`, `8` producers), standalone COW open mode. All `0..32` secondary-index
+points share an identical 32-field (`988 B` / ~1.0 KB per doc) payload shape
+plus the `age_1` range index; TreeDB load throughput includes full settled
+`Checkpoint()` drain time, while MongoDB `w:1` does not wait for a checkpoint.
 
-| secondary indexes | TreeDB load docs/sec | MongoDB load docs/sec | TreeDB `_id` r16 ops/sec | MongoDB `_id` r16 ops/sec | TreeDB physical MiB | MongoDB physical MiB |
+| secondary indexes | Relaxed TreeDB docs/sec | Relaxed MongoDB (`w:1`) docs/sec | Ratio | Fast TreeDB docs/sec | Fast MongoDB (`w:1`) docs/sec | Ratio |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 516,948 | 415,137 | 113,293 | 35,142 | 13.82 | 213.35 |
-| 1 | 468,687 | 242,186 | 113,150 | 33,503 | 18.66 | 217.02 |
-| 2 | 428,523 | 198,786 | 109,432 | 32,110 | 15.08 | 217.60 |
+| 0 | 306,188 | 478,052 | 0.64x | 381,860 | 478,069 | 0.80x |
+| 1 | 262,226 | 208,584 | 1.26x | 364,160 | 261,281 | 1.39x |
+| 2 | 277,201 | 186,889 | 1.48x | 337,527 | 218,585 | 1.54x |
+| 4 | 219,916 | 141,579 | 1.55x | 287,320 | 163,755 | 1.75x |
+| 8 | 127,918 | 82,272 | 1.55x | 159,022 | 95,481 | 1.67x |
+| 16 | 83,738 | 45,998 | 1.82x | 87,049 | 49,314 | 1.77x |
+| 32 | 20,238 | 26,438 | 0.77x | 18,830 | 26,320 | 0.72x |
 
-In the same run, zero phases had MongoDB ahead on ops/sec: TreeDB indexed `age`
-range reads (`r16`) measured `105,441` / `107,480` / `106,588 ops/sec`
-(`4.30x–4.66x` MongoDB 8) and concurrent `_id` `updateOne` scaling reached
-`59,621–61,948 ops/sec` at 16 writers (`1.90x–1.98x` MongoDB) and
-`80,596–81,717 ops/sec` at 32 writers (`2.39x–2.48x` MongoDB). In the paired
-`command_wal_durable` vs. MongoDB `w:1,j:true` sweep, TreeDB led every phase
-(`335k–461k` load `1.22x–1.74x`, `3,968–4,139 ops/sec` durable `updateOne w16`
-`2.24x–2.46x`, `101k–114k` `age` range `r16` `4.58x–5.02x`) at `8.34–10.85 MiB`
-physical `du` (`0.04x–0.05x` MongoDB).
+In `command_wal_relaxed` across the `idx=0, 1, 2` full sweep on ~1.0 KB docs,
+TreeDB leads MongoDB on concurrent `_id` `r16` reads (`59.0k–71.2k` vs.
+`24.0k–24.8k`, `2.45x–2.87x`), indexed `email` `r16` reads (`57.2k–57.3k` vs.
+`22.2k–23.2k`, `2.46x–2.58x`), and concurrent `_id` `updateOne` (`40.4k–43.4k`
+`w16` `1.51x–1.56x`, `44.1k–48.7k` `w32` `1.63x–1.79x`; in
+`command_wal_durable` vs. MongoDB `w:1,j:true`, `3,455–3,882` `w16`
+`2.13x–2.31x`). On the standard ~300 B gateway doc producer scaling sweep
+(`0..2` indexes), TreeDB reached **`986,663`** docs/sec in `no_wal_fast`
+(`5.33x` at peak; `1.99x–6.93x` across `p=1..32`), **`739,940`** docs/sec in
+`command_wal_relaxed` (`2.61x` at peak; `1.46x–5.95x` across `p=1..32`), and
+**`385,042`** docs/sec in `command_wal_durable` (`1.61x` at peak;
+`1.10x–4.13x` across `p=1..16`).
 
 Source:
-[November 27 post-PR-4 deep benchmark refresh](docs/benchmarks/s21_deep_bench_refresh_2026-11-27.md#2-mongo-api-full-sweep-workload-100k-bson-docs-standalone-cow)
-(prior [November 26 README benchmark refresh](docs/benchmarks/readme_benchmark_refresh_2026-11-26.md#8-mongo-api-full-sweep-workload--writer-scaling)).
+[November 28 Sprint 22 deep benchmark refresh](docs/benchmarks/s22_deep_bench_refresh_2026-11-28.md#2-mongo-api-full-sweep--032-secondary-index-scaling-100k-docs-standalone-cow)
+and persistent HTML reports
+([relaxed](docs/benchmarks/deep_report_relaxed.html),
+[fast](docs/benchmarks/deep_report_fast.html),
+[durable](docs/benchmarks/deep_report_durable.html))
+(prior [November 27 post-PR-4 refresh](docs/benchmarks/s21_deep_bench_refresh_2026-11-27.md#2-mongo-api-full-sweep-workload-100k-bson-docs-standalone-cow)).
 
 ### Vector Search Server Matched-Recall Matrix
 
