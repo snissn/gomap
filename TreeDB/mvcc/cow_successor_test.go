@@ -11,7 +11,6 @@ func TestCOWSuccessorLogicalTombstoneAndEmptyValue(t *testing.T) {
 			opts := treedb.OptionsFor(profile, t.TempDir())
 			opts.MemtableMode = "cow_btree"
 			opts.MemtableShards = 4
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			db, err := treedb.Open(opts)
 			if err != nil {
@@ -50,7 +49,6 @@ func TestCOWSuccessorPublicEmptyKeyValue(t *testing.T) {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := treedb.OptionsFor(profile, t.TempDir())
 			opts.MemtableMode = "cow_btree"
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			db, err := treedb.Open(opts)
 			if err != nil {

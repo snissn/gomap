@@ -24,12 +24,12 @@ Use that folder for architecture, format, durability, recovery, lifecycle, and v
 ## Architecture
 
 ### Storage Layout
--   **Root dir:** `Options.Dir` is a root directory with `maindb/` (main data) plus optional side stores such as `dictdb/` and `templatedb/`.
--   **Pages:** 4KB fixed-size blocks in `maindb/index.db`.
+-   **Database dir:** `Options.Dir` is a single flat directory containing `index.db`, `wal/`, `value_vlog/`, `leaf_vlog/`, `format.json`, and `LOCK`. Value-log dictionaries and template definitions live inside `index.db`'s `SystemRootPageID`.
+-   **Pages:** 4KB fixed-size blocks in `index.db`.
 -   **Nodes:** Slotted pages supporting variable-length keys.
--   **Value log:** Persistent append-only segments under `maindb/value_vlog/` storing large values with CRC checksums.
--   **Leaf log:** Optional persistent outer-leaf generations under `maindb/leaf_vlog/` when `IndexOuterLeavesInValueLog` is enabled.
--   **Journal/redo log:** Commit metadata for crash recovery under `maindb/wal/`.
+-   **Value log:** Persistent append-only segments under `value_vlog/` storing large values with CRC checksums.
+-   **Leaf log:** Optional persistent outer-leaf generations under `leaf_vlog/` when `IndexOuterLeavesInValueLog` is enabled.
+-   **Journal/redo log:** Commit metadata for crash recovery under `wal/`.
 
 ### Write Path ("The Zipper")
 Writes are batched and applied using a recursive "Zipper" merge algorithm. This creates a new version of the tree path (COW) without modifying existing on-disk pages, ensuring crash safety and snapshot isolation.

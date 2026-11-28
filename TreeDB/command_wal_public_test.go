@@ -27,7 +27,6 @@ import (
 func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
@@ -182,7 +181,6 @@ func TestPublicCommandWALDurablePointWriteSyncUsesExternalCachedMode(t *testing.
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
@@ -337,7 +335,6 @@ func TestPublicCommandWALRawKVEmptyPointKeyAndZeroLengthValues(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -619,7 +616,6 @@ func requirePublicCommandWALNoCheckpointSince(t *testing.T, db *DB, before map[s
 func commandWALDurabilityProofOptions(dir string) Options {
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.MaxWALBytes = -1
@@ -1672,10 +1668,9 @@ func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
 
 func TestPublicCommandWALLiveCountersDoNotRequireStatsScan(t *testing.T) {
 	db, err := Open(Options{
-		Dir:               t.TempDir(),
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:        t.TempDir(),
+		Durability: DurabilityWALOnRelaxed,
+		CommandWAL: true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -1724,7 +1719,6 @@ func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T)
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -1797,7 +1791,6 @@ func TestPublicCommandWALPointWritesUseVisibleRevision(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -1847,7 +1840,6 @@ func TestPublicCommandWALBatchWritesPreserveVisibleRevisionOnReopen(t *testing.T
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -1899,7 +1891,6 @@ func TestPublicCommandWALDurableBatchWriteSyncDoesNotCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
@@ -2003,7 +1994,6 @@ func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2041,7 +2031,6 @@ func TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2080,7 +2069,6 @@ func TestPublicCommandWALBatchPayloadSoftCapWritesAndReopens(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2127,7 +2115,6 @@ func TestPublicCommandWALBatchPayloadSoftCapWritesAndReopens(t *testing.T) {
 	reopen, err := Open(Options{
 		Dir:                 dir,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
@@ -2144,7 +2131,6 @@ func TestPublicCommandWALBatchPayloadSoftCapRangePointerReopens(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	}
 	opts.ValueLog.PointerThreshold = 1
@@ -2199,7 +2185,7 @@ func TestPublicCommandWALBatchPayloadSoftCapRangePointerReopens(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -2217,7 +2203,6 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2265,10 +2250,9 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 
 func TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN(t *testing.T) {
 	db, err := Open(Options{
-		Dir:               t.TempDir(),
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:        t.TempDir(),
+		Durability: DurabilityWALOnRelaxed,
+		CommandWAL: true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2304,7 +2288,6 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2368,7 +2351,7 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 
 func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, MaxWALBytes: -1, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1, DisableSideStores: true})
+	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, MaxWALBytes: -1, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -2456,7 +2439,7 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close after cleanup: %v", err)
 	}
-	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true})
 	if err != nil {
 		t.Fatalf("reopen after cleanup: %v", err)
 	}
@@ -2473,7 +2456,6 @@ func TestCOWWriteAcknowledgesWhileWALByteSampleContended(t *testing.T) {
 		o.MaxWALBytes = -1
 		o.BackgroundCheckpointInterval = -1
 		o.BackgroundCheckpointIdleDuration = -1
-		o.DisableSideStores = true
 		o.DisableBackgroundPrune = true
 	})
 	walDir := backenddb.WALDirPath(database.backend.Dir())
@@ -2613,7 +2595,6 @@ func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 		MaxWALBytes:                      1,
 		BackgroundCheckpointInterval:     -1,
 		BackgroundCheckpointIdleDuration: -1,
-		DisableSideStores:                true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2672,7 +2653,6 @@ func TestPublicCommandWALAutoCheckpointBytesIncludesRotatedSegments(t *testing.T
 		CommandWALSegmentTargetBytes:     1,
 		BackgroundCheckpointInterval:     -1,
 		BackgroundCheckpointIdleDuration: -1,
-		DisableSideStores:                true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2709,7 +2689,6 @@ func TestPublicCommandWALAutoCheckpointRetainsUncoveredTailThroughReopen(t *test
 		MaxWALBytes:                      1,
 		BackgroundCheckpointInterval:     -1,
 		BackgroundCheckpointIdleDuration: -1,
-		DisableSideStores:                true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -2761,7 +2740,7 @@ func TestPublicCommandWALAutoCheckpointRetainsUncoveredTailThroughReopen(t *test
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	db, err = Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -2776,10 +2755,9 @@ func TestPublicCommandWALAutoCheckpointRetainsUncoveredTailThroughReopen(t *test
 
 func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
 	db, err := Open(Options{
-		Dir:               t.TempDir(),
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:        t.TempDir(),
+		Durability: DurabilityWALOnRelaxed,
+		CommandWAL: true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2806,10 +2784,9 @@ func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
 
 func TestPublicCommandWALNoopCheckpointRunsPublishHook(t *testing.T) {
 	db, err := Open(Options{
-		Dir:               t.TempDir(),
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:        t.TempDir(),
+		Durability: DurabilityWALOnRelaxed,
+		CommandWAL: true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -2833,7 +2810,7 @@ func TestPublicCommandWALNoopCheckpointRunsPublishHook(t *testing.T) {
 }
 
 func TestPublicCommandWALCheckpointSeparatesCleanupStage(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOnRelaxed, CommandWAL: true, DisableSideStores: true})
+	db, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOnRelaxed, CommandWAL: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -2888,7 +2865,6 @@ func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := OptionsFor(tt.profile, t.TempDir())
-			opts.DisableSideStores = true
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("Open command WAL: %v", err)
@@ -2920,10 +2896,9 @@ func TestPublicCommandWALCloseReportsFinalCheckpointError(t *testing.T) {
 	checkpointErr := errors.New("forced checkpoint failure")
 	var notified []error
 	db, err := Open(Options{
-		Dir:               t.TempDir(),
-		Durability:        DurabilityWALOnRelaxed,
-		CommandWAL:        true,
-		DisableSideStores: true,
+		Dir:        t.TempDir(),
+		Durability: DurabilityWALOnRelaxed,
+		CommandWAL: true,
 		NotifyError: func(err error) {
 			notified = append(notified, err)
 		},
@@ -3058,7 +3033,6 @@ func TestPublicCommandWALBatchReplayBytesAppendOnlyLeaseAvoidsDirectArena(t *tes
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 		MemtableMode:        "append_only",
 		MemtableShards:      1,
 		FlushThreshold:      1 << 30,
@@ -3139,7 +3113,6 @@ func TestPublicCommandWALBatchHashSortedLeaseProtectsCallerMutation(t *testing.T
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 		MemtableMode:        "hash_sorted",
 		MemtableShards:      1,
 		FlushThreshold:      1 << 30,
@@ -3224,7 +3197,6 @@ func TestPublicCommandWALBatchZeroValueAppendOnlyLeaseAvoidsDirectArena(t *testi
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 		MemtableMode:        "append_only",
 		MemtableShards:      1,
 		FlushThreshold:      1 << 30,
@@ -3326,7 +3298,6 @@ func TestPublicCommandWALBatchRevisionPayloadSetKeepsMutableAllZeroValue(t *test
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -3574,7 +3545,6 @@ func TestPublicCommandWALBatchReplayBytesPayloadPreservesAssignedRevision(t *tes
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -3658,7 +3628,7 @@ func TestPublicCommandWALBatchReplayBytesPayloadPreservesAssignedRevision(t *tes
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true})
 	if err != nil {
 		t.Fatalf("Reopen command WAL: %v", err)
 	}
@@ -3735,7 +3705,6 @@ func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -3803,7 +3772,6 @@ func TestPublicCommandWALBatchStablePayloadAppendsWithoutReplay(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -3873,7 +3841,6 @@ func TestPublicCommandWALBatchOrdinarySetStablePayloadAppendsWithoutReplay(t *te
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -4216,7 +4183,6 @@ func BenchmarkPublicCommandWALRawKVSet(b *testing.B) {
 				Durability:          DurabilityWALOnRelaxed,
 				CommandWAL:          commandWAL,
 				CommandWALStatsScan: commandWAL,
-				DisableSideStores:   true,
 			})
 			if err != nil {
 				b.Fatalf("Open: %v", err)
@@ -4251,7 +4217,6 @@ func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
 						Durability:          DurabilityWALOnRelaxed,
 						CommandWAL:          commandWAL,
 						CommandWALStatsScan: commandWAL,
-						DisableSideStores:   true,
 					})
 					if err != nil {
 						b.Fatalf("Open: %v", err)
@@ -5452,7 +5417,6 @@ func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	})
 	if err != nil {
@@ -5483,7 +5447,7 @@ func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -5505,7 +5469,6 @@ func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := Open(opts)
 	if err != nil {
@@ -5558,7 +5521,7 @@ func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
 		t.Fatalf("backend Close after manual command append: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -5582,7 +5545,6 @@ func TestPublicCommandWALDeleteRangeBoundsNoopFramesAndCheckpointLSN(t *testing.
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	})
 	if err != nil {
@@ -5653,7 +5615,6 @@ func TestPublicCommandWALDeleteRangeFullRangeInMemoryCheckpoint(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	})
 	if err != nil {
@@ -5692,7 +5653,6 @@ func TestPublicCommandWALDeleteRangeSnapshotIsolation(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	})
 	if err != nil {
@@ -5733,7 +5693,6 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	}
 	opts.ValueLog.PointerThreshold = 1
@@ -5769,7 +5728,7 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -5794,7 +5753,6 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 		WALMaxSegmentBytes:           4096,
 	}
@@ -5881,7 +5839,7 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -5895,7 +5853,6 @@ func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
 	dir := t.TempDir()
 	opts := OptionsFor(ProfileCommandWALRelaxed, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.FlushThreshold = 1 << 30
 	opts.WALMaxSegmentBytes = 1 << 20
@@ -5968,7 +5925,6 @@ func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *tes
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 		WALMaxSegmentBytes:           4096,
 	}
@@ -6077,7 +6033,6 @@ func TestPublicCommandWALCloseRejectsLateSetSyncWithErrClosed(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -6131,7 +6086,6 @@ func TestPublicCommandWALBatchWriteAfterCloseReturnsErrClosed(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -6170,7 +6124,6 @@ func TestPublicCommandWALBatchPayloadPoolAcquisitionKeepsClosedHandlesIsolated(t
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -6255,7 +6208,6 @@ func TestPublicCommandWALBatchPayloadPoolDropsOversizeBuffer(t *testing.T) {
 		Durability:          DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)

@@ -348,7 +348,7 @@ func TestTextV2RewritePointerizesLargeDocMapBlocksCommandWALAndReplay(t *testing
 	// a fresh directory so reopening exercises full LSN-0 CommandWAL replay via
 	// replayInlineAppender.
 	replayDir := t.TempDir()
-	replayMainDir := filepath.Join(replayDir, "maindb")
+	replayMainDir := replayDir
 	if err := os.MkdirAll(replayMainDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", replayMainDir, err)
 	}

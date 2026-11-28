@@ -60,7 +60,6 @@ func TestStableChildAtReopensModeledRelativeDatabaseRoot(t *testing.T) {
 	sourceRoot := t.TempDir()
 	sourceDB := filepath.Join(sourceRoot, "db")
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, sourceDB)
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)
@@ -121,7 +120,6 @@ func TestStableChildCapturesParentEvidenceForAbsentDatabaseRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, filepath.Join(sourceRoot, "db"))
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	evidenceDir := filepath.Join(canonicalTempDir(t), "relative-evidence")
 	t.Setenv(powerlossoracle.EnvEvidenceDir, evidenceDir)

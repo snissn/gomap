@@ -32,7 +32,7 @@ func requireStandaloneExt4(t *testing.T, dir string) {
 
 func checkStandaloneWALStream(t *testing.T, owner *StandaloneServer, want bool) {
 	t.Helper()
-	format, ok, err := backenddb.LoadFormatConfig(filepath.Join(owner.Options.Dir, "maindb"))
+	format, ok, err := backenddb.LoadFormatConfig(owner.Options.Dir)
 	if err != nil || !ok || format.RelaxedStandaloneWALStream != want {
 		t.Fatalf("persisted stream policy=%t found=%t err=%v, want %t", format.RelaxedStandaloneWALStream, ok, err, want)
 	}

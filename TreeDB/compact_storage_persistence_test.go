@@ -34,7 +34,7 @@ func TestCompactStorageExhaustiveDefaultWriteProducedValueLogPointersSurviveBack
 		t.Fatalf("Close public default-write fixture: %v", err)
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, DisableSideStores: true})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("OpenBackend for default-write fixture: %v", err)
 	}
@@ -112,7 +112,6 @@ func compactPersistencePublicOptions(dir string) treedb.Options {
 		IndexOuterLeavesInValueLog: true,
 	}
 	opts.DisableBackgroundPrune = true
-	opts.DisableSideStores = true
 	opts.FlushAdmissionPolicy = treedb.FlushAdmissionPolicyExplicit
 	opts.FlushApplyConcurrency = 4
 	opts.FlushApplyMinEntries = 1

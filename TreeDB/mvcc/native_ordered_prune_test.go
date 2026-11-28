@@ -17,7 +17,6 @@ func nativeOrderedPruneOpen(t *testing.T, profile treedb.Profile, dir string) *t
 	opts.MemtableMode = "cow_ordered"
 	opts.MemtableShards = 4
 	opts.FlushThreshold = 1 << 30
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := treedb.Open(opts)

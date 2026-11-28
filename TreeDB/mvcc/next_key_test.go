@@ -412,7 +412,6 @@ func TestVersionIteratorNextKeyErrorsAndReverse(t *testing.T) {
 func TestVersionIteratorNextKeyOrderedPinnedCutAndFloor(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
 	opts.MemtableMode = "cow_ordered"
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)

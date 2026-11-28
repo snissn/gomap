@@ -17,7 +17,6 @@ func TestCOWRelaxedPublicPointLaneAffinity(t *testing.T) {
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 1
 	opts.JournalLanes = 3
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.PointerThreshold = 1

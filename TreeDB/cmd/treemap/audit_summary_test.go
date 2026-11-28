@@ -47,7 +47,7 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 	if report.Command != "treemap audit-summary" {
 		t.Fatalf("command=%q", report.Command)
 	}
-	if report.Dir != filepath.Clean(dir) || report.RootDir != filepath.Clean(dir) || report.MainDir != filepath.Join(filepath.Clean(dir), "maindb") {
+	if report.Dir != filepath.Clean(dir) || report.RootDir != filepath.Clean(dir) || report.MainDir != filepath.Clean(dir) {
 		t.Fatalf("unexpected dirs: dir=%q root=%q main=%q", report.Dir, report.RootDir, report.MainDir)
 	}
 	if !report.Options.FrameStats || report.Options.GzipSamples != 3 || report.Options.GzipSampleMaxBytes != 4096 {
@@ -102,81 +102,12 @@ func TestAuditSummaryJSONOutputShape(t *testing.T) {
 	}
 }
 
-func TestAuditSummaryMainDBDirWithSiblingSideStoreUsesParentRoot(t *testing.T) {
-	root := t.TempDir()
-	mainDir := filepath.Join(root, "maindb")
-	if err := os.Mkdir(mainDir, 0o755); err != nil {
-		t.Fatalf("mkdir maindb: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(root, "dictdb"), 0o755); err != nil {
-		t.Fatalf("mkdir dictdb: %v", err)
-	}
-	if got := resolveTreemapRootDir(mainDir, mainDir); got != root {
-		t.Fatalf("resolveTreemapRootDir(mainDir with sibling side store)=%q want %q", got, root)
-	}
-}
-
-func TestAuditSummaryMainDBDirWithAncientSiblingUsesParentRoot(t *testing.T) {
-	root := t.TempDir()
-	opts := treedb.Options{
-		Dir:        root,
-		Durability: treedb.DurabilityWALOffRelaxed,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-			ForcePointers:    true,
-		},
-	}
-	opts.BackgroundCheckpointInterval = -1
-	opts.BackgroundCheckpointIdleDuration = -1
-	opts.BackgroundIndexVacuumInterval = -1
-	opts.MaxWALBytes = -1
-
-	db, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("open root fixture: %v", err)
-	}
-	if err := db.Set([]byte("root-key"), bytes.Repeat([]byte("v"), 512)); err != nil {
-		_ = db.Close()
-		t.Fatalf("set root fixture: %v", err)
-	}
-	if err := db.Checkpoint(); err != nil {
-		_ = db.Close()
-		t.Fatalf("checkpoint root fixture: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close root fixture: %v", err)
-	}
-	_ = os.RemoveAll(filepath.Join(root, "dictdb"))
-	_ = os.RemoveAll(filepath.Join(root, "templatedb"))
-	ancientDir := filepath.Join(root, "ancient")
-	if err := os.Mkdir(ancientDir, 0o755); err != nil {
-		t.Fatalf("mkdir ancient sibling: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(ancientDir, "freezer.dat"), bytes.Repeat([]byte("a"), 123), 0o644); err != nil {
-		t.Fatalf("write ancient sibling file: %v", err)
-	}
-
-	mainDir := filepath.Join(root, "maindb")
-	report, err := collectAuditSummary(mainDir, auditSummaryCollectOptions{CompactMode: treedbdb.CompactStorageFull})
-	if err != nil {
-		t.Fatalf("collectAuditSummary(root maindb): %v", err)
-	}
-	if report.RootDir != root {
-		t.Fatalf("RootDir=%q want root %q", report.RootDir, root)
-	}
-	ancient := auditStorageDomainsByName(report.Storage.Domains)["ancient"]
-	if !ancient.Exists || ancient.Path != ancientDir || ancient.Bytes != 123 {
-		t.Fatalf("ancient domain not reported from root sibling: %+v", ancient)
-	}
-}
-
 func TestAuditSummaryFlatMainDBDirNamedMainDBUsesInputAsRoot(t *testing.T) {
 	parent := t.TempDir()
 	flatDir := filepath.Join(parent, "maindb")
 	opts := treedb.Options{
-		Dir:               flatDir,
-		DisableSideStores: true,
-		Durability:        treedb.DurabilityWALOffRelaxed,
+		Dir:        flatDir,
+		Durability: treedb.DurabilityWALOffRelaxed,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 			ForcePointers:    true,
@@ -371,8 +302,8 @@ func buildAuditSummaryFixture(t *testing.T) string {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close fixture: %v", err)
 	}
-	assertLogFamilyHasData(t, filepath.Join(dir, "maindb", "value_vlog"))
-	assertLogFamilyHasData(t, filepath.Join(dir, "maindb", "leaf_vlog"))
+	assertLogFamilyHasData(t, filepath.Join(dir, "value_vlog"))
+	assertLogFamilyHasData(t, filepath.Join(dir, "leaf_vlog"))
 	return dir
 }
 

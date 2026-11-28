@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -114,7 +113,7 @@ func TestBackendFactoryRolesLegacyLifecycle(t *testing.T) {
 				if err := backend.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-				cfg, ok, err := backenddb.LoadFormatConfig(filepath.Join(opts.Dir, "maindb"))
+				cfg, ok, err := backenddb.LoadFormatConfig(opts.Dir)
 				if err != nil || !ok || !cfg.IndexOuterLeavesInValueLog {
 					t.Fatalf("outer-leaf physical policy=%+v,%v,%v", cfg, ok, err)
 				}

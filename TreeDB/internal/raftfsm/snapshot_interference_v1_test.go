@@ -23,7 +23,7 @@ func TestSnapshotStreamingDoesNotHoldApplyForWholeArchiveV1(t *testing.T) {
 	defer db.Close()
 	_, transport := hraft.NewInmemTransport("node-a")
 	defer transport.Close()
-	cfg := raftcluster.Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: "node-a", GroupID: "default", DisableSideStores: true, Peers: []raftcluster.Peer{{ID: "node-a", Address: "node-a"}}}
+	cfg := raftcluster.Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: "node-a", GroupID: "default", Peers: []raftcluster.Peer{{ID: "node-a", Address: "node-a"}}}
 	fsm, err := Open(Options{DB: db, Cluster: cfg, StoreOptions: raftapply.DurableApplyStoreOptions{AllowInitialIndexGap: true}})
 	if err != nil {
 		t.Fatal(err)

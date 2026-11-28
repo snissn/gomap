@@ -1423,20 +1423,16 @@ func captureIndexStorageSummary(cfg config, backend *backenddb.DB) (indexStorage
 }
 
 func indexDBSize(root string) (uint64, error) {
-	for _, path := range []string{
-		filepath.Join(root, "maindb", "index.db"),
-		filepath.Join(root, "index.db"),
-	} {
-		info, err := os.Stat(path)
-		if err == nil {
-			if !info.Mode().IsRegular() {
-				return 0, fmt.Errorf("%s is not a regular file", path)
-			}
-			return uint64(info.Size()), nil
+	path := filepath.Join(root, "index.db")
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return 0, fmt.Errorf("%s is not a regular file", path)
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return 0, fmt.Errorf("stat index.db %s: %w", path, err)
-		}
+		return uint64(info.Size()), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("stat index.db %s: %w", path, err)
 	}
 	return 0, fmt.Errorf("index.db not found under %s", root)
 }

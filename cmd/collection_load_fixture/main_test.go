@@ -221,8 +221,8 @@ func TestRunFixtureKeepsTemplateV1TwoIndexDatabase(t *testing.T) {
 	if summary.IndexStorageFinal.IndexDBBytes == 0 {
 		t.Fatal("expected final index storage summary")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db")); err != nil {
-		t.Fatalf("expected kept maindb/index.db: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
+		t.Fatalf("expected kept index.db: %v", err)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
 		t.Fatalf("index count=%d want 2", summary.IndexCount)
 	}
 
-	indexPath := filepath.Join(dir, "maindb", "index.db")
+	indexPath := filepath.Join(dir, "index.db")
 	beforeVacuum := regularFileSize(t, indexPath)
 	if beforeVacuum == 0 {
 		t.Fatal("expected non-empty index.db before vacuum")

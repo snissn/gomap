@@ -32,7 +32,6 @@ func successorWorkspaceValue(key, timestamp int) []byte {
 func prepareSuccessorWorkspace(t testing.TB, depth int, pointers bool) *successorWorkspaceFixture {
 	t.Helper()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

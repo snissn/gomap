@@ -44,7 +44,6 @@ func TestAdapterWritesAfterCloseDoNotError(t *testing.T) {
 		Durability:          treedb.DurabilityWALOnRelaxed,
 		CommandWAL:          true,
 		CommandWALStatsScan: true,
-		DisableSideStores:   true,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

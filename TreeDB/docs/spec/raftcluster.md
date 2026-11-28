@@ -53,23 +53,18 @@ Validation first resolves TreeDB's storage root and main DB directory from
       peers/<peer-id>/
 ```
 
-An explicit `ClusterDir` may replace `<root>/raftcluster`, but validation still
+An explicit `ClusterDir` may replace `<dir>/raftcluster`, but validation still
 requires `Options.Dir` so the package can reject storage overlap with TreeDB's
-main DB paths. Supported layouts resolve as follows:
-
-- root layout: `Options.Dir = <root>` and main DB at `<root>/maindb`;
-- main-DB layout: `Options.Dir = <root>/maindb` and cluster state at
-  `<root>/raftcluster`;
-- flat or `DisableSideStores=true` layout: root and main DB both resolve to
-  `Options.Dir`, with cluster state at `<dir>/raftcluster`.
+paths. TreeDB uses a single flat directory layout where root and DB both resolve
+to `Options.Dir`, with default cluster state at `<dir>/raftcluster`.
 
 The Raft paths must be distinct from:
 
-- `<main-db>/wal/`
-- `<main-db>/value_vlog/`
-- `<main-db>/leaf_vlog/`
-- `<main-db>/column_assets/`
-- `<main-db>/index.db` for flat layouts (value-log dictionaries and template definitions live inside `maindb/index.db` `SystemRootPageID`)
+- `<dir>/wal/`
+- `<dir>/value_vlog/`
+- `<dir>/leaf_vlog/`
+- `<dir>/column_assets/`
+- `<dir>/index.db` (value-log dictionaries and template definitions live inside `index.db` `SystemRootPageID`)
 
 For `HashicorpRaftProvider`, the Raft log directory stores
 `raft-log.bolt` and the stable metadata directory stores

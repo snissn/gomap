@@ -12,8 +12,7 @@ import (
 func TestOpen_DictAndAutoCompression_RequireSideStoresUnlessTrainingDisabled(t *testing.T) {
 	t.Run("dict_allows_side_stores_disabled", func(t *testing.T) {
 		db, err := Open(Options{
-			Dir:               t.TempDir(),
-			DisableSideStores: true,
+			Dir: t.TempDir(),
 			ValueLog: ValueLogOptions{
 				PointerThreshold: 1,
 				Compression:      ValueLogCompressionDict,
@@ -29,8 +28,7 @@ func TestOpen_DictAndAutoCompression_RequireSideStoresUnlessTrainingDisabled(t *
 
 	t.Run("auto_allows_side_stores_disabled", func(t *testing.T) {
 		db, err := Open(Options{
-			Dir:               t.TempDir(),
-			DisableSideStores: true,
+			Dir: t.TempDir(),
 			ValueLog: ValueLogOptions{
 				PointerThreshold: 1,
 				Compression:      ValueLogCompressionAuto,

@@ -11,7 +11,6 @@ import (
 
 func durableDeferredCheckpointTestOptions(dir string) Options {
 	opts := OptionsFor(ProfileCommandWALDurable, dir)
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

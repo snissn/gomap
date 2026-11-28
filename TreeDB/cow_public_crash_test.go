@@ -78,11 +78,11 @@ func cowPublicCrashShardKeys() (string, string) {
 
 func cowPublicCrashCaptureFrames(t *testing.T, directory string) []cowPublicCrashFrame {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(directory, false)
+	layoutMainDir, err := resolveOpenDir(directory)
 	if err != nil {
 		t.Fatalf("resolve actual public storage layout: %v", err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-*.log"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("command WAL paths=%v err=%v", paths, err)
 	}

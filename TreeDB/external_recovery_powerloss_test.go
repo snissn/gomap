@@ -231,7 +231,7 @@ func externalStableReopen(t *testing.T, model *powerlossoracle.Model, opts Optio
 			t.Fatal(err)
 		}
 		physical := opts
-		physical.Dir, physical.DisableSideStores, physical.DisableBackgroundPrune = previousPath, true, true
+		physical.Dir, physical.DisableBackgroundPrune = previousPath, true
 		db, err := backenddb.Open(physical)
 		if err != nil {
 			t.Fatalf("previous physical reopen: %v", err)

@@ -77,12 +77,9 @@ func TestApplyEnvMaintenanceOverrides_VlogBlockCodec(t *testing.T) {
 
 func TestApplyEnvMaintenanceOverrides_VlogDictEnableDisable(t *testing.T) {
 	t.Run("enable", func(t *testing.T) {
-		opts := Options{DisableSideStores: true}
+		opts := Options{}
 		t.Setenv(envVlogDictEnable, "")
 		applyEnvMaintenanceOverrides(&opts)
-		if !opts.DisableSideStores {
-			t.Fatalf("expected DisableSideStores preserved when dict enabled (dictionaries live in maindb)")
-		}
 		if got := opts.ValueLog.DictTrain.TrainBytes; got != compression.DefaultTrainBytes {
 			t.Fatalf("expected train bytes=%d, got %d", compression.DefaultTrainBytes, got)
 		}

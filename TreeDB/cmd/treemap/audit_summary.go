@@ -378,7 +378,6 @@ func collectAuditSummaryStorage(inputDir, rootDir, mainDir string) (auditSummary
 		{name: "index_db", path: filepath.Join(mainDir, "index.db")},
 		{name: "value_vlog", path: treedbdb.ValueLogDirPath(mainDir)},
 		{name: "leaf_vlog", path: treedbdb.LeafLogDirPath(mainDir)},
-		{name: "dictdb", path: filepath.Join(rootDir, "dictdb")},
 		{name: "wal", path: filepath.Join(mainDir, "wal")},
 	}
 	out := auditSummaryStorage{Domains: make([]auditSummaryStorageDomain, 0, len(domainPaths))}

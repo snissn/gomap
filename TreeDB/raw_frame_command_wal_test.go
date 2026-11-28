@@ -17,7 +17,6 @@ func TestPublicCompressedFrames_OrdinaryGroupingReopen(t *testing.T) {
 		t.Run(string(profile), func(t *testing.T) {
 			dir := t.TempDir()
 			opts := treedb.OptionsFor(profile, dir)
-			opts.DisableSideStores = true
 			opts.IndexOuterLeavesInValueLog = false
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundCheckpointIdleDuration = -1
@@ -123,7 +122,6 @@ func TestPublicCompressedFrames_OrdinaryGroupingReopen(t *testing.T) {
 func TestPublicCommandWALRawFrames_DurableGrouping(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
-	opts.DisableSideStores = true
 	opts.IndexOuterLeavesInValueLog = false
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

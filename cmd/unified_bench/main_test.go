@@ -2871,7 +2871,7 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 
 func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 	dir := t.TempDir()
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll leaf_vlog: %v", err)
 	}
@@ -2921,7 +2921,7 @@ func TestScanTreeDBLeafVLogCodecStats_ParsesGroupedFrameCodecs(t *testing.T) {
 
 func TestScanTreeDBLeafVLogCodecStats_UncompressedDictFrameUsesDictMode(t *testing.T) {
 	dir := t.TempDir()
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll leaf_vlog: %v", err)
 	}
@@ -2948,7 +2948,7 @@ func TestScanTreeDBLeafVLogCodecStats_UncompressedDictFrameUsesDictMode(t *testi
 
 func TestScanTreeDBLeafVLogCodecStats_PreservesPartialStatsOnSegmentError(t *testing.T) {
 	dir := t.TempDir()
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll leaf_vlog: %v", err)
 	}
@@ -2974,7 +2974,7 @@ func TestScanTreeDBLeafVLogCodecStats_PreservesPartialStatsOnSegmentError(t *tes
 
 func TestScanTreeDBLeafVLogCodecStats_UnknownBlockCodecNotAttributedToSnappy(t *testing.T) {
 	dir := t.TempDir()
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll leaf_vlog: %v", err)
 	}
@@ -4502,7 +4502,7 @@ func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
 
 func TestComputeTreeDBDiskUsage_IncludesLeafVLog(t *testing.T) {
 	dir := t.TempDir()
-	mainDir := filepath.Join(dir, "maindb")
+	mainDir := dir
 	if err := os.MkdirAll(filepath.Join(mainDir, "leaf_vlog"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(leaf_vlog): %v", err)
 	}

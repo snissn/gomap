@@ -213,7 +213,7 @@ func TestDirectDATAReclaimsAfterOldViewRelease(t *testing.T) {
 
 	// Keep the newest META bytes before damaging that slot in the original
 	// namespace. Copying dependencies would invalidate their stable identities.
-	index, err := os.OpenFile(filepath.Join(opts.Dir, "maindb", "index.db"), os.O_RDWR, 0)
+	index, err := os.OpenFile(filepath.Join(opts.Dir, "index.db"), os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

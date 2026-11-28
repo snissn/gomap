@@ -48,7 +48,6 @@ func certificationOptions(t *testing.T) (string, treedb.Options) {
 	t.Helper()
 	profileName, profile := certificationProfileFromEnv(t)
 	opts := treedb.OptionsFor(profile, t.TempDir())
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	return profileName, opts

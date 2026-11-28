@@ -105,7 +105,6 @@ func TestWriteCapabilitiesPublicCloseAndDurableReopen(t *testing.T) {
 		t.Run(memtable, func(t *testing.T) {
 			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 			opts.MemtableMode = memtable
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			db, err := treedb.Open(opts)
 			if err != nil {

@@ -55,7 +55,7 @@ func assertPublicExpvarStatsHookCounters(t *testing.T, db *DB, wantCommandWAL bo
 	if len(instances) == 0 {
 		t.Fatalf("expvar instances missing")
 	}
-	wantWALDir := filepath.Join(db.dir, "maindb", "wal")
+	wantWALDir := filepath.Join(db.dir, "wal")
 	for _, raw := range instances {
 		instance, ok := raw.(map[string]any)
 		if !ok {

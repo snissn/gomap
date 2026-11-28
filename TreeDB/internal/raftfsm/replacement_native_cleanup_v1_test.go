@@ -293,7 +293,7 @@ func TestReplacementNativeInstallCleanupDebtRecoversExactSeedV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	cfg := raftcluster.Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: targetPeer.ID, GroupID: sourceOpts.Cluster.GroupID, DisableSideStores: true, Peers: []raftcluster.Peer{{ID: "node-a", Address: "node-a"}, targetPeer}}
+	cfg := raftcluster.Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: targetPeer.ID, GroupID: sourceOpts.Cluster.GroupID, Peers: []raftcluster.Peer{{ID: "node-a", Address: "node-a"}, targetPeer}}
 	var receiver *raftcluster.HashicorpRaftProvider
 	var fsm *FSM
 	var transport *hraft.InmemTransport

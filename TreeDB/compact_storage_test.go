@@ -18,7 +18,6 @@ import (
 func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrapper(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
-	opts.DisableSideStores = true
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("Open command_wal_relaxed public cached DB: %v", err)
@@ -79,7 +78,6 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.HotSegmentTargetBytes = 64 << 10
@@ -169,7 +167,7 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	}
 	cleanupDone = true
 
-	reopened, err := treedb.Open(treedb.Options{Dir: dir, DisableSideStores: true})
+	reopened, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen after CompactStorage: %v", err)
 	}
@@ -193,7 +191,6 @@ func TestCompactStorageCachedRefreshesProtectedPathsAcrossPhases(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 
@@ -228,7 +225,6 @@ func TestCompactStorageCachedPlanReportsZeroByteValueLogDebt(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -268,7 +264,6 @@ func TestCompactStorageCachedDeletesZeroByteValueLogFiles(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -367,7 +362,7 @@ func TestCachedValueLogWritersAreLazy(t *testing.T) {
 
 func countValueLogSegmentFiles(t *testing.T, rootDir string) (total, zero, nonzero int) {
 	t.Helper()
-	valueLogDir := filepath.Join(rootDir, "maindb", "value_vlog")
+	valueLogDir := filepath.Join(rootDir, "value_vlog")
 	entries, err := os.ReadDir(valueLogDir)
 	if err != nil {
 		if os.IsNotExist(err) {

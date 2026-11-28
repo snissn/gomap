@@ -215,7 +215,6 @@ func TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts(t *testing.T
 		}
 		physical := opts
 		physical.Dir = working
-		physical.DisableSideStores = true
 		physical.DisableBackgroundPrune = true
 		physical.BackgroundCheckpointInterval = -1
 		physical.BackgroundCheckpointIdleDuration = -1

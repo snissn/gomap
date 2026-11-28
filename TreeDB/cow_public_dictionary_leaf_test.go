@@ -22,7 +22,6 @@ func TestCOWPublicPackedDictionaryLeafOldCut(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
 	ctx := context.Background()
 	database, opts, _ := cowPublicContractOpen(t, ProfileNoWALFast, func(o *Options) {
-		o.DisableSideStores = false
 		o.DisableBackgroundPrune = true
 		o.BackgroundCheckpointInterval = -1
 		o.BackgroundCheckpointIdleDuration = -1

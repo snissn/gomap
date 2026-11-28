@@ -25,7 +25,6 @@ func TestOpenBackendWithCachedLeafLog_CompactStorageNoDeletedFDs(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 4
 	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.PointerThreshold = 1
@@ -369,7 +368,6 @@ func TestPostValueLogGCHookErrorPropagatesAndRunsOutsidePublishLocks(t *testing.
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 2
 	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.PointerThreshold = 1
@@ -528,7 +526,6 @@ func TestOpen_CompactStorageNoDeletedFDs(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 4
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.PointerThreshold = 1
@@ -660,7 +657,6 @@ func TestOpenBackendWithCachedLeafLog_DeferredSnapshotReleaseAsyncClosesDeletedF
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 2
 	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.PointerThreshold = 1
@@ -841,7 +837,6 @@ func TestOpen_ReopenLane254PrunedByCompactStorage(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 4
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.PointerThreshold = 1

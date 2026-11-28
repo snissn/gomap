@@ -90,7 +90,7 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	releaseInstall := func() { releaseInstallOnce.Do(func() { close(releaseLastInstall) }) }
 	defer releaseInstall()
 	var installations atomic.Int32
-	cacheRoot := filepath.Join(dir, "maindb", "wal")
+	cacheRoot := filepath.Join(dir, "wal")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == cacheRoot && installations.Add(1) == waiters {
 			close(lastInstall)
@@ -276,7 +276,7 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 				t.Fatal(err)
 			}
 			opening, initialEntries := prefix.LogicalFrontiers(), prefix.AcceptedPendingCount()
-			mainRoot := filepath.Join(database.dir, "maindb")
+			mainRoot := database.dir
 			// This hook runs after installation and release of the producer gates.
 			// Rendezvous before either waiter starts the shared durability barrier.
 			installedReady := make(chan struct{})

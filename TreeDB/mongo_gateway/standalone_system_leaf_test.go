@@ -26,7 +26,7 @@ func TestStandaloneBSONSystemPagerLeaves(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			mainDir := filepath.Join(dir, "maindb")
+			mainDir := dir
 			opts := StandaloneOptions{
 				Dir: dir, Profile: treedb.ProfileCommandWALRelaxed,
 				DefaultCollectionOptions: collections.CollectionOptions{DataRootStoragePolicy: policy},

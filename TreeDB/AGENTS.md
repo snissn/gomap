@@ -2,8 +2,8 @@
 
 Apply the repository-wide persistent value-log and pre-alpha guidance in
 [AGENTS.md](../AGENTS.md). The value log resides under
-`Options.Dir/maindb/value_vlog/`; the decoupled redo journal resides under
-`Options.Dir/maindb/wal/`. `Options.Durability = DurabilityWALOffRelaxed` can
+`Options.Dir/value_vlog/`; the decoupled redo journal resides under
+`Options.Dir/wal/`. `Options.Durability = DurabilityWALOffRelaxed` can
 disable the WAL while persistent value-log pointers remain enabled.
 
 The [TreeDB spec index](docs/spec/README.md) links the canonical storage format,

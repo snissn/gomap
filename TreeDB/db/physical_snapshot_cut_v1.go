@@ -355,15 +355,6 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 	return err
 }
 
-// CapturePhysicalSnapshotSideStoreV1 asks the registered store owner to flush
-// and capture its index. It never opens a second owner by pathname.
-func (db *DB) CapturePhysicalSnapshotSideStoreV1(_ context.Context, _ string) (*PhysicalSnapshotCutV1, error) {
-	if db == nil || db.closing.Load() {
-		return nil, ErrClosed
-	}
-	return nil, errors.New("treedb: invalid snapshot side-store name")
-}
-
 // ValidateStorageDirectoryV1 binds side-file discovery to the exact directory
 // containing this cut's retained index, rather than a replacement at its path.
 func (cut *PhysicalSnapshotCutV1) ValidateStorageDirectoryV1(directory *os.File) error {

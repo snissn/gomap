@@ -53,19 +53,3 @@ func TestOpenBackend_ReadOnlyResolvesInMainDBDictAndTemplateWithoutWrites(t *tes
 		t.Fatal("expected read-only PutTemplateDef to fail")
 	}
 }
-
-func TestWireSideStoreLookups_IsNoOp(t *testing.T) {
-	root := t.TempDir()
-	opts := &Options{CommandWAL: true, ReadOnly: true}
-	cleanup, err := wireSideStoreLookups(root, opts)
-	if err != nil {
-		t.Fatalf("wireSideStoreLookups: %v", err)
-	}
-	defer func() { _ = cleanup() }()
-	if !opts.CommandWAL {
-		t.Fatal("wireSideStoreLookups cleared main DB CommandWAL option")
-	}
-	if opts.PhysicalSnapshotSideStoreCapture != nil {
-		t.Fatal("expected PhysicalSnapshotSideStoreCapture to remain nil with in-maindb system storage")
-	}
-}

@@ -24,7 +24,6 @@ func TestManagedHistoryPruneSkipsRetainedTail(t *testing.T) {
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
 			opts.MemtableMode, opts.MemtableShards = "cow_btree", 4
 			opts.FlushThreshold = 1 << 30
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
 			opts.MaxWALBytes = -1
 			opts.ValueLog.PointerThreshold = 1
@@ -247,7 +246,6 @@ func TestManagedHistoryNativeDeferredCloseCustody(t *testing.T) {
 			opts.MemtableMode = "cow_btree"
 			opts.MemtableShards = 4
 			opts.FlushThreshold = 1 << 30
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundCheckpointIdleDuration = -1
 			opts.MaxWALBytes = -1

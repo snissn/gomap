@@ -914,7 +914,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		if err := db.Checkpoint(); err != nil {
 			t.Fatalf("Checkpoint: %v", err)
 		}
-		beforeFrames := countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb"))
+		beforeFrames := countCollectionCommandWALFrames(t, dir)
 		var buildCalls atomic.Int32
 		restoreBuild := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
 			buildCalls.Add(1)
@@ -931,7 +931,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		if got := buildCalls.Load(); got != maxColumnGraphRebuildPhysicalRootRewriteAttempts {
 			t.Fatalf("buildCalls=%d; want bounded cap %d", got, maxColumnGraphRebuildPhysicalRootRewriteAttempts)
 		}
-		if gotFrames := countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb")); gotFrames != beforeFrames {
+		if gotFrames := countCollectionCommandWALFrames(t, dir); gotFrames != beforeFrames {
 			t.Fatalf("exhausted rebuild appended CommandWAL frames: before=%d after=%d", beforeFrames, gotFrames)
 		}
 		gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: !rootpublication.StableRelativeNamespaceSupported()})
@@ -1390,7 +1390,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 				if betweenErr == nil {
 					betweenErr = mgr.FlushAll()
 				}
-				beforeFrames = countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb"))
+				beforeFrames = countCollectionCommandWALFrames(t, dir)
 			}
 		})
 		defer restoreRetry()
@@ -1404,7 +1404,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		if got := buildCalls.Load(); got != 1 {
 			t.Fatalf("retry after logical write must fail before attempt 2 build: buildCalls=%d, want 1", got)
 		}
-		if gotFrames := countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb")); gotFrames != beforeFrames {
+		if gotFrames := countCollectionCommandWALFrames(t, dir); gotFrames != beforeFrames {
 			t.Fatalf("rejected retry appended CommandWAL frames: before=%d after=%d", beforeFrames, gotFrames)
 		}
 	})
@@ -1455,7 +1455,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 						mutErr = mgr.FlushAll()
 					}
 					beforeCommit, beforeSystem = dbCommitSeqAndSystemRoot(db)
-					beforeFrames = countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb"))
+					beforeFrames = countCollectionCommandWALFrames(t, dir)
 				})
 				defer restoreHandoff()
 
@@ -1470,7 +1470,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 					t.Fatalf("concurrent %s must NOT retry rebuild: buildCalls=%d, want 1", op, got)
 				}
 				commit, system := dbCommitSeqAndSystemRoot(db)
-				if commit != beforeCommit || system != beforeSystem || countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb")) != beforeFrames {
+				if commit != beforeCommit || system != beforeSystem || countCollectionCommandWALFrames(t, dir) != beforeFrames {
 					t.Fatalf("concurrent %s rejection mutated root or appended CommandWAL frame", op)
 				}
 				if err := db.Checkpoint(); err != nil {

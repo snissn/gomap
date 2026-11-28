@@ -2,7 +2,6 @@ package treedb
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,7 +100,7 @@ func TestApplyEnvIndexFormatOverrides_BoolKnobs(t *testing.T) {
 
 func TestOpen_EnvIndexFormatConflictWithPersistedFormat(t *testing.T) {
 	dir := t.TempDir()
-	maindbDir := filepath.Join(dir, "maindb")
+	maindbDir := dir
 	if err := os.MkdirAll(maindbDir, 0o755); err != nil {
 		t.Fatalf("mkdir maindb: %v", err)
 	}

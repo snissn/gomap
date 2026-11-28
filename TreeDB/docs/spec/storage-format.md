@@ -107,10 +107,10 @@ A TreeDB deployment uses:
   `raftcluster/nodes/<node-id>/groups/<group-id>/` with separate `log/`,
   `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - persistent value-log dictionary and template-definition metadata and payloads
-  stored directly inside `maindb/index.db` `SystemRootPageID` (`dict/bytes/<id>`,
+  stored directly inside `index.db` `SystemRootPageID` (`dict/bytes/<id>`,
   `dict/chunk/<id>/<idx>`, `template/def/<id>`, `template/chunk/<id>/<idx>`,
   `template/fp/<fp>`, or raw `dictID=0` `ValuePtr` records in
-  `maindb/value_vlog/` lane `SystemValueLogLaneID`), committed either directly
+  `value_vlog/` lane `SystemValueLogLaneID`), committed either directly
   via `ApplySystemOps` or piggybacked atomically onto user-root commits via
   `StageSystemOps` (activating only after `index.db` sync whenever command-WAL
   durability is enabled).
@@ -462,10 +462,9 @@ binding for future owner-scoped preparation, not permission to serve without
 verified local assets and an ACTIVE ready set.
 
 Before a writable public open can succeed, TreeDB establishes the complete
-directory dependency chain from the outer database root through `maindb`,
-enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,
-and `column_assets` directories. Missing components are created in parent-first
-order. On platforms with parent-directory sync, the distinct parents of newly
+directory dependency chain for the flat database directory and its `wal`,
+`value_vlog`, `leaf_vlog`, and `column_assets` subdirectories. Missing
+components are created in parent-first order. On platforms with parent-directory sync, the distinct parents of newly
 created names are synchronized deepest-first, including the parent of a newly
 created outer root. Windows uses its narrower exact-child creation persistence
 primitive for each new component. Fully existing initialized layouts add no
@@ -521,7 +520,7 @@ filesystem-level copy without that barrier is unsupported once command-WAL
 external refs can exist.
 
 Raft provider state is separate from the main DB. The local command WAL under
-`maindb/wal/` is not a Raft log, and `maindb/value_vlog/` remains persistent
+`wal/` is not a Raft log, and `value_vlog/` remains persistent
 value storage managed by reachability-based GC and rewrite/compaction. The
 single-group provider/storage boundary is defined in
 `TreeDB/docs/spec/raftcluster.md`.

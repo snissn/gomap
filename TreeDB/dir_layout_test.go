@@ -6,76 +6,34 @@ import (
 	"testing"
 )
 
-func TestResolveOpenDirLayout_RootDir(t *testing.T) {
-	root := t.TempDir()
-	mainDir := filepath.Join(root, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", mainDir, err)
-	}
-	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write maindb/index.db: %v", err)
-	}
-
-	layout, err := resolveOpenDirLayout(root, false)
-	if err != nil {
-		t.Fatalf("resolve root layout: %v", err)
-	}
-	if layout.rootDir != root || layout.mainDir != mainDir || layout.disableSideStores {
-		t.Fatalf("unexpected root layout: %+v", layout)
-	}
-}
-
-func TestResolveOpenDirLayout_MainDirWithSideStores(t *testing.T) {
-	root := t.TempDir()
-	mainDir := filepath.Join(root, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatalf("mkdir maindb: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write maindb/index.db: %v", err)
-	}
-
-	layout, err := resolveOpenDirLayout(mainDir, false)
-	if err != nil {
-		t.Fatalf("resolve main dir layout: %v", err)
-	}
-	if layout.rootDir != root || layout.mainDir != mainDir {
-		t.Fatalf("unexpected main-dir layout: %+v", layout)
-	}
-}
-
-func TestResolveOpenDirLayout_FlatDirDisablesSideStores(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "index.db"), []byte("x"), 0o644); err != nil {
+func TestResolveOpenDir_FlatDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.db"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write index.db: %v", err)
 	}
 
-	layout, err := resolveOpenDirLayout(root, false)
+	got, err := resolveOpenDir(dir)
 	if err != nil {
-		t.Fatalf("resolve flat layout: %v", err)
+		t.Fatalf("resolve flat dir: %v", err)
 	}
-	if layout.rootDir != root || layout.mainDir != root || !layout.disableSideStores {
-		t.Fatalf("unexpected flat layout: %+v", layout)
+	if got != filepath.Clean(dir) {
+		t.Fatalf("unexpected resolved dir: got=%q want=%q", got, filepath.Clean(dir))
 	}
 }
 
-func TestResolveOpenDirLayout_IndexPathDirectoryReturnsError(t *testing.T) {
+func TestResolveOpenDir_IndexPathDirectoryReturnsError(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "index.db"), 0o755); err != nil {
 		t.Fatalf("mkdir index.db: %v", err)
 	}
 
-	if _, err := resolveOpenDirLayout(root, false); err == nil {
+	if _, err := resolveOpenDir(root); err == nil {
 		t.Fatal("expected index.db directory error")
 	}
 }
 
-func TestResolveOpenDirLayout_DisableSideStoresRejectsRootDir(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "maindb"), 0o755); err != nil {
-		t.Fatalf("mkdir maindb: %v", err)
-	}
-	if _, err := resolveOpenDirLayout(root, true); err == nil {
-		t.Fatalf("expected DisableSideStores root-layout error")
+func TestResolveOpenDir_EmptyReturnsError(t *testing.T) {
+	if _, err := resolveOpenDir(""); err == nil {
+		t.Fatal("expected empty dir error")
 	}
 }

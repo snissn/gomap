@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
@@ -30,20 +29,7 @@ func BenchmarkDBOwnedValueLogRoute(b *testing.B) {
 		if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
 			b.Fatal(err)
 		}
-		// Reuse the production snapshot-restore ordering. Physical identities
-		// change on copy; value bytes, pointers and logical roots do not.
-		for _, name := range []string{"dictdb", "templatedb"} {
-			side := filepath.Join(dir, name)
-			if _, err := os.Stat(filepath.Join(side, "index.db")); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				b.Fatal(err)
-			}
-			if err := backenddb.RebindDurableRootSnapshotLayoutV1(side, ""); err != nil {
-				b.Fatal(err)
-			}
-		}
-		if err := backenddb.RebindDurableRootSnapshotLayoutV1(filepath.Join(dir, "maindb"), dir); err != nil {
+		if err := backenddb.RebindDurableRootSnapshotLayoutV1(dir, ""); err != nil {
 			b.Fatal(err)
 		}
 		db, err = Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})

@@ -26,7 +26,6 @@ func TestCOWOrderedPublicPreparedAdoptionNeedsNoFurtherAdmission(t *testing.T) {
 		t.Run(string(profile), func(t *testing.T) {
 			database, options, _ := cowPublicContractOpen(t, profile, func(options *Options) {
 				options.MemtableMode = "cow_ordered"
-				options.DisableSideStores = true
 				options.DisableBackgroundPrune = true
 				options.BackgroundCheckpointInterval = -1
 				options.ValueLog.ForcePointers = false

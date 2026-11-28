@@ -27,7 +27,7 @@ func TestNativeFullStoreValueLogMaintenanceHeldReopen(t *testing.T) {
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
 	opts.BackgroundIndexVacuumInterval, opts.MaxWALBytes = -1, -1
-	opts.DisableBackgroundPrune, opts.DisableSideStores = true, true
+	opts.DisableBackgroundPrune = true
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.Compression = treedb.ValueLogCompressionOff
 	opts.ValueLog.CompressionAutotune = treedb.AutotuneOptions{Mode: treedb.AutotuneOff}

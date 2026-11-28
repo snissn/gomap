@@ -27,7 +27,6 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 		t.Run(fmt.Sprint(profile), func(t *testing.T) {
 			opts := treedb.OptionsFor(profile, t.TempDir())
 			opts.MemtableMode = "cow_btree"
-			opts.DisableSideStores = true
 			opts.DisableBackgroundPrune = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.ValueLog.PointerThreshold = 1
@@ -180,7 +179,6 @@ func TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts(t *testing.
 				opts.IndexPrimaryDirectory = true // Meta/seal interruption cuts target index.db.primary.
 				opts.MemtableMode = "cow_btree"
 				opts.MemtableShards = 2
-				opts.DisableSideStores = true
 				opts.DisableBackgroundPrune = true
 				opts.BackgroundCheckpointInterval = -1
 				opts.ValueLog.PointerThreshold = 1

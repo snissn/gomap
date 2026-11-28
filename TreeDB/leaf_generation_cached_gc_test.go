@@ -15,7 +15,7 @@ import (
 
 func listLeafVlogSegmentInfos(t *testing.T, dir string) []os.FileInfo {
 	t.Helper()
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	entries, err := os.ReadDir(leafDir)
 	if err != nil {
 		if os.IsNotExist(err) {

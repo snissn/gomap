@@ -367,14 +367,14 @@ func TestHelperTreeDBCommandWALRelaxedRotatedPrefixWriter(t *testing.T) {
 		}
 	}
 
-	valueSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "value_vlog", "value-l*.log"))
+	valueSegments, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
 	if err != nil {
 		t.Fatalf("glob value-log segments: %v", err)
 	}
 	if len(valueSegments) < 2 {
 		t.Fatalf("value-log segments=%v, want an actual relaxed rotation", valueSegments)
 	}
-	walSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "commit-l*.log"))
+	walSegments, err := filepath.Glob(filepath.Join(dir, "wal", "commit-l*.log"))
 	if err != nil {
 		t.Fatalf("glob command-WAL segments: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestHelperTreeDBCommandWALRelaxedRotatedPrefixWriter(t *testing.T) {
 	if err := empty.Close(); err != nil {
 		t.Fatalf("empty batch Close: %v", err)
 	}
-	barrierWALSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "commit-l*.log"))
+	barrierWALSegments, err := filepath.Glob(filepath.Join(dir, "wal", "commit-l*.log"))
 	if err != nil {
 		t.Fatalf("glob command-WAL segments after barrier: %v", err)
 	}
@@ -838,7 +838,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				return
 			}
 
-			entries, err := os.ReadDir(filepath.Join(dir, "maindb", "wal"))
+			entries, err := os.ReadDir(filepath.Join(dir, "wal"))
 			if err != nil {
 				if os.IsNotExist(err) {
 					return
@@ -864,8 +864,8 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	walDir := filepath.Join(dir, "wal")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	for _, path := range []string{walDir, valueLogDir} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatalf("mkdir log dir %s: %v", path, err)
@@ -929,8 +929,8 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 
 func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 	dir := t.TempDir()
-	walDir := filepath.Join(dir, "maindb", "wal")
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	walDir := filepath.Join(dir, "wal")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	for _, path := range []string{walDir, valueLogDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir log dir %s: %v", path, err)
@@ -1003,8 +1003,8 @@ func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 
 func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 	dir := t.TempDir()
-	walDir := filepath.Join(dir, "maindb", "wal")
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	walDir := filepath.Join(dir, "wal")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	for _, path := range []string{walDir, valueLogDir} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir log dir %s: %v", path, err)
@@ -1073,7 +1073,7 @@ func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 func TestRecovery_MultiLaneOrdering(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
+	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1132,7 +1132,7 @@ func TestRecovery_MultiLaneOrdering(t *testing.T) {
 func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
+	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1164,8 +1164,8 @@ func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 func TestRecovery_MissingDictFails(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	walDir := filepath.Join(dir, "wal")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	for _, path := range []string{walDir, valueLogDir} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatalf("mkdir log dir %s: %v", path, err)
@@ -1262,7 +1262,7 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
+	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
@@ -1313,8 +1313,8 @@ func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "maindb", "wal")
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	walDir := filepath.Join(dir, "wal")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	for _, path := range []string{walDir, valueLogDir} {
 		if err := os.MkdirAll(path, 0755); err != nil {
 			t.Fatalf("mkdir log dir %s: %v", path, err)

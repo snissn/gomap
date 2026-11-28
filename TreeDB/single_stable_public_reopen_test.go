@@ -111,7 +111,6 @@ func TestSingleStablePublicAdaptiveCheckpointPointersAndReopen(t *testing.T) {
 	opts.MemtableMode = "" // Exercise the public default-to-adaptive resolution.
 	opts.MemtableShards = 2
 	opts.JournalLanes = 1
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

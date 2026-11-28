@@ -3,7 +3,6 @@ package mongogateway
 import (
 	"context"
 	"net"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -167,7 +166,7 @@ func TestStandaloneOutsideRelaxedBSONKeepsOriginalStorageDefaults(t *testing.T) 
 			if got := owner.Options.DefaultCollectionOptions.DataRootStoragePolicy; got != collections.RootStorageDefault {
 				t.Errorf("default data-root policy %q, want original Default", got)
 			}
-			cfg, found, err := backenddb.LoadFormatConfig(filepath.Join(opts.Dir, "maindb"))
+			cfg, found, err := backenddb.LoadFormatConfig(opts.Dir)
 			if err != nil || !found {
 				t.Fatalf("read format config: found=%t err=%v", found, err)
 			}

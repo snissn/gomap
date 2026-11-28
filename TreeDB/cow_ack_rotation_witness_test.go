@@ -19,7 +19,7 @@ import (
 func TestCOWDurableACKStableImageAfterRegistrationRotation(t *testing.T) {
 	opts := OptionsFor(ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode, opts.MemtableShards, opts.FlushThreshold = "cow_ordered", 2, 1<<30
-	opts.DisableSideStores, opts.DisableBackgroundPrune = true, true
+	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers, opts.ValueLog.Compression = 1, true, ValueLogCompressionOff
 	database, err := Open(opts)

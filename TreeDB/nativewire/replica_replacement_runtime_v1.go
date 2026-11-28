@@ -35,7 +35,6 @@ func (r *FixedPeerTCPRuntimeV1) openDataGroupV1(cfg raftcluster.Config, nativeCo
 	opts := backenddb.Options{Dir: cfg.Dir, CommandWAL: true, CommandWALStatsScan: true}
 	if nativeCollections {
 		opts = treedb.OptionsFor(treedb.ProfileCommandWALDurable, cfg.Dir)
-		opts.DisableSideStores = true
 		opts.MemtableMode = "cow_btree"
 		opts.CommandWALStatsScan = true
 		d.nativeDatabase, err = treedb.Open(opts)
@@ -227,7 +226,7 @@ func (r *FixedPeerTCPRuntimeV1) prepareReplacementV1(ctx context.Context, comman
 	if err := admission.admitReplacementRaftGroupV1(group.ID); err != nil {
 		return err
 	}
-	cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(group.ID)), ClusterDir: r.config.RaftRoot, DisableSideStores: true, NodeID: r.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features}
+	cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(group.ID)), ClusterDir: r.config.RaftRoot, NodeID: r.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features}
 	resolved, err := raftcluster.Validate(cfg)
 	if err != nil {
 		return err

@@ -19,7 +19,7 @@ func TestCOWPublicActualPreparationAppendSwapAndDurablePause(t *testing.T) {
 		}
 		for _, point := range points {
 			t.Run(fmt.Sprintf("%s/%s", profile, point), func(t *testing.T) {
-				db, _, blocked := cowPublicContractOpen(t, profile, func(opts *Options) { opts.DisableSideStores = true; opts.BackgroundCheckpointInterval = -1 })
+				db, _, blocked := cowPublicContractOpen(t, profile, func(opts *Options) { opts.BackgroundCheckpointInterval = -1 })
 				for _, key := range []string{"a", "d"} {
 					if err := db.Set([]byte(key), []byte("old")); err != nil {
 						t.Fatal(err)

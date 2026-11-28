@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -17,34 +16,10 @@ func restore(ctx context.Context, root string) ([]string, error) {
 	if root == "" {
 		return nil, fmt.Errorf("missing private fixture directory")
 	}
-	main := filepath.Join(root, "maindb")
-	if _, err := os.Stat(filepath.Join(main, "index.db")); os.IsNotExist(err) {
-		if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, root, ""); err != nil {
-			return nil, err
-		}
-		return []string{"backend"}, nil
-	} else if err != nil {
+	if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, root, ""); err != nil {
 		return nil, err
 	}
-	var stores []string
-	// Restore side-store index first so the main manifest binds its final
-	// identity, using the same ordering as production snapshot restoration.
-	for _, name := range []string{"templatedb"} {
-		dir := filepath.Join(root, name)
-		if _, err := os.Stat(filepath.Join(dir, "index.db")); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-		if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, dir, ""); err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		stores = append(stores, name)
-	}
-	if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, main, root); err != nil {
-		return nil, err
-	}
-	return append(stores, "maindb"), nil
+	return []string{"backend"}, nil
 }
 
 func main() {

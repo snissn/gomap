@@ -187,7 +187,7 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	requireDictionaryEncodedValueLogFrame(t, database, filepath.Join(dir, "maindb", "value_vlog"), dictionaryKey, database.Stats())
+	requireDictionaryEncodedValueLogFrame(t, database, filepath.Join(dir, "value_vlog"), dictionaryKey, database.Stats())
 	if physicalResources {
 		status, err := vectorCollection.RebuildVectorIndex("embedding_graph")
 		if err != nil {

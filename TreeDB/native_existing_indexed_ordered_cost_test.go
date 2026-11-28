@@ -323,10 +323,10 @@ func orderedCostStats(t *testing.T, database *DB, handle *backenddb.DB, dir stri
 	if !valid || token.RootPageID < 2 || token.RootPageID >= page.PrimaryBankNamespace {
 		t.Fatalf("not DATA: %+v", token)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "index.db.primary")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected PRIMARY file: %v", err)
 	}
 	s["ordered_cost.physical_root"] = strconv.FormatUint(token.RootPageID, 10)

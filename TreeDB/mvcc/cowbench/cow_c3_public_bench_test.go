@@ -88,7 +88,6 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							b.Fatal("bounded fixture requires fixed benchtime <=4096x")
 						}
 						opts := treedb.OptionsFor(profile, b.TempDir())
-						opts.DisableSideStores = true
 						opts.BackgroundCheckpointInterval = -1
 						opts.MemtableMode = mode
 						opts.MemtableShards = 4

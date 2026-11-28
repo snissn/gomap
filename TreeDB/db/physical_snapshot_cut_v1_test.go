@@ -36,7 +36,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 					t.Fatal(err)
 				}
 			}
-			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true, DisableSideStores: true})
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			}
 			defer second.Close()
 			assertWriterBlocked := func() {
-				reopened, err := Open(Options{Dir: dir, DisableSideStores: true})
+				reopened, err := Open(Options{Dir: dir})
 				if reopened != nil {
 					_ = reopened.Close()
 				}
@@ -186,7 +186,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 					if fallback {
 						corruptIndexPageByte(t, destination, active)
 					}
-					restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
+					restored, err := Open(Options{Dir: destination, ReadOnly: true})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -208,7 +208,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			if err := second.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := Open(Options{Dir: dir, DisableSideStores: true})
+			reopened, err := Open(Options{Dir: dir})
 			if err != nil {
 				t.Fatalf("writer refused after last cut: %v", err)
 			}
@@ -220,7 +220,7 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 }
 
 func TestPhysicalSnapshotCutV1CancellationReleasesLease(t *testing.T) {
-	database, err := Open(Options{Dir: t.TempDir(), DisableSideStores: true})
+	database, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestPhysicalSnapshotCutV1CancellationReleasesLease(t *testing.T) {
 
 func TestPhysicalSnapshotCutV1RefusesInvalidSourceParent(t *testing.T) {
 	dir := t.TempDir()
-	database, err := Open(Options{Dir: dir, DisableSideStores: true})
+	database, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestPhysicalSnapshotCutV1RefusesInvalidSourceParent(t *testing.T) {
 
 func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	dir := t.TempDir()
-	database, err := Open(Options{Dir: dir, DisableSideStores: true})
+	database, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err := Open(Options{Dir: dir, DisableSideStores: true, ReadOnly: true})
+	reader, err := Open(Options{Dir: dir, ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if writer, err := Open(Options{Dir: dir, DisableSideStores: true}); !errors.Is(err, lockfile.ErrLocked) {
+	if writer, err := Open(Options{Dir: dir}); !errors.Is(err, lockfile.ErrLocked) {
 		if writer != nil {
 			_ = writer.Close()
 		}
@@ -362,7 +362,7 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 			if fallback {
 				corruptIndexPageByte(t, destination, active)
 			}
-			restored, err := Open(Options{Dir: destination, DisableSideStores: true, ReadOnly: true})
+			restored, err := Open(Options{Dir: destination, ReadOnly: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -381,14 +381,14 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 	if err := cut.Close(); err != nil {
 		t.Fatal(err)
 	}
-	writer, err := Open(Options{Dir: dir, DisableSideStores: true})
+	writer, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	unlocked, err := openReadOnlyNoLock(Options{Dir: dir, DisableSideStores: true, ReadOnly: true})
+	unlocked, err := openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

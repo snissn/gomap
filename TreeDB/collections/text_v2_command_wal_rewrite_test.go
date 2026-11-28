@@ -461,7 +461,7 @@ func TestTextV2CommandWALUnappliedReplayAndNoop5829(t *testing.T) {
 	liveBackendDir := d.Dir()
 	// Capture format.json and unpruned WAL segments BEFORE clean close (which checkpoints/prunes WAL).
 	replayDir := t.TempDir()
-	replayMainDir := filepath.Join(replayDir, "maindb")
+	replayMainDir := replayDir
 	if err := os.MkdirAll(replayMainDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll replayMainDir: %v", err)
 	}
@@ -758,7 +758,7 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 		liveBackendDir := d.Dir()
 		liveLSN := d.State().AppliedCommandLSN
 		replayDir := t.TempDir()
-		replayMainDir := filepath.Join(replayDir, "maindb")
+		replayMainDir := replayDir
 		if err := os.MkdirAll(replayMainDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -850,7 +850,7 @@ func TestTextV2CommandWALReplayOptionsFidelity5829(t *testing.T) {
 		liveBackendDir := d.Dir()
 		liveLSN := d.State().AppliedCommandLSN
 		replayDir := t.TempDir()
-		replayMainDir := filepath.Join(replayDir, "maindb")
+		replayMainDir := replayDir
 		if err := os.MkdirAll(replayMainDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -1116,7 +1116,7 @@ func TestTextV2CommandWALNativeCOW5829(t *testing.T) {
 				t.Fatalf("expected CommandKindCollectionRewriteTextIndex in native COW WAL frames (count=%d)", len(frames))
 			}
 			replayDir := t.TempDir()
-			replayMainDir := filepath.Join(replayDir, "maindb")
+			replayMainDir := replayDir
 			if err := os.MkdirAll(replayMainDir, 0o755); err != nil {
 				t.Fatalf("MkdirAll replayMainDir: %v", err)
 			}

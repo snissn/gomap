@@ -83,7 +83,7 @@ func TestReplacementPrejoinRealNativeInstallRestartAndTailV1(t *testing.T) {
 	_, sourceTransport := hraft.NewInmemTransport(hraft.ServerAddress(old.Address))
 	defer sourceTransport.Close()
 	config := func(id raftcluster.NodeID, peers []raftcluster.Peer) raftcluster.Config {
-		return raftcluster.Config{NodeID: id, GroupID: "default", Dir: filepath.Join(root, string(id), "data"), ClusterDir: filepath.Join(root, string(id), "raft"), DisableSideStores: true, Peers: peers}
+		return raftcluster.Config{NodeID: id, GroupID: "default", Dir: filepath.Join(root, string(id), "data"), ClusterDir: filepath.Join(root, string(id), "raft"), Peers: peers}
 	}
 	openFSM := func(cfg raftcluster.Config) (*backenddb.DB, *raftfsm.FSM) {
 		t.Helper()

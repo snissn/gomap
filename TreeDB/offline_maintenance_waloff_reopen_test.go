@@ -13,9 +13,8 @@ import (
 func TestOpenBackend_WALOffReopen_AllowsOfflineValueLogMaintenance(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.Options{
-		Dir:               dir,
-		DisableSideStores: true,
-		Durability:        treedb.DurabilityWALOffRelaxed,
+		Dir:        dir,
+		Durability: treedb.DurabilityWALOffRelaxed,
 		ValueLog: treedb.ValueLogOptions{
 			ForcePointers:    true,
 			PointerThreshold: 1,
@@ -47,7 +46,7 @@ func TestOpenBackend_WALOffReopen_AllowsOfflineValueLogMaintenance(t *testing.T)
 	writeSession("first", 1, 8)
 	writeSession("second", 16, 8)
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, DisableSideStores: true})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}

@@ -14,7 +14,7 @@ func ExampleStore_IterateVersions() {
 		panic(err)
 	}
 	defer os.RemoveAll(dir)
-	db, err := treedb.Open(treedb.Options{Dir: dir, Durability: treedb.DurabilityWALOffRelaxed, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	db, err := treedb.Open(treedb.Options{Dir: dir, Durability: treedb.DurabilityWALOffRelaxed, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		panic(err)
 	}

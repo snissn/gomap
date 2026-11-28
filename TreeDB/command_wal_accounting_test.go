@@ -14,8 +14,8 @@ func TestPublicExternalCommandWALHasOneByteAccountingOwner(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
 		Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true,
-		CommandWALSegmentTargetBytes: 256, DisableSideStores: true,
-		MaxWALBytes: -1, BackgroundCheckpointInterval: -1,
+		CommandWALSegmentTargetBytes: 256,
+		MaxWALBytes:                  -1, BackgroundCheckpointInterval: -1,
 		BackgroundCheckpointIdleDuration: -1,
 	}
 	check := func(database *DB) {

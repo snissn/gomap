@@ -92,7 +92,6 @@ func TestCOWPublicPhysicalProbeClosesOnRefusal(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
 		opts.MemtableMode = "cow_btree"
-		opts.DisableSideStores = true
 		opts.BackgroundCheckpointInterval = -1
 		opts.ValueLog.PointerThreshold = 1 << 30
 		db, err := treedb.Open(opts)

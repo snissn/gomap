@@ -18,7 +18,6 @@ func managedHistoryOptions(profile treedb.Profile, dir string, pointers bool) tr
 	opts := treedb.OptionsFor(profile, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 4
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.ForcePointers = pointers
 	opts.ValueLog.PointerThreshold = 1 << 30

@@ -36,7 +36,6 @@ func openTestDB(t testing.TB, dir string, durability treedb.DurabilityMode) *tre
 		t.Fatalf("unsupported durability mode %d", durability)
 	}
 	opts := treedb.OptionsFor(profile, dir)
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -141,7 +140,6 @@ func TestGetAtPointSuccessorValueLogCheckpointAndReopen(t *testing.T) {
 		db, err := treedb.Open(treedb.Options{
 			Dir:                          dir,
 			Durability:                   treedb.DurabilityWALOffRelaxed,
-			DisableSideStores:            true,
 			BackgroundCheckpointInterval: -1,
 			ValueLog: treedb.ValueLogOptions{
 				ForcePointers:    true,

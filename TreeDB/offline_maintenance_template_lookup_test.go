@@ -31,10 +31,7 @@ func TestVacuumIndexOffline_WithTemplateFrames_PreservesSystemTemplateLookup(t *
 		t.Fatalf("EncodeTemplateDef: %v", err)
 	}
 
-	mainDir := filepath.Join(dir, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(maindb): %v", err)
-	}
+	mainDir := dir
 	writerOpts := OptionsFor(ProfileNoWALFast, mainDir)
 	writerOpts.IndexOuterLeavesInValueLog = false
 	writerOpts.ValueLog.ForcePointers = true

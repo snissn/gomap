@@ -410,7 +410,7 @@ func waitForTrainer(engine *template.Engine, maxWait time.Duration) map[string]s
 }
 
 func main() {
-	appDir := flag.String("app-dir", "", "TreeDB application dir (contains maindb/dictdb/templatedb)")
+	appDir := flag.String("app-dir", "", "TreeDB database dir")
 	source := flag.String("source", "mixed", "training source: prefix|pointer|outerleaf|mixed")
 	prefix := flag.String("prefix", "s/", "key prefix to sample for training")
 	limit := flag.Int("limit", 250000, "max records to scan (0=all)")
@@ -435,13 +435,7 @@ func main() {
 		log.Fatal("-app-dir is required")
 	}
 
-	rootDir := filepath.Clean(*appDir)
-	mainDir := rootDir
-	if info, statErr := os.Stat(filepath.Join(rootDir, "maindb", "index.db")); statErr == nil && !info.IsDir() {
-		mainDir = filepath.Join(rootDir, "maindb")
-	} else if filepath.Base(rootDir) == "maindb" {
-		rootDir = filepath.Dir(rootDir)
-	}
+	mainDir := filepath.Clean(*appDir)
 
 	backendOpts := treedbdb.Options{
 		Dir:                    mainDir,

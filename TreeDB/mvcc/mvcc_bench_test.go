@@ -25,7 +25,6 @@ func openBenchDBWithMemtableMode(b *testing.B, mode string) *treedb.DB {
 		Dir:                          b.TempDir(),
 		Durability:                   treedb.DurabilityWALOffRelaxed,
 		CommandWAL:                   false,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 		MemtableMode:                 mode,
 	})
@@ -91,7 +90,6 @@ func BenchmarkCommitAt(b *testing.B) {
 // the live relaxed profile.
 func BenchmarkCommitAtCommandWALRelaxedSingleton(b *testing.B) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, b.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	// Keep the reproduction bounded while forcing several background flushes in
 	// a short benchmark. One shard makes source/flush accounting deterministic;
@@ -148,7 +146,6 @@ func BenchmarkCommitAtCommandWALDurableSingleton(b *testing.B) {
 		for _, route := range []string{"Point", "Batch"} {
 			b.Run(shape+"/"+route, func(b *testing.B) {
 				opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, b.TempDir())
-				opts.DisableSideStores = true
 				opts.BackgroundCheckpointInterval = -1
 				opts.FlushThreshold = 64 << 20
 				opts.MemtableShards = 1
@@ -724,7 +721,7 @@ func exactKeyIterationTarget() []byte { return []byte{'p', 0, 0xff, 'o', 's', 't
 func prepareExactKeyIteration(t testing.TB, depth int, source string) (*treedb.DB, *Store, [][]byte) {
 	t.Helper()
 	db, err := treedb.Open(treedb.Options{Dir: t.TempDir(), Durability: treedb.DurabilityWALOffRelaxed,
-		CommandWAL: false, DisableSideStores: true, BackgroundCheckpointInterval: -1,
+		CommandWAL: false, BackgroundCheckpointInterval: -1,
 		FlushThreshold: 64 << 20, MemtableShards: 8})
 	if err != nil {
 		t.Fatal(err)

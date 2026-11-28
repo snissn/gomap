@@ -22,7 +22,6 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -398,7 +397,7 @@ func runCheckpointBench(dir string, args []string) {
 		fmt.Printf("checkpoint %s\n", dur)
 	}
 
-	mainIndex := filepath.Join(dir, "maindb", "index.db")
+	mainIndex := filepath.Join(dir, "index.db")
 	if st, err := os.Stat(mainIndex); err == nil {
 		fmt.Fprintf(os.Stderr, "disk index.db bytes=%d mib=%.1f\n", st.Size(), float64(st.Size())/(1024*1024))
 	}
@@ -795,64 +794,15 @@ func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
 	opts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
 	applyPersistedFormatConfig(dir, &opts)
 
-	var closers []func() error
-	rootDir := resolveTreeDBRootDir(dir)
-	dictDir := filepath.Join(rootDir, "dictdb")
-	dictIndexPath := filepath.Join(dictDir, "index.db")
-	if _, err := os.Stat(dictIndexPath); err == nil {
-		// When the main DB uses dict-compressed frames, backend open replays WAL
-		// by scanning value-log segments and validating dict IDs. Wire DictLookup
-		// from dictdb/ so recovery and GC can proceed.
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
-		applyPersistedFormatConfig(dictDir, &dictOpts)
-		dictOpts.DisableBackgroundPrune = true
-		// dictdb should not require dict lookup itself; force compression off in
-		// case a stale format.json is present.
-		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-		dictBackend, err := treedbdb.Open(dictOpts)
-		if err != nil {
-			return nil, nil, fmt.Errorf("dictdb open: %w", err)
-		}
-		store := dictdb.New(dictBackend)
-		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-			return store.GetDictBytes(context.Background(), dictID)
-		}
-		closers = append(closers, dictBackend.Close)
-	} else if !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("stat dictdb index: %w", err)
-	}
-
 	backend, err := treedbdb.Open(opts)
 	if err != nil {
-		for i := len(closers) - 1; i >= 0; i-- {
-			_ = closers[i]()
-		}
 		return nil, nil, err
 	}
-	closers = append(closers, backend.Close)
-
-	cleanup := func() error {
-		var first error
-		for i := len(closers) - 1; i >= 0; i-- {
-			if err := closers[i](); err != nil && first == nil {
-				first = err
-			}
-		}
-		return first
-	}
-	return backend, cleanup, nil
+	return backend, backend.Close, nil
 }
 
 func resolveMainDBDir(dir string) string {
-	root := resolveTreeDBRootDir(dir)
-	mainDir := filepath.Join(root, "maindb")
-	if _, err := os.Stat(filepath.Join(mainDir, "index.db")); err == nil {
-		return mainDir
-	}
-	if _, err := os.Stat(filepath.Join(root, "index.db")); err == nil {
-		return root
-	}
-	return dir
+	return filepath.Clean(dir)
 }
 
 func parseTemplateModeFlag(v string) (template.Mode, error) {
@@ -1399,26 +1349,7 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 }
 
 func resolveTreeDBRootDir(dir string) string {
-	clean := filepath.Clean(dir)
-	if filepath.Base(clean) == "dictdb" {
-		parent := filepath.Dir(clean)
-		if _, err := os.Stat(filepath.Join(parent, "maindb", "index.db")); err == nil {
-			return parent
-		}
-	}
-	if _, err := os.Stat(filepath.Join(clean, "maindb", "index.db")); err == nil {
-		return clean
-	}
-	if _, err := os.Stat(filepath.Join(clean, "index.db")); err == nil {
-		if filepath.Base(clean) == "maindb" {
-			parent := filepath.Dir(clean)
-			if _, err := os.Stat(filepath.Join(parent, "dictdb", "index.db")); err == nil {
-				return parent
-			}
-		}
-		return clean
-	}
-	return clean
+	return filepath.Clean(dir)
 }
 
 func closeTreeDB(db *treedb.DB) {

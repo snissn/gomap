@@ -60,7 +60,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				if primaryarena.IsPage(basis.RootPageID) {
 					t.Fatal("main backend omitted DATA selection")
 				}
-				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
+				if _, err := os.Stat(filepath.Join(opts.Dir, "index.db.primary")); !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
 				if _, err := os.Stat(filepath.Join(opts.Dir, "dictdb")); !os.IsNotExist(err) {
@@ -74,18 +74,18 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				var swaps int
 				var observationErr error
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-					if event.Root != filepath.Join(opts.Dir, "maindb") && event.Root != filepath.Join(opts.Dir, "maindb", "wal") {
+					if event.Root != opts.Dir && event.Root != filepath.Join(opts.Dir, "wal") {
 						return nil
 					}
 					mu.Lock()
 					defer mu.Unlock()
-					if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == filepath.Join(opts.Dir, "maindb", "wal") {
+					if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == filepath.Join(opts.Dir, "wal") {
 						swaps++
 					}
 					if event.Resource != durabilitycut.ResourceMeta || (event.Point != durabilitycut.BeforeMetaWrite && event.Point != durabilitycut.AfterMetaWrite && event.Point != durabilitycut.BeforeMetaSync && event.Point != durabilitycut.AfterMetaSync) {
 						return nil
 					}
-					if event.Path != filepath.Join(opts.Dir, "maindb", "index.db") || ((event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.AfterMetaWrite) && (event.Length != int64(page.PageSize) || (event.Offset != 0 && event.Offset != int64(page.PageSize)))) {
+					if event.Path != filepath.Join(opts.Dir, "index.db") || ((event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.AfterMetaWrite) && (event.Length != int64(page.PageSize) || (event.Offset != 0 && event.Offset != int64(page.PageSize)))) {
 						observationErr = fmt.Errorf("selected checkpoint authority event: %+v", event)
 						return observationErr
 					}
@@ -182,7 +182,7 @@ func TestCOWPublicDATASelectionLayeredPublication(t *testing.T) {
 				}
 				// Both records are still in the final two slots. Decode after the
 				// explicit checkpoint rather than reading inside a physical seal.
-				f, err := os.Open(filepath.Join(opts.Dir, "maindb", "index.db"))
+				f, err := os.Open(filepath.Join(opts.Dir, "index.db"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -282,7 +282,6 @@ func TestCOWPublicDATASelectionAndExplicitPRIMARY(t *testing.T) {
 					opts.MemtableMode = mode
 					opts.MemtableShards = 2
 					opts.IndexPrimaryDirectory = explicit
-					opts.DisableSideStores = true
 					opts.DisableBackgroundPrune = true
 					database, err := Open(opts)
 					if err != nil {
@@ -327,7 +326,6 @@ func TestCOWPublicDATASelectionReopensExistingDATA(t *testing.T) {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
 			opts.MemtableMode = "btree"
-			opts.DisableSideStores = true
 			database, err := Open(opts)
 			if err != nil {
 				t.Fatal(err)
@@ -365,7 +363,6 @@ func TestCOWPublicDATAEmptyCheckpointPreservesSuccessorBasis(t *testing.T) {
 		for _, pointer := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/pointer=%v", profile, pointer), func(t *testing.T) {
 				database, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
-					opts.DisableSideStores = true
 					opts.BackgroundCheckpointInterval = -1
 					opts.BackgroundCheckpointIdleDuration = -1
 					opts.DisableBackgroundPrune = true

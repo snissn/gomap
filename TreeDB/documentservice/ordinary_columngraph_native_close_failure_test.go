@@ -89,7 +89,7 @@ func TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure(t *testing.T) {
 		if err := owner.Set(rawKey, rawValue); err != nil {
 			t.Fatalf("acknowledged final marker: %v", err)
 		}
-		root := filepath.Join(dir, "maindb")
+		root := dir
 		path := filepath.Join(root, "index.db")
 		var writes atomic.Uint32
 		restore := durabilitycut.Install(func(event durabilitycut.Event) error {

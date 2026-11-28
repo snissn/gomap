@@ -108,11 +108,7 @@ var ErrNamespacePersistenceUnsupported = db.ErrNamespacePersistenceUnsupported
 var ensureOpenStorageLayoutDirs = db.EnsureStorageLayoutDirsForOpen
 
 const (
-	defaultChunkSize     = 256 * 1024
-	defaultDictChunkSize = 64 * 1024
-	// Template side-store pages intentionally use the same default size as dictdb
-	// pages so both auxiliary stores behave consistently under the unified layout.
-	defaultTemplateChunkSize = defaultDictChunkSize
+	defaultChunkSize = 256 * 1024
 
 	defaultSlowdownBacklogSeconds        = 1.0
 	defaultStopBacklogSeconds            = 2.0
@@ -903,12 +899,12 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	applyEnvMaintenanceOverrides(&opts)
 	forceTemplateCompressionOff(&opts)
 
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	dir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		return nil, err
 	}
-	rootDir := layout.rootDir
-	maindbDir := layout.mainDir
+	rootDir := dir
+	maindbDir := dir
 
 	// Apply persisted index encoding knobs so tools and apps can open existing
 	// dirs without needing to re-specify format-affecting flags.
@@ -948,8 +944,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		applyEnvIndexFormatOverrides(&opts)
 	}
 
-	// Keep opts.DisableSideStores consistent with the resolved layout.
-	opts.DisableSideStores = layout.disableSideStores
 	db.NormalizeFlushAdmissionOptions(&opts)
 
 	writePath := writePathFromOptions(opts)
@@ -969,23 +963,18 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		)
 	}
 
-	// Dictionaries and templates live directly inside maindb's SystemRootPageID
-	// (inline/chunked or optional raw value-log pointers), so both work without
-	// separate side-store directories regardless of DisableSideStores.
+	// Dictionaries and templates live directly inside index.db's SystemRootPageID
+	// (inline/chunked or optional raw value-log pointers).
 
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("treedb: maindb directory missing for read-only open: %s", maindbDir)
+				return nil, fmt.Errorf("treedb: database directory missing for read-only open: %s", maindbDir)
 			}
 			return nil, err
 		}
 	} else {
-		dirs := []string{rootDir}
-		if maindbDir != rootDir {
-			dirs = append(dirs, maindbDir)
-		}
-		if err := ensureOpenStorageLayoutDirs(0o755, filepath.Join(maindbDir, "index.db"), dirs...); err != nil {
+		if err := ensureOpenStorageLayoutDirs(0o755, filepath.Join(maindbDir, "index.db"), maindbDir); err != nil {
 			return nil, fmt.Errorf("treedb: ensure public storage layout: %w", err)
 		}
 	}
@@ -2875,35 +2864,28 @@ func VacuumIndexOffline(opts Options) error {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return err
 	}
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	dir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		return err
 	}
-	opts.Dir = layout.mainDir
-	opts.DisableSideStores = layout.disableSideStores
+	opts.Dir = dir
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	if opts.IgnoreFormatConfig {
-		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(layout.mainDir)
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(dir)
 		if err != nil {
 			return err
 		}
 		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
-		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
+		if cfg, ok, err := db.LoadFormatConfig(dir); err != nil {
 			return err
 		} else if ok {
 			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyToOptions(&opts)
 		}
 	}
-
-	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sideCleanup() }()
 
 	return db.VacuumIndexOffline(opts)
 }

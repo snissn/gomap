@@ -15,7 +15,7 @@ import (
 
 func TestRetainedPhysicalRootsRestoreTornSlotsAndRetry(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, DisableSideStores: true, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, DisableBackgroundPrune: true}
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestRetainedPhysicalRootsRestoreTornSlotsAndRetry(t *testing.T) {
 
 func TestRetainedPhysicalRootsRejectInodeAndNamespaceReplacement(t *testing.T) {
 	dir := t.TempDir()
-	database, err := Open(Options{Dir: dir, DisableSideStores: true, DisableBackgroundPrune: true})
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestRetainedPhysicalRootsRejectInodeAndNamespaceReplacement(t *testing.T) {
 
 func TestRetainedPhysicalRootsRejectProjectionBeforeAnySlotWrite(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{Dir: dir, DisableSideStores: true, DisableBackgroundPrune: true}
+	opts := Options{Dir: dir, DisableBackgroundPrune: true}
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)

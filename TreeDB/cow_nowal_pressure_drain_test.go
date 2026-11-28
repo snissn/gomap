@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -271,7 +270,7 @@ func TestPublicProfileNoWALFastLeafPackReclaimsDiskAndReopens(t *testing.T) {
 
 	leafDirBytes := func() (int, int64) {
 		t.Helper()
-		entries, err := os.ReadDir(backenddb.LeafLogDirPath(filepath.Join(dir, "maindb")))
+		entries, err := os.ReadDir(backenddb.LeafLogDirPath(dir))
 		if err != nil {
 			t.Fatal(err)
 		}

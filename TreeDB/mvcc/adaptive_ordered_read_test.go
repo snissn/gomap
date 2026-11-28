@@ -15,7 +15,6 @@ func TestAdaptiveMVCCOrderedFirstQualifiedRead(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileNoWALFast, treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := treedb.OptionsFor(profile, t.TempDir())
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.ValueLog.PointerThreshold = 1
 			db, err := treedb.Open(opts)
@@ -140,7 +139,6 @@ func TestAdaptiveMVCCOrderedFirstQualifiedRead(t *testing.T) {
 
 func TestAdaptiveMVCCOrderedLateQualifiedRead(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)
@@ -245,7 +243,6 @@ func TestMVCCOrderedReadPreservesExplicitMode(t *testing.T) {
 	for _, mode := range []string{"append_only", "hash_sorted", "btree", "skiplist", "cow_btree"} {
 		t.Run(mode, func(t *testing.T) {
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.MemtableMode = mode
 			db, err := treedb.Open(opts)
@@ -278,7 +275,6 @@ func TestMVCCOrderedReadPreservesExplicitMode(t *testing.T) {
 // nonrotating read route; only canonical Store demand selects adaptive ordering.
 func TestAdaptiveMVCCOrderedReadExcludesUnqualifiedRanges(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -319,7 +315,6 @@ func TestAdaptiveMVCCOrderedReadExcludesUnqualifiedRanges(t *testing.T) {
 
 func TestAdaptiveMVCCOrderedConcurrentFirstRead(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)

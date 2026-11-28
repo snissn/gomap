@@ -133,7 +133,7 @@ func TestPublicCOWSealedFallbackDoesNotResyncActiveWAL(t *testing.T) {
 
 			next := database.backend.CommandWALNextLSN()
 			var walSyncs, metaSyncs atomic.Int32
-			mainDir := filepath.Join(opts.Dir, "maindb")
+			mainDir := opts.Dir
 			restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 				if e.Point == durabilitycut.AfterDependencyFileSync && e.Resource == durabilitycut.ResourceCommandWAL && filepath.Dir(e.Path) == filepath.Join(mainDir, "wal") {
 					walSyncs.Add(1)
@@ -188,7 +188,7 @@ func TestPublicCOWSealedFallbackPropagatesJournalFlushFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("missing checkpoint basis")
 	}
-	walDir := filepath.Join(opts.Dir, "maindb", "wal")
+	walDir := filepath.Join(opts.Dir, "wal")
 	failure := errors.New("fallback command WAL buffer drain failed")
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 		if e.Point == durabilitycut.BeforeUserspaceFlush && e.Resource == durabilitycut.ResourceCommandWAL && filepath.Dir(e.Path) == walDir {

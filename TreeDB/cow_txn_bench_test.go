@@ -24,7 +24,6 @@ func BenchmarkPublicCOWTxn(b *testing.B) {
 				b.Run(fmt.Sprintf("%s/%s/History%d", profile, shape, history), func(b *testing.B) {
 					opts := OptionsFor(profile, b.TempDir())
 					opts.MemtableMode = "cow_btree"
-					opts.DisableSideStores = true
 					opts.BackgroundCheckpointInterval = -1
 					opts.BackgroundCheckpointIdleDuration = -1
 					opts.BackgroundIndexVacuumInterval = -1

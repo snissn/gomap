@@ -326,7 +326,7 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 			defer old.Close()
 			cowPublicContractSnapshotValue(t, old, "leaf-seed-00000000", value, true)
 			cowPublicContractSnapshotValue(t, old, "leaf-seed-00001023", value, true)
-			leafPattern := filepath.Join(opts.Dir, "maindb", "leaf_vlog", "value-l*.log")
+			leafPattern := filepath.Join(opts.Dir, "leaf_vlog", "value-l*.log")
 			initialFiles, err := filepath.Glob(leafPattern)
 			if err != nil {
 				t.Fatal(err)

@@ -1063,7 +1063,7 @@ func quicksilverRetainedMarker(engine, dir string) error {
 	case engine == "treedb_backend" || engine == "treedb_backend_command_wal":
 		marker = "index.db"
 	case strings.HasPrefix(engine, "treedb"):
-		marker = "maindb/index.db"
+		marker = "index.db"
 	case engine == "lmdb":
 		marker = "data.mdb"
 	case engine == "rocksdb":

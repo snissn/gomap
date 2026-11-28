@@ -22,7 +22,6 @@ func TestVectorPartitionRetainedSnapshotInstallV1(t *testing.T) {
 	}
 	source := filepath.Join(t.TempDir(), "source")
 	opts := forcedPointerYCSBNativewireOptions(source)
-	opts.DisableSideStores = true
 	database, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatal(err)

@@ -35,7 +35,6 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
 			database, opts, _ := cowPublicContractOpen(t, profile, func(o *Options) {
-				o.DisableSideStores = false
 				o.DisableBackgroundPrune = true
 				o.BackgroundCheckpointInterval = -1
 				o.BackgroundCheckpointIdleDuration = -1

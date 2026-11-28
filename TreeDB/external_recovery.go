@@ -249,7 +249,7 @@ func OpenExternalRecovery(opts Options, config ExternalRecoveryConfig) (_ *Exter
 	if err := externalAtomicFile(filepath.Join(working, externalRecoveryMarker), markerBytes); err != nil {
 		return nil, err
 	}
-	opts.Dir, opts.DisableSideStores = working, true
+	opts.Dir = working
 	opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = -1, -1
 	opts.BackgroundIndexVacuumInterval, opts.DisableBackgroundPrune = -1, true
 	o.options = opts

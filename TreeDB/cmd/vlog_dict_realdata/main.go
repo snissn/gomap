@@ -1968,12 +1968,6 @@ func measureBenchDiskUsage(dir string) (benchDiskUsage, error) {
 		return usage, nil
 	}
 	root := dir
-	maindbDir := filepath.Join(dir, "maindb")
-	if info, err := os.Stat(maindbDir); err == nil && info.IsDir() {
-		root = maindbDir
-	} else if err != nil && !os.IsNotExist(err) {
-		return usage, err
-	}
 
 	valueBytes, err := sumDirFiles(root, "wal", "value-", "")
 	if err != nil {
