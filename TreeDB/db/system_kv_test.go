@@ -337,3 +337,72 @@ func TestSystemDict_PointerSegmentGC_RotatesSystemWriter(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemDict_CompactRewriteWriter_SystemLeafNeverUsesSelfDict(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 << 10,
+		IndexOuterLeavesInValueLog: true,
+		FreshSystemPagerLeaves:     false,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	// Install a compact-style rewriteWriter with a live leafDictID/leafDict
+	// configured (mirroring compact_storage.go's leaf-page-log setup).
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0, d.valueLogIdentityPins)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 1)
+	writer.ridAlloc = newRewriteRIDAllocator(1, nil)
+	writer.blockCompression = true
+	writer.blockCodec = valuelog.BlockCodecSnappy
+	writer.leafBlockCodec = valuelog.BlockCodecSnappy
+	d.SetLeafPageLog(writer)
+	defer func() {
+		d.SetLeafPageLog(nil)
+		_ = writer.Close()
+	}()
+
+	payload := bytes.Repeat([]byte("self-dict-system-leaf-acyclicity-test|"), 16)
+	sum := sha256.Sum256(payload)
+	dictID := binary.BigEndian.Uint64(sum[:8])
+	enc := make([]byte, 1+len(payload))
+	enc[0] = SystemDictEncodingInline
+	copy(enc[1:], payload)
+	if err := d.ApplySystemOps([]SystemKVOp{{Key: SystemDictBytesKey(dictID), Value: enc}}, true); err != nil {
+		t.Fatalf("ApplySystemOps(seed dict): %v", err)
+	}
+
+	// Activate leafDictID on the installed compact rewriteWriter, then publish a
+	// subsequent SystemRootPageID mutation through ApplySystemOps (and flush).
+	writer.SetLeafDictMode(dictID, payload, false)
+	if err := d.ApplySystemOps([]SystemKVOp{{Key: []byte("meta/after-dict"), Value: []byte("ok")}}, true); err != nil {
+		t.Fatalf("ApplySystemOps(after SetLeafDictMode): %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("writer.Flush: %v", err)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	// Fixed-scratch lookup enforces DictID==0 on SystemRootPageID outer leaves;
+	// if compact's rewriteWriter had dictionary-encoded the system leaf, this
+	// would fail with "system outer leaf unexpectedly uses dict".
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	var keyScratch, leafScratch [page.PageSize]byte
+	entry, err := snap.GetSystemEntryExactWithFixedScratch(SystemDictBytesKey(dictID), keyScratch[:], leafScratch[:])
+	if err != nil {
+		t.Fatalf("GetSystemEntryExactWithFixedScratch: %v", err)
+	}
+	if !bytes.Equal(entry.Value, enc) {
+		t.Fatalf("system dict mismatch after compact rewriteWriter system update")
+	}
+}

@@ -3498,6 +3498,13 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 	}
 
 	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool, rawOnly bool) (uint64, error) {
+		if rawOnly && writer != nil && (writer.leafDictID != 0 || len(writer.leafDict) > 0) {
+			savedID, savedDict := writer.leafDictID, writer.leafDict
+			writer.leafDictID, writer.leafDict = 0, nil
+			defer func() {
+				writer.leafDictID, writer.leafDict = savedID, savedDict
+			}()
+		}
 		rewriter := &rewriteIterator{
 			inner:               iter,
 			ptrMap:              ptrMap,
