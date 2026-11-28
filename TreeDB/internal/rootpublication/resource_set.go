@@ -1292,7 +1292,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 				entry.pinIndex = nil
 			}
 		}
-		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
+		if mode == stableResourceViewUnpinned {
 			if err := advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
 				return err
 			}
@@ -1366,7 +1366,7 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 				entry.pinIndex = nil
 			}
 		}
-		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
+		if mode == stableResourceViewUnpinned {
 			if err := advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
 				return err
 			}

@@ -624,11 +624,12 @@ func TestIdentityPinRegistryUnionCoalesceRaisesFrontierPin5922(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open low: %v", err)
 		}
+		defer func() { _ = fLow.Close() }()
 		fHigh, err := os.Open(filePath)
 		if err != nil {
-			_ = fLow.Close()
 			t.Fatalf("Open high: %v", err)
 		}
+		defer func() { _ = fHigh.Close() }()
 		identity, err := StableIdentityFromFile(fLow)
 		if err != nil {
 			t.Fatalf("StableIdentityFromFile: %v", err)
@@ -700,6 +701,11 @@ func TestIdentityPinRegistryUnionCoalesceRaisesFrontierPin5922(t *testing.T) {
 			setHigh.Release()
 			t.Fatalf("UnionStableResourceSets: %v", err)
 		}
+		if got := tokLow.identityPin.frontierBytes; got != 256 {
+			setLow.Release()
+			setHigh.Release()
+			t.Fatalf("UnionStableResourceSets mutated borrowed tokLow frontier pin: got=%d want=256", got)
+		}
 		cloneBuilder := NewStableResourceSetBuilder()
 		if err := cloneStableResourceEntryIntoBuilder(cloneBuilder, &unionView.entries[0]); err != nil {
 			cloneBuilder.Abandon()
@@ -745,11 +751,12 @@ func TestIdentityPinRegistryUnionCoalesceRaisesFrontierPin5922(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open low: %v", err)
 		}
+		defer func() { _ = fLow.Close() }()
 		fHigh, err := os.Open(filePath)
 		if err != nil {
-			_ = fLow.Close()
 			t.Fatalf("Open high: %v", err)
 		}
+		defer func() { _ = fHigh.Close() }()
 		identity, err := StableIdentityFromFile(fLow)
 		if err != nil {
 			t.Fatalf("StableIdentityFromFile: %v", err)
@@ -894,6 +901,7 @@ func TestIdentityPinRegistryImportedTokenRaisesSourceFrontierPin5922(t *testing.
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	defer func() { _ = file.Close() }()
 	identity, err := StableIdentityFromFile(file)
 	if err != nil {
 		t.Fatalf("StableIdentityFromFile: %v", err)
@@ -1016,11 +1024,12 @@ func TestStableResourceSetBuilderMergeRollbackOnTruncateLease5922(t *testing.T) 
 			if err != nil {
 				t.Fatalf("Open f1: %v", err)
 			}
+			defer func() { _ = f1.Close() }()
 			f2, err := os.Open(filePath)
 			if err != nil {
-				_ = f1.Close()
 				t.Fatalf("Open f2: %v", err)
 			}
+			defer func() { _ = f2.Close() }()
 			identity, err := StableIdentityFromFile(f1)
 			if err != nil {
 				t.Fatalf("StableIdentityFromFile: %v", err)
@@ -1046,7 +1055,9 @@ func TestStableResourceSetBuilderMergeRollbackOnTruncateLease5922(t *testing.T) 
 					if err != nil {
 						t.Fatalf("Open filler %d: %v", i, err)
 					}
-					if err := builder.Add(distinctPhysicalTokenFixture(t, ff, uint64(i+1000))); err != nil {
+					tok := distinctPhysicalTokenFixture(t, ff, uint64(i+1000))
+					_ = ff.Close()
+					if err := builder.Add(tok); err != nil {
 						t.Fatalf("builder.Add filler %d: %v", i, err)
 					}
 				}
