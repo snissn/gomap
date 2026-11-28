@@ -678,8 +678,12 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		col.catalogMu.RLock()
 		cachedCat := col.catalog
 		col.catalogMu.RUnlock()
-		if cachedCat != nil && cachedCat.rootID(docMapRootName) != afterDocMapRoot {
-			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d; want %d", cachedCat.rootID(docMapRootName), afterDocMapRoot)
+		if cachedCat == nil || cachedCat.rootID(docMapRootName) != afterDocMapRoot {
+			gotRoot := uint64(0)
+			if cachedCat != nil {
+				gotRoot = cachedCat.rootID(docMapRootName)
+			}
+			t.Fatalf("cached catalog retained stale text-v2-docmap root=%d; want %d", gotRoot, afterDocMapRoot)
 		}
 
 		verifyRepoChunks5921SearchAndGC(t, db, col, "r1")
@@ -849,12 +853,14 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
 				t.Fatalf("CloseVectorIndexPreparedSearchCache: %v", err)
 			}
-			gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
-			if err != nil {
-				t.Fatalf("ColumnAssetGC after normalized retry failed: %v", err)
-			}
-			if gcStats.Plan.Segments.Unknown != 0 {
-				t.Fatalf("ColumnAssetGC after normalized retry reported unknown_segments=%d; want 0 (plan=%+v)", gcStats.Plan.Segments.Unknown, gcStats.Plan.Segments)
+			if rootpublication.StableRelativeNamespaceSupported() {
+				gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+				if err != nil {
+					t.Fatalf("ColumnAssetGC after normalized retry failed: %v", err)
+				}
+				if gcStats.Plan.Segments.Unknown != 0 {
+					t.Fatalf("ColumnAssetGC after normalized retry reported unknown_segments=%d; want 0 (plan=%+v)", gcStats.Plan.Segments.Unknown, gcStats.Plan.Segments)
+				}
 			}
 			if err := closeFn(); err != nil {
 				t.Fatalf("close(post-rebuild): %v", err)
@@ -873,12 +879,14 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reopen OpenCollection: %v", err)
 			}
-			gcAfterReopen, err := reopenCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
-			if err != nil {
-				t.Fatalf("ColumnAssetGC after reopen failed: %v", err)
-			}
-			if gcAfterReopen.Plan.Segments.Unknown != 0 {
-				t.Fatalf("ColumnAssetGC after reopen reported unknown_segments=%d; want 0", gcAfterReopen.Plan.Segments.Unknown)
+			if rootpublication.StableRelativeNamespaceSupported() {
+				gcAfterReopen, err := reopenCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+				if err != nil {
+					t.Fatalf("ColumnAssetGC after reopen failed: %v", err)
+				}
+				if gcAfterReopen.Plan.Segments.Unknown != 0 {
+					t.Fatalf("ColumnAssetGC after reopen reported unknown_segments=%d; want 0", gcAfterReopen.Plan.Segments.Unknown)
+				}
 			}
 		})
 	})
@@ -920,7 +928,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 		if gotFrames := countCollectionCommandWALFrames(t, filepath.Join(dir, "maindb")); gotFrames != beforeFrames {
 			t.Fatalf("exhausted rebuild appended CommandWAL frames: before=%d after=%d", beforeFrames, gotFrames)
 		}
-		gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+		gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: !rootpublication.StableRelativeNamespaceSupported()})
 		if err != nil || gcStats.Plan.Segments.Unknown != 0 {
 			t.Fatalf("ColumnAssetGC after retry exhaustion: err=%v unknown_segments=%d", err, gcStats.Plan.Segments.Unknown)
 		}
@@ -1149,17 +1157,26 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			t.Fatalf("expected distinct value_vlog segment for text-v2-docmap (primary=%v docmap=%v)", primaryFileIDs, docMapFileIDs)
 		}
 		var rewriteStats backenddb.ValueLogRewriteStats
-		err = col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 256, typedGraphFoldTestAssetLimits(), func() error {
-			var rewriteErr error
-			rewriteStats, rewriteErr = db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
-				SourceFileIDs: docMapOnlyFileIDs,
-				BatchSize:     16,
-				SyncEachBatch: true,
-			})
-			return rewriteErr
+		var hookCalls atomic.Int32
+		restoreFoldHook := setTypedGraphFoldBeforePublishTestHook(func() error {
+			if hookCalls.Add(1) == 1 {
+				var rewriteErr error
+				rewriteStats, rewriteErr = db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+					SourceFileIDs: docMapOnlyFileIDs,
+					BatchSize:     16,
+					SyncEachBatch: true,
+				})
+				return rewriteErr
+			}
+			return nil
 		})
+		defer restoreFoldHook()
+		err = col.foldTypedGraph(context.Background(), typedGraphOverlapLimits().Cold, 256, typedGraphFoldTestAssetLimits(), nil)
 		if err != nil {
 			t.Fatalf("foldTypedGraph failed after online ValueLogRewriteOnline on text-v2-docmap: %v", err)
+		}
+		if got := hookCalls.Load(); got != 1 {
+			t.Fatalf("typedGraphFoldBeforePublishTestHook calls=%d; want 1", got)
 		}
 		if rewriteStats.RecordsCopied == 0 {
 			t.Fatalf("expected ValueLogRewriteOnline(docmap-only) to copy >=1 record, got %+v", rewriteStats)
@@ -1190,6 +1207,9 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 	})
 
 	t.Run("case3f_unpublished_owned_segment_cleanup_fails_closed_on_rebound_identity_or_pin", func(t *testing.T) {
+		if !rootpublication.StableRelativeNamespaceSupported() {
+			t.Skip("unpublished owned segment cleanup requires stable relative namespace support")
+		}
 		segDir := t.TempDir()
 		parent, err := os.Open(segDir)
 		if err != nil {
@@ -1359,7 +1379,7 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 				if err := db.Checkpoint(); err != nil {
 					t.Fatalf("Checkpoint: %v", err)
 				}
-				gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+				gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: !rootpublication.StableRelativeNamespaceSupported()})
 				if err != nil || gcStats.Plan.Segments.Unknown != 0 {
 					t.Fatalf("ColumnAssetGC after concurrent %s rejection: err=%v unknown_segments=%d", op, err, gcStats.Plan.Segments.Unknown)
 				}
@@ -1414,9 +1434,11 @@ func TestVectorIndexRebuildTextV2DocMapRace5921(t *testing.T) {
 			if err := db.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
-			gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
-			if err != nil || gcStats.Plan.Segments.Unknown != 0 {
-				t.Fatalf("ColumnAssetGC after normalized concurrent insert rejection: err=%v unknown_segments=%d", err, gcStats.Plan.Segments.Unknown)
+			if rootpublication.StableRelativeNamespaceSupported() {
+				gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+				if err != nil || gcStats.Plan.Segments.Unknown != 0 {
+					t.Fatalf("ColumnAssetGC after normalized concurrent insert rejection: err=%v unknown_segments=%d", err, gcStats.Plan.Segments.Unknown)
+				}
 			}
 		})
 	})
@@ -1483,7 +1505,7 @@ func verifyRepoChunks5921SearchAndGC(t *testing.T, db *backenddb.DB, col *Collec
 	if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
 		t.Fatalf("CloseVectorIndexPreparedSearchCache: %v", err)
 	}
-	gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+	gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{DryRun: !rootpublication.StableRelativeNamespaceSupported()})
 	if err != nil {
 		t.Fatalf("ColumnAssetGC: %v", err)
 	}

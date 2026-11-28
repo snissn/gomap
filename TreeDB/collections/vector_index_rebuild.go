@@ -563,9 +563,13 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 		}
 	}
 	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing, preparePublication, func(fn func() error) {
-			postUnlockCleanup = fn
-		})
+		var registerCleanup func(func() error)
+		if !heldRaw && owner == nil {
+			registerCleanup = func(fn func() error) {
+				postUnlockCleanup = fn
+			}
+		}
+		return c.rebuildCosineNormalizedF32V1ColumnGraph(name, snap, catalog, baseMeta, *cfg, def, manifest, records, rows, constructionMatrix, baseCopy, baseCommitSeq, baseSystemRoot, rootName, baseManifestRootID, replay, started, &timing, preparePublication, registerCleanup)
 	}
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: baseManifestRootID}
@@ -748,19 +752,12 @@ func (c *Collection) rebuildCosineNormalizedF32V1ColumnGraph(name string, snap *
 			basePrepared.stableResources.Release()
 			basePrepared.stableResources = nil
 		}
-		if len(targets) == 0 {
+		if len(targets) == 0 || registerPostUnlockCleanup == nil {
 			return
 		}
-		cleanupFn := func() error {
+		registerPostUnlockCleanup(func() error {
 			return c.deleteUnpublishedRebuildOwnedSegments(targets)
-		}
-		if registerPostUnlockCleanup != nil {
-			registerPostUnlockCleanup(cleanupFn)
-			return
-		}
-		if cleanupErr := cleanupFn(); cleanupErr != nil {
-			retErr = errors.Join(retErr, cleanupErr)
-		}
+		})
 	}
 	if prepareErr != nil {
 		retErr = prepareErr
@@ -2892,6 +2889,9 @@ func collectUnpublishedRebuildOwnedSegmentTargets(rootDir string, prepared *Colu
 // deletion leases, and parent-handle unlink/sync strictly outside rawPublish.
 func (c *Collection) deleteUnpublishedRebuildOwnedSegments(targets []unpublishedRebuildOwnedSegmentTarget) error {
 	if c == nil || c.db == nil || len(targets) == 0 {
+		return nil
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
 		return nil
 	}
 	registry := c.db.StableResourceIdentityPinRegistry()

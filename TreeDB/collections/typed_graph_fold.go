@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -13,6 +14,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
+
+var typedGraphFoldBeforePublishTestHook struct {
+	sync.RWMutex
+	hook func() error
+}
+
+func setTypedGraphFoldBeforePublishTestHook(hook func() error) func() {
+	typedGraphFoldBeforePublishTestHook.Lock()
+	previous := typedGraphFoldBeforePublishTestHook.hook
+	typedGraphFoldBeforePublishTestHook.hook = hook
+	typedGraphFoldBeforePublishTestHook.Unlock()
+	return func() {
+		typedGraphFoldBeforePublishTestHook.Lock()
+		typedGraphFoldBeforePublishTestHook.hook = previous
+		typedGraphFoldBeforePublishTestHook.Unlock()
+	}
+}
+
+func runTypedGraphFoldBeforePublishTestHook() error {
+	typedGraphFoldBeforePublishTestHook.RLock()
+	hook := typedGraphFoldBeforePublishTestHook.hook
+	typedGraphFoldBeforePublishTestHook.RUnlock()
+	if hook != nil {
+		return hook()
+	}
+	return nil
+}
 
 // foldTypedGraph is explicit internal maintenance. The callback is an internal
 // observation seam after capture admission is released, not a publication hook.
@@ -528,6 +556,9 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 		rootNames = append(rootNames, locatorName)
 	} else if e := errors.Join(remapped.Error(), remapped.Close()); e != nil {
 		return e
+	}
+	if hookErr := runTypedGraphFoldBeforePublishTestHook(); hookErr != nil {
+		return hookErr
 	}
 	inputs[0].DurableResources = graph.stableResources
 	graph.stableResources = nil
