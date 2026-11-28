@@ -1262,7 +1262,16 @@ func (db *DB) validateDirectSystemOpReferencesLocked(baseSystemRoot uint64, ops 
 		if idx == nil || idx.pager == nil {
 			return ErrClosed
 		}
-		tr = tree.New(idx.pager, newValueReader(nil), baseSystemRoot)
+		var set *valuelog.Set
+		if db.valueLogManager != nil {
+			set = db.valueLogManager.CurrentSetNoRefresh()
+			defer func() {
+				if set != nil {
+					_ = db.valueLogManager.Release(set)
+				}
+			}()
+		}
+		tr = tree.New(idx.pager, newValueReader(set), baseSystemRoot)
 	}
 	entryExists := func(key []byte) (bool, error) {
 		if tr == nil {

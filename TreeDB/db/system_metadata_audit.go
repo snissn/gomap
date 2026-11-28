@@ -279,7 +279,7 @@ func (db *DB) snapshotStagedSystemMetadataIDs() (dictIDs map[uint64]struct{}, tp
 					dictIDs = make(map[uint64]struct{}, 4)
 				}
 				dictIDs[id] = struct{}{}
-			} else if bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix) {
+			} else if !op.IsPointer && (bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix)) {
 				if len(op.Value) == 8 {
 					if id := binary.BigEndian.Uint64(op.Value); id != 0 {
 						if dictIDs == nil {
@@ -293,6 +293,18 @@ func (db *DB) snapshotStagedSystemMetadataIDs() (dictIDs map[uint64]struct{}, tp
 					tplIDs = make(map[uint64]struct{}, 4)
 				}
 				tplIDs[id] = struct{}{}
+			} else if !op.IsPointer && bytes.HasPrefix(op.Key, systemTemplateFPPrefix) && len(op.Value) > 0 {
+				if cands, err := decodeSystemTemplateFPCandidates(op.Value); err == nil {
+					for _, c := range cands {
+						if c.id == 0 {
+							continue
+						}
+						if tplIDs == nil {
+							tplIDs = make(map[uint64]struct{}, 4)
+						}
+						tplIDs[c.id] = struct{}{}
+					}
+				}
 			}
 		}
 	}

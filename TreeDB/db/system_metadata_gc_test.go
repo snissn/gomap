@@ -435,4 +435,103 @@ func TestSystemMetadataGC_StagingSerializationAndDanglingReject(t *testing.T) {
 	if err := d.ApplySystemOps([]db.SystemKVOp{{Key: []byte("dict/current"), Value: curVal2}}, true); !errors.Is(err, valuelog.ErrMissingDict) {
 		t.Fatalf("ApplySystemOps(deleted dict2) err=%v want ErrMissingDict", err)
 	}
+
+	// Stage ONLY a template/fp/* routing update referencing an existing template
+	// (tpl1) outside the recent grace window. GC must preserve tpl1 while deleting
+	// unreferenced tpl2, and subsequent SetSync must cleanly piggyback the staged
+	// routing entry.
+	tstore := templatedb.NewBackend(d, templatedb.Config{})
+	tcfg := templ.NormalizeConfig(templ.Config{})
+	tpl1Bytes, err := templ.EncodeTemplateDef(templ.TemplateDef{
+		Kind:    templ.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-fp-1-anchor-a-"), []byte("-stage-fp-1-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(1): %v", err)
+	}
+	tpl2Bytes, err := templ.EncodeTemplateDef(templ.TemplateDef{
+		Kind:    templ.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-fp-2-anchor-a-"), []byte("-stage-fp-2-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(2): %v", err)
+	}
+	tpl1ID, err := tstore.PutTemplateDef(ctx, tpl1Bytes, nil)
+	if err != nil {
+		t.Fatalf("PutTemplateDef(1): %v", err)
+	}
+	tpl2ID, err := tstore.PutTemplateDef(ctx, tpl2Bytes, nil)
+	if err != nil {
+		t.Fatalf("PutTemplateDef(2): %v", err)
+	}
+	encodeFPCand := func(id uint64) []byte {
+		var buf []byte
+		buf = binary.AppendUvarint(buf, id)
+		buf = binary.AppendUvarint(buf, 32)
+		return buf
+	}
+	fpKey := make([]byte, len("template/fp/")+8)
+	copy(fpKey, "template/fp/")
+	binary.BigEndian.PutUint64(fpKey[len("template/fp/"):], 0x1122334455667788)
+	if err := d.StageSystemOps([]db.SystemKVOp{{Key: fpKey, Value: encodeFPCand(tpl1ID)}}, nil); err != nil {
+		t.Fatalf("StageSystemOps(template/fp -> tpl1): %v", err)
+	}
+	stats, err = d.SystemMetadataGC(ctx, db.SystemMetadataGCOptions{
+		Audit: db.SystemMetadataAuditOptions{
+			KeepRecentPublishedDicts:     -1,
+			KeepRecentPublishedTemplates: -1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SystemMetadataGC(tpl): %v", err)
+	}
+	if stats.TemplatesDeleted != 1 {
+		t.Fatalf("expected exactly 1 template deleted (tpl2), got %+v", stats)
+	}
+	if err := d.SetSync([]byte("piggyback-fp"), []byte("ok")); err != nil {
+		t.Fatalf("SetSync(piggyback-fp): %v", err)
+	}
+	if _, err := d.LookupSystemTemplateDef(tpl1ID); err != nil {
+		t.Fatalf("staged-fp tpl1ID=%d was unexpectedly deleted: %v", tpl1ID, err)
+	}
+	if _, err := d.LookupSystemTemplateDef(tpl2ID); !errors.Is(err, templ.ErrMissingTemplate) {
+		t.Fatalf("tpl2ID=%d expected ErrMissingTemplate, got %v", tpl2ID, err)
+	}
+	if err := d.StageSystemOps([]db.SystemKVOp{{Key: fpKey, Value: encodeFPCand(tpl2ID)}}, nil); !errors.Is(err, templ.ErrMissingTemplate) {
+		t.Fatalf("StageSystemOps(deleted tpl2) err=%v want ErrMissingTemplate", err)
+	}
+	if err := d.ApplySystemOps([]db.SystemKVOp{{Key: fpKey, Value: encodeFPCand(tpl2ID)}}, true); !errors.Is(err, templ.ErrMissingTemplate) {
+		t.Fatalf("ApplySystemOps(deleted tpl2) err=%v want ErrMissingTemplate", err)
+	}
+}
+
+func TestSystemMetadataGC_DirectActivationWithLeafVlogSystemLeaves(t *testing.T) {
+	dir := t.TempDir()
+	d, err := db.Open(db.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		FreshSystemPagerLeaves:     false,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog, err := db.NewStandaloneLeafPageLog(dir, db.StandaloneLeafPageLogOptions{})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	d.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = d.Close()
+		_ = leafLog.Close()
+	}()
+	ctx := context.Background()
+	dstore := dictdb.New(d)
+	dictID, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, "leaf-vlog-sys-dict", 701))
+	if err != nil {
+		t.Fatalf("PutDictBytes: %v", err)
+	}
+	if err := dstore.SetCurrent(ctx, dictID); err != nil {
+		t.Fatalf("SetCurrent with leaf_vlog system leaves: %v", err)
+	}
 }
