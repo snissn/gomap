@@ -28,6 +28,25 @@ func TestPreparedInsertPublicationBaseAllowsInstalledDictionaryLookup(t *testing
 	}
 }
 
+func TestPreparedInsertPublicationBaseAcceptsSemanticGroupedFrameCache(t *testing.T) {
+	profile := acceptedPreparedPublicationBaseProfile()
+	profile.ValueLogRead.GroupedFrameCacheEntries = 8192
+	profile.ValueLogRead.GroupedFrameCacheMaxBytes = 128 << 20
+	if err := checkPreparedInsertPublicationBase(profile); err != nil {
+		t.Fatalf("semantic grouped-frame cache defaults rejected: %v", err)
+	}
+	overEntries := profile
+	overEntries.ValueLogRead.GroupedFrameCacheEntries = 8193
+	if err := checkPreparedInsertPublicationBase(overEntries); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("over-cap grouped-frame cache entries error=%v, want prepared resource limit", err)
+	}
+	overBytes := profile
+	overBytes.ValueLogRead.GroupedFrameCacheMaxBytes = (128 << 20) + 1
+	if err := checkPreparedInsertPublicationBase(overBytes); !errors.Is(err, ErrPreparedInsertResourceLimit) {
+		t.Fatalf("over-cap grouped-frame cache bytes error=%v, want prepared resource limit", err)
+	}
+}
+
 func TestPreparedInsertPublicationBaseRejectsHistoricalLeafCounts(t *testing.T) {
 	for name, mutate := range map[string]func(*backenddb.PreparedRootPublicationBaseProfile){
 		"generations": func(p *backenddb.PreparedRootPublicationBaseProfile) {

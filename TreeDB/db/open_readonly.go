@@ -111,6 +111,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
+	applyValueLogGroupedFrameCacheOptions(vm, opts.ValueLog)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	dictLookup := opts.ValueLog.DictLookup
 	if dictLookup == nil {
@@ -325,6 +326,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
+	applyValueLogGroupedFrameCacheOptions(vm, opts.ValueLog)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	dictLookup := opts.ValueLog.DictLookup
 	if dictLookup == nil {

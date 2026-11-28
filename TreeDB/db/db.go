@@ -1162,6 +1162,13 @@ type ValueLogOptions struct {
 	// the cost of a larger mapped virtual-address window.
 	CurrentWritableMmap bool
 
+	// GroupedFrameCacheEntries overrides the per-segment decoded grouped-frame
+	// cache entry cap (0 uses the default 2048; <0 disables).
+	GroupedFrameCacheEntries int
+	// GroupedFrameCacheMaxBytes overrides the manager-wide decoded grouped-frame
+	// cache byte budget (0 uses the default 64 MiB; <0 disables).
+	GroupedFrameCacheMaxBytes int64
+
 	// MaxRetainedBytes emits a warning when retained value-log bytes exceed this
 	// threshold (0 disables warnings). Cached mode only.
 	MaxRetainedBytes int64
@@ -2817,6 +2824,23 @@ func validateOptions(opts Options) error {
 	return nil
 }
 
+func applyValueLogGroupedFrameCacheOptions(vm *valuelog.Manager, opts ValueLogOptions) {
+	if vm == nil {
+		return
+	}
+	if opts.GroupedFrameCacheEntries < 0 || opts.GroupedFrameCacheMaxBytes < 0 {
+		vm.SetGroupedFrameCacheEntries(0)
+		vm.SetGroupedFrameCacheMaxBytes(0)
+		return
+	}
+	if opts.GroupedFrameCacheEntries > 0 {
+		vm.SetGroupedFrameCacheEntries(opts.GroupedFrameCacheEntries)
+	}
+	if opts.GroupedFrameCacheMaxBytes > 0 {
+		vm.SetGroupedFrameCacheMaxBytes(opts.GroupedFrameCacheMaxBytes)
+	}
+}
+
 func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int) {
 	inlineThreshold := page.DefaultInlineThreshold
 	adaptiveCtrl := adaptive.New()
@@ -2905,6 +2929,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
+	applyValueLogGroupedFrameCacheOptions(vm, opts.ValueLog)
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	dictLookup := opts.ValueLog.DictLookup
 	if dictLookup == nil {

@@ -98,6 +98,15 @@ const fastProfileChunkSize = 4 << 20
 // databases only pay fixed slot metadata overhead until leaves are cached.
 const defaultSemanticLeafPageReadCacheEntries = 32768
 
+// defaultSemanticGroupedFrameCacheEntries and defaultSemanticGroupedFrameCacheMaxBytes
+// size the standalone semantic/collection decoded value-log grouped-frame cache
+// at a 128 MiB ceiling (up to 8192 frames per segment), allocated lazily per
+// populated shard so small DBs do not preallocate 128 MiB.
+const (
+	defaultSemanticGroupedFrameCacheEntries  = 8192
+	defaultSemanticGroupedFrameCacheMaxBytes = 128 << 20
+)
+
 // ParseProfile parses a profile name using TreeDB's standard profile vocabulary.
 // Empty input returns fallback. The bool reports whether a known name or empty
 // fallback was accepted.
@@ -305,6 +314,12 @@ func OptionsForSemantic(profile Profile, dir string) Options {
 	opts.MemtableWorkload = MemtableWorkloadSemantic
 	if opts.LeafPageReadCacheEntries == 0 && strings.TrimSpace(os.Getenv(db.LeafPageReadCacheEntriesEnvKey)) == "" {
 		opts.LeafPageReadCacheEntries = defaultSemanticLeafPageReadCacheEntries
+	}
+	if opts.ValueLog.GroupedFrameCacheEntries == 0 {
+		opts.ValueLog.GroupedFrameCacheEntries = defaultSemanticGroupedFrameCacheEntries
+	}
+	if opts.ValueLog.GroupedFrameCacheMaxBytes == 0 {
+		opts.ValueLog.GroupedFrameCacheMaxBytes = defaultSemanticGroupedFrameCacheMaxBytes
 	}
 	return opts
 }

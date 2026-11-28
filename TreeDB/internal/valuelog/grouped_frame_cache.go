@@ -4,10 +4,19 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-const groupedFrameCacheMaxShards = 512
+const (
+	groupedFrameCacheMaxShards  = 512
+	groupedFrameCacheHitStripes = 16
+)
+
+type groupedFrameCacheHitStripe struct {
+	hits atomic.Uint64
+	_    [56]byte // pad to 64-byte cache line
+}
 
 // GroupedFrameCacheStats captures decoded grouped-frame cache behavior.
 // RetainedBytes is the currently retained decoded-raw bytes; BudgetBytes is the
@@ -33,10 +42,15 @@ type GroupedFrameCacheStats struct {
 type groupedFrameCacheBudget struct {
 	limit    atomic.Int64
 	retained atomic.Int64
+	evict    func(exclude *groupedFrameCache, need int) bool
 }
 
 func newGroupedFrameCacheBudget(limit int64) *groupedFrameCacheBudget {
-	b := &groupedFrameCacheBudget{}
+	return newGroupedFrameCacheBudgetWithEvict(limit, nil)
+}
+
+func newGroupedFrameCacheBudgetWithEvict(limit int64, evict func(exclude *groupedFrameCache, need int) bool) *groupedFrameCacheBudget {
+	b := &groupedFrameCacheBudget{evict: evict}
 	b.setLimit(limit)
 	return b
 }
@@ -109,6 +123,8 @@ type groupedFrameCache struct {
 	capacity int
 	shards   []groupedFrameCacheShard
 
+	hitStripes [groupedFrameCacheHitStripes]groupedFrameCacheHitStripe
+
 	hits              atomic.Uint64
 	misses            atomic.Uint64
 	stores            atomic.Uint64
@@ -119,6 +135,19 @@ type groupedFrameCache struct {
 	skippedOversize   atomic.Uint64
 	skippedBudget     atomic.Uint64
 	skippedContention atomic.Uint64
+}
+
+func (c *groupedFrameCache) recordHit(start int64) {
+	idx := ((uint64(start) * 0x9e3779b97f4a7c15) >> 60) & (groupedFrameCacheHitStripes - 1)
+	c.hitStripes[idx].hits.Add(1)
+}
+
+func (c *groupedFrameCache) totalHits() uint64 {
+	total := c.hits.Load()
+	for i := range c.hitStripes {
+		total += c.hitStripes[i].hits.Load()
+	}
+	return total
 }
 
 type groupedFrameCacheShard struct {
@@ -145,6 +174,15 @@ type groupedFrameCacheSlot struct {
 	raw       []byte
 	rawPooled bool
 	used      uint64
+
+	// COW certificate fields: set only by storeCOWVerified after full CRC32
+	// verification, COWRecordShape validation, and bounded decode.
+	cowVerified    bool
+	cowRecordBytes uint64
+	cowDictID      uint64
+	cowCodec       BlockCodec
+	cowFrame       FrameHeader
+	cowLimits      COWReadLimits
 }
 
 func newGroupedFrameCache(owner *File, entries, maxRaw int, maxBytes int64, budget *groupedFrameCacheBudget) *groupedFrameCache {
@@ -304,6 +342,14 @@ func groupedFrameOffsetsEqual(a, b *[MaxFrameK + 1]uint32, k int) bool {
 }
 
 func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
+	c.releaseRawWithMode(raw, pooled, false)
+}
+
+func (c *groupedFrameCache) releaseRawNonBlocking(raw []byte, pooled bool) {
+	c.releaseRawWithMode(raw, pooled, true)
+}
+
+func (c *groupedFrameCache) releaseRawWithMode(raw []byte, pooled, nonBlocking bool) {
 	if c == nil || len(raw) == 0 {
 		return
 	}
@@ -318,7 +364,11 @@ func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
 			// them to the process pool can displace scratch used by live files.
 			return
 		}
-		c.owner.releaseDecodeScratch(raw)
+		if nonBlocking {
+			c.owner.tryReleaseDecodeScratch(raw)
+		} else {
+			c.owner.releaseDecodeScratch(raw)
+		}
 		return
 	}
 	putDecodeScratch(raw)
@@ -409,7 +459,141 @@ func (c *groupedFrameCache) readAppendTo(start int64, verifyCRC bool, expectedK 
 	return nil, false, nil, false
 }
 
+func cowReadLimitsDominate(caller, credit COWReadLimits) bool {
+	return credit.MaxRecordBytes > 0 && credit.MaxRawBytes > 0 && credit.MaxValueBytes > 0 &&
+		caller.MaxRecordBytes >= credit.MaxRecordBytes &&
+		caller.MaxRawBytes >= credit.MaxRawBytes &&
+		caller.MaxValueBytes >= credit.MaxValueBytes
+}
+
+// readCOWVerified serves a verified COW grouped value directly from a cached
+// decoded frame without re-running CRC32 or decompression. It only matches
+// slots populated by storeCOWVerified (full CRC32 + COWRecordShape + bounded
+// decode), enforces caller COWReadLimits (including dictionary credit dominance
+// for DictID != 0), and rejects template/compact-leaf payloads.
+// checkShape runs while holding slot.mu.RLock() and MUST be lock-free / non-blocking.
+// When useDst && requireDstCap is true, a hit is returned only if cap(dst) >= len(val),
+// letting callers with pre-admitted scratch copy out under RLock without growing.
+func (c *groupedFrameCache) readCOWVerified(
+	ptr page.ValuePtr,
+	limits COWReadLimits,
+	checkShape func(COWRecordShape) bool,
+	dst []byte,
+	useDst bool,
+	requireDstCap bool,
+) (out []byte, hit bool) {
+	if c == nil || c.capacity <= 0 || len(c.shards) == 0 || ptr.Offset < 4 || !page.ValuePtrIsGrouped(ptr) {
+		return nil, false
+	}
+	start := int64(ptr.Offset - 4)
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	s := c.shardFor(start, true)
+	if s == nil || s.cap <= 0 {
+		return nil, false
+	}
+	if !s.allocated.Load() {
+		c.misses.Add(1)
+		return nil, false
+	}
+	slots := s.slots
+	wantFP := groupedFrameCacheHash(start, true) | 1
+	recordLenHint := page.ValuePtrRecordLength(ptr)
+	for i := range slots {
+		slot := &slots[i]
+		if slot.fp.Load() != wantFP {
+			continue
+		}
+		slot.mu.RLock()
+		if slot.fp.Load() != wantFP || !slot.valid || !slot.cowVerified || !slot.verifyCRC || slot.start != start {
+			slot.mu.RUnlock()
+			continue
+		}
+		if recordLenHint != 0 && uint64(recordLenHint)+4 != slot.cowRecordBytes {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		if subIndex < 0 || subIndex >= slot.k {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		valStart := slot.offsets[subIndex]
+		valEnd := slot.offsets[subIndex+1]
+		rawLen := slot.rawLen
+		if valEnd < valStart || valEnd > rawLen || uint32(len(slot.raw)) != rawLen || slot.offsets[slot.k] != rawLen {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		valLen := uint64(valEnd - valStart)
+		if slot.cowRecordBytes > limits.MaxRecordBytes || uint64(rawLen) > limits.MaxRawBytes || valLen > limits.MaxValueBytes {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		if slot.cowDictID != 0 && !cowReadLimitsDominate(limits, slot.cowLimits) {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		if checkShape != nil {
+			shape := COWRecordShape{
+				RecordBytes: slot.cowRecordBytes,
+				RawBytes:    uint64(rawLen),
+				ValueBytes:  valLen,
+				DictID:      slot.cowDictID,
+				Compressed:  true,
+				Codec:       slot.cowCodec,
+				ptr:         ptr,
+				limits:      limits,
+				frame:       slot.cowFrame,
+				valueStart:  valStart,
+				valid:       true,
+			}
+			if !checkShape(shape) {
+				slot.mu.RUnlock()
+				c.misses.Add(1)
+				return nil, false
+			}
+		}
+		val := slot.raw[valStart:valEnd]
+		if templ.IsEncodedPayload(val) || HasCompactLeafLogPayload(val) {
+			slot.mu.RUnlock()
+			c.misses.Add(1)
+			return nil, false
+		}
+		if useDst {
+			if requireDstCap && cap(dst) < len(val) {
+				slot.mu.RUnlock()
+				c.misses.Add(1)
+				return nil, false
+			}
+			out = append(dst[:0], val...)
+		} else {
+			out = make([]byte, len(val))
+			copy(out, val)
+		}
+		slot.mu.RUnlock()
+		c.recordHit(start)
+		return out, true
+	}
+	c.misses.Add(1)
+	return nil, false
+}
+
 func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
+	return c.storeEntry(start, verifyCRC, k, offsets, raw, pooled, false, COWRecordShape{})
+}
+
+func (c *groupedFrameCache) storeCOWVerified(start int64, shape COWRecordShape, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
+	if !shape.valid || shape.leaf || !shape.Compressed || shape.frame.K == 0 {
+		return false
+	}
+	return c.storeEntry(start, true, int(shape.frame.K), offsets, raw, pooled, true, shape)
+}
+
+func (c *groupedFrameCache) storeEntry(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool, cowVerified bool, shape COWRecordShape) bool {
 	if c == nil || c.capacity <= 0 || len(c.shards) == 0 {
 		if c != nil {
 			c.skippedDisabled.Add(1)
@@ -435,7 +619,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	}
 	defer s.mu.Unlock()
 	if !s.allocated.Load() {
-		if !c.reserve(len(raw)) {
+		if !c.reserveWithPeerEvict(len(raw)) {
 			c.skippedBudget.Add(1)
 			return false
 		}
@@ -444,10 +628,15 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	} else {
 		// Replace any existing entry for the same identity in this shard. The new
 		// entry includes K/raw length/offsets, so stale state cannot be reused across
-		// frame shape changes at the same file-local start.
+		// frame shape changes at the same file-local start. Preserve any stricter
+		// existing dictionary COW credit so a racing broader reader cannot downgrade it.
 		for i := range s.slots {
 			slot := &s.slots[i]
 			if slot.valid && slot.start == start && slot.verifyCRC == verifyCRC {
+				if cowVerified && slot.cowVerified && shape.DictID != 0 && slot.cowDictID == shape.DictID &&
+					cowReadLimitsDominate(shape.limits, slot.cowLimits) {
+					shape.limits = slot.cowLimits
+				}
 				s.evictSlotLocked(c, i)
 			}
 		}
@@ -455,6 +644,9 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		for !c.reserve(len(raw)) {
 			idx := s.oldestIndexLocked()
 			if idx < 0 {
+				if c.reserveWithPeerEvict(len(raw)) {
+					break
+				}
 				c.skippedBudget.Add(1)
 				return false
 			}
@@ -491,11 +683,94 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	slot.raw = raw
 	slot.rawPooled = pooled
 	slot.used = s.clock
+	slot.cowVerified = cowVerified
+	if cowVerified {
+		slot.cowRecordBytes = shape.RecordBytes
+		slot.cowDictID = shape.DictID
+		slot.cowCodec = shape.Codec
+		slot.cowFrame = shape.frame
+		slot.cowLimits = shape.limits
+	} else {
+		slot.cowRecordBytes = 0
+		slot.cowDictID = 0
+		slot.cowCodec = 0
+		slot.cowFrame = FrameHeader{}
+		slot.cowLimits = COWReadLimits{}
+	}
 	slot.valid = true
 	slot.fp.Store(groupedFrameCacheHash(start, verifyCRC) | 1)
 	slot.mu.Unlock()
 	c.stores.Add(1)
 	return true
+}
+
+func (c *groupedFrameCache) reserveWithPeerEvict(n int) bool {
+	if c.reserve(n) {
+		return true
+	}
+	if c.budget == nil || c.budget.evict == nil {
+		return false
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		if !c.budget.evict(c, n) {
+			return false
+		}
+		if c.reserve(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// tryEvictOldestFromShard performs strictly non-blocking eviction of the oldest
+// unlocked entry in one shard so peer files sharing a manager byte budget can
+// reclaim stale frames without any deadlock or blocking wait.
+func (c *groupedFrameCache) tryEvictOldestFromShard(shardIdx int) int {
+	if c == nil || shardIdx < 0 || shardIdx >= len(c.shards) {
+		return 0
+	}
+	s := &c.shards[shardIdx]
+	if !s.allocated.Load() || !s.mu.TryLock() {
+		return 0
+	}
+	idx := s.oldestIndexLocked()
+	if idx < 0 {
+		s.mu.Unlock()
+		return 0
+	}
+	slot := &s.slots[idx]
+	if !slot.valid {
+		s.mu.Unlock()
+		return 0
+	}
+	if !slot.mu.TryLock() {
+		s.mu.Unlock()
+		return 0
+	}
+	slot.fp.Store(0)
+	raw := slot.raw
+	pooled := slot.rawPooled
+	freed := len(raw)
+	slot.valid = false
+	slot.start = 0
+	slot.verifyCRC = false
+	slot.k = 0
+	slot.rawLen = 0
+	slot.offsets = [MaxFrameK + 1]uint32{}
+	slot.raw = nil
+	slot.rawPooled = false
+	slot.used = 0
+	slot.cowVerified = false
+	slot.cowRecordBytes = 0
+	slot.cowDictID = 0
+	slot.cowCodec = 0
+	slot.cowFrame = FrameHeader{}
+	slot.cowLimits = COWReadLimits{}
+	slot.mu.Unlock()
+	s.mu.Unlock()
+	c.releaseRawNonBlocking(raw, pooled)
+	c.evictions.Add(1)
+	return freed
 }
 
 func (s *groupedFrameCacheShard) oldestIndexLocked() int {
@@ -546,6 +821,12 @@ func (s *groupedFrameCacheShard) evictSlotLocked(c *groupedFrameCache, idx int) 
 	slot.raw = nil
 	slot.rawPooled = false
 	slot.used = 0
+	slot.cowVerified = false
+	slot.cowRecordBytes = 0
+	slot.cowDictID = 0
+	slot.cowCodec = 0
+	slot.cowFrame = FrameHeader{}
+	slot.cowLimits = COWReadLimits{}
 	slot.mu.Unlock()
 	c.releaseRaw(raw, pooled)
 	c.evictions.Add(1)
@@ -572,7 +853,7 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 		return GroupedFrameCacheStats{}
 	}
 	st := GroupedFrameCacheStats{
-		Hits:              c.hits.Load(),
+		Hits:              c.totalHits(),
 		Misses:            c.misses.Load(),
 		Stores:            c.stores.Load(),
 		Evictions:         c.evictions.Load(),

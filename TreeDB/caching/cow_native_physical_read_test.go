@@ -989,3 +989,150 @@ func TestCOWNativePhysicalReadContendedFallbackAndIdleScratch(t *testing.T) {
 		t.Fatalf("close leaked budget: %+v", stats)
 	}
 }
+
+func TestCOWNativeValueBlockMultiLaneAndGroupedFrameCache(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		Durability:                 backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: backenddb.ValueLogOptions{
+			GroupedFrameCacheEntries:  512,
+			GroupedFrameCacheMaxBytes: 16 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{
+		TransactionOwner:           owner,
+		DisableWAL:                 true,
+		AllowUnsafe:                true,
+		MemtableMode:               "cow_btree",
+		COWMemtableLimits:          cowStandaloneLimitsForTest(),
+		FlushThreshold:             1 << 30,
+		IndexOuterLeavesInValueLog: true,
+		ValueLogPointerThreshold:   128,
+		ValueLogCompression:        uint8(vlogCompressionBlock),
+		ValueLogBlockCodec:         1, // LZ4
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		t.Fatal(err)
+	}
+
+	const numDocs = 128
+	wants := make([][]byte, numDocs)
+	batch := db.NewBatch()
+	for i := 0; i < numDocs; i++ {
+		v := bytes.Repeat([]byte(fmt.Sprintf("lz4-block-doc-%04d|", i)), 56) // ~1 KiB > pointer threshold
+		wants[i] = v
+		if err := batch.Set([]byte(fmt.Sprintf("doc-%04d", i)), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	capRaw, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capRaw.Close()
+	capture := capRaw.(*NativeSemanticCapture)
+	token, ok := capture.Snapshot().StateToken()
+	if !ok {
+		t.Fatal("missing basis state token")
+	}
+
+	ptrs := make([]page.ValuePtr, numDocs)
+	for i := 0; i < numDocs; i++ {
+		e, err := capture.NativeEntryAtRoot(token.RootPageID, []byte(fmt.Sprintf("doc-%04d", i)), false)
+		if err != nil || e.Flags&node.FlagPointer == 0 {
+			t.Fatalf("doc %d expected pointer entry, got %+v err=%v", i, e, err)
+		}
+		ptrs[i] = e.ValuePtr
+	}
+
+	// 1. Hold Lane 0: LZ4 block value read must spill to physicalSlots (reusing
+	// pre-admitted block decoder) rather than allocating throwaway stack scratch.
+	db.cow.physicalMu.Lock()
+	var dst []byte
+	got, err := capture.NativeValueAtPointerInto(ptrs[0], dst, nil)
+	if err != nil || !bytes.Equal(got, wants[0]) {
+		db.cow.physicalMu.Unlock()
+		t.Fatalf("spillover LZ4 value read: len=%d err=%v", len(got), err)
+	}
+	warmSpillSlots := 0
+	for i := range db.cow.physicalSlots {
+		db.cow.physicalSlots[i].mu.Lock()
+		if db.cow.physicalSlots[i].reader != nil {
+			warmSpillSlots++
+		}
+		db.cow.physicalSlots[i].mu.Unlock()
+	}
+	db.cow.physicalMu.Unlock()
+	if warmSpillSlots == 0 {
+		t.Fatal("LZ4 block value read did not populate a pooled physicalSlots lane when lane 0 was held")
+	}
+
+	// 2. Concurrent readers across all 128 pointers hit the verified grouped-frame cache.
+	var wg sync.WaitGroup
+	errs := make(chan error, 24)
+	for g := 0; g < 24; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			buf := make([]byte, 0, 2048)
+			for j := 0; j < numDocs; j++ {
+				idx := (id*13 + j) % numDocs
+				v, err := capture.NativeValueAtPointerInto(ptrs[idx], buf[:0], nil)
+				if err != nil || !bytes.Equal(v, wants[idx]) {
+					errs <- fmt.Errorf("g=%d idx=%d err=%v len=%d", id, idx, err, len(v))
+					return
+				}
+				buf = v[:0]
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	if err := capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := db.cow.budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+		t.Fatalf("close leaked budget: %+v", stats)
+	}
+}
