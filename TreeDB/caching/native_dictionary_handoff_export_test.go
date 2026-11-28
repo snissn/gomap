@@ -379,7 +379,15 @@ func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := dictdb.New(backend)
+	store, err := dictdb.Open(filepath.Join(dir, "dictdb"), backenddb.Options{ChunkSize: 64 << 10})
+	if err != nil {
+		t.Fatal(errors.Join(err, backend.Close()))
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	backend.SetDictCallbacks(
 		func(id uint64) ([]byte, error) { return store.GetDictBytes(context.Background(), id) },
 		store.GetCurrentForClass,

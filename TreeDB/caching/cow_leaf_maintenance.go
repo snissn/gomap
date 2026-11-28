@@ -283,12 +283,17 @@ func (db *DB) runPrivateCOWLeafPackLocked(parentCtx context.Context, maxGenerati
 		stop := context.AfterFunc(parentCtx, cancel)
 		defer stop()
 	}
+	prevMaintOwner := db.maintenanceOwnerGID.Swap(currentMaintenanceGoroutineID())
+	defer db.maintenanceOwnerGID.Store(prevMaintOwner)
 	roots, systemRoots := db.publishedLeafGenerationProtectionIDs()
 	stats, packErr := db.backend.(backendPrivateCOWLeafPackRunner).LeafGenerationPackRunOnceForPrivateCOW(db.cow.txnOwner, ctx, backenddb.LeafGenerationPackFromPlanOptions{
 		Sync: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
 		MinReclaimPerByteCopiedPPM: leafGenerationPackMaintenanceDefaultMinReclaimPerByteCopiedPPM,
 		MaxGenerations:             maxGenerations, MaxBytesToCopy: maxCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
+		OnAfterDictPrepare: func() error {
+			return db.adoptPrivateCOWLeafBasis(original)
+		},
 	})
 	// Observation only: an already accepted pack must still reach the original
 	// basis adopter even if this nil-by-default test observer returns an error.

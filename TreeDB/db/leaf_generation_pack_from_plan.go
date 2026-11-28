@@ -19,6 +19,10 @@ type LeafGenerationPackFromPlanOptions struct {
 	ProtectedRootIDs           []uint64
 	ProtectedSystemRootIDs     []uint64
 	MaintenanceLimits          LeafGenerationMaintenanceLimits
+	// OnAfterDictPrepare is invoked if leaf-pack dictionary preparation publishes
+	// a new dictionary into SystemRootPageID before pack source handoff, so
+	// private-COW callers can adopt the updated SystemRootPageID basis first.
+	OnAfterDictPrepare func() error
 }
 
 func leafGenerationPackFromPlanPlanOptions(opts LeafGenerationPackFromPlanOptions) LeafGenerationPlanOptions {
@@ -58,6 +62,7 @@ func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOption
 		ProtectedRootIDs:           opts.ProtectedRootIDs,
 		ProtectedSystemRootIDs:     opts.ProtectedSystemRootIDs,
 		MaintenanceLimits:          opts.MaintenanceLimits,
+		OnAfterDictPrepare:         opts.OnAfterDictPrepare,
 	}
 }
 

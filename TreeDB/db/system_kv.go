@@ -231,18 +231,8 @@ func (db *DB) GetSystemEntry(key []byte) (node.LeafEntry, bool, error) {
 // a bounded, strictly non-dictionary (dictID=0) reader so dictionary lookups
 // remain acyclic in every leaf-placement mode.
 func (s *Snapshot) GetSystemEntryExactWithFixedScratch(key, keyScratch, leafScratch []byte) (node.LeafEntry, error) {
-	if s == nil {
-		return node.LeafEntry{}, ErrClosed
-	}
-	if err := s.beginRead(); err != nil {
-		return node.LeafEntry{}, err
-	}
-	defer s.endRead()
-	if s.state == nil || s.state.SystemRootPageID == 0 {
-		return node.LeafEntry{}, tree.ErrKeyNotFound
-	}
 	var readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)
-	if s.state.ValueLogSet != nil {
+	if s != nil && s.state != nil && s.state.ValueLogSet != nil {
 		readLeaf = func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 			vptr := ptr.ValuePtr()
 			f := s.state.ValueLogSet.Files[vptr.FileID]
@@ -270,6 +260,24 @@ func (s *Snapshot) GetSystemEntryExactWithFixedScratch(key, keyScratch, leafScra
 			copy(out, raw)
 			return out, nil
 		}
+	}
+	return s.GetSystemEntryExactWithFixedScratchAndLeafReader(key, keyScratch, leafScratch, readLeaf)
+}
+
+// GetSystemEntryExactWithFixedScratchAndLeafReader reads a persisted
+// SystemRootPageID entry using caller-admitted fixed-page scratch and a
+// caller-supplied bounded outer-leaf reader (such as dictdb's COW-admitted
+// non-dictionary leaf reader).
+func (s *Snapshot) GetSystemEntryExactWithFixedScratchAndLeafReader(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
+	if s == nil {
+		return node.LeafEntry{}, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	defer s.endRead()
+	if s.state == nil || s.state.SystemRootPageID == 0 {
+		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
 	sysTree := tree.New(s.idx.pager, &s.reader, s.state.SystemRootPageID)
 	return sysTree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, readLeaf)
@@ -568,12 +576,11 @@ func (db *DB) syncSystemValueLogWriterIfOpen() error {
 		return nil
 	}
 	db.systemVLogMu.Lock()
-	writer := db.systemVLogWriter
-	db.systemVLogMu.Unlock()
-	if writer == nil {
+	defer db.systemVLogMu.Unlock()
+	if db.systemVLogWriter == nil {
 		return nil
 	}
-	return writer.Sync()
+	return db.systemVLogWriter.Sync()
 }
 
 func nextSystemValueLogSeq(dir string, lane uint32) (uint32, error) {
@@ -610,7 +617,7 @@ func nextSystemValueLogSeq(dir string, lane uint32) (uint32, error) {
 // caching.DB in COW mode) that fences cached writers and refreshes the COW
 // backend basis around SystemRootPageID-only metadata commits such as
 // dictionary publication.
-func (db *DB) SetSystemRootMutationFence(begin func() (func(error) error, error)) {
+func (db *DB) SetSystemRootMutationFence(begin func() (func() error, error)) {
 	if db == nil {
 		return
 	}
@@ -619,7 +626,7 @@ func (db *DB) SetSystemRootMutationFence(begin func() (func(error) error, error)
 	db.systemRootMutationFenceMu.Unlock()
 }
 
-func (db *DB) systemRootMutationFenceFn() func() (func(error) error, error) {
+func (db *DB) systemRootMutationFenceFn() func() (func() error, error) {
 	if db == nil {
 		return nil
 	}
@@ -647,7 +654,7 @@ func (db *DB) ApplySystemOps(ops []SystemKVOp, sync bool) error {
 	if len(ops) == 0 {
 		return nil
 	}
-	var finish func(error) error
+	var finish func() error
 	if begin := db.systemRootMutationFenceFn(); begin != nil {
 		var fenceErr error
 		finish, fenceErr = begin()
@@ -657,7 +664,7 @@ func (db *DB) ApplySystemOps(ops []SystemKVOp, sync bool) error {
 	}
 	err := db.applySystemOpsDirect(ops, sync)
 	if finish != nil {
-		return finish(err)
+		return errors.Join(err, finish())
 	}
 	return err
 }

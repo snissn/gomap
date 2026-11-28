@@ -1062,12 +1062,14 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 			return rootID, false, err
 		}
 	}
-	if c.writer != nil && (c.writer.leafDictID != 0 || len(c.writer.leafDict) > 0) {
-		savedDictID, savedDict := c.writer.leafDictID, c.writer.leafDict
-		c.writer.leafDictID, c.writer.leafDict = 0, nil
-		defer func() {
-			c.writer.leafDictID, c.writer.leafDict = savedDictID, savedDict
-		}()
+	if c.writer != nil && c.writer.leafDictID != 0 {
+		if _, inSelfSystemRoot, _ := c.db.GetSystemEntry(SystemDictBytesKey(c.writer.leafDictID)); inSelfSystemRoot {
+			savedDictID, savedDict := c.writer.leafDictID, c.writer.leafDict
+			c.writer.leafDictID, c.writer.leafDict = 0, nil
+			defer func() {
+				c.writer.leafDictID, c.writer.leafDict = savedDictID, savedDict
+			}()
+		}
 	}
 
 	inlineThreshold := c.db.InlineThreshold()
@@ -1500,36 +1502,56 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, err
 	}
 
+	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite user leaf root: %w", err)
+	}
+
 	var (
 		newSysRoot uint64
 		sysChanged bool
 	)
-	// SystemRootPageID outer leaves must remain non-dictionary-encoded (dictID=0)
-	// so reading dictionary definitions from SystemRootPageID remains strictly
-	// acyclic even when FreshSystemPagerLeaves is false.
+	// When writer.leafDictID lives inside this DB's own SystemRootPageID (the
+	// standard in-maindb dict layout), keep SystemRootPageID outer leaves
+	// non-dictionary-encoded (dictID=0) so reading dict/bytes/<leafDictID> from
+	// SystemRootPageID stays strictly acyclic even when FreshSystemPagerLeaves
+	// is false.
+	disableSystemLeafDict := false
+	if writer.leafDictID != 0 {
+		if _, inSelfSystemRoot, _ := db.GetSystemEntry(SystemDictBytesKey(writer.leafDictID)); inSelfSystemRoot {
+			disableSystemLeafDict = true
+		}
+	}
 	savedLeafDictID, savedLeafDict := writer.leafDictID, writer.leafDict
-	writer.leafDictID, writer.leafDict = 0, nil
+	if disableSystemLeafDict {
+		writer.leafDictID, writer.leafDict = 0, nil
+	}
+	restoreSystemLeafDict := func() {
+		if disableSystemLeafDict {
+			writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
+		}
+	}
 	newSysRoot, sysChanged, err = leafCtx.rewriteNode(sysRoot)
 	if err != nil {
-		writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
+		restoreSystemLeafDict()
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
 	}
 	preCollectionSysRoot := newSysRoot
 	if len(collectionRootReplacements) > 0 {
 		if sysChanged {
 			if err := writer.Flush(); err != nil {
-				writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
+				restoreSystemLeafDict()
 				return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten system leaf root: %w", err)
 			}
 			if err := privateLeafReader.Refresh(); err != nil {
-				writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
+				restoreSystemLeafDict()
 				return 0, 0, fmt.Errorf("vlog-rewrite: refresh private leaf reader: %w", err)
 			}
 		}
 		retiredBeforeCollectionDelta := len(leafCtx.retired)
 		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
-			writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
+			restoreSystemLeafDict()
 			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)
 		}
 		// The staged descriptor delta proves and accounts for the copy-time work,
@@ -1539,11 +1561,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		newSysRoot = replacedSysRoot
 		sysChanged = sysChanged || replacementChanged
 	}
-	writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
-	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
-	if err != nil {
-		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite user leaf root: %w", err)
-	}
+	restoreSystemLeafDict()
 	if !sysChanged && !userChanged {
 		if runStats != nil {
 			runStats.ApplyStages.TreeRewriteTimeNanos += time.Since(copyStarted).Nanoseconds()

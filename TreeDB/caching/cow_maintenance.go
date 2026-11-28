@@ -40,7 +40,7 @@ func (db *DB) RunBackendMaintenanceWithPostRefresh(fn, settle func() error) erro
 // maintenance goroutine (for example during LeafGenerationPack or
 // ValueLogRewriteOnline), it returns (nil, nil) because the caller already
 // holds the maintenance fence and will refresh the COW basis on completion.
-func (db *DB) BeginSystemRootMutation() (func(error) error, error) {
+func (db *DB) BeginSystemRootMutation() (func() error, error) {
 	if db == nil || db.cow == nil {
 		return nil, nil
 	}
@@ -79,16 +79,16 @@ func (db *DB) BeginSystemRootMutation() (func(error) error, error) {
 			return nil, backendMaintenanceError("refresh backend value-log set before callback", err)
 		}
 	}
-	return func(fnErr error) error {
+	return func() error {
 		defer func() {
 			db.flushMu.Unlock()
 			releaseMaintenance()
 		}()
 		if db.closing.Load() {
-			return fnErr
+			return nil
 		}
 		reconcileErr := backendMaintenanceError("reconcile cached value-log readers and writers", db.reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(false))
-		return db.finishCOWBackendMaintenance(errors.Join(fnErr, reconcileErr))
+		return db.finishCOWBackendMaintenance(reconcileErr)
 	}, nil
 }
 

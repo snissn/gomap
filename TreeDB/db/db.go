@@ -235,7 +235,7 @@ type DB struct {
 	systemVLogSeq                  uint32
 	systemVLogNextRID              uint64
 	systemRootMutationFenceMu      sync.RWMutex
-	systemRootMutationFence        func() (func(error) error, error)
+	systemRootMutationFence        func() (func() error, error)
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32

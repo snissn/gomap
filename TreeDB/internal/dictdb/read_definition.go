@@ -223,9 +223,78 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		return failDictionaryReadDefinition(d, err, deferred)
 	}
 	d.metadata = nil
+	readSystemLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		vptr := ptr.ValuePtr()
+		file, _, err := d.snapshot.PinnedValueLogSegment(vptr.FileID)
+		if err != nil {
+			return nil, err
+		}
+		shape, err := file.InspectCOWLeafRecord(vptr, limits)
+		if err != nil {
+			return nil, err
+		}
+		if shape.DictID != 0 {
+			return nil, ErrReadDefinitionIdentity
+		}
+		var (
+			decode         valuelog.COWDecodeFunc
+			decoder        *valuelog.COWDecoder
+			releaseDecoder func()
+			payload, raw   []byte
+		)
+		if shape.Compressed {
+			switch shape.Codec {
+			case valuelog.BlockCodecSnappy, valuelog.BlockCodecLZ4:
+				decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.RecordBytes, func(sizes valuelog.COWDecoderAllocationSizes) error {
+					var admitErr error
+					releaseDecoder, admitErr = admit(DictionaryReadAllocationSizes{
+						Owner:      sizes.OwnerWrapper,
+						Payload:    sizes.InputBacking,
+						Definition: sizes.RawBacking,
+					})
+					return admitErr
+				})
+			case valuelog.BlockCodecZSTD:
+				window := max(shape.RawBytes, uint64(2048))
+				decoder, err = valuelog.NewCOWDecoder(0, nil, shape.RawBytes, shape.RecordBytes, window, func(sizes valuelog.COWDecoderAllocationSizes) error {
+					var admitErr error
+					releaseDecoder, admitErr = admit(DictionaryReadAllocationSizes{
+						Owner:      sizes.OwnerWrapper + sizes.FixedAllocationBytes,
+						Payload:    sizes.InputBacking + sizes.SequenceBacking,
+						Definition: sizes.RawBacking,
+					})
+					return admitErr
+				})
+			default:
+				return nil, ErrReadDefinitionIdentity
+			}
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				if decoder != nil {
+					decoder.Close()
+				}
+				if releaseDecoder != nil {
+					releaseDecoder()
+				}
+			}()
+			decode = decoder.Decode
+			payload = make([]byte, shape.RecordBytes)
+			raw = make([]byte, shape.RawBytes)
+		} else {
+			releaseRaw, err := admit(DictionaryReadAllocationSizes{Payload: shape.RecordBytes})
+			if err != nil {
+				return nil, err
+			}
+			defer releaseRaw()
+			payload = make([]byte, shape.RecordBytes)
+		}
+		return file.ReadCOWLeafPage(vptr, shape, payload, raw, dst, decode)
+	}
 	copy(d.key[:], "dict/bytes/")
 	binary.BigEndian.PutUint64(d.key[len("dict/bytes/"):], id)
-	entry, err := d.snapshot.GetSystemEntryExactWithFixedScratch(d.key[:], d.keyScratch[:], d.leafScratch[:])
+	entry, err := d.snapshot.GetSystemEntryExactWithFixedScratchAndLeafReader(d.key[:], d.keyScratch[:], d.leafScratch[:], readSystemLeaf)
 	if err != nil {
 		return failDictionaryReadDefinition(d, err, deferred)
 	}
@@ -268,7 +337,7 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 			d.chunkKey[len("dict/chunk/")+8] = '/'
 			for i := uint32(0); i < chunkCount; i++ {
 				binary.BigEndian.PutUint32(d.chunkKey[len("dict/chunk/")+9:], i)
-				chunkEntry, chunkErr := d.snapshot.GetSystemEntryExactWithFixedScratch(d.chunkKey[:], d.keyScratch[:], d.leafScratch[:])
+				chunkEntry, chunkErr := d.snapshot.GetSystemEntryExactWithFixedScratchAndLeafReader(d.chunkKey[:], d.keyScratch[:], d.leafScratch[:], readSystemLeaf)
 				if chunkErr != nil {
 					return failDictionaryReadDefinition(d, chunkErr, deferred)
 				}
