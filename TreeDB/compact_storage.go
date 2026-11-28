@@ -186,6 +186,9 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err != nil {
 		return CompactStorageStats(stats), err
 	}
+	if db.cached != nil && len(stats.SystemMetadataGC.Audit.ReclaimableTemplateIDs) > 0 && stats.SystemMetadataGC.TemplatesDeleted > 0 {
+		db.cached.EvictTemplateIDs(stats.SystemMetadataGC.Audit.ReclaimableTemplateIDs)
+	}
 	finishValueLogFence()
 	fenceActive = false
 	if db.cached != nil && len(stats.ValueLogRewrite.SourceFileIDsUnreferenced) > 0 {
@@ -253,6 +256,18 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	opts.ValueLogProtectedPaths = explicitProtectedPaths
 	opts.LeafGenerationProtectedRootIDs = explicitProtectedRootIDs
 	opts.LeafGenerationProtectedSystemRootIDs = explicitProtectedSystemRootIDs
+	userProtectedSystemMetaIDsFunc := opts.SystemMetadataProtectedIDsFunc
+	opts.SystemMetadataProtectedIDsFunc = func() ([]uint64, []uint64) {
+		var dictIDs, tplIDs []uint64
+		if userProtectedSystemMetaIDsFunc != nil {
+			uDicts, uTpls := userProtectedSystemMetaIDsFunc()
+			dictIDs = appendUniqueUint64s(dictIDs, uDicts)
+			tplIDs = appendUniqueUint64s(tplIDs, uTpls)
+		}
+		dictIDs = appendUniqueUint64s(dictIDs, db.cached.ActiveDictIDs())
+		tplIDs = appendUniqueUint64s(tplIDs, db.cached.RecentTemplateIDs())
+		return dictIDs, tplIDs
+	}
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}

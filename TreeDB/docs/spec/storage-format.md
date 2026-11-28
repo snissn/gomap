@@ -5035,4 +5035,12 @@ are persistent compression metadata and may be reclaimed only by
    template entry updates `valueLogRefTracker` via `CollectOldPointerRefs`. Once
    both dual-meta slots advance past the pre-GC `SystemRootPageID`, subsequent
    `ValueLogGC` reclaims any now-unreferenced lane-254 segment automatically.
+5. **Public wrapper and `CompactStorage` integration**: The root `treedb.DB`
+   wrappers (`SystemMetadataAudit`, `SystemMetadataGC`) automatically merge
+   active cached dictionary IDs and recent template IDs inside the maintenance
+   fence and evict deleted template IDs from `template.Engine` after commit.
+   `DB.CompactStorage` runs a `system-metadata-gc` phase after value-log and
+   leaf-generation GC (chaining a follow-up `value-log-gc` pass when pointer
+   entries were deleted).
+
 

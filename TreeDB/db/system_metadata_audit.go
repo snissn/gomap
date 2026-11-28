@@ -267,46 +267,52 @@ func (db *DB) snapshotStagedSystemMetadataIDs() (dictIDs map[uint64]struct{}, tp
 	if db == nil {
 		return nil, nil
 	}
-	db.stagedSystemOpsMu.Lock()
-	defer db.stagedSystemOpsMu.Unlock()
-	for _, batch := range db.stagedSystemOps {
-		for _, op := range batch.ops {
-			if op.Delete {
-				continue
-			}
-			if id, ok := parseSystemDictBytesKey(op.Key); ok {
-				if dictIDs == nil {
-					dictIDs = make(map[uint64]struct{}, 4)
+	collectBatches := func(batches []stagedSystemOpBatch) {
+		for _, batch := range batches {
+			for _, op := range batch.ops {
+				if op.Delete {
+					continue
 				}
-				dictIDs[id] = struct{}{}
-			} else if !op.IsPointer && (bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix)) {
-				if len(op.Value) == 8 {
-					if id := binary.BigEndian.Uint64(op.Value); id != 0 {
-						if dictIDs == nil {
-							dictIDs = make(map[uint64]struct{}, 4)
-						}
-						dictIDs[id] = struct{}{}
+				if id, ok := parseSystemDictBytesKey(op.Key); ok {
+					if dictIDs == nil {
+						dictIDs = make(map[uint64]struct{}, 4)
 					}
-				}
-			} else if id, ok := parseSystemTemplateDefKey(op.Key); ok {
-				if tplIDs == nil {
-					tplIDs = make(map[uint64]struct{}, 4)
-				}
-				tplIDs[id] = struct{}{}
-			} else if !op.IsPointer && bytes.HasPrefix(op.Key, systemTemplateFPPrefix) && len(op.Value) > 0 {
-				if cands, err := decodeSystemTemplateFPCandidates(op.Value); err == nil {
-					for _, c := range cands {
-						if c.id == 0 {
-							continue
+					dictIDs[id] = struct{}{}
+				} else if !op.IsPointer && (bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix)) {
+					if len(op.Value) == 8 {
+						if id := binary.BigEndian.Uint64(op.Value); id != 0 {
+							if dictIDs == nil {
+								dictIDs = make(map[uint64]struct{}, 4)
+							}
+							dictIDs[id] = struct{}{}
 						}
-						if tplIDs == nil {
-							tplIDs = make(map[uint64]struct{}, 4)
+					}
+				} else if id, ok := parseSystemTemplateDefKey(op.Key); ok {
+					if tplIDs == nil {
+						tplIDs = make(map[uint64]struct{}, 4)
+					}
+					tplIDs[id] = struct{}{}
+				} else if !op.IsPointer && bytes.HasPrefix(op.Key, systemTemplateFPPrefix) && len(op.Value) > 0 {
+					if cands, err := decodeSystemTemplateFPCandidates(op.Value); err == nil {
+						for _, c := range cands {
+							if c.id == 0 {
+								continue
+							}
+							if tplIDs == nil {
+								tplIDs = make(map[uint64]struct{}, 4)
+							}
+							tplIDs[c.id] = struct{}{}
 						}
-						tplIDs[c.id] = struct{}{}
 					}
 				}
 			}
 		}
+	}
+	db.stagedSystemOpsMu.Lock()
+	defer db.stagedSystemOpsMu.Unlock()
+	collectBatches(db.stagedSystemOps)
+	for _, inFlight := range db.stagedSystemOpsInFlight {
+		collectBatches(inFlight.batches)
 	}
 	return dictIDs, tplIDs
 }

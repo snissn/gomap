@@ -170,6 +170,97 @@ func (c *defCache) Add(id uint64, def TemplateDef) {
 	}
 }
 
+func (c *defCache) Delete(ids []uint64) {
+	if c == nil || len(ids) == 0 {
+		return
+	}
+	drop := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			drop[id] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	removed := false
+	for id := range drop {
+		if _, ok := c.defs[id]; ok {
+			delete(c.defs, id)
+			removed = true
+		}
+	}
+	if !removed || len(c.ids) == 0 {
+		return
+	}
+	kept := c.ids[:0]
+	for _, id := range c.ids {
+		if _, ok := drop[id]; !ok {
+			kept = append(kept, id)
+		}
+	}
+	c.ids = kept
+	if len(c.ids) == 0 {
+		c.next = 0
+	} else if c.next >= len(c.ids) {
+		c.next %= len(c.ids)
+	}
+}
+
+// RecentTemplateIDs returns the template IDs currently tracked in the engine's
+// recent fast-path list. Safe for lock-free concurrent callers.
+func (e *Engine) RecentTemplateIDs() []uint64 {
+	if e == nil {
+		return nil
+	}
+	snap := e.recentSnap.Load()
+	if snap == nil || len(*snap) == 0 {
+		return nil
+	}
+	out := make([]uint64, 0, len(*snap))
+	for _, entry := range *snap {
+		if entry.id != 0 {
+			out = append(out, entry.id)
+		}
+	}
+	return out
+}
+
+// EvictTemplateIDs removes the given template IDs from both the engine's recent
+// fast-path list and its in-memory definition cache.
+func (e *Engine) EvictTemplateIDs(ids []uint64) {
+	if e == nil || len(ids) == 0 {
+		return
+	}
+	drop := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			drop[id] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	e.recentMu.Lock()
+	if len(e.recent) > 0 {
+		kept := e.recent[:0]
+		for _, entry := range e.recent {
+			if _, ok := drop[entry.id]; !ok {
+				kept = append(kept, entry)
+			}
+		}
+		if len(kept) != len(e.recent) {
+			clear(e.recent[len(kept):])
+			e.recent = kept
+			e.publishRecentSnapshotLocked()
+		}
+	}
+	e.recentMu.Unlock()
+	e.defCache.Delete(ids)
+}
+
 // NewEngine creates a template engine with normalized config.
 func NewEngine(cfg Config) *Engine {
 	cfg = NormalizeConfig(cfg)

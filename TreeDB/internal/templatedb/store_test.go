@@ -214,3 +214,283 @@ func TestBackendSystemRoot_InlineChunkedAndPointerRoundTrip(t *testing.T) {
 		t.Fatalf("CountSystemPrefix(template/fp/)=(%d, %v) want (4, nil)", fpCount, err)
 	}
 }
+
+func TestStore_StageTemplateDef_PiggybackAndIdempotentCallback(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	store := NewBackend(backend, Config{})
+	ctx := context.Background()
+	tcfg := template.NormalizeConfig(template.Config{})
+	defBytes, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-tpl-anchor-alpha-"), []byte("-stage-tpl-anchor-beta")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef: %v", err)
+	}
+
+	inputFPs := []uint64{900, 300, 900}
+	fired := false
+	id, err := store.StageTemplateDef(ctx, defBytes, inputFPs, func() {
+		fired = true
+	})
+	if err != nil || id == 0 {
+		t.Fatalf("StageTemplateDef: id=%d err=%v", id, err)
+	}
+	// Verify caller's slice was not mutated.
+	if inputFPs[0] != 900 || inputFPs[1] != 300 || inputFPs[2] != 900 {
+		t.Fatalf("StageTemplateDef mutated caller routeFPs: %v", inputFPs)
+	}
+	if fired {
+		t.Fatalf("onDurable should wait until piggybacked commit syncs")
+	}
+	if err := backend.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if !fired {
+		t.Fatalf("expected onDurable to fire after SetSync")
+	}
+	got, err := store.GetTemplateDef(ctx, id)
+	if err != nil || !bytes.Equal(got, defBytes) {
+		t.Fatalf("GetTemplateDef(%d): len=%d err=%v", id, len(got), err)
+	}
+
+	// Idempotent StageTemplateDef with no new routeFPs must invoke onDurable
+	// after releasing store.mu (verified by reading from the store inside callback).
+	idempotentFired := false
+	id2, err := store.StageTemplateDef(ctx, defBytes, nil, func() {
+		if _, cbErr := store.GetTemplateDef(ctx, id); cbErr != nil {
+			t.Errorf("re-entrant GetTemplateDef inside onDurable failed: %v", cbErr)
+		}
+		idempotentFired = true
+	})
+	if err != nil || id2 != id {
+		t.Fatalf("StageTemplateDef(idempotent): id=%d want %d err=%v", id2, id, err)
+	}
+	if !idempotentFired {
+		t.Fatalf("expected idempotent StageTemplateDef onDurable to run")
+	}
+}
+
+func TestStore_StageTemplateDef_PreservesDurabilityBarrierAndMergesStagedFP(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+
+	store := NewBackend(backend, Config{})
+	ctx := context.Background()
+	tcfg := template.NormalizeConfig(template.Config{})
+	def1, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-merge-1-anchor-a-"), []byte("-stage-merge-1-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(1): %v", err)
+	}
+	def2, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-merge-2-anchor-a-"), []byte("-stage-merge-2-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(2): %v", err)
+	}
+
+	const sharedFP uint64 = 0xfeedface01020304
+	var cb1Fired, cb2Fired, cb3Fired bool
+	id1, err := store.StageTemplateDef(ctx, def1, []uint64{sharedFP}, func() { cb1Fired = true })
+	if err != nil || id1 == 0 {
+		t.Fatalf("StageTemplateDef(def1): id=%d err=%v", id1, err)
+	}
+	// Stage a second distinct template onto the SAME fingerprint BEFORE any flush.
+	id2, err := store.StageTemplateDef(ctx, def2, []uint64{sharedFP}, func() { cb2Fired = true })
+	if err != nil || id2 == 0 || id2 == id1 {
+		t.Fatalf("StageTemplateDef(def2): id=%d id1=%d err=%v", id2, id1, err)
+	}
+
+	// Piggyback both staged templates onto an UNSYNCED user batch in Durable mode.
+	b := backend.NewBatch()
+	if err := b.Set([]byte("u1"), []byte("v1")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if cb1Fired || cb2Fired {
+		t.Fatalf("callbacks fired before durable sync barrier: cb1=%v cb2=%v", cb1Fired, cb2Fired)
+	}
+
+	// Re-staging def1 with no routeFPs while its original commit is still awaiting
+	// the durability sync barrier must NOT invoke cb3 immediately.
+	id1Again, err := store.StageTemplateDef(ctx, def1, nil, func() { cb3Fired = true })
+	if err != nil || id1Again != id1 {
+		t.Fatalf("StageTemplateDef(def1 idempotent): id=%d want %d err=%v", id1Again, id1, err)
+	}
+	if cb3Fired {
+		t.Fatalf("idempotent StageTemplateDef fired callback before durability sync barrier")
+	}
+
+	// Checkpoint syncs the durable barrier and releases all three callbacks.
+	if err := backend.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if !cb1Fired || !cb2Fired || !cb3Fired {
+		t.Fatalf("expected all callbacks to fire after Checkpoint: cb1=%v cb2=%v cb3=%v", cb1Fired, cb2Fired, cb3Fired)
+	}
+
+	// Both staged templates must be present in the merged sharedFP candidate list.
+	cands, err := store.GetCandidates(ctx, sharedFP, 0)
+	if err != nil {
+		t.Fatalf("GetCandidates: %v", err)
+	}
+	var saw1, saw2 bool
+	for _, c := range cands {
+		if c.ID == id1 {
+			saw1 = true
+		}
+		if c.ID == id2 {
+			saw2 = true
+		}
+	}
+	if !saw1 || !saw2 {
+		t.Fatalf("merged sharedFP candidates missing staged template: got=%+v want both %d and %d", cands, id1, id2)
+	}
+
+	// Stage a third template and immediately publish it synchronously via
+	// PutTemplateDef BEFORE any flush; PutTemplateDef must commit it durably so
+	// GetTemplateDef immediately succeeds.
+	def3, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-sync-3-anchor-a-"), []byte("-stage-sync-3-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(3): %v", err)
+	}
+	var cb4Fired bool
+	stagedID3, err := store.StageTemplateDef(ctx, def3, []uint64{sharedFP}, func() { cb4Fired = true })
+	if err != nil || stagedID3 == 0 {
+		t.Fatalf("StageTemplateDef(def3): id=%d err=%v", stagedID3, err)
+	}
+	syncID3, err := store.PutTemplateDef(ctx, def3, nil)
+	if err != nil || syncID3 != stagedID3 {
+		t.Fatalf("PutTemplateDef(def3 after stage): id=%d want %d err=%v", syncID3, stagedID3, err)
+	}
+	if !cb4Fired {
+		t.Fatalf("expected synchronous PutTemplateDef to flush staged def3 callback")
+	}
+	got3, err := store.GetTemplateDef(ctx, syncID3)
+	if err != nil || !bytes.Equal(got3, def3) {
+		t.Fatalf("GetTemplateDef(%d) after sync PutTemplateDef: len=%d err=%v", syncID3, len(got3), err)
+	}
+
+	// Verify re-entrant callback staging + unsynced piggyback durability barrier
+	// on synchronous PutTemplateDef:
+	// 1. Stage A with an onDurable callback that stages C on the same FP.
+	// 2. Synchronously PutTemplateDef(B, [fp2]): must drain A, run callback (staging C),
+	//    drain C, and commit B without losing any candidate on fp2.
+	const reentrantFP uint64 = 0x11223344aabbccdd
+	defA, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-A-anchor-1-"), []byte("-reentrant-A-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(A): %v", err)
+	}
+	defB, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-B-anchor-1-"), []byte("-reentrant-B-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(B): %v", err)
+	}
+	defC, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-C-anchor-1-"), []byte("-reentrant-C-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(C): %v", err)
+	}
+	var idC uint64
+	var stageCErr error
+	idA, err := store.StageTemplateDef(ctx, defA, []uint64{reentrantFP}, func() {
+		idC, stageCErr = store.StageTemplateDef(ctx, defC, []uint64{reentrantFP}, nil)
+	})
+	if err != nil || idA == 0 {
+		t.Fatalf("StageTemplateDef(A): id=%d err=%v", idA, err)
+	}
+	idB, err := store.PutTemplateDef(ctx, defB, []uint64{reentrantFP})
+	if err != nil || idB == 0 {
+		t.Fatalf("PutTemplateDef(B): id=%d err=%v", idB, err)
+	}
+	if stageCErr != nil || idC == 0 {
+		t.Fatalf("reentrant StageTemplateDef(C) failed: id=%d err=%v", idC, stageCErr)
+	}
+	if backend.HasPendingStagedSystemOps() || backend.HasUnsyncedSystemOps() {
+		t.Fatalf("expected PutTemplateDef to quiesce reentrant staged ops and sync barriers")
+	}
+	cands2, err := store.GetCandidates(ctx, reentrantFP, 0)
+	if err != nil {
+		t.Fatalf("GetCandidates(reentrantFP): %v", err)
+	}
+	var sawA, sawB, sawC bool
+	for _, c := range cands2 {
+		switch c.ID {
+		case idA:
+			sawA = true
+		case idB:
+			sawB = true
+		case idC:
+			sawC = true
+		}
+	}
+	if !sawA || !sawB || !sawC {
+		t.Fatalf("reentrantFP candidates missing template: got=%+v want A=%d B=%d C=%d", cands2, idA, idB, idC)
+	}
+
+	// Verify synchronous PutTemplateDef syncs an already-piggybacked unsynced def.
+	defD, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("unsynced-D-anchor-1-"), []byte("-unsynced-D-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(D): %v", err)
+	}
+	var cbDFired bool
+	idD, err := store.StageTemplateDef(ctx, defD, nil, func() { cbDFired = true })
+	if err != nil || idD == 0 {
+		t.Fatalf("StageTemplateDef(D): id=%d err=%v", idD, err)
+	}
+	b2 := backend.NewBatch()
+	if err := b2.Set([]byte("u2"), []byte("v2")); err != nil {
+		t.Fatalf("Set(u2): %v", err)
+	}
+	if err := b2.Write(); err != nil {
+		t.Fatalf("Write(u2): %v", err)
+	}
+	_ = b2.Close()
+	if cbDFired {
+		t.Fatalf("cbD fired before sync barrier")
+	}
+	idDSync, err := store.PutTemplateDef(ctx, defD, nil)
+	if err != nil || idDSync != idD {
+		t.Fatalf("PutTemplateDef(D): id=%d want %d err=%v", idDSync, idD, err)
+	}
+	if !cbDFired || backend.HasUnsyncedSystemOps() {
+		t.Fatalf("expected synchronous PutTemplateDef(D) to sync outstanding barrier: cbDFired=%v unsynced=%v", cbDFired, backend.HasUnsyncedSystemOps())
+	}
+}

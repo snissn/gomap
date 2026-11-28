@@ -257,6 +257,16 @@ type CompactStorageOptions struct {
 	// place. This is intended for specialty diagnostics that need to inspect
 	// empty segment files after compaction.
 	DisableZeroByteValueLogCleanup bool
+
+	// SystemMetadataAudit configures reachability pins and grace windows for the
+	// SystemMetadataGC phase executed after value-log and leaf-generation GC.
+	SystemMetadataAudit SystemMetadataAuditOptions
+
+	// SystemMetadataProtectedIDsFunc optionally supplies dynamic active
+	// dictionary and template IDs sampled right when the system-metadata-gc
+	// phase runs (used by cached DBs so concurrent COW writers' active IDs are
+	// pinned fresh at phase execution time).
+	SystemMetadataProtectedIDsFunc func() (dictIDs []uint64, templateIDs []uint64)
 }
 
 // CompactStorageUsage summarizes file usage for a storage domain.
@@ -366,6 +376,7 @@ type CompactStorageStats struct {
 	LeafGenerationPlan  LeafGenerationPlan               `json:"leaf_generation_plan"`
 	LeafGenerationPacks []LeafGenerationPackRunOnceStats `json:"leaf_generation_packs,omitempty"`
 	LeafGenerationGC    LeafGenerationGCStats            `json:"leaf_generation_gc"`
+	SystemMetadataGC    SystemMetadataGCStats            `json:"system_metadata_gc,omitempty"`
 	IndexVacuum         VacuumOnlineStats                `json:"index_vacuum"`
 
 	ZeroByteValueLogFilesDeleted int `json:"zero_byte_value_log_files_deleted,omitempty"`
@@ -1015,6 +1026,48 @@ func (db *DB) compactStorageWithOwner(ctx context.Context, opts CompactStorageOp
 		return nil
 	}); err != nil {
 		return stats, err
+	}
+
+	if err := db.runCompactStoragePhase(&stats, "system-metadata-gc", func() error {
+		auditOpts := opts.SystemMetadataAudit
+		if opts.SystemMetadataProtectedIDsFunc != nil {
+			dynDicts, dynTpls := opts.SystemMetadataProtectedIDsFunc()
+			if len(dynDicts) > 0 {
+				merged := make([]uint64, 0, len(auditOpts.ProtectedDictIDs)+len(dynDicts))
+				merged = append(merged, auditOpts.ProtectedDictIDs...)
+				merged = append(merged, dynDicts...)
+				auditOpts.ProtectedDictIDs = merged
+			}
+			if len(dynTpls) > 0 {
+				merged := make([]uint64, 0, len(auditOpts.ProtectedTemplateIDs)+len(dynTpls))
+				merged = append(merged, auditOpts.ProtectedTemplateIDs...)
+				merged = append(merged, dynTpls...)
+				auditOpts.ProtectedTemplateIDs = merged
+			}
+		}
+		metaStats, err := db.systemMetadataGC(ctx, SystemMetadataGCOptions{
+			DryRun: opts.DryRun,
+			Audit:  auditOpts,
+		}, !maintenanceLocked, false)
+		stats.SystemMetadataGC = metaStats
+		return err
+	}); err != nil {
+		return stats, err
+	}
+	if !opts.DryRun && stats.SystemMetadataGC.PointerEntriesDeleted > 0 {
+		if err := db.runCompactStoragePhase(&stats, "value-log-gc-after-system-metadata-gc", func() error {
+			gc, err := db.valueLogGC(ctx, ValueLogGCOptions{
+				ProtectedPaths: compactStorageValueLogProtectedPaths(opts),
+			}, !maintenanceLocked)
+			if err != nil {
+				return err
+			}
+			stats.ValueLogGC.SegmentsDeleted += gc.SegmentsDeleted
+			stats.ValueLogGC.BytesDeleted += gc.BytesDeleted
+			return nil
+		}); err != nil {
+			return stats, err
+		}
 	}
 
 	indexDebt, err := db.compactStorageIndexVacuumDebtForExecution(ctx, opts, owner)

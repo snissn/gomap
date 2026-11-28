@@ -245,11 +245,14 @@ type DB struct {
 	systemMetaCacheMu              sync.RWMutex
 	systemMetaGCEpoch              atomic.Uint64
 	stagedSystemOpsCount           atomic.Int32
+	stagedSystemOpsInFlightCount   atomic.Int32
 	stagedSystemSyncWaitersCount   atomic.Int32
 	stagedSystemInFlightUnsynced   atomic.Int32
 	stagedSystemDurableSeq         atomic.Uint64
 	stagedSystemOpsMu              sync.Mutex
 	stagedSystemOps                []stagedSystemOpBatch
+	stagedSystemOpsInFlightSeq     uint64
+	stagedSystemOpsInFlight        []inFlightStagedSystemOps
 	stagedSystemSyncWaiters        []stagedSystemSyncWaiter
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32

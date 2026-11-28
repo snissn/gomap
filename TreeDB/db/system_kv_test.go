@@ -1577,3 +1577,96 @@ func TestCompactStorage_ExhaustiveReplaceableOwnerOuterLeafSystemRootTrainsLeafD
 		t.Fatalf("post-compact key mismatch after reopen: got=%q err=%v", gotPost, err)
 	}
 }
+
+func TestGetSystemIncludingStaged_PreservesInFlightVisibilityAcrossDrain(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	encodeCand := func(ids ...uint64) []byte {
+		var buf []byte
+		for _, id := range ids {
+			buf = binary.AppendUvarint(buf, id)
+			buf = binary.AppendUvarint(buf, 32)
+		}
+		return buf
+	}
+	const tplA, tplB uint64 = 101, 102
+	defA := append([]byte{SystemDictEncodingInline}, []byte("def-A-bytes")...)
+	defB := append([]byte{SystemDictEncodingInline}, []byte("def-B-bytes")...)
+	fpKey := SystemTemplateFPKey(0xabc123)
+	candA := encodeCand(tplA)
+	candAB := encodeCand(tplA, tplB)
+
+	if err := d.StageSystemOps([]SystemKVOp{
+		{Key: SystemTemplateDefKey(tplA), Value: defA},
+		{Key: fpKey, Value: candA},
+	}, nil); err != nil {
+		t.Fatalf("StageSystemOps(A): %v", err)
+	}
+
+	// Simulate an in-flight flush that has drained A but not yet committed it.
+	drained, token := d.drainStagedSystemOps()
+	if len(drained) == 0 || token == 0 {
+		t.Fatalf("drainStagedSystemOps returned len=%d token=%d", len(drained), token)
+	}
+
+	// Even while A is drained and uncommitted, GetSystemIncludingStaged and
+	// LookupSystemTemplateDefIncludingStaged must still see A so a concurrent
+	// StageTemplateDef merges against it.
+	got, err := d.GetSystemIncludingStaged(fpKey)
+	if err != nil || !bytes.Equal(got, candA) {
+		t.Fatalf("GetSystemIncludingStaged while in-flight = %x, %v; want %x, nil", got, err, candA)
+	}
+	gotDefA, err := d.LookupSystemTemplateDefIncludingStaged(tplA)
+	if err != nil || string(gotDefA) != "def-A-bytes" {
+		t.Fatalf("LookupSystemTemplateDefIncludingStaged(tplA) while in-flight = %q, %v", gotDefA, err)
+	}
+
+	// Register a callback-only barrier while A is drained and still in flight.
+	// A concurrent FlushStagedSystemOps(true) must NOT drain or fire that barrier
+	// before A itself commits and becomes durable.
+	var barrierFired bool
+	if err := d.StageSystemOps(nil, func() { barrierFired = true }); err != nil {
+		t.Fatalf("StageSystemOps(barrier while in-flight): %v", err)
+	}
+	if err := d.FlushStagedSystemOps(true); err != nil {
+		t.Fatalf("FlushStagedSystemOps(true) while A in-flight: %v", err)
+	}
+	if barrierFired {
+		t.Fatalf("callback-only barrier fired prematurely before in-flight A committed")
+	}
+
+	// Staging a newer update B referencing both tplA (in-flight!) and tplB
+	// while A is in-flight must succeed and take precedence over A.
+	if err := d.StageSystemOps([]SystemKVOp{
+		{Key: SystemTemplateDefKey(tplB), Value: defB},
+		{Key: fpKey, Value: candAB},
+	}, nil); err != nil {
+		t.Fatalf("StageSystemOps(B): %v", err)
+	}
+	got, err = d.GetSystemIncludingStaged(fpKey)
+	if err != nil || !bytes.Equal(got, candAB) {
+		t.Fatalf("GetSystemIncludingStaged with newer staged B = %x, %v; want %x, nil", got, err, candAB)
+	}
+
+	// Completing A unsynced parks its attached barrier at A's commitSeq until sync.
+	d.completeStagedSystemOpBatches(drained, token, 5, false)
+	if d.stagedSystemOpsInFlightCount.Load() != 0 {
+		t.Fatalf("expected stagedSystemOpsInFlightCount=0 after complete, got %d", d.stagedSystemOpsInFlightCount.Load())
+	}
+	if barrierFired {
+		t.Fatalf("callback-only barrier fired before in-flight A's commitSeq was synced")
+	}
+	d.notifySystemOpsSyncedThrough(5)
+	if !barrierFired {
+		t.Fatalf("expected callback-only barrier to fire once in-flight A's commitSeq synced")
+	}
+	got, err = d.GetSystemIncludingStaged(fpKey)
+	if err != nil || !bytes.Equal(got, candAB) {
+		t.Fatalf("GetSystemIncludingStaged after complete(A) = %x, %v; want %x, nil", got, err, candAB)
+	}
+}

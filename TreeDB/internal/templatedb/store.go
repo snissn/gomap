@@ -206,9 +206,17 @@ func (s *Store) buildTemplateDefOps(id uint64, defBytes []byte) ([]db.SystemKVOp
 	return ops, nil
 }
 
-func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
+func (s *Store) getExistingTemplateDef(id uint64, includeStaged bool) ([]byte, error) {
 	if s.backend != nil {
-		val, err := s.backend.LookupSystemTemplateDef(id)
+		var (
+			val []byte
+			err error
+		)
+		if includeStaged {
+			val, err = s.backend.LookupSystemTemplateDefIncludingStaged(id)
+		} else {
+			val, err = s.backend.LookupSystemTemplateDef(id)
+		}
 		if errors.Is(err, template.ErrMissingTemplate) {
 			return nil, nil
 		}
@@ -217,124 +225,200 @@ func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
 	return s.kv.Get(templateKey(id))
 }
 
-func (s *Store) getRawFPBytes(fp uint64) ([]byte, error) {
+func (s *Store) getRawFPBytes(fp uint64, includeStaged bool) ([]byte, error) {
 	if s.backend != nil {
+		if includeStaged {
+			return s.backend.GetSystemIncludingStaged(db.SystemTemplateFPKey(fp))
+		}
 		return s.backend.GetSystem(db.SystemTemplateFPKey(fp))
 	}
 	return s.kv.Get(fpKey(fp))
 }
 
 // PutTemplateDef stores a template definition and updates routing indices.
-func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
+func (s *Store) PutTemplateDef(ctx context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
+	return s.putOrStageTemplateDef(ctx, defBytes, routeFPs, false, nil)
+}
+
+// StageTemplateDef stages a template definition and routing index updates for
+// piggybacked publication onto the next TreeDB flush/checkpoint without an
+// independent fsync. When backed by a TreeDB backend, onDurable is invoked
+// once the staged ops are durable in SystemRootPageID; for in-memory KV stores
+// it falls back to synchronous WriteSync and invokes onDurable immediately.
+func (s *Store) StageTemplateDef(ctx context.Context, defBytes []byte, routeFPs []uint64, onDurable func()) (uint64, error) {
+	return s.putOrStageTemplateDef(ctx, defBytes, routeFPs, true, onDurable)
+}
+
+// lockAndFlushStagedForSync acquires s.mu only after draining any pending
+// staged system ops or unsynced durability barriers on s.backend. Flushing runs
+// outside s.mu so re-entrant onDurable callbacks that call StageTemplateDef
+// cannot deadlock and are drained cleanly before synchronous publication reads
+// committed SystemRootPageID state.
+func (s *Store) lockAndFlushStagedForSync() error {
+	const maxDrainRounds = 16
+	for round := 0; round < maxDrainRounds; round++ {
+		if s.backend != nil && (s.backend.HasPendingStagedSystemOps() || s.backend.HasUnsyncedSystemOps()) {
+			if err := s.backend.FlushStagedSystemOps(true); err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		if s.backend == nil || (!s.backend.HasPendingStagedSystemOps() && !s.backend.HasUnsyncedSystemOps()) {
+			return nil
+		}
+		s.mu.Unlock()
+	}
+	return fmt.Errorf("templatedb: staged system ops did not quiesce before synchronous publication")
+}
+
+func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64, stage bool, onDurable func()) (uint64, error) {
 	if s == nil || (s.backend == nil && s.kv == nil) {
 		return 0, errStoreUnavailable
 	}
 	cfg := NormalizeConfig(s.cfg)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Dedup and sort route fingerprints deterministically.
-	if len(routeFPs) > 0 {
-		sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
-		j := 0
-		for i := 0; i < len(routeFPs); i++ {
-			if i == 0 || routeFPs[i] != routeFPs[i-1] {
-				routeFPs[j] = routeFPs[i]
-				j++
+	var runOnDurableNow bool
+	var registerStageBarrier bool
+	id, err := func() (uint64, error) {
+		if stage {
+			s.mu.Lock()
+		} else {
+			if err := s.lockAndFlushStagedForSync(); err != nil {
+				return 0, err
 			}
 		}
-		routeFPs = routeFPs[:j]
-	}
+		defer s.mu.Unlock()
 
-	id := uint64(0)
-	alreadyStored := false
-	for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
-		id = template.TemplateID(defBytes, byte(attempt))
-		if id == 0 {
-			continue
+		// Copy, dedup, and sort route fingerprints deterministically without
+		// mutating the caller's slice.
+		var sortedFPs []uint64
+		if len(routeFPs) > 0 {
+			sortedFPs = append([]uint64(nil), routeFPs...)
+			sort.Slice(sortedFPs, func(i, j int) bool { return sortedFPs[i] < sortedFPs[j] })
+			j := 0
+			for i := 0; i < len(sortedFPs); i++ {
+				if i == 0 || sortedFPs[i] != sortedFPs[i-1] {
+					sortedFPs[j] = sortedFPs[i]
+					j++
+				}
+			}
+			sortedFPs = sortedFPs[:j]
 		}
-		existing, err := s.getExistingTemplateDef(id)
-		if err != nil {
-			return 0, err
-		}
-		if existing == nil {
-			break
-		}
-		if bytes.Equal(existing, defBytes) {
-			// Idempotent publish; still refresh routing lists.
-			alreadyStored = true
-			break
-		}
-		if attempt == cfg.MaxIDAttempts-1 {
-			return 0, fmt.Errorf("templatedb: template id collision for %d", id)
-		}
-		id = 0
-	}
-	if id == 0 {
-		return 0, fmt.Errorf("templatedb: unable to assign template id")
-	}
 
-	candidateSize := len(defBytes)
-	updates := make(map[uint64][]byte, len(routeFPs))
-	for _, fp := range routeFPs {
-		listBytes, err := s.getRawFPBytes(fp)
-		if err != nil {
-			return 0, err
-		}
-		cands, err := decodeCandidates(listBytes)
-		if err != nil {
-			return 0, err
-		}
-		cands = upsertCandidate(cands, template.Candidate{ID: id, Size: candidateSize})
-		if cfg.MaxCandidatesPerFP > 0 && len(cands) > cfg.MaxCandidatesPerFP {
-			cands = cands[:cfg.MaxCandidatesPerFP]
-		}
-		encoded := encodeCandidates(cands)
-		for cfg.MaxCandidateListBytes > 0 && len(encoded) > cfg.MaxCandidateListBytes && len(cands) > 1 {
-			cands = cands[:len(cands)-1]
-			encoded = encodeCandidates(cands)
-		}
-		updates[fp] = encoded
-	}
-
-	if s.backend != nil {
-		var ops []db.SystemKVOp
-		if !alreadyStored {
-			defOps, err := s.buildTemplateDefOps(id, defBytes)
+		id := uint64(0)
+		alreadyStored := false
+		for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
+			id = template.TemplateID(defBytes, byte(attempt))
+			if id == 0 {
+				continue
+			}
+			existing, err := s.getExistingTemplateDef(id, stage)
 			if err != nil {
 				return 0, err
 			}
-			ops = append(ops, defOps...)
+			if existing == nil {
+				break
+			}
+			if bytes.Equal(existing, defBytes) {
+				// Idempotent publish; still refresh routing lists.
+				alreadyStored = true
+				break
+			}
+			if attempt == cfg.MaxIDAttempts-1 {
+				return 0, fmt.Errorf("templatedb: template id collision for %d", id)
+			}
+			id = 0
+		}
+		if id == 0 {
+			return 0, fmt.Errorf("templatedb: unable to assign template id")
+		}
+
+		candidateSize := len(defBytes)
+		updates := make(map[uint64][]byte, len(sortedFPs))
+		for _, fp := range sortedFPs {
+			listBytes, err := s.getRawFPBytes(fp, stage)
+			if err != nil {
+				return 0, err
+			}
+			cands, err := decodeCandidates(listBytes)
+			if err != nil {
+				return 0, err
+			}
+			cands = upsertCandidate(cands, template.Candidate{ID: id, Size: candidateSize})
+			if cfg.MaxCandidatesPerFP > 0 && len(cands) > cfg.MaxCandidatesPerFP {
+				cands = cands[:cfg.MaxCandidatesPerFP]
+			}
+			encoded := encodeCandidates(cands)
+			for cfg.MaxCandidateListBytes > 0 && len(encoded) > cfg.MaxCandidateListBytes && len(cands) > 1 {
+				cands = cands[:len(cands)-1]
+				encoded = encodeCandidates(cands)
+			}
+			updates[fp] = encoded
+		}
+
+		if s.backend != nil {
+			var ops []db.SystemKVOp
+			if !alreadyStored {
+				defOps, err := s.buildTemplateDefOps(id, defBytes)
+				if err != nil {
+					return 0, err
+				}
+				ops = append(ops, defOps...)
+			}
+			for fp, enc := range updates {
+				ops = append(ops, db.SystemKVOp{
+					Key:   db.SystemTemplateFPKey(fp),
+					Value: enc,
+				})
+			}
+			if stage {
+				if len(ops) == 0 {
+					registerStageBarrier = true
+					return id, nil
+				}
+				if err := s.backend.StageSystemOps(ops, onDurable); err != nil {
+					return 0, err
+				}
+				return id, nil
+			}
+			if err := s.backend.ApplySystemOps(ops, true); err != nil {
+				return 0, err
+			}
+			runOnDurableNow = true
+			return id, nil
+		}
+
+		batch := s.kv.NewBatch()
+		if err := batch.Set(templateKey(id), defBytes); err != nil {
+			_ = batch.Close()
+			return 0, err
 		}
 		for fp, enc := range updates {
-			ops = append(ops, db.SystemKVOp{
-				Key:   db.SystemTemplateFPKey(fp),
-				Value: enc,
-			})
+			if err := batch.Set(fpKey(fp), enc); err != nil {
+				_ = batch.Close()
+				return 0, err
+			}
 		}
-		if err := s.backend.ApplySystemOps(ops, true); err != nil {
+		if err := batch.WriteSync(); err != nil {
+			_ = batch.Close()
+			return 0, err
+		}
+		if err := batch.Close(); err != nil {
+			return 0, err
+		}
+		runOnDurableNow = true
+		return id, nil
+	}()
+	if err != nil {
+		return 0, err
+	}
+	if registerStageBarrier {
+		if err := s.backend.StageSystemOps(nil, onDurable); err != nil {
 			return 0, err
 		}
 		return id, nil
 	}
-
-	batch := s.kv.NewBatch()
-	if err := batch.Set(templateKey(id), defBytes); err != nil {
-		_ = batch.Close()
-		return 0, err
-	}
-	for fp, enc := range updates {
-		if err := batch.Set(fpKey(fp), enc); err != nil {
-			_ = batch.Close()
-			return 0, err
-		}
-	}
-	if err := batch.WriteSync(); err != nil {
-		_ = batch.Close()
-		return 0, err
-	}
-	if err := batch.Close(); err != nil {
-		return 0, err
+	if runOnDurableNow && onDurable != nil {
+		onDurable()
 	}
 	return id, nil
 }
@@ -354,7 +438,9 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 	}
 	cfg := NormalizeConfig(s.cfg)
 
-	s.mu.Lock()
+	if err := s.lockAndFlushStagedForSync(); err != nil {
+		return nil, err
+	}
 	defer s.mu.Unlock()
 
 	ids := make([]uint64, len(defs))
@@ -403,7 +489,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 				id = 0
 				continue
 			}
-			existing, err := s.getExistingTemplateDef(id)
+			existing, err := s.getExistingTemplateDef(id, false)
 			if err != nil {
 				return nil, err
 			}
@@ -445,7 +531,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 
 	updates := make(map[uint64][]byte, len(fpMap))
 	for fp, adds := range fpMap {
-		listBytes, err := s.getRawFPBytes(fp)
+		listBytes, err := s.getRawFPBytes(fp, false)
 		if err != nil {
 			return nil, err
 		}
