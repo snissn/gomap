@@ -5027,8 +5027,10 @@ are persistent compression metadata and may be reclaimed only by
    `valuelog.Manager.EvictTemplateDefs`). `StageSystemOps` acquires
    `systemMetaPublishMu` shared and rejects staging `dict/current*` or
    `template/fp/*` activations whose target definitions are absent from both the
-   staged batch and `SystemRootPageID`. On intervening commits, GC retries once
-   and otherwise fails closed (`AbortedStale=true`) with zero deletions.
+   staged batch and `SystemRootPageID`; direct `ApplySystemOps` similarly
+   validates `dict/current*` and `template/fp/*` target existence atomically
+   against `baseSystemRoot` inside `writeMu`. On intervening commits, GC retries
+   once and otherwise fails closed (`AbortedStale=true`) with zero deletions.
 4. **Lane-254 pointer reclamation**: Deleting a `FlagPointer` dictionary or
    template entry updates `valueLogRefTracker` via `CollectOldPointerRefs`. Once
    both dual-meta slots advance past the pre-GC `SystemRootPageID`, subsequent

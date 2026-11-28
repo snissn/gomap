@@ -1022,6 +1022,9 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 	if preCommitCheck != nil && !preCommitCheck() {
 		return 0, false, false, true, nil
 	}
+	if err := db.validateDirectSystemOpReferencesLocked(baseSystemRoot, sortedOps); err != nil {
+		return 0, false, false, false, err
+	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 
@@ -1187,6 +1190,123 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 	db.updateStagedSystemOpsCountLocked()
 	db.stagedSystemOpsMu.Unlock()
 	db.recordRecentSystemMetadataIDs(cloned)
+	return nil
+}
+
+// validateDirectSystemOpReferencesLocked verifies inside db.writeMu against
+// baseSystemRoot that any dict/current* or template/fp/* activation in ops
+// references a definition either written in ops (and not deleted) or present
+// in baseSystemRoot. This prevents direct publishes (PublishDict, SetCurrent,
+// PutTemplateDef) from committing a dangling activation after a concurrent
+// SystemMetadataGC deletes an unreferenced definition.
+func (db *DB) validateDirectSystemOpReferencesLocked(baseSystemRoot uint64, ops []SystemKVOp) error {
+	var definedDicts, deletedDicts map[uint64]struct{}
+	var definedTpls, deletedTpls map[uint64]struct{}
+	var refDicts, refTpls []uint64
+	for _, op := range ops {
+		switch {
+		case bytes.HasPrefix(op.Key, systemDictBytesPrefix):
+			if id, ok := parseSystemDictBytesKey(op.Key); ok {
+				if op.Delete {
+					if deletedDicts == nil {
+						deletedDicts = make(map[uint64]struct{}, 2)
+					}
+					deletedDicts[id] = struct{}{}
+				} else {
+					if definedDicts == nil {
+						definedDicts = make(map[uint64]struct{}, 2)
+					}
+					definedDicts[id] = struct{}{}
+				}
+			}
+		case !op.Delete && (bytes.Equal(op.Key, systemDictCurrentKey) || bytes.HasPrefix(op.Key, systemDictCurrentPrefix)):
+			if !op.IsPointer && len(op.Value) == 8 {
+				if id := binary.BigEndian.Uint64(op.Value); id != 0 {
+					refDicts = append(refDicts, id)
+				}
+			}
+		case bytes.HasPrefix(op.Key, systemTemplateDefPrefix):
+			if id, ok := parseSystemTemplateDefKey(op.Key); ok {
+				if op.Delete {
+					if deletedTpls == nil {
+						deletedTpls = make(map[uint64]struct{}, 2)
+					}
+					deletedTpls[id] = struct{}{}
+				} else {
+					if definedTpls == nil {
+						definedTpls = make(map[uint64]struct{}, 2)
+					}
+					definedTpls[id] = struct{}{}
+				}
+			}
+		case !op.Delete && bytes.HasPrefix(op.Key, systemTemplateFPPrefix):
+			if !op.IsPointer && len(op.Value) > 0 {
+				cands, err := decodeSystemTemplateFPCandidates(op.Value)
+				if err != nil {
+					return err
+				}
+				for _, c := range cands {
+					if c.id != 0 {
+						refTpls = append(refTpls, c.id)
+					}
+				}
+			}
+		}
+	}
+	if len(refDicts) == 0 && len(refTpls) == 0 {
+		return nil
+	}
+	var tr *tree.Tree
+	if baseSystemRoot != 0 {
+		idx := db.idx.Load()
+		if idx == nil || idx.pager == nil {
+			return ErrClosed
+		}
+		tr = tree.New(idx.pager, newValueReader(nil), baseSystemRoot)
+	}
+	entryExists := func(key []byte) (bool, error) {
+		if tr == nil {
+			return false, nil
+		}
+		entry, err := tr.GetEntry(key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return entry.Flags&node.FlagTombstone == 0, nil
+	}
+	for _, id := range refDicts {
+		if _, deleted := deletedDicts[id]; deleted {
+			return fmt.Errorf("treedb: cannot activate deleted dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+		if _, defined := definedDicts[id]; defined {
+			continue
+		}
+		ok, err := entryExists(SystemDictBytesKey(id))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("treedb: cannot activate missing dict %d: %w", id, valuelog.ErrMissingDict)
+		}
+	}
+	for _, id := range refTpls {
+		if _, deleted := deletedTpls[id]; deleted {
+			return fmt.Errorf("treedb: cannot index deleted template %d: %w", id, templ.ErrMissingTemplate)
+		}
+		if _, defined := definedTpls[id]; defined {
+			continue
+		}
+		ok, err := entryExists(SystemTemplateDefKey(id))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("treedb: cannot index missing template %d: %w", id, templ.ErrMissingTemplate)
+		}
+	}
 	return nil
 }
 

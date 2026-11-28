@@ -430,4 +430,9 @@ func TestSystemMetadataGC_StagingSerializationAndDanglingReject(t *testing.T) {
 	if err := d.StageSystemOps([]db.SystemKVOp{{Key: []byte("dict/current"), Value: curVal2}}, nil); !errors.Is(err, valuelog.ErrMissingDict) {
 		t.Fatalf("StageSystemOps(deleted dict2) err=%v want ErrMissingDict", err)
 	}
+	// Direct ApplySystemOps (e.g. dictdb.SetCurrent / PublishDict after GC raced
+	// past hash dedup) must also reject activating the deleted dict2ID atomically.
+	if err := d.ApplySystemOps([]db.SystemKVOp{{Key: []byte("dict/current"), Value: curVal2}}, true); !errors.Is(err, valuelog.ErrMissingDict) {
+		t.Fatalf("ApplySystemOps(deleted dict2) err=%v want ErrMissingDict", err)
+	}
 }
