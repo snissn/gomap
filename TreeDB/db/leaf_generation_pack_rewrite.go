@@ -1062,6 +1062,13 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 			return rootID, false, err
 		}
 	}
+	if c.writer != nil && (c.writer.leafDictID != 0 || len(c.writer.leafDict) > 0) {
+		savedDictID, savedDict := c.writer.leafDictID, c.writer.leafDict
+		c.writer.leafDictID, c.writer.leafDict = 0, nil
+		defer func() {
+			c.writer.leafDictID, c.writer.leafDict = savedDictID, savedDict
+		}()
+	}
 
 	inlineThreshold := c.db.InlineThreshold()
 	for _, replacement := range replacements {
@@ -1497,23 +1504,32 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		newSysRoot uint64
 		sysChanged bool
 	)
+	// SystemRootPageID outer leaves must remain non-dictionary-encoded (dictID=0)
+	// so reading dictionary definitions from SystemRootPageID remains strictly
+	// acyclic even when FreshSystemPagerLeaves is false.
+	savedLeafDictID, savedLeafDict := writer.leafDictID, writer.leafDict
+	writer.leafDictID, writer.leafDict = 0, nil
 	newSysRoot, sysChanged, err = leafCtx.rewriteNode(sysRoot)
 	if err != nil {
+		writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
 	}
 	preCollectionSysRoot := newSysRoot
 	if len(collectionRootReplacements) > 0 {
 		if sysChanged {
 			if err := writer.Flush(); err != nil {
+				writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
 				return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten system leaf root: %w", err)
 			}
 			if err := privateLeafReader.Refresh(); err != nil {
+				writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
 				return 0, 0, fmt.Errorf("vlog-rewrite: refresh private leaf reader: %w", err)
 			}
 		}
 		retiredBeforeCollectionDelta := len(leafCtx.retired)
 		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
+			writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
 			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)
 		}
 		// The staged descriptor delta proves and accounts for the copy-time work,
@@ -1523,6 +1539,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		newSysRoot = replacedSysRoot
 		sysChanged = sysChanged || replacementChanged
 	}
+	writer.leafDictID, writer.leafDict = savedLeafDictID, savedLeafDict
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite user leaf root: %w", err)

@@ -659,6 +659,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			return stats, err
 		}
 		for id := range candidates {
+			if err := db.closeSystemValueLogWriterIfFileID(id); err != nil {
+				return stats, err
+			}
 			if err := vm.MarkZombie(id); err != nil {
 				return stats, err
 			}

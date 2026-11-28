@@ -231,10 +231,11 @@ type DB struct {
 	systemDictCache                sync.Map
 	systemVLogMu                   sync.Mutex
 	systemVLogWriter               *valuelog.Writer
+	systemVLogFileID               uint32
 	systemVLogSeq                  uint32
 	systemVLogNextRID              uint64
-	systemRootMutationHookMu       sync.RWMutex
-	systemRootMutationHook         func(func() error) error
+	systemRootMutationFenceMu      sync.RWMutex
+	systemRootMutationFence        func() (func(error) error, error)
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32

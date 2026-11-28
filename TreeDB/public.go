@@ -1254,7 +1254,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		}
 	}
 
-	backend.SetSystemRootMutationHook(cached.RunSystemRootMutation)
+	backend.SetSystemRootMutationFence(cached.BeginSystemRootMutation)
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
@@ -1910,7 +1910,7 @@ func (db *DB) Close() error {
 
 	// Close cached layer first if present
 	if db.backend != nil {
-		db.backend.SetSystemRootMutationHook(nil)
+		db.backend.SetSystemRootMutationFence(nil)
 	}
 	if db.cached != nil {
 		if db.commandWALCached {

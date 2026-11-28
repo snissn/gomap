@@ -32,6 +32,9 @@ const (
 	SystemDictChunkSize = 2048
 	// SystemDictChunkHeaderSize is: tag(1) + chunkCount(4) + totalLen(4) + sha256(32).
 	SystemDictChunkHeaderSize = 1 + 4 + 4 + 32
+	// MaxSystemDictBytes bounds inline/chunked dictionary allocation sizes to
+	// guard against corrupt chunk headers triggering oversized allocations.
+	MaxSystemDictBytes = 64 << 20
 
 	// SystemValueLogLaneID is a dedicated ordinary value-log lane used when
 	// system-tree entries opt into value-log pointer storage (dictID=0,
@@ -78,7 +81,8 @@ func EncodeSystemDictChunkHeader(chunkCount, totalLen uint32, sum [32]byte) []by
 	return buf
 }
 
-// DecodeSystemDictChunkHeader decodes an inline chunked dictionary header.
+// DecodeSystemDictChunkHeader decodes and validates an inline chunked
+// dictionary header (including exact chunk-count geometry and bounded size).
 func DecodeSystemDictChunkHeader(raw []byte) (chunkCount, totalLen uint32, sum [32]byte, err error) {
 	if len(raw) != SystemDictChunkHeaderSize || raw[0] != SystemDictEncodingChunked {
 		return 0, 0, sum, fmt.Errorf("treedb: invalid chunked system dict header (len=%d)", len(raw))
@@ -86,8 +90,15 @@ func DecodeSystemDictChunkHeader(raw []byte) (chunkCount, totalLen uint32, sum [
 	chunkCount = binary.BigEndian.Uint32(raw[1:5])
 	totalLen = binary.BigEndian.Uint32(raw[5:9])
 	copy(sum[:], raw[9:41])
-	if chunkCount == 0 && totalLen != 0 {
-		return 0, 0, sum, fmt.Errorf("treedb: invalid chunked system dict header (chunks=0 len=%d)", totalLen)
+	if totalLen > MaxSystemDictBytes {
+		return 0, 0, sum, fmt.Errorf("treedb: system dict length %d exceeds max %d", totalLen, MaxSystemDictBytes)
+	}
+	var wantChunks uint32
+	if totalLen > 0 {
+		wantChunks = uint32((uint64(totalLen) + SystemDictChunkSize - 1) / SystemDictChunkSize)
+	}
+	if chunkCount != wantChunks {
+		return 0, 0, sum, fmt.Errorf("treedb: invalid chunked system dict header (chunks=%d want=%d len=%d)", chunkCount, wantChunks, totalLen)
 	}
 	return chunkCount, totalLen, sum, nil
 }
@@ -215,8 +226,10 @@ func (db *DB) GetSystemEntry(key []byte) (node.LeafEntry, bool, error) {
 }
 
 // GetSystemEntryExactWithFixedScratch reads a persisted SystemRootPageID entry
-// using caller-admitted fixed-page scratch (no heap allocations, no leaf_vlog
-// indirection).
+// using caller-admitted fixed-page scratch. When SystemRootPageID stores outer
+// leaves in leaf_vlog (FreshSystemPagerLeaves=false), it resolves them through
+// a bounded, strictly non-dictionary (dictID=0) reader so dictionary lookups
+// remain acyclic in every leaf-placement mode.
 func (s *Snapshot) GetSystemEntryExactWithFixedScratch(key, keyScratch, leafScratch []byte) (node.LeafEntry, error) {
 	if s == nil {
 		return node.LeafEntry{}, ErrClosed
@@ -228,8 +241,38 @@ func (s *Snapshot) GetSystemEntryExactWithFixedScratch(key, keyScratch, leafScra
 	if s.state == nil || s.state.SystemRootPageID == 0 {
 		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
+	var readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)
+	if s.state.ValueLogSet != nil {
+		readLeaf = func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+			vptr := ptr.ValuePtr()
+			f := s.state.ValueLogSet.Files[vptr.FileID]
+			if f == nil {
+				return nil, valuelog.ErrFileNotFound
+			}
+			dictID, err := f.PreparedRecordDictionaryID(vptr)
+			if err != nil {
+				return nil, err
+			}
+			if dictID != 0 {
+				return nil, fmt.Errorf("treedb: system outer leaf unexpectedly uses dict %d", dictID)
+			}
+			raw, usedDst, err := s.reader.ReadUnsafeTo(vptr, dst[:0])
+			if err != nil {
+				return nil, err
+			}
+			if usedDst {
+				return raw, nil
+			}
+			if len(raw) > cap(dst) {
+				return nil, fmt.Errorf("treedb: system outer leaf size %d exceeds scratch %d", len(raw), cap(dst))
+			}
+			out := dst[:len(raw)]
+			copy(out, raw)
+			return out, nil
+		}
+	}
 	sysTree := tree.New(s.idx.pager, &s.reader, s.state.SystemRootPageID)
-	return sysTree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, nil)
+	return sysTree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, readLeaf)
 }
 
 // LookupSystemDictBytes resolves dictionary bytes for dictID from
@@ -383,7 +426,11 @@ func (db *DB) SetDictCallbacks(
 		return
 	}
 	if lookup == nil {
-		lookup = db.LookupSystemDictBytes
+		if db.valueLogDictLookup != nil {
+			lookup = db.valueLogDictLookup
+		} else {
+			lookup = db.LookupSystemDictBytes
+		}
 	}
 	db.valueLogDictLookup = lookup
 	db.valueLogDictCurrentForClass = currentForClass
@@ -412,6 +459,9 @@ func (db *DB) AppendRawSystemValueLog(rid uint64, val []byte) (page.ValuePtr, er
 	}
 	db.systemVLogMu.Lock()
 	defer db.systemVLogMu.Unlock()
+	if db.closing.Load() {
+		return page.ValuePtr{}, ErrClosed
+	}
 
 	writer, err := db.ensureSystemValueLogWriterLocked()
 	if err != nil {
@@ -433,7 +483,22 @@ func (db *DB) AppendRawSystemValueLog(rid uint64, val []byte) (page.ValuePtr, er
 
 func (db *DB) ensureSystemValueLogWriterLocked() (*valuelog.Writer, error) {
 	if db.systemVLogWriter != nil {
-		return db.systemVLogWriter, nil
+		stillRegistered := true
+		if db.valueLogManager != nil && db.systemVLogFileID != 0 {
+			set := db.valueLogManager.CurrentSetNoRefresh()
+			if set != nil {
+				_, stillRegistered = set.Files[db.systemVLogFileID]
+				_ = db.valueLogManager.Release(set)
+			} else {
+				stillRegistered = false
+			}
+		}
+		if stillRegistered {
+			return db.systemVLogWriter, nil
+		}
+		_ = db.systemVLogWriter.Close()
+		db.systemVLogWriter = nil
+		db.systemVLogFileID = 0
 	}
 	if db.dir == "" {
 		return nil, fmt.Errorf("treedb: missing backend dir for system value log")
@@ -445,6 +510,9 @@ func (db *DB) ensureSystemValueLogWriterLocked() (*valuelog.Writer, error) {
 	seq, err := nextSystemValueLogSeq(valueLogDir, SystemValueLogLaneID)
 	if err != nil {
 		return nil, err
+	}
+	if seq <= db.systemVLogSeq {
+		seq = db.systemVLogSeq + 1
 	}
 	fileID, err := valuelog.EncodeFileID(SystemValueLogLaneID, seq)
 	if err != nil {
@@ -459,6 +527,7 @@ func (db *DB) ensureSystemValueLogWriterLocked() (*valuelog.Writer, error) {
 		return nil, errors.Join(err, writer.Close())
 	}
 	db.systemVLogWriter = writer
+	db.systemVLogFileID = fileID
 	db.systemVLogSeq = seq
 	return writer, nil
 }
@@ -470,10 +539,27 @@ func (db *DB) closeSystemValueLogWriter() error {
 	db.systemVLogMu.Lock()
 	writer := db.systemVLogWriter
 	db.systemVLogWriter = nil
+	db.systemVLogFileID = 0
 	db.systemVLogMu.Unlock()
 	if writer == nil {
 		return nil
 	}
+	return writer.Close()
+}
+
+func (db *DB) closeSystemValueLogWriterIfFileID(fileID uint32) error {
+	if db == nil || fileID == 0 {
+		return nil
+	}
+	db.systemVLogMu.Lock()
+	if db.systemVLogWriter == nil || db.systemVLogFileID != fileID {
+		db.systemVLogMu.Unlock()
+		return nil
+	}
+	writer := db.systemVLogWriter
+	db.systemVLogWriter = nil
+	db.systemVLogFileID = 0
+	db.systemVLogMu.Unlock()
 	return writer.Close()
 }
 
@@ -520,33 +606,34 @@ func nextSystemValueLogSeq(dir string, lane uint32) (uint32, error) {
 	return maxSeq + 1, nil
 }
 
-// SetSystemRootMutationHook registers an optional wrapper (used by caching.DB
-// in COW mode) that fences cached writers and refreshes the COW backend basis
-// around SystemRootPageID-only metadata commits such as dictionary publication.
-func (db *DB) SetSystemRootMutationHook(hook func(func() error) error) {
+// SetSystemRootMutationFence registers an optional begin/finish fence (used by
+// caching.DB in COW mode) that fences cached writers and refreshes the COW
+// backend basis around SystemRootPageID-only metadata commits such as
+// dictionary publication.
+func (db *DB) SetSystemRootMutationFence(begin func() (func(error) error, error)) {
 	if db == nil {
 		return
 	}
-	db.systemRootMutationHookMu.Lock()
-	db.systemRootMutationHook = hook
-	db.systemRootMutationHookMu.Unlock()
+	db.systemRootMutationFenceMu.Lock()
+	db.systemRootMutationFence = begin
+	db.systemRootMutationFenceMu.Unlock()
 }
 
-func (db *DB) systemRootMutationWrapper() func(func() error) error {
+func (db *DB) systemRootMutationFenceFn() func() (func(error) error, error) {
 	if db == nil {
 		return nil
 	}
-	db.systemRootMutationHookMu.RLock()
-	hook := db.systemRootMutationHook
-	db.systemRootMutationHookMu.RUnlock()
-	return hook
+	db.systemRootMutationFenceMu.RLock()
+	begin := db.systemRootMutationFence
+	db.systemRootMutationFenceMu.RUnlock()
+	return begin
 }
 
 // ApplySystemOps atomically applies a batch of inline, pointer, or tombstone
 // mutations to SystemRootPageID while preserving UserRootPageID and
-// AppliedCommandLSN. System-tree leaves are always written into index.db pager
-// pages (never leaf_vlog) so recovery and dictionary/template lookups remain
-// strictly acyclic.
+// AppliedCommandLSN. System-tree leaf placement follows the DB's uniform
+// systemRootOrderedPublishOptions policy so internal nodes never mix pager and
+// leaf-log child references.
 func (db *DB) ApplySystemOps(ops []SystemKVOp, sync bool) error {
 	if db == nil {
 		return ErrClosed
@@ -560,12 +647,19 @@ func (db *DB) ApplySystemOps(ops []SystemKVOp, sync bool) error {
 	if len(ops) == 0 {
 		return nil
 	}
-	if hook := db.systemRootMutationWrapper(); hook != nil {
-		return hook(func() error {
-			return db.applySystemOpsDirect(ops, sync)
-		})
+	var finish func(error) error
+	if begin := db.systemRootMutationFenceFn(); begin != nil {
+		var fenceErr error
+		finish, fenceErr = begin()
+		if fenceErr != nil {
+			return fenceErr
+		}
 	}
-	return db.applySystemOpsDirect(ops, sync)
+	err := db.applySystemOpsDirect(ops, sync)
+	if finish != nil {
+		return finish(err)
+	}
+	return err
 }
 
 func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) (retErr error) {
@@ -614,11 +708,7 @@ func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) (retErr error) {
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
-	systemOpts := defaultOrderedRootPublishOptions(db)
-	// Always place system-tree leaves for internal metadata in index.db pager
-	// pages so dict/template reads never depend on leaf_vlog decoding.
-	systemOpts.outerLeavesInValueLog = false
-	systemOpts.leafPageLog = nil
+	systemOpts := systemRootOrderedPublishOptions(db)
 
 	trackValueLogRefs := hasPointer && db.valueLogRefTracker != nil
 	iter := newSystemKVOpIterator(sortedOps)

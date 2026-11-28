@@ -35,7 +35,6 @@ func TestOpenFreshCompositeEnsuresPublicLayoutDependencies(t *testing.T) {
 	want := []string{
 		root,
 		filepath.Join(root, "maindb"),
-		filepath.Join(root, "dictdb"),
 	}
 	wantProof := filepath.Join(root, "maindb", "index.db")
 	if gotMode != 0o755 || gotProof != wantProof || !reflect.DeepEqual(gotPaths, want) {

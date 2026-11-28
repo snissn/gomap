@@ -90,7 +90,6 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	observedEvents := 0
 	selectedOccurrence := -1
 	namespaceEvents := 0
-	dictDBPersistenceEvents := 0
 	authoritativeAssetPersistenceEvents := 0
 	armed := false
 	phase := "witness"
@@ -110,9 +109,6 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		}
 		for _, path := range paths {
 			clean := filepath.Clean(path)
-			if pathContainsComponent(clean, "dictdb") && (event.Namespace != "" || event.Point == durabilitycut.AfterDependencyFileSync || event.Point == durabilitycut.AfterNewFileDirectorySync || event.Point == durabilitycut.AfterMetaSync) {
-				dictDBPersistenceEvents++
-			}
 			if (pathContainsComponent(clean, "column_assets") || strings.Contains(filepath.ToSlash(clean), "vector")) &&
 				(event.Namespace != "" || event.Point == durabilitycut.AfterDependencyFileSync || event.Point == durabilitycut.AfterNewFileDirectorySync) {
 				authoritativeAssetPersistenceEvents++
@@ -221,10 +217,10 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, authoritativeResourcesVariantID, powerLossOracleSeed)
 		}
 	}
-	if namespaceEvents == 0 || dictDBPersistenceEvents == 0 || (witness.physicalResources && authoritativeAssetPersistenceEvents == 0) {
-		t.Fatalf("resource creation persistence coverage namespace=%d dictdb=%d assets=%d", namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
+	if namespaceEvents == 0 || (witness.physicalResources && authoritativeAssetPersistenceEvents == 0) {
+		t.Fatalf("resource creation persistence coverage namespace=%d assets=%d", namespaceEvents, authoritativeAssetPersistenceEvents)
 	}
-	t.Logf("authoritative resource cut occurrence=%d namespace_events=%d dictdb_persistence_events=%d asset_persistence_events=%d", selectedOccurrence, namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
+	t.Logf("authoritative resource cut occurrence=%d namespace_events=%d asset_persistence_events=%d", selectedOccurrence, namespaceEvents, authoritativeAssetPersistenceEvents)
 	if err := database.Close(); err != nil && !errors.Is(err, cutErr) {
 		t.Logf("close after injected post-meta cut: %v", err)
 	}

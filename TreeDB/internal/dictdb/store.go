@@ -7,8 +7,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -22,8 +23,7 @@ var errStoreUnavailable = errors.New("dictdb: store unavailable")
 type Store struct {
 	backend          *db.DB
 	ownsBackend      bool
-	mu               sync.Mutex
-	pointerThreshold int
+	pointerThreshold atomic.Int64
 }
 
 const (
@@ -59,9 +59,7 @@ func (s *Store) SetPointerThreshold(threshold int) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	s.pointerThreshold = threshold
-	s.mu.Unlock()
+	s.pointerThreshold.Store(int64(threshold))
 }
 
 // Close closes the underlying backend if and only if this Store opened it via
@@ -123,8 +121,6 @@ func (s *Store) PutDictBytes(_ context.Context, dictBytes []byte) (uint64, error
 	}
 	checksum := sha256.Sum256(dictBytes)
 	hKey := hashKey(checksum)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	val, err := s.backend.GetSystem(hKey)
 	if err != nil {
@@ -182,8 +178,6 @@ func (s *Store) PublishDict(_ context.Context, dictBytes []byte, k int, class st
 	}
 	checksum := sha256.Sum256(dictBytes)
 	hKey := hashKey(checksum)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	dictID, needWriteBytes, needWriteHash, err := s.resolvePublishIdentityLocked(hKey, checksum, dictBytes)
 	if err != nil {
@@ -230,8 +224,6 @@ func (s *Store) PublishRewriteLeafDict(_ context.Context, dictBytes []byte, clas
 	}
 	checksum := sha256.Sum256(dictBytes)
 	hKey := hashKey(checksum)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	dictID, needWriteBytes, needWriteHash, err := s.resolvePublishIdentityLocked(hKey, checksum, dictBytes)
 	if err != nil {
@@ -292,7 +284,8 @@ func (s *Store) resolvePublishIdentityLocked(hKey []byte, checksum [32]byte, dic
 
 func (s *Store) buildDictPayloadOpsLocked(dictID uint64, checksum [32]byte, dictBytes []byte) ([]db.SystemKVOp, error) {
 	bKey := db.SystemDictBytesKey(dictID)
-	if s.pointerThreshold > 0 && len(dictBytes) > s.pointerThreshold {
+	threshold := int(s.pointerThreshold.Load())
+	if threshold > 0 && len(dictBytes) > threshold {
 		ptr, err := s.backend.AppendRawSystemValueLog(dictID, dictBytes)
 		if err != nil {
 			return nil, err
@@ -304,6 +297,9 @@ func (s *Store) buildDictPayloadOpsLocked(dictID uint64, checksum [32]byte, dict
 		encoded[0] = db.SystemDictEncodingInline
 		copy(encoded[1:], dictBytes)
 		return []db.SystemKVOp{{Key: bKey, Value: encoded}}, nil
+	}
+	if uint64(len(dictBytes)) > math.MaxUint32 || len(dictBytes) > db.MaxSystemDictBytes {
+		return nil, fmt.Errorf("dictdb: dict length %d exceeds max inline chunked size %d", len(dictBytes), db.MaxSystemDictBytes)
 	}
 	chunkCount := uint32((len(dictBytes) + db.SystemDictChunkSize - 1) / db.SystemDictChunkSize)
 	ops := make([]db.SystemKVOp, 0, 1+int(chunkCount))
@@ -354,8 +350,6 @@ func (s *Store) SetCurrent(_ context.Context, dictID uint64) error {
 	if s == nil || s.backend == nil {
 		return errStoreUnavailable
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if dictID == 0 {
 		return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: currentKey(), Delete: true}}, true)
@@ -380,8 +374,6 @@ func (s *Store) SetCurrentForClass(_ context.Context, class string, dictID uint6
 		return errStoreUnavailable
 	}
 	key := currentKeyForClass(class)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if dictID == 0 {
 		return s.backend.ApplySystemOps([]db.SystemKVOp{{Key: key, Delete: true}}, true)
 	}
@@ -408,8 +400,6 @@ func (s *Store) SetK(_ context.Context, dictID uint64, k int) error {
 	if k < dictKMin || k > dictKMax {
 		return fmt.Errorf("dictdb: invalid dict K=%d", k)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err
@@ -481,8 +471,6 @@ func (s *Store) SetLeafPayloadMode(_ context.Context, dictID uint64, useRawPages
 	if dictID == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ok, err := s.dictExists(dictID)
 	if err != nil {
 		return err

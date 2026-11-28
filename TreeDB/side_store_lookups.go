@@ -172,9 +172,7 @@ func wireMainBackendDictCallbacks(backend *db.DB, store *dictdb.Store, readOnly 
 		publishRewriteLeaf = store.PublishRewriteLeafDict
 	}
 	backend.SetDictCallbacks(
-		func(dictID uint64) ([]byte, error) {
-			return store.GetDictBytes(context.Background(), dictID)
-		},
+		nil,
 		store.GetCurrentForClass,
 		store.GetLeafPayloadMode,
 		put,
