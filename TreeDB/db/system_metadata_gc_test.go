@@ -320,11 +320,20 @@ func TestSystemMetadataGC_ConcurrentWritersRace(t *testing.T) {
 	ctx := context.Background()
 	dstore := dictdb.New(d)
 
-	// Seed a couple of dead dicts.
+	// Seed a couple of dead dicts and an initial active current dict, plus prebuild
+	// the dicts to be published concurrently so the publisher goroutine exercises
+	// real PublishDict concurrency rather than spending the loop in zstd.BuildDict.
 	for i := 0; i < 4; i++ {
 		if _, err := dstore.PutDictBytes(ctx, buildTestZstdDict(t, fmt.Sprintf("race-dead-%d", i), uint32(300+i))); err != nil {
 			t.Fatalf("PutDictBytes(%d): %v", i, err)
 		}
+	}
+	if _, err := dstore.PublishDict(ctx, buildTestZstdDict(t, "race-initial-cur", 350), 4, "default", true); err != nil {
+		t.Fatalf("PublishDict(initial): %v", err)
+	}
+	pubDicts := make([][]byte, 6)
+	for i := range pubDicts {
+		pubDicts[i] = buildTestZstdDict(t, fmt.Sprintf("race-pub-%d", i), uint32(400+i))
 	}
 
 	var stop atomic.Bool
@@ -347,8 +356,11 @@ func TestSystemMetadataGC_ConcurrentWritersRace(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; !stop.Load() && i < 6; i++ {
-			if _, err := dstore.PublishDict(ctx, buildTestZstdDict(t, fmt.Sprintf("race-pub-%d", i), uint32(400+i)), 4, "default", true); err != nil {
+		for i, dictBytes := range pubDicts {
+			if stop.Load() {
+				return
+			}
+			if _, err := dstore.PublishDict(ctx, dictBytes, 4, "default", true); err != nil {
 				errCh <- fmt.Errorf("PublishDict(%d): %w", i, err)
 				return
 			}
