@@ -877,7 +877,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if post.accepted && piggybacked != nil {
 		piggybackedCommitted = true
-		b.db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, sync)
+		b.db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, post.physicallyDurable)
 	}
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)

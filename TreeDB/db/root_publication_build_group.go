@@ -734,7 +734,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		group.physicalSeal = post.physicalSeal
 		if piggybacked != nil {
 			piggybackedCommitted = true
-			db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, syncWrite)
+			db.commitPiggybackedSystemOps(piggybacked, post.commitSeq, post.physicallyDurable)
 		}
 	}
 	if err != nil {

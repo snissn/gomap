@@ -1595,6 +1595,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		if opts.publishTiming != nil {
 			opts.publishTiming.FinalizeDurabilityWait += time.Since(durabilityStart)
 		}
+		post.physicallyDurable = true
 	}
 	return post, nil
 }
@@ -2179,6 +2180,7 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		runtime.failAmbiguousSeal(seal, err)
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishAmbiguous, Err: err}
 	}
+	runtime.db.notifySystemOpsSyncedThrough(seal.latestSequence)
 	return rootpublication.PublishResult{
 		Outcome: rootpublication.PublishSucceeded, DurableCommitSeq: seal.latestSequence,
 		OldestRecoverableCommitSeq: oldest,

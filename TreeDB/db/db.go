@@ -239,6 +239,7 @@ type DB struct {
 	stagedSystemOpsCount           atomic.Int32
 	stagedSystemSyncWaitersCount   atomic.Int32
 	stagedSystemInFlightUnsynced   atomic.Int32
+	stagedSystemDurableSeq         atomic.Uint64
 	stagedSystemOpsMu              sync.Mutex
 	stagedSystemOps                []stagedSystemOpBatch
 	stagedSystemSyncWaiters        []stagedSystemSyncWaiter
@@ -4323,6 +4324,7 @@ type finalizeCommitPost struct {
 	doPrune                           bool
 	debug                             bool
 	sync                              bool
+	physicallyDurable                 bool
 	start                             time.Time
 	durSync1                          time.Duration
 	durMeta                           time.Duration
@@ -4747,6 +4749,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	post.kickPrune = db.pruner.Enabled()
 	post.doPrune = !post.kickPrune
 	post.sync = sync
+	post.physicallyDurable = sync
 	if debugTiming {
 		post.debug = true
 		post.start = start
@@ -4770,7 +4773,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
-	if post.sync {
+	if post.physicallyDurable {
 		db.notifySystemOpsSyncedThrough(post.commitSeq)
 	}
 

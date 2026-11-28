@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -864,6 +866,60 @@ func TestStageSystemOps_PiggybackDurableWaitsForSyncAndRelaxedActivatesImmediate
 		}
 		if d.HasUnsyncedSystemOps() {
 			t.Fatal("expected HasUnsyncedSystemOps=false after WriteSync")
+		}
+	})
+
+	t.Run("command_wal_write_sync_waits_for_physical_seal", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+			CommandWAL: true,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		// Hold the async root-publication coordinator with a delay so
+		// Batch.WriteSync returns after admission but BEFORE physical sealing.
+		d.rootPublicationFixedDelay = 200 * time.Millisecond
+		var activated atomic.Bool
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-cwal-seal"),
+			Value: []byte("sealed"),
+		}}, func() { activated.Store(true) }); err != nil {
+			t.Fatalf("StageSystemOps: %v", err)
+		}
+		b := d.NewBatch()
+		if err := b.Set([]byte("cwal/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("WriteSync: %v", err)
+		}
+		_ = b.Close()
+
+		// CommandWAL WriteSync returns before physical root seal completes, so
+		// activation MUST NOT have fired yet.
+		if activated.Load() {
+			t.Fatal("CommandWAL WriteSync activated staged dict before physical root durability")
+		}
+		if !d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=true while physical seal is in flight")
+		}
+
+		// Once physical sealing completes (Checkpoint / WaitThrough), activation
+		// fires automatically.
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if !activated.Load() {
+			t.Fatal("expected staged dict activation after physical root seal")
+		}
+		if d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=false after physical root seal")
 		}
 	})
 }
