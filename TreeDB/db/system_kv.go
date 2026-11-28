@@ -968,6 +968,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 		return 0, false, false, nil
 	}
 	sortedOps, hasPointer := normalizeSystemKVOps(ops)
+	db.recordRecentSystemMetadataIDs(sortedOps)
 	if len(sortedOps) == 0 {
 		return 0, false, false, nil
 	}
@@ -1152,6 +1153,7 @@ func (db *DB) StageSystemOps(ops []SystemKVOp, onDurable func()) error {
 	})
 	db.updateStagedSystemOpsCountLocked()
 	db.stagedSystemOpsMu.Unlock()
+	db.recordRecentSystemMetadataIDs(cloned)
 	return nil
 }
 
