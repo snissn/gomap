@@ -249,20 +249,43 @@ func (s *Store) StageTemplateDef(ctx context.Context, defBytes []byte, routeFPs 
 	return s.putOrStageTemplateDef(ctx, defBytes, routeFPs, true, onDurable)
 }
 
+// lockAndFlushStagedForSync acquires s.mu only after draining any pending
+// staged system ops or unsynced durability barriers on s.backend. Flushing runs
+// outside s.mu so re-entrant onDurable callbacks that call StageTemplateDef
+// cannot deadlock and are drained cleanly before synchronous publication reads
+// committed SystemRootPageID state.
+func (s *Store) lockAndFlushStagedForSync() error {
+	const maxDrainRounds = 16
+	for round := 0; round < maxDrainRounds; round++ {
+		if s.backend != nil && (s.backend.HasPendingStagedSystemOps() || s.backend.HasUnsyncedSystemOps()) {
+			if err := s.backend.FlushStagedSystemOps(true); err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		if s.backend == nil || (!s.backend.HasPendingStagedSystemOps() && !s.backend.HasUnsyncedSystemOps()) {
+			return nil
+		}
+		s.mu.Unlock()
+	}
+	return fmt.Errorf("templatedb: staged system ops did not quiesce before synchronous publication")
+}
+
 func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64, stage bool, onDurable func()) (uint64, error) {
 	if s == nil || (s.backend == nil && s.kv == nil) {
 		return 0, errStoreUnavailable
-	}
-	if !stage && s.backend != nil && s.backend.HasPendingStagedSystemOps() {
-		if err := s.backend.FlushStagedSystemOps(true); err != nil {
-			return 0, err
-		}
 	}
 	cfg := NormalizeConfig(s.cfg)
 	var runOnDurableNow bool
 	var registerStageBarrier bool
 	id, err := func() (uint64, error) {
-		s.mu.Lock()
+		if stage {
+			s.mu.Lock()
+		} else {
+			if err := s.lockAndFlushStagedForSync(); err != nil {
+				return 0, err
+			}
+		}
 		defer s.mu.Unlock()
 
 		// Copy, dedup, and sort route fingerprints deterministically without
@@ -413,14 +436,11 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 	if len(defs) == 0 {
 		return nil, nil
 	}
-	if s.backend != nil && s.backend.HasPendingStagedSystemOps() {
-		if err := s.backend.FlushStagedSystemOps(true); err != nil {
-			return nil, err
-		}
-	}
 	cfg := NormalizeConfig(s.cfg)
 
-	s.mu.Lock()
+	if err := s.lockAndFlushStagedForSync(); err != nil {
+		return nil, err
+	}
 	defer s.mu.Unlock()
 
 	ids := make([]uint64, len(defs))

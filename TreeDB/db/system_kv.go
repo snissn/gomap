@@ -1011,106 +1011,123 @@ func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool
 		}
 	}
 
-	db.writeMu.Lock()
-	writeLocked := true
-	defer func() {
-		if writeLocked {
-			db.writeMu.Unlock()
+	const maxConcurrentRetries = 8
+	for attempt := 0; attempt <= maxConcurrentRetries; attempt++ {
+		db.writeMu.Lock()
+		writeLocked := true
+		unlockWrite := func() {
+			if writeLocked {
+				db.writeMu.Unlock()
+				writeLocked = false
+			}
 		}
-	}()
-	if db.closing.Load() {
-		return 0, false, false, false, nil, ErrClosed
-	}
-	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return 0, false, false, false, nil, err
-	}
-	if db.readOnly {
-		return 0, false, false, false, nil, ErrReadOnly
-	}
-
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
-
-	if checkGuard && (baseSeq != wantSeq || baseSystemRoot != wantSystemRoot) {
-		return 0, false, false, true, nil, nil
-	}
-	if preCommitCheck != nil && !preCommitCheck() {
-		return 0, false, false, true, nil, nil
-	}
-	if err := db.validateDirectSystemOpReferencesLocked(baseSystemRoot, sortedOps); err != nil {
-		return 0, false, false, false, nil, err
-	}
-
-	systemOpts := systemRootOrderedPublishOptions(db)
-
-	trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
-	iter := newSystemKVOpIterator(sortedOps)
-	newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(
-		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false,
-	)
-	if err != nil {
-		return 0, false, false, false, nil, err
-	}
-	defer func() {
-		if vlogRefDelta != nil {
-			releaseValueLogRefDelta(vlogRefDelta)
+		if db.closing.Load() {
+			unlockWrite()
+			return 0, false, false, false, nil, ErrClosed
 		}
-	}()
+		if err := db.checkWriteAdmissionLocked(); err != nil {
+			unlockWrite()
+			return 0, false, false, false, nil, err
+		}
+		if db.readOnly {
+			unlockWrite()
+			return 0, false, false, false, nil, ErrReadOnly
+		}
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		if checkGuard {
+		db.mu.RLock()
+		userRoot := db.meta.UserRootPageID
+		baseSystemRoot := db.meta.SystemRootPageID
+		baseSeq := db.meta.CommitSeq
+		db.mu.RUnlock()
+
+		if checkGuard && (baseSeq != wantSeq || baseSystemRoot != wantSystemRoot) {
+			unlockWrite()
 			return 0, false, false, true, nil, nil
 		}
-		return 0, false, false, false, nil, errors.New("treedb: concurrent modification detected during system KV publish")
-	}
+		if preCommitCheck != nil && !preCommitCheck() {
+			unlockWrite()
+			return 0, false, false, true, nil, nil
+		}
+		if err := db.validateDirectSystemOpReferencesLocked(baseSystemRoot, sortedOps); err != nil {
+			unlockWrite()
+			return 0, false, false, false, nil, err
+		}
 
-	var finalizeOpts finalizeCommitOptions
-	if db.privateCOWOwner != nil {
-		finalizeOpts.privateCOWRewrite = newPrivateCOWRewriteFinalization(db.privateCOWOwner, nil)
-	}
-	finalizeOpts.onAccepted = onAccepted
-	forceRefresh := hasPointer || len(touchedValueLogSegments) > 0
-	post, err := db.finalizeCommitReleasingRootSerialization(
-		userRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments,
-		forceRefresh, vlogRefDelta, nil, nil, finalizeOpts,
-		baseSeq,
-		func() {
-			db.writeMu.Unlock()
-			writeLocked = false
-		},
-		nil,
-	)
-	if err != nil {
-		return post.commitSeq, post.accepted, post.physicallyDurable, false, nil, err
-	}
-	vlogRefDelta = nil
-	if deferPostWork {
-		postCopy := post
-		postWork = func() {
-			db.finalizeCommitPostWork(postCopy)
+		systemOpts := systemRootOrderedPublishOptions(db)
+
+		trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
+		iter := newSystemKVOpIterator(sortedOps)
+		newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(
+			baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false,
+		)
+		if err != nil {
+			unlockWrite()
+			return 0, false, false, false, nil, err
 		}
-	} else {
-		db.finalizeCommitPostWork(post)
-	}
-	if hasPointer {
-		if err := db.RefreshValueLogSet(); err != nil {
-			return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, err
+
+		db.mu.RLock()
+		curUserRoot := db.meta.UserRootPageID
+		curSystemRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+			if vlogRefDelta != nil {
+				releaseValueLogRefDelta(vlogRefDelta)
+			}
+			unlockWrite()
+			if checkGuard {
+				return 0, false, false, true, nil, nil
+			}
+			if attempt < maxConcurrentRetries {
+				continue
+			}
+			return 0, false, false, false, nil, errors.New("treedb: concurrent modification detected during system KV publish")
 		}
-	}
-	for _, op := range sortedOps {
-		if !op.Delete && bytes.HasPrefix(op.Key, systemTemplateDefPrefix) {
-			db.EnsureSystemTemplateLookup()
-			break
+
+		var finalizeOpts finalizeCommitOptions
+		if db.privateCOWOwner != nil {
+			finalizeOpts.privateCOWRewrite = newPrivateCOWRewriteFinalization(db.privateCOWOwner, nil)
 		}
+		finalizeOpts.onAccepted = onAccepted
+		forceRefresh := hasPointer || len(touchedValueLogSegments) > 0
+		post, err := db.finalizeCommitReleasingRootSerialization(
+			userRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments,
+			forceRefresh, vlogRefDelta, nil, nil, finalizeOpts,
+			baseSeq,
+			unlockWrite,
+			nil,
+		)
+		unlockWrite()
+		if err != nil {
+			if vlogRefDelta != nil && !post.accepted {
+				releaseValueLogRefDelta(vlogRefDelta)
+			}
+			if !post.accepted && !checkGuard && errors.Is(err, errDurableRootCandidateStale) && attempt < maxConcurrentRetries {
+				continue
+			}
+			return post.commitSeq, post.accepted, post.physicallyDurable, false, nil, err
+		}
+		if deferPostWork {
+			postCopy := post
+			postWork = func() {
+				db.finalizeCommitPostWork(postCopy)
+			}
+		} else {
+			db.finalizeCommitPostWork(post)
+		}
+		if hasPointer {
+			if err := db.RefreshValueLogSet(); err != nil {
+				return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, err
+			}
+		}
+		for _, op := range sortedOps {
+			if !op.Delete && bytes.HasPrefix(op.Key, systemTemplateDefPrefix) {
+				db.EnsureSystemTemplateLookup()
+				break
+			}
+		}
+		return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, nil
 	}
-	return post.commitSeq, post.accepted, post.physicallyDurable, false, postWork, nil
+	return 0, false, false, false, nil, errors.New("treedb: concurrent modification detected during system KV publish")
 }
 
 type stagedSystemOpBatch struct {

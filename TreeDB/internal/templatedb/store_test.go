@@ -397,4 +397,100 @@ func TestStore_StageTemplateDef_PreservesDurabilityBarrierAndMergesStagedFP(t *t
 	if err != nil || !bytes.Equal(got3, def3) {
 		t.Fatalf("GetTemplateDef(%d) after sync PutTemplateDef: len=%d err=%v", syncID3, len(got3), err)
 	}
+
+	// Verify re-entrant callback staging + unsynced piggyback durability barrier
+	// on synchronous PutTemplateDef:
+	// 1. Stage A with an onDurable callback that stages C on the same FP.
+	// 2. Synchronously PutTemplateDef(B, [fp2]): must drain A, run callback (staging C),
+	//    drain C, and commit B without losing any candidate on fp2.
+	const reentrantFP uint64 = 0x11223344aabbccdd
+	defA, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-A-anchor-1-"), []byte("-reentrant-A-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(A): %v", err)
+	}
+	defB, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-B-anchor-1-"), []byte("-reentrant-B-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(B): %v", err)
+	}
+	defC, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("reentrant-C-anchor-1-"), []byte("-reentrant-C-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(C): %v", err)
+	}
+	var idC uint64
+	var stageCErr error
+	idA, err := store.StageTemplateDef(ctx, defA, []uint64{reentrantFP}, func() {
+		idC, stageCErr = store.StageTemplateDef(ctx, defC, []uint64{reentrantFP}, nil)
+	})
+	if err != nil || idA == 0 {
+		t.Fatalf("StageTemplateDef(A): id=%d err=%v", idA, err)
+	}
+	idB, err := store.PutTemplateDef(ctx, defB, []uint64{reentrantFP})
+	if err != nil || idB == 0 {
+		t.Fatalf("PutTemplateDef(B): id=%d err=%v", idB, err)
+	}
+	if stageCErr != nil || idC == 0 {
+		t.Fatalf("reentrant StageTemplateDef(C) failed: id=%d err=%v", idC, stageCErr)
+	}
+	if backend.HasPendingStagedSystemOps() || backend.HasUnsyncedSystemOps() {
+		t.Fatalf("expected PutTemplateDef to quiesce reentrant staged ops and sync barriers")
+	}
+	cands2, err := store.GetCandidates(ctx, reentrantFP, 0)
+	if err != nil {
+		t.Fatalf("GetCandidates(reentrantFP): %v", err)
+	}
+	var sawA, sawB, sawC bool
+	for _, c := range cands2 {
+		switch c.ID {
+		case idA:
+			sawA = true
+		case idB:
+			sawB = true
+		case idC:
+			sawC = true
+		}
+	}
+	if !sawA || !sawB || !sawC {
+		t.Fatalf("reentrantFP candidates missing template: got=%+v want A=%d B=%d C=%d", cands2, idA, idB, idC)
+	}
+
+	// Verify synchronous PutTemplateDef syncs an already-piggybacked unsynced def.
+	defD, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("unsynced-D-anchor-1-"), []byte("-unsynced-D-anchor-2")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(D): %v", err)
+	}
+	var cbDFired bool
+	idD, err := store.StageTemplateDef(ctx, defD, nil, func() { cbDFired = true })
+	if err != nil || idD == 0 {
+		t.Fatalf("StageTemplateDef(D): id=%d err=%v", idD, err)
+	}
+	b2 := backend.NewBatch()
+	if err := b2.Set([]byte("u2"), []byte("v2")); err != nil {
+		t.Fatalf("Set(u2): %v", err)
+	}
+	if err := b2.Write(); err != nil {
+		t.Fatalf("Write(u2): %v", err)
+	}
+	_ = b2.Close()
+	if cbDFired {
+		t.Fatalf("cbD fired before sync barrier")
+	}
+	idDSync, err := store.PutTemplateDef(ctx, defD, nil)
+	if err != nil || idDSync != idD {
+		t.Fatalf("PutTemplateDef(D): id=%d want %d err=%v", idDSync, idD, err)
+	}
+	if !cbDFired || backend.HasUnsyncedSystemOps() {
+		t.Fatalf("expected synchronous PutTemplateDef(D) to sync outstanding barrier: cbDFired=%v unsynced=%v", cbDFired, backend.HasUnsyncedSystemOps())
+	}
 }
