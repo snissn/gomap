@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -164,6 +165,10 @@ func scanSegmentDictAndTemplateIDs(f *os.File, _ uint32, dictLookup DictLookup) 
 		payload := payloadBuf[:valueLen]
 		if _, err := io.ReadFull(br, payload); err != nil {
 			return res, err
+		}
+		crcVal := binary.LittleEndian.Uint32(hdr[0:4])
+		if crc.ChecksumParts(hdr[4:], payload) != crcVal {
+			return res, ErrCorrupt
 		}
 
 		if flags&recordFlagGrouped == 0 {

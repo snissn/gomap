@@ -123,4 +123,23 @@ func TestScanSegmentCompressionIDs_DictAndTemplate(t *testing.T) {
 	if _, err := ScanSegmentCompressionIDs(corruptPath, fileID, true, lookup); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("full scan on cleared grouped flag err=%v want ErrCorrupt", err)
 	}
+
+	// 4) Flipping a payload byte (e.g., TM magic) in an uncompressed template record
+	// must fail closed via CRC verification during full template scanning.
+	flipped, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(flipped): %v", err)
+	}
+	tmIdx := bytes.Index(flipped, []byte{'T', 'M', 1})
+	if tmIdx < 0 {
+		t.Fatalf("expected TM\\x01 magic in uncompressed first record")
+	}
+	flipped[tmIdx] ^= 0x01
+	flippedPath := filepath.Join(dir, "value-l0-000003.log")
+	if err := os.WriteFile(flippedPath, flipped, 0o600); err != nil {
+		t.Fatalf("WriteFile(flipped): %v", err)
+	}
+	if _, err := ScanSegmentCompressionIDs(flippedPath, fileID, true, lookup); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("full scan on flipped TM magic err=%v want ErrCorrupt", err)
+	}
 }
