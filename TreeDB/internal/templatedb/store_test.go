@@ -370,4 +370,31 @@ func TestStore_StageTemplateDef_PreservesDurabilityBarrierAndMergesStagedFP(t *t
 	if !saw1 || !saw2 {
 		t.Fatalf("merged sharedFP candidates missing staged template: got=%+v want both %d and %d", cands, id1, id2)
 	}
+
+	// Stage a third template and immediately publish it synchronously via
+	// PutTemplateDef BEFORE any flush; PutTemplateDef must commit it durably so
+	// GetTemplateDef immediately succeeds.
+	def3, err := template.EncodeTemplateDef(template.TemplateDef{
+		Kind:    template.TemplateAnchors,
+		Anchors: [][]byte{[]byte("stage-sync-3-anchor-a-"), []byte("-stage-sync-3-anchor-b")},
+	}, tcfg)
+	if err != nil {
+		t.Fatalf("EncodeTemplateDef(3): %v", err)
+	}
+	var cb4Fired bool
+	stagedID3, err := store.StageTemplateDef(ctx, def3, []uint64{sharedFP}, func() { cb4Fired = true })
+	if err != nil || stagedID3 == 0 {
+		t.Fatalf("StageTemplateDef(def3): id=%d err=%v", stagedID3, err)
+	}
+	syncID3, err := store.PutTemplateDef(ctx, def3, nil)
+	if err != nil || syncID3 != stagedID3 {
+		t.Fatalf("PutTemplateDef(def3 after stage): id=%d want %d err=%v", syncID3, stagedID3, err)
+	}
+	if !cb4Fired {
+		t.Fatalf("expected synchronous PutTemplateDef to flush staged def3 callback")
+	}
+	got3, err := store.GetTemplateDef(ctx, syncID3)
+	if err != nil || !bytes.Equal(got3, def3) {
+		t.Fatalf("GetTemplateDef(%d) after sync PutTemplateDef: len=%d err=%v", syncID3, len(got3), err)
+	}
 }

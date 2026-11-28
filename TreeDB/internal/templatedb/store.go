@@ -206,9 +206,17 @@ func (s *Store) buildTemplateDefOps(id uint64, defBytes []byte) ([]db.SystemKVOp
 	return ops, nil
 }
 
-func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
+func (s *Store) getExistingTemplateDef(id uint64, includeStaged bool) ([]byte, error) {
 	if s.backend != nil {
-		val, err := s.backend.LookupSystemTemplateDefIncludingStaged(id)
+		var (
+			val []byte
+			err error
+		)
+		if includeStaged {
+			val, err = s.backend.LookupSystemTemplateDefIncludingStaged(id)
+		} else {
+			val, err = s.backend.LookupSystemTemplateDef(id)
+		}
 		if errors.Is(err, template.ErrMissingTemplate) {
 			return nil, nil
 		}
@@ -217,9 +225,12 @@ func (s *Store) getExistingTemplateDef(id uint64) ([]byte, error) {
 	return s.kv.Get(templateKey(id))
 }
 
-func (s *Store) getRawFPBytes(fp uint64) ([]byte, error) {
+func (s *Store) getRawFPBytes(fp uint64, includeStaged bool) ([]byte, error) {
 	if s.backend != nil {
-		return s.backend.GetSystemIncludingStaged(db.SystemTemplateFPKey(fp))
+		if includeStaged {
+			return s.backend.GetSystemIncludingStaged(db.SystemTemplateFPKey(fp))
+		}
+		return s.backend.GetSystem(db.SystemTemplateFPKey(fp))
 	}
 	return s.kv.Get(fpKey(fp))
 }
@@ -241,6 +252,11 @@ func (s *Store) StageTemplateDef(ctx context.Context, defBytes []byte, routeFPs 
 func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64, stage bool, onDurable func()) (uint64, error) {
 	if s == nil || (s.backend == nil && s.kv == nil) {
 		return 0, errStoreUnavailable
+	}
+	if !stage && s.backend != nil && s.backend.HasPendingStagedSystemOps() {
+		if err := s.backend.FlushStagedSystemOps(true); err != nil {
+			return 0, err
+		}
 	}
 	cfg := NormalizeConfig(s.cfg)
 	var runOnDurableNow bool
@@ -272,7 +288,7 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 			if id == 0 {
 				continue
 			}
-			existing, err := s.getExistingTemplateDef(id)
+			existing, err := s.getExistingTemplateDef(id, stage)
 			if err != nil {
 				return 0, err
 			}
@@ -296,7 +312,7 @@ func (s *Store) putOrStageTemplateDef(_ context.Context, defBytes []byte, routeF
 		candidateSize := len(defBytes)
 		updates := make(map[uint64][]byte, len(sortedFPs))
 		for _, fp := range sortedFPs {
-			listBytes, err := s.getRawFPBytes(fp)
+			listBytes, err := s.getRawFPBytes(fp, stage)
 			if err != nil {
 				return 0, err
 			}
@@ -397,6 +413,11 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 	if len(defs) == 0 {
 		return nil, nil
 	}
+	if s.backend != nil && s.backend.HasPendingStagedSystemOps() {
+		if err := s.backend.FlushStagedSystemOps(true); err != nil {
+			return nil, err
+		}
+	}
 	cfg := NormalizeConfig(s.cfg)
 
 	s.mu.Lock()
@@ -448,7 +469,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 				id = 0
 				continue
 			}
-			existing, err := s.getExistingTemplateDef(id)
+			existing, err := s.getExistingTemplateDef(id, false)
 			if err != nil {
 				return nil, err
 			}
@@ -490,7 +511,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 
 	updates := make(map[uint64][]byte, len(fpMap))
 	for fp, adds := range fpMap {
-		listBytes, err := s.getRawFPBytes(fp)
+		listBytes, err := s.getRawFPBytes(fp, false)
 		if err != nil {
 			return nil, err
 		}
