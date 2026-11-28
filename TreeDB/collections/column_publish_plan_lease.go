@@ -256,7 +256,7 @@ func (l *columnPublishPlanLease) finishFailure(cause error) error {
 	case columnPublishPlanLeasePrepared:
 		return l.abandonLocked()
 	case columnPublishPlanLeaseInstalling:
-		if !l.transferred || (!backenddb.CommitPublicationAccepted(cause) && !errors.Is(cause, backenddb.ErrRecoveryRequired)) {
+		if !l.transferred || (!backenddb.CommitPublicationAccepted(cause) && !errors.Is(cause, backenddb.ErrRecoveryRequired) && !errors.Is(cause, ErrCommitAmbiguous)) {
 			return l.abandonLocked()
 		}
 		return l.quarantineLocked(fmt.Sprintf("ambiguous column publish: %v", cause), columnPublishPlanPreparedRefs(l.plan))
@@ -643,6 +643,34 @@ func cleanupUnpublishedStableColumnPublishAssets(
 	var wholeTargets []*cleanupTarget
 	for _, path := range paths {
 		target := targets[path]
+		if !target.ineligible {
+			slices.SortFunc(target.refs, func(a, b ColumnAssetRef) int {
+				if a.Offset != b.Offset {
+					if a.Offset < b.Offset {
+						return -1
+					}
+					return 1
+				}
+				if a.Length != b.Length {
+					if a.Length < b.Length {
+						return -1
+					}
+					return 1
+				}
+				return 0
+			})
+			prevEnd := target.truncateTo
+			for _, ref := range target.refs {
+				if ref.Offset != prevEnd {
+					target.ineligible = true
+					break
+				}
+				prevEnd = ref.Offset + ref.Length
+			}
+			if prevEnd != target.maxEnd {
+				target.ineligible = true
+			}
+		}
 		if target.ineligible {
 			retained = append(retained, target.refs...)
 			continue

@@ -547,3 +547,309 @@ func TestColumnPublishPlanLeaseStableAlignedNonZeroOffsetQuarantines5922(t *test
 	}
 	assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 1)
 }
+
+func TestColumnPublishPlanLeaseStableNonContiguousRefsQuarantines5922(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace support required")
+	}
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openEventsCollection5922(t, d)
+	if _, err := col.Insert([]byte("seed-meta"), []byte(`{"time_us":1,"kind":"like","did":"d0"}`)); err != nil {
+		t.Fatalf("Insert seed: %v", err)
+	}
+	view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	cfg := view.FullConfig
+	if releaseView != nil {
+		releaseView()
+	}
+
+	const segFileID = columnAssetM12ASegmentFileID + 3
+	// Write prefix [0..100), then prepared ref1 [100..150), interleaved committed
+	// ref [150..200), and prepared ref2 [200..250).
+	_ = writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, segFileID, make([]byte, 100))
+
+	captureLease1, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease(1): %v", err)
+	}
+	refs1, res1, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		segFileID,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    make([]byte, 50),
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Generation: 7,
+			PartID:     10,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLease1,
+	)
+	captureLease1.Release()
+	if err != nil {
+		t.Fatalf("Append(ref1): %v", err)
+	}
+	defer res1.Release()
+
+	// Interleaved committed append at [150..200)
+	captureLeaseMid, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease(mid): %v", err)
+	}
+	_, resMid, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		segFileID,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    make([]byte, 50),
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Generation: 8,
+			PartID:     11,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLeaseMid,
+	)
+	captureLeaseMid.Release()
+	if err != nil {
+		t.Fatalf("Append(mid): %v", err)
+	}
+	defer resMid.Release()
+
+	// Second prepared ref at [200..250)
+	captureLease2, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease(2): %v", err)
+	}
+	refs2, res2, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		segFileID,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    make([]byte, 50),
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Generation: 7,
+			PartID:     12,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLease2,
+	)
+	captureLease2.Release()
+	if err != nil {
+		t.Fatalf("Append(ref2): %v", err)
+	}
+	if refs1[0].Offset != 100 || refs2[0].Offset != 200 {
+		res2.Release()
+		t.Fatalf("unexpected offsets ref1=%d ref2=%d want 100, 200", refs1[0].Offset, refs2[0].Offset)
+	}
+
+	lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+		Enabled:            true,
+		Collection:         "events",
+		AppliedCommandLSN:  79,
+		ManifestRootBaseID: 44,
+		RootDelta:          ColumnManifestRootDelta{BaseRootID: 44},
+		PreparedAssets: []ColumnPreparedAsset{
+			{Ref: refs1[0], Rows: 1, Bytes: refs1[0].Length, GenerationID: refs1[0].Generation},
+			{Ref: refs2[0], Rows: 1, Bytes: refs2[0].Length, GenerationID: refs2[0].Generation},
+		},
+		stableResources:      res2,
+		stablePreparedAssets: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPublishPlanLease: %v", err)
+	}
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs1[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Abandon(); !errors.Is(err, errColumnPublishPlanLeaseCleanupQuarantined) {
+		t.Fatalf("Abandon error=%v, want quarantined cleanup for non-contiguous prepared refs", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 250 {
+		t.Fatalf("segment with interleaved committed ref was truncated to %d, want 250", info.Size())
+	}
+	assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 1)
+}
+
+func TestColumnPublishPlanLeasePostTransferCommitAmbiguousQuarantines5922(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace support required")
+	}
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openEventsCollection5922(t, d)
+	if _, err := col.Insert([]byte("seed-meta"), []byte(`{"time_us":1,"kind":"like","did":"d0"}`)); err != nil {
+		t.Fatalf("Insert seed: %v", err)
+	}
+	view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	cfg := view.FullConfig
+	if releaseView != nil {
+		releaseView()
+	}
+
+	captureLease, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+	}
+	refs, stableResources, err := AppendColumnPhysicalAssetsWithStableResources(
+		d.ColumnAssetRootDir(),
+		cfg,
+		columnAssetM12ASegmentFileID+4,
+		[]StableColumnPhysicalAssetAppend{{
+			Payload:    []byte("ambiguous-commit-payload"),
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Generation: 7,
+			PartID:     20,
+		}},
+		d.StableResourceIdentityPinRegistry(),
+		captureLease,
+	)
+	captureLease.Release()
+	if err != nil {
+		t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+	}
+	asset := ColumnPreparedAsset{Ref: refs[0], Rows: 1, Bytes: refs[0].Length, GenerationID: refs[0].Generation}
+	lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+		Enabled:              true,
+		Collection:           "events",
+		AppliedCommandLSN:    80,
+		ManifestRootBaseID:   44,
+		RootDelta:            ColumnManifestRootDelta{BaseRootID: 44},
+		PreparedAssets:       []ColumnPreparedAsset{asset},
+		stableResources:      stableResources,
+		stablePreparedAssets: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPublishPlanLease: %v", err)
+	}
+	if _, err := lease.beginInstall("events", 80, 44); err != nil {
+		t.Fatalf("beginInstall: %v", err)
+	}
+	if err := lease.transferStableResources(backenddb.CommandWALPublishContext{}); err != nil && !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("transferStableResources: %v", err)
+	}
+	if err := lease.finishFailure(fmt.Errorf("%w: injected post-transfer ambiguity", ErrCommitAmbiguous)); err != nil {
+		t.Fatalf("finishFailure(ErrCommitAmbiguous): %v", err)
+	}
+	if got := lease.stateValue(); got != columnPublishPlanLeaseQuarantined {
+		t.Fatalf("state=%v want quarantined on post-transfer ErrCommitAmbiguous", got)
+	}
+	if raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref); err != nil || string(raw) != "ambiguous-commit-payload" {
+		t.Fatalf("post-transfer ambiguous asset raw=%q err=%v want retained intact", raw, err)
+	}
+	assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 1)
+}
+
+func TestColumnPublishPlanLeaseStableWholeSegmentAbandonAndPrePublishUnlinks5922(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable relative namespace support required")
+	}
+	for _, tc := range []struct {
+		name     string
+		install  bool
+		transfer bool
+		fileID   uint32
+	}{
+		{name: "abandon_fresh_whole_segment", fileID: columnAssetM12ASegmentFileID + 10},
+		{name: "pre_publish_after_transfer_fresh_whole_segment", install: true, transfer: true, fileID: columnAssetM12ASegmentFileID + 11},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+			col := openEventsCollection5922(t, d)
+			if _, err := col.Insert([]byte("seed-meta"), []byte(`{"time_us":1,"kind":"like","did":"d0"}`)); err != nil {
+				t.Fatalf("Insert seed: %v", err)
+			}
+			view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+			if err != nil {
+				t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+			}
+			cfg := view.FullConfig
+			if releaseView != nil {
+				releaseView()
+			}
+			captureLease, err := d.AcquireStableResourceCaptureLease()
+			if err != nil {
+				t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+			}
+			refs, stableResources, err := AppendColumnPhysicalAssetsWithStableResources(
+				d.ColumnAssetRootDir(),
+				cfg,
+				tc.fileID,
+				[]StableColumnPhysicalAssetAppend{{
+					Payload:    []byte("fresh-whole-segment-unpublished"),
+					Kind:       ColumnAssetKindTCS1PartImage,
+					Generation: 7,
+					PartID:     30,
+				}},
+				d.StableResourceIdentityPinRegistry(),
+				captureLease,
+			)
+			captureLease.Release()
+			if err != nil {
+				t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+			}
+			if refs[0].Offset != 0 {
+				stableResources.Release()
+				t.Fatalf("expected offset 0 for fresh segment, got %d", refs[0].Offset)
+			}
+			asset := ColumnPreparedAsset{Ref: refs[0], Rows: 1, Bytes: refs[0].Length, GenerationID: refs[0].Generation}
+			path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), asset.Ref)
+			if err != nil {
+				stableResources.Release()
+				t.Fatal(err)
+			}
+			lease, err := newColumnPublishPlanLease(col, ColumnPublishPlan{
+				Enabled:              true,
+				Collection:           "events",
+				AppliedCommandLSN:    81,
+				ManifestRootBaseID:   44,
+				RootDelta:            ColumnManifestRootDelta{BaseRootID: 44},
+				PreparedAssets:       []ColumnPreparedAsset{asset},
+				stableResources:      stableResources,
+				stablePreparedAssets: true,
+			})
+			if err != nil {
+				t.Fatalf("newColumnPublishPlanLease: %v", err)
+			}
+			if !tc.install {
+				if err := lease.Abandon(); err != nil {
+					t.Fatalf("Abandon fresh whole segment: %v", err)
+				}
+			} else {
+				if _, err := lease.beginInstall("events", 81, 44); err != nil {
+					t.Fatalf("beginInstall: %v", err)
+				}
+				if tc.transfer {
+					if err := lease.transferStableResources(backenddb.CommandWALPublishContext{}); err != nil && !errors.Is(err, rootpublication.ErrResourceOwnership) {
+						t.Fatalf("transferStableResources: %v", err)
+					}
+				}
+				if err := lease.finishFailure(errors.New("injected pre-publish failure")); err != nil {
+					t.Fatalf("finishFailure fresh whole segment: %v", err)
+				}
+			}
+			if got := lease.stateValue(); got != columnPublishPlanLeaseAbandoned {
+				t.Fatalf("state=%v want abandoned", got)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("fresh unpublished whole segment still exists: stat err=%v", err)
+			}
+			assertColumnPublishPlanLeaseRegistry4550(t, col, 0, 0, 0)
+		})
+	}
+}

@@ -1058,11 +1058,17 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
+			if err := advanceTokenIdentityPinFrontier(token, entry.frontier.Bytes); err != nil {
+				return err
+			}
 			entry.token = token
 			entry.pins = nil
 			entry.pinIndex = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
+			if err := advanceTokenIdentityPinFrontier(existing, entry.frontier.Bytes); err != nil {
+				return err
+			}
 			token.releaseFrom(ResourceOwnerBuilder)
 		}
 		return nil
@@ -1115,6 +1121,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		entry.reachability.addReachable(token.reachability)
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if !existing.hasDiagnosticNamespace() && token.hasDiagnosticNamespace() {
+			if err := advanceTokenIdentityPinFrontier(token, entry.frontier.Bytes); err != nil {
+				return err
+			}
 			// Preserve the one namespace-creation obligation independently of
 			// insertion order by making its exact-handle token representative.
 			entry.token = token
@@ -1123,6 +1132,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 			entry.pinIndex = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
+			if err := advanceTokenIdentityPinFrontier(existing, entry.frontier.Bytes); err != nil {
+				return err
+			}
 			token.releaseFrom(ResourceOwnerBuilder)
 		}
 		return nil
@@ -1268,6 +1280,11 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 				entry.pinIndex = nil
 			}
 		}
+		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
+			if err := advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if mode == stableResourceViewValidatedCount {
@@ -1337,6 +1354,11 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 				entry.pinIndex = nil
 			}
 		}
+		if mode != stableResourceViewValidatedCount && mode != stableResourceViewPhysicalCount {
+			if err := advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if mode == stableResourceViewValidatedCount {
@@ -1387,6 +1409,9 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 			entry.token = incoming.token
 			entry.pins = nil
 			entry.pinIndex = nil
+		}
+		if err := advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -2170,6 +2195,9 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming *resourceKindBacking, 
 			view.logicalObligationCount += nextEntry.logicalObligations.count - existing.logicalObligations.count
 			replacedLogicalCommitments = true
 			nextEntry.frontier = maxFrontier(nextEntry.frontier, child.frontier)
+			if preflightErr = advanceTokenIdentityPinFrontier(nextEntry.token, nextEntry.frontier.Bytes); preflightErr != nil {
+				return false
+			}
 			mergeStableResourceDescriptorIdentity(&nextEntry, child.logicalLane, child.resourceID, child.diagnosticPath)
 			for field := range child.reachability.reachableFields() {
 				nextEntry.reachability.addReachable(field)
@@ -2525,6 +2553,9 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 				lookup.replaceRepresentative(i, existing, incoming.token)
 				entry.pins = nil
 				entry.pinIndex = nil
+			}
+			if err = advanceTokenIdentityPinFrontier(entry.token, entry.frontier.Bytes); err != nil {
+				break
 			}
 			coalesced = true
 			break

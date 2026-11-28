@@ -2102,4 +2102,199 @@ func TestColumnAssetGCTruncateUnpublishedTails5922(t *testing.T) {
 			t.Fatalf("candidate segment was deleted despite interior gap: %v", err)
 		}
 	})
+
+	t.Run("negative_control_inflight_stable_writer_pin_fails_closed", func(t *testing.T) {
+		dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+		d := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = d.Close() }()
+		col := openEventsCollection5922(t, d)
+		if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+			t.Fatalf("Insert e1: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+		if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+			t.Fatalf("initial reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+		}
+		liveEntry := livePlan.SegmentEntries[0]
+		committedSize := liveEntry.Bytes
+
+		view, releaseView, err := col.prepareColumnPhysicalScanSnapshotView()
+		if err != nil {
+			t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+		}
+		cfg := view.FullConfig
+		if releaseView != nil {
+			releaseView()
+		}
+		// Simulate an in-flight writer that appended bytes and holds a live
+		// StableResourceSet (pre-lease / pre-publish) protecting its frontier.
+		captureLease, err := d.AcquireStableResourceCaptureLease()
+		if err != nil {
+			t.Fatalf("AcquireStableResourceCaptureLease: %v", err)
+		}
+		refs, inflightResources, err := AppendColumnPhysicalAssetsWithStableResources(
+			d.ColumnAssetRootDir(),
+			cfg,
+			liveEntry.FileID,
+			[]StableColumnPhysicalAssetAppend{{
+				Payload:    []byte("inflight-unpublished-writer-payload"),
+				Kind:       ColumnAssetKindTCS1PartImage,
+				Generation: livePlan.ActiveManifestGeneration + 1,
+				PartID:     777,
+			}},
+			d.StableResourceIdentityPinRegistry(),
+			captureLease,
+		)
+		captureLease.Release()
+		if err != nil {
+			t.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+		}
+		released := false
+		defer func() {
+			if !released && inflightResources != nil {
+				inflightResources.Release()
+			}
+		}()
+		inflightEnd := refs[0].Offset + refs[0].Length
+
+		candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("candidate-blocked-by-inflight-pin"))
+		candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+		if err != nil {
+			t.Fatalf("columnAssetSegmentPath(candidate): %v", err)
+		}
+
+		// While inflightResources is held, TruncateUnpublishedTails MUST fail
+		// closed without truncating the writer's synced bytes or deleting candidate.
+		blockedStats, blockedErr := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{candidate},
+		})
+		if !errors.Is(blockedErr, ErrColumnAssetReachabilityIncomplete) {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) with live writer pin err=%v want ErrColumnAssetReachabilityIncomplete", blockedErr)
+		}
+		if blockedStats.SegmentsDeleted != 0 {
+			t.Fatalf("GC deleted segments despite live writer pin: %+v", blockedStats)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != inflightEnd {
+			t.Fatalf("live writer bytes were truncated while StableResourceSet pinned: size=%d err=%v want %d", info.Size(), err, inflightEnd)
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			t.Fatalf("candidate segment was deleted despite live writer pin: %v", err)
+		}
+
+		// Once the writer abandons and releases its StableResourceSet, opt-in
+		// tail truncation recovers the tail and deletes the unrelated candidate.
+		inflightResources.Release()
+		released = true
+
+		recoveredStats, recoveredErr := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+			CandidateRefs:            []ColumnAssetRef{candidate},
+		})
+		if recoveredErr != nil {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) after writer pin release: %v (stats=%+v)", recoveredErr, recoveredStats)
+		}
+		if !recoveredStats.Plan.Complete || recoveredStats.Plan.Segments.Unknown != 0 || recoveredStats.SegmentsDeleted != 1 {
+			t.Fatalf("post-release GC stats=%+v plan=%+v want complete plan deleting candidate", recoveredStats, recoveredStats.Plan.Segments)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != committedSize {
+			t.Fatalf("post-release segment size=%d err=%v want committedSize=%d", info.Size(), err, committedSize)
+		}
+		if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("candidate segment stat err=%v want ErrNotExist", err)
+		}
+	})
+
+	t.Run("negative_control_older_pinned_snapshot_fails_closed", func(t *testing.T) {
+		dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+		d := openCollectionCommandWALDB(t, dir)
+		defer func() { _ = d.Close() }()
+		col := openEventsCollection5922(t, d)
+		if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+			t.Fatalf("Insert e1: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(1): %v", err)
+		}
+		// Hold an older reader snapshot before a later write advances PlanCommitSeq.
+		olderSnap := d.AcquireSnapshot()
+		if olderSnap == nil {
+			t.Fatal("AcquireSnapshot returned nil")
+		}
+		snapClosed := false
+		defer func() {
+			if !snapClosed {
+				_ = olderSnap.Close()
+			}
+		}()
+
+		if _, err := col.Insert([]byte("e2"), []byte(`{"time_us":2,"kind":"post","did":"d2"}`)); err != nil {
+			t.Fatalf("Insert e2: %v", err)
+		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(2): %v", err)
+		}
+		livePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{SegmentDetails: true})
+		if err != nil || !livePlan.Complete || len(livePlan.SegmentEntries) == 0 {
+			t.Fatalf("reachability plan err=%v complete=%t entries=%+v", err, livePlan.Complete, livePlan.SegmentEntries)
+		}
+		liveEntry := livePlan.SegmentEntries[0]
+		committedSize := liveEntry.Bytes
+
+		// Append trailing bytes that look unpublished to the active manifest while
+		// olderSnap is pinned below PlanCommitSeq.
+		tailBytes := bytes.Repeat([]byte{0x77}, 128)
+		f, err := os.OpenFile(liveEntry.Path, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatalf("OpenFile: %v", err)
+		}
+		if _, err := f.Write(tailBytes); err != nil {
+			_ = f.Close()
+			t.Fatalf("Write tail: %v", err)
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			t.Fatalf("Sync tail: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close tail: %v", err)
+		}
+		withTailSize := committedSize + int64(len(tailBytes))
+
+		// While olderSnap is pinned, TruncateUnpublishedTails MUST fail closed
+		// without truncating the segment.
+		blockedStats, blockedErr := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+		})
+		if !errors.Is(blockedErr, ErrColumnAssetReachabilityIncomplete) {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) with older pinned snapshot err=%v want ErrColumnAssetReachabilityIncomplete", blockedErr)
+		}
+		if blockedStats.SegmentsDeleted != 0 {
+			t.Fatalf("GC deleted segments despite older pinned snapshot: %+v", blockedStats)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != withTailSize {
+			t.Fatalf("segment was truncated while older snapshot pinned: size=%d err=%v want %d", info.Size(), err, withTailSize)
+		}
+
+		// After releasing the older snapshot, opt-in tail truncation succeeds.
+		if err := olderSnap.Close(); err != nil {
+			t.Fatalf("olderSnap.Close: %v", err)
+		}
+		snapClosed = true
+		recoveredStats, recoveredErr := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			TruncateUnpublishedTails: true,
+		})
+		if recoveredErr != nil {
+			t.Fatalf("ColumnAssetGC(TruncateUnpublishedTails=true) after snapshot release: %v", recoveredErr)
+		}
+		if !recoveredStats.Plan.Complete || recoveredStats.Plan.Segments.Unknown != 0 {
+			t.Fatalf("post-snapshot-release stats=%+v plan=%+v want complete clean plan", recoveredStats, recoveredStats.Plan.Segments)
+		}
+		if info, err := os.Stat(liveEntry.Path); err != nil || info.Size() != committedSize {
+			t.Fatalf("post-snapshot-release segment size=%d err=%v want %d", info.Size(), err, committedSize)
+		}
+	})
 }

@@ -614,6 +614,19 @@ func (c *Collection) truncateUnpublishedColumnAssetTails(
 			return false, nil
 		}
 	}
+	// Never truncate trailing bytes while an older reader snapshot is pinned
+	// (or in-flight acquiring an older view) below PlanCommitSeq: superseded
+	// refs on a live segment may still be read by that older snapshot without
+	// appearing in the active manifest. This check runs before
+	// CaptureRecoverableRootSet because CaptureRecoverableRootSet itself
+	// registers a reader-capable pin at the oldest recoverable durable root;
+	// once no older reader pin exists or is in flight at PlanCommitSeq,
+	// monotonic commitSeq prevents any future AcquireSnapshot from observing a
+	// catalog older than PlanCommitSeq, while recoverableRoots plus
+	// maxRecoverableEndByFile protects every durable fallback root.
+	if plan.PlanCommitSeq == 0 || c.columnAssetReachabilityOlderSnapshotPinned(plan.PlanCommitSeq) {
+		return false, nil
+	}
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return false, err
 	}
@@ -660,13 +673,18 @@ func (c *Collection) truncateUnpublishedColumnAssetTails(
 		return nil
 	}
 
+	truncatedAny := false
 	for _, entry := range unknowns {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
 		if err := truncateOneUnpublishedColumnAssetTail(namespace.SegmentDir, entry, registry, validatePlanCurrent); err != nil {
+			if errors.Is(err, rootpublication.ErrResourcePinned) && !truncatedAny {
+				return false, nil
+			}
 			return false, err
 		}
+		truncatedAny = true
 	}
 	return true, nil
 }
@@ -711,6 +729,17 @@ func truncateOneUnpublishedColumnAssetTail(
 	if !rootpublication.SamePhysicalIdentity(childID, entry.plannedChildIdentity) {
 		return fmt.Errorf("%w: candidate rebound for file_id=%d", ErrColumnAssetGCPlanStale, entry.FileID)
 	}
+	truncateNamespace := filepath.ToSlash(filepath.Join(filepath.Clean(segmentDir), name))
+	truncateLease, err := registry.BeginTruncateAt(childID, truncateNamespace, uint64(entry.tailTruncateEnd))
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			truncateLease.Abort()
+		}
+	}()
 	if err := rootpublication.ValidateStableChildLink(parent, child, name); err != nil {
 		return err
 	}
@@ -736,6 +765,8 @@ func truncateOneUnpublishedColumnAssetTail(
 	if err := rootpublication.SyncStableNamespace(parent); err != nil {
 		return err
 	}
+	truncateLease.Commit()
+	committed = true
 	return nil
 }
 
@@ -903,6 +934,34 @@ func (c *Collection) pinRecoverableColumnAssetSegmentsWithMaxEnds(ctx context.Co
 		} else {
 			view, viewErr = c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snapshot, catalog, catalog.meta.Name, catalog.rootID(rootName), cfg, true, columnManifestScanAllSidecars())
 		}
+		var capturedBaseRefs []ColumnAssetRef
+		if viewErr == nil && catalog.typedGraphBase != nil {
+			if opts.MaxManifestRecords > 0 || opts.MaxManifestBytes > 0 {
+				if baseRoot := catalog.typedGraphBase.roots[collectionColumnManifestRootName(catalog.meta.Name)]; baseRoot != 0 {
+					viewErr = validateColumnManifestScanBudget(ctx, snapshot, baseRoot, opts.MaxManifestRecords, opts.MaxManifestBytes)
+				}
+			}
+			if viewErr == nil {
+				requirements, _, reqErr := catalog.typedGraphBase.requirementsAtSnapshot(snapshot)
+				if reqErr != nil {
+					viewErr = reqErr
+				} else if len(requirements.Obligations) != 0 {
+					capturedBaseRefs = make([]ColumnAssetRef, 0, len(requirements.Obligations))
+					for _, obligation := range requirements.Obligations {
+						capturedBaseRefs = append(capturedBaseRefs, ColumnAssetRef{
+							Kind:       ColumnAssetKind(obligation.Kind),
+							Namespace:  obligation.Namespace,
+							Generation: obligation.Generation,
+							PartID:     obligation.PartID,
+							FileID:     uint32(obligation.FileID),
+							Offset:     obligation.Offset,
+							Length:     obligation.Length,
+							Checksum:   obligation.Checksum,
+						})
+					}
+				}
+			}
+		}
 		closeErr := snapshot.Close()
 		if viewErr != nil {
 			return nil, fmt.Errorf("collections: capture recoverable column assets at commit_seq=%d: %w", root.CommitSeq, viewErr)
@@ -933,6 +992,9 @@ func (c *Collection) pinRecoverableColumnAssetSegmentsWithMaxEnds(ctx context.Co
 			}
 		}
 		if err := pinRefs(columnPhysicalScanSnapshotViewAssetRefs(view)); err != nil {
+			return nil, err
+		}
+		if err := pinRefs(capturedBaseRefs); err != nil {
 			return nil, err
 		}
 	}

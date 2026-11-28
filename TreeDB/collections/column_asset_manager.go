@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -1814,7 +1815,7 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 		return nil, errors.Join(err, abort())
 	}
 	appender.stableConstructionObserved = true
-	appender.stableConstructionPin, err = appender.stableRegistry.Pin(appender.stableChildIdentity)
+	appender.stableConstructionPin, err = appender.stableRegistry.PinWithFrontier(appender.stableChildIdentity, math.MaxUint64)
 	if err != nil {
 		return nil, errors.Join(err, abort())
 	}

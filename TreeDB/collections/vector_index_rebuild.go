@@ -351,7 +351,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwnerOnce(name str
 	var postUnlockCleanups []func() error
 	defer func() {
 		for i := len(postUnlockCleanups) - 1; i >= 0; i-- {
-			if cleanupErr := postUnlockCleanups[i](); cleanupErr != nil {
+			if cleanupErr := postUnlockCleanups[i](); cleanupErr != nil && err != nil {
 				err = errors.Join(err, cleanupErr)
 			}
 		}

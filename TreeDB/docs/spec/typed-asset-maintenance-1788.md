@@ -300,21 +300,28 @@ and requires EVERY `Unknown` segment in the plan to satisfy all preconditions be
 any file is mutated:
 
 - canonical regular `.tca` segment (`FileID != 0` with exact captured `(parentIdentity, childIdentity)`);
+- no older reader snapshot pinned below `plan.PlanCommitSeq`;
 - not owned by an active writer and not logically quarantined;
 - `maxRefEnd > 0 && maxRefEnd < segment.bytes` with zero interior gaps across
-  `[0..maxRefEnd)` (after deterministic zero-padding) and zero recoverable-root or
-  replay refs extending past `maxRefEnd`.
+  `[0..maxRefEnd)` (after deterministic zero-padding) and zero recoverable-root,
+  historical captured-base, or replay refs extending past `maxRefEnd`;
+- no active `IdentityPinRegistry` frontier pin protecting bytes past `maxRefEnd`
+  (enforced atomically by `IdentityPinRegistry.BeginTruncateAt(..., maxRefEnd)`,
+  blocking truncation while any live `StableResourceSet` or active segment
+  appender pins bytes beyond `maxRefEnd`).
 
-Under `withVectorPartitionStorageMutationV1`, `CaptureRecoverableRootSet`, recoverable
-segment pinning, and the per-segment write lock, each eligible segment revalidates its
-recoverable root closure, committed root witness, exact `(parentIdentity, childIdentity)`,
-linked child authority, and exact `fileSize == segment.bytes` via an opened file
-descriptor before fd-based `ftruncate(fd, maxRefEnd)`, file sync, and parent directory
-sync. `ColumnAssetGC` then re-plans reachability from scratch and runs normal
-fail-closed whole-segment deletion. Any non-eligible unknown segment (such as a
-directory, symlink, interior mid-segment gap, active quarantine/owner, or recoverable
-ref beyond `maxRefEnd`) still fails closed with `ErrColumnAssetReachabilityIncomplete`
-and mutates nothing.
+Under `withVectorPartitionStorageMutationV1`, the pre-capture older-snapshot fence,
+`CaptureRecoverableRootSet`, recoverable segment pinning, the per-segment write lock,
+and `IdentityPinRegistry.BeginTruncateAt`, each eligible segment revalidates its
+recoverable root closure, committed root witness, exact `(parentIdentity,
+childIdentity)`, linked child authority, and exact `fileSize == segment.bytes` via an
+opened file descriptor before fd-based `ftruncate(fd, maxRefEnd)`, file sync, and
+parent directory sync. `ColumnAssetGC` then re-plans reachability from scratch and
+runs normal fail-closed whole-segment deletion. Any non-eligible unknown segment (such
+as a directory, symlink, interior mid-segment gap, active quarantine/owner, active
+in-flight writer frontier pin, older pinned reader snapshot, or recoverable ref beyond
+`maxRefEnd`) still fails closed with `ErrColumnAssetReachabilityIncomplete` and
+mutates nothing.
 
 `ColumnAssetRewrite` may copy protected manifest refs out of complete mixed
 segments and publish a remapped manifest. It skips any mixed segment that also

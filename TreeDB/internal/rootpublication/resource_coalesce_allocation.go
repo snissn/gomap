@@ -577,6 +577,9 @@ func newOwnedResourceEntryHistoryWithScope(left, right *stableResourceEntry, tok
 			return fail(err)
 		}
 		out.frontierValue = entry.frontier
+		if err := advanceTokenIdentityPinFrontier(token, entry.frontier.Bytes); err != nil {
+			return fail(err)
+		}
 	} else {
 		entry.frontier = token.frontier
 	}

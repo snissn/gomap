@@ -420,3 +420,85 @@ func BenchmarkStableResourceTokenConstructionWithIdentityPinRegistry(b *testing.
 		token.Release()
 	}
 }
+
+func TestIdentityPinRegistryFrontierPinAndTruncateLease5922(t *testing.T) {
+	registry := NewIdentityPinRegistry()
+	identity := testStableIdentity(77)
+	if err := registry.Observe(identity); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	defer func() {
+		if err := registry.Unobserve(identity); err != nil {
+			t.Fatalf("Unobserve: %v", err)
+		}
+		if got := registry.ActiveIdentities(); got != 0 {
+			t.Fatalf("active identities after unobserve = %d, want 0", got)
+		}
+	}()
+
+	// Pin with frontier 500 blocks truncation below 500, allows truncation at >= 500.
+	pin1, err := registry.PinWithFrontier(identity, 500)
+	if err != nil {
+		t.Fatalf("PinWithFrontier(500): %v", err)
+	}
+	const ns = "column_assets/events/segment-000001.tca"
+	if _, err := registry.BeginTruncateAt(identity, ns, 499); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("BeginTruncateAt(499) with pin@500 err=%v, want ErrResourcePinned", err)
+	}
+	lease, err := registry.BeginTruncateAt(identity, ns, 500)
+	if err != nil {
+		t.Fatalf("BeginTruncateAt(500) with pin@500: %v", err)
+	}
+	// While truncating at 500:
+	// - concurrent PinWithFrontier > 500 is rejected
+	if _, err := registry.PinWithFrontier(identity, 501); !errors.Is(err, ErrResourceDeletionInProgress) {
+		t.Fatalf("PinWithFrontier(501) during truncate@500 err=%v, want ErrResourceDeletionInProgress", err)
+	}
+	// - AdvanceFrontier > 500 is rejected
+	if err := pin1.AdvanceFrontier(501); !errors.Is(err, ErrResourceDeletionInProgress) {
+		t.Fatalf("AdvanceFrontier(501) during truncate@500 err=%v, want ErrResourceDeletionInProgress", err)
+	}
+	// - concurrent BeginTruncateAt on same identity/namespace is rejected
+	if _, err := registry.BeginTruncateAt(identity, ns, 500); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("nested BeginTruncateAt err=%v, want ErrResourcePinned", err)
+	}
+	// - concurrent PinWithFrontier <= 500 is allowed
+	pinLow, err := registry.PinWithFrontier(identity, 400)
+	if err != nil {
+		t.Fatalf("PinWithFrontier(400) during truncate@500: %v", err)
+	}
+	// Commit leaves identity live and un-retired.
+	lease.Commit()
+	if registry.IsRetired(identity) {
+		t.Fatal("BeginTruncateAt Commit unexpectedly retired identity")
+	}
+
+	// Advancing pinLow past 500 succeeds after truncate commits and blocks truncation at 600.
+	if err := pinLow.AdvanceFrontier(700); err != nil {
+		t.Fatalf("AdvanceFrontier(700): %v", err)
+	}
+	cloned, err := pinLow.clone()
+	if err != nil {
+		t.Fatalf("clone pin@700: %v", err)
+	}
+	if _, err := registry.BeginTruncateAt(identity, ns, 650); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("BeginTruncateAt(650) with pin@700 err=%v, want ErrResourcePinned", err)
+	}
+	pinLow.Release()
+	// Cloned pin must still hold frontier 700 until released!
+	if _, err := registry.BeginTruncateAt(identity, ns, 650); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("BeginTruncateAt(650) with cloned pin@700 err=%v, want ErrResourcePinned", err)
+	}
+	cloned.Release()
+
+	// Now only pin1@500 remains; truncating at 500 succeeds and Abort releases cleanly.
+	lease2, err := registry.BeginTruncateAt(identity, ns, 500)
+	if err != nil {
+		t.Fatalf("BeginTruncateAt(500) after releasing 700 pins: %v", err)
+	}
+	lease2.Abort()
+	pin1.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("active pins after releasing all = %d, want 0", got)
+	}
+}
