@@ -453,8 +453,10 @@ func (db *DB) SetDictCallbacks(
 }
 
 // AppendRawSystemValueLog appends an uncompressed, non-dictionary-encoded
-// (dictID=0, templateID=0) payload to maindb's dedicated system value-log lane
-// and returns its ValuePtr for atomic inclusion in a subsequent ApplySystemOps.
+// (dictID=0, templateID=0) payload to maindb's dedicated system value-log lane,
+// protects the returned ValuePtr from concurrent ValueLogGC until a subsequent
+// ApplySystemOps (or ReleaseValueLogValues on abandonment), and returns it for
+// atomic inclusion in SystemRootPageID.
 func (db *DB) AppendRawSystemValueLog(rid uint64, val []byte) (page.ValuePtr, error) {
 	if db == nil {
 		return page.ValuePtr{}, ErrClosed
@@ -465,6 +467,8 @@ func (db *DB) AppendRawSystemValueLog(rid uint64, val []byte) (page.ValuePtr, er
 	if db.readOnly {
 		return page.ValuePtr{}, ErrReadOnly
 	}
+	db.publishPrepareMu.RLock()
+	defer db.publishPrepareMu.RUnlock()
 	db.systemVLogMu.Lock()
 	defer db.systemVLogMu.Unlock()
 	if db.closing.Load() {
@@ -486,6 +490,7 @@ func (db *DB) AppendRawSystemValueLog(rid uint64, val []byte) (page.ValuePtr, er
 	if err := writer.Flush(); err != nil {
 		return page.ValuePtr{}, err
 	}
+	db.protectPendingValueLogAppendPtrs([]page.ValuePtr{ptr})
 	return ptr, nil
 }
 
@@ -636,6 +641,20 @@ func (db *DB) systemRootMutationFenceFn() func() (func() error, error) {
 	return begin
 }
 
+func collectPendingSystemValueLogPtrCounts(ops []SystemKVOp) map[page.ValuePtr]int64 {
+	var counts map[page.ValuePtr]int64
+	for _, op := range ops {
+		if op.Delete || !op.IsPointer || op.ValuePtr.FileID == 0 || !page.IsValueLogFileID(op.ValuePtr.FileID) {
+			continue
+		}
+		if counts == nil {
+			counts = make(map[page.ValuePtr]int64, 1)
+		}
+		counts[op.ValuePtr]++
+	}
+	return counts
+}
+
 // ApplySystemOps atomically applies a batch of inline, pointer, or tombstone
 // mutations to SystemRootPageID while preserving UserRootPageID and
 // AppliedCommandLSN. System-tree leaf placement follows the DB's uniform
@@ -644,6 +663,10 @@ func (db *DB) systemRootMutationFenceFn() func() (func() error, error) {
 func (db *DB) ApplySystemOps(ops []SystemKVOp, sync bool) error {
 	if db == nil {
 		return ErrClosed
+	}
+	pendingPtrs := collectPendingSystemValueLogPtrCounts(ops)
+	if len(pendingPtrs) > 0 {
+		defer db.releasePendingValueLogAppendPtrCounts(pendingPtrs)
 	}
 	if db.closing.Load() {
 		return ErrClosed

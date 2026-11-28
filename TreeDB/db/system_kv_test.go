@@ -487,3 +487,137 @@ func TestSystemDict_CompactRewriteWriter_SystemLeafNeverUsesSelfDict(t *testing.
 		t.Fatalf("system dict mismatch after initSystemZipper publication")
 	}
 }
+
+func TestSystemDict_PendingPointerProtectedAcrossValueLogGC(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:       dir,
+		ChunkSize: 64 << 10,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
+
+	// Seed a first pointer-backed dictionary and rewrite it off the original
+	// system value-log segment so that segment is no longer referenced by any
+	// recoverable root.
+	firstPayload := bytes.Repeat([]byte("first-pending-pin-system-dict|"), 320)
+	firstSum := sha256.Sum256(firstPayload)
+	firstID := binary.BigEndian.Uint64(firstSum[:8])
+	firstPtr, err := d.AppendRawSystemValueLog(0, firstPayload)
+	if err != nil {
+		t.Fatalf("AppendRawSystemValueLog(first): %v", err)
+	}
+	if err := d.ApplySystemOps([]SystemKVOp{{
+		Key:       SystemDictBytesKey(firstID),
+		ValuePtr:  firstPtr,
+		IsPointer: true,
+	}}, true); err != nil {
+		t.Fatalf("ApplySystemOps(first): %v", err)
+	}
+	if _, err := d.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{firstPtr.FileID},
+		BatchSize:     8,
+		SyncEachBatch: true,
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline(first): %v", err)
+	}
+	// Advance recoverable roots so no alternate root still pins firstPtr.FileID.
+	for i := 0; i < 3; i++ {
+		if err := d.SetSync([]byte(fmt.Sprintf("advance-%d", i)), []byte("v")); err != nil {
+			t.Fatalf("SetSync(advance-%d): %v", i, err)
+		}
+	}
+	firstAfterEntry, found, err := d.GetSystemEntry(SystemDictBytesKey(firstID))
+	if err != nil || !found {
+		t.Fatalf("GetSystemEntry(first after rewrite): found=%v err=%v", found, err)
+	}
+	if firstAfterEntry.ValuePtr.FileID == firstPtr.FileID {
+		t.Fatalf("expected rewrite to relocate first dict off %d", firstPtr.FileID)
+	}
+	firstRewrittenPath := d.valueLogManager.SegmentPath(firstAfterEntry.ValuePtr.FileID)
+
+	// Append a second raw system payload while the original system writer is
+	// still registered, then run protected-path ValueLogGC BEFORE publishing the
+	// pointer. ProtectedPaths disables lane-tip active exemptions so only the
+	// pending append pin keeps secondPtr.FileID alive.
+	secondPayload := bytes.Repeat([]byte("second-pending-pin-system-dict|"), 320)
+	secondSum := sha256.Sum256(secondPayload)
+	secondID := binary.BigEndian.Uint64(secondSum[:8])
+	secondPtr, err := d.AppendRawSystemValueLog(0, secondPayload)
+	if err != nil {
+		t.Fatalf("AppendRawSystemValueLog(second): %v", err)
+	}
+	if secondPtr.FileID != firstPtr.FileID {
+		t.Fatalf("expected second append to reuse still-registered system segment %d, got %d", firstPtr.FileID, secondPtr.FileID)
+	}
+	gcDuringPending, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ProtectedPaths: []string{firstRewrittenPath},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC(while pending): %v", err)
+	}
+	if gcDuringPending.SegmentsDeleted != 0 || gcDuringPending.SegmentsActive == 0 {
+		t.Fatalf("expected pending system pointer to keep segment %d active across GC, stats=%+v", secondPtr.FileID, gcDuringPending)
+	}
+	// Publishing secondPtr must succeed because the pending append pin kept its
+	// segment alive across GC.
+	if err := d.ApplySystemOps([]SystemKVOp{{
+		Key:       SystemDictBytesKey(secondID),
+		ValuePtr:  secondPtr,
+		IsPointer: true,
+	}}, true); err != nil {
+		t.Fatalf("ApplySystemOps(second after GC): %v", err)
+	}
+
+	// Verify the pin was released after publication: once secondPtr is rewritten
+	// onto another segment and recoverable roots advance, protected-path GC must
+	// reclaim secondPtr.FileID.
+	if _, err := d.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{secondPtr.FileID},
+		BatchSize:     8,
+		SyncEachBatch: true,
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline(second): %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := d.SetSync([]byte(fmt.Sprintf("advance-post-%d", i)), []byte("v")); err != nil {
+			t.Fatalf("SetSync(advance-post-%d): %v", i, err)
+		}
+	}
+	secondAfterEntry, found, err := d.GetSystemEntry(SystemDictBytesKey(secondID))
+	if err != nil || !found {
+		t.Fatalf("GetSystemEntry(second after rewrite): found=%v err=%v", found, err)
+	}
+	secondRewrittenPath := d.valueLogManager.SegmentPath(secondAfterEntry.ValuePtr.FileID)
+	gcStats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ProtectedPaths: []string{firstRewrittenPath, secondRewrittenPath},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC(reclaim after publish): %v", err)
+	}
+	if gcStats.SegmentsDeleted == 0 {
+		t.Fatalf("expected GC to reclaim unreferenced segment %d once pending pin was released, stats=%+v", secondPtr.FileID, gcStats)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	got, err := reopen.LookupSystemDictBytes(secondID)
+	if err != nil || !bytes.Equal(got, secondPayload) {
+		t.Fatalf("reopen LookupSystemDictBytes(second): len=%d want=%d err=%v", len(got), len(secondPayload), err)
+	}
+}
