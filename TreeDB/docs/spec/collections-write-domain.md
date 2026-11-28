@@ -543,12 +543,25 @@ Graph construction retains mutation ownership and the pinned source, but does
 not hold the database-wide publication guard. Before final publication, rebuild
 releases mutation, drains the command prefix, and reacquires publication then
 mutation using the same nonblocking protocol. It revalidates all collection
-authority roots, metadata and captured typed-base identity before appending a
-rebuild frame. An intervening collection change rejects the candidate; unrelated
-raw or sibling-collection publications may proceed. No automatic rebuild retry
-is implied. Existing staged publishers inherit raw/teardown ownership instead
-of recursively acquiring those guards or invoking barriers with mutation held.
-Replay retains its existing assigned-LSN path and does not run public barriers.
+authority roots (excluding text-index roots, which column-graph rebuild neither
+reads, writes, nor aliases), metadata, and captured typed-base identity before
+appending a rebuild frame. An intervening logical collection change rejects the
+candidate without automatic retry; unrelated raw, sibling-collection, or
+text-index physical root rewrites may proceed, and catalog caches refresh from
+the post-commit snapshot whenever any commit intervened before `writeMu`.
+
+On the public CommandWAL rebuild path (excluding replay, staged-raw, and
+external-owner callers), a physical-only root page rewrite (such as online
+value-log rewrite) that leaves collection metadata unchanged may automatically
+retry up to a bounded cap (`3` attempts total) only after exact-identity
+cleanup of any unpublished owned segments succeeds. Each retry carries forward
+the initial attempt's logical collection metadata witness and fails closed with
+`ErrConcurrentMutation` before building or appending if any logical document
+write or DDL change intervened, or when retry attempts are exhausted. Accepted,
+ambiguous, or cleanup-failed publications never retry. Existing staged
+publishers inherit raw/teardown ownership instead of recursively acquiring
+those guards or invoking barriers with mutation held. Replay retains its
+existing assigned-LSN path and does not run public barriers.
 
 This ordering applies to ordinary, normalized, empty/no-op and native rebuild
 publication. Checkpoint may retain a selected write domain whose pending state

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -13,6 +14,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
+
+var typedGraphFoldBeforePublishTestHook struct {
+	sync.RWMutex
+	hook func() error
+}
+
+func setTypedGraphFoldBeforePublishTestHook(hook func() error) func() {
+	typedGraphFoldBeforePublishTestHook.Lock()
+	previous := typedGraphFoldBeforePublishTestHook.hook
+	typedGraphFoldBeforePublishTestHook.hook = hook
+	typedGraphFoldBeforePublishTestHook.Unlock()
+	return func() {
+		typedGraphFoldBeforePublishTestHook.Lock()
+		typedGraphFoldBeforePublishTestHook.hook = previous
+		typedGraphFoldBeforePublishTestHook.Unlock()
+	}
+}
+
+func runTypedGraphFoldBeforePublishTestHook() error {
+	typedGraphFoldBeforePublishTestHook.RLock()
+	hook := typedGraphFoldBeforePublishTestHook.hook
+	typedGraphFoldBeforePublishTestHook.RUnlock()
+	if hook != nil {
+		return hook()
+	}
+	return nil
+}
 
 // foldTypedGraph is explicit internal maintenance. The callback is an internal
 // observation seam after capture admission is released, not a publication hook.
@@ -529,16 +557,24 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	} else if e := errors.Join(remapped.Error(), remapped.Close()); e != nil {
 		return e
 	}
+	if hookErr := runTypedGraphFoldBeforePublishTestHook(); hookErr != nil {
+		return hookErr
+	}
 	inputs[0].DurableResources = graph.stableResources
 	graph.stableResources = nil
 	var installed *typedGraphBaseAlias
+	var preflightCommitSeq, preflightSystemRoot uint64
 	handedOff = true // publisher owns all iterators and both producer sets
 	publicationStarted := time.Now()
 	system, roots, err := c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewritePlan(), inputs, func() error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
-		return c.validateColumnGraphRebuildSource(latest.catalog, latest.baseCommitSeq, latest.baseSystemRoot)
+		if e := c.validateColumnGraphRebuildSource(latest.catalog, latest.baseCommitSeq, latest.baseSystemRoot); e != nil {
+			return e
+		}
+		preflightCommitSeq, preflightSystemRoot = dbCommitSeqAndSystemRoot(c.db)
+		return nil
 	}, func(roots []uint64) (iterator.UnsafeIterator, error) {
 		if len(roots) != len(inputs) {
 			return nil, ErrVectorIndexSnapshotMismatch
@@ -576,12 +612,42 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 	// Durable publication succeeded, even if the following in-memory install or
 	// later checkpoint/maintenance/warm fails. Never roll this observation back.
 	workstats.Fold.Publications.Add(1)
-	next := cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
-	next.typedGraphBase = installed
 	c.meta = updated
-	c.rememberCatalogAtSystemRoot(system, next)
-	c.noteWriteDomainCatalog(system, next)
+	var next *collectionCatalog
+	if preflightCommitSeq == latest.baseCommitSeq && preflightSystemRoot == latest.baseSystemRoot {
+		next = cloneCatalogWithRootUpdates(latest.catalog, updated, rootNames, roots[currentStart:])
+		next.typedGraphBase = installed
+		c.rememberCatalogAtSystemRoot(system, next)
+		c.noteWriteDomainCatalog(system, next)
+	} else if system != 0 {
+		if postSnap := c.db.AcquireSnapshot(); postSnap != nil {
+			postSystem := snapshotSystemRoot(postSnap)
+			if fresh, loadErr := loadCollectionCatalog(postSnap, updated.Name); loadErr == nil && fresh != nil {
+				sameFoldAuthority := fresh.pager == latest.catalog.pager &&
+					len(fresh.rootOverlays) == 0 &&
+					fresh.typedGraphBase != nil &&
+					(postSystem == system ||
+						(sameCollectionMeta(fresh.meta, updated) &&
+							fresh.rootID(latest.rootName) == roots[currentStart] &&
+							sameCollectionMeta(fresh.typedGraphBase.meta, installed.meta)))
+				if sameFoldAuthority {
+					next = fresh
+					c.rememberCatalog(postSnap, fresh)
+					c.noteWriteDomainCatalog(postSystem, fresh)
+				}
+			}
+			_ = postSnap.Close()
+		}
+	}
 	if nextState != nil {
+		if next == nil {
+			if current := coord.typedPublication.Load(); current != nil {
+				invalid := *current
+				invalid.invalid = true
+				coord.typedPublication.Store(&invalid)
+			}
+			return ErrConcurrentMutation
+		}
 		typedGraphPublicationAfterAcceptedHook.RLock()
 		beforeStateInstall := typedGraphPublicationAfterAcceptedHook.foldBeforeStateInstall
 		typedGraphPublicationAfterAcceptedHook.RUnlock()
@@ -589,7 +655,11 @@ func (c *Collection) installTypedGraphFold(ctx context.Context, captured columnS
 			beforeStateInstall(c)
 		}
 		nextState.catalog = next
-		baseCatalog := newCollectionCatalogWithOverlays(installed.meta, installed.roots, nil)
+		baseAlias := installed
+		if next.typedGraphBase != nil {
+			baseAlias = next.typedGraphBase
+		}
+		baseCatalog := newCollectionCatalogWithOverlays(baseAlias.meta, baseAlias.roots, nil)
 		baseCatalog.pager = next.pager
 		nextState.servingBase.view.Catalog = baseCatalog
 		nextState.servingBase.materializerView.Catalog = baseCatalog
