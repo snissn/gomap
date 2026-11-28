@@ -68,6 +68,10 @@ func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, 
 			return res, ErrCorrupt
 		}
 		flags := hdr[5]
+		if flags&^recordFlagGrouped != 0 {
+			return res, ErrCorrupt
+		}
+		rid := binary.LittleEndian.Uint64(hdr[8:16])
 		valueLenU32 := binary.LittleEndian.Uint32(hdr[16:20])
 		if recordSizeExceedsMax(valueLenU32) {
 			return res, ErrRecordTooLarge
@@ -80,6 +84,9 @@ func scanSegmentDictIDsSeek(f *os.File, fileSize int64) (SegmentCompressionIDs, 
 		}
 
 		if flags&recordFlagGrouped == 0 {
+			if rid == 0 {
+				return res, ErrCorrupt
+			}
 			if valueLen > 0 {
 				if _, err := f.Seek(valueLen, io.SeekCurrent); err != nil {
 					return res, err
@@ -141,6 +148,10 @@ func scanSegmentDictAndTemplateIDs(f *os.File, _ uint32, dictLookup DictLookup) 
 			return res, ErrCorrupt
 		}
 		flags := hdr[5]
+		if flags&^recordFlagGrouped != 0 {
+			return res, ErrCorrupt
+		}
+		rid := binary.LittleEndian.Uint64(hdr[8:16])
 		valueLenU32 := binary.LittleEndian.Uint32(hdr[16:20])
 		if recordSizeExceedsMax(valueLenU32) {
 			return res, ErrRecordTooLarge
@@ -156,6 +167,9 @@ func scanSegmentDictAndTemplateIDs(f *os.File, _ uint32, dictLookup DictLookup) 
 		}
 
 		if flags&recordFlagGrouped == 0 {
+			if rid == 0 {
+				return res, ErrCorrupt
+			}
 			if templ.IsEncodedPayload(payload) {
 				if tid, err := templ.EncodedPayloadTemplateID(payload); err == nil && tid != 0 {
 					if res.TemplateIDs == nil {

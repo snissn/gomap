@@ -2,7 +2,9 @@ package valuelog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -103,5 +105,22 @@ func TestScanSegmentCompressionIDs_DictAndTemplate(t *testing.T) {
 	}
 	if len(gotFull.TemplateIDs) != 2 {
 		t.Fatalf("full TemplateIDs=%v want 2 entries", gotFull.TemplateIDs)
+	}
+
+	// 3) Corrupting the grouped flag (leaving RID=0) must fail closed in both paths.
+	rawBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	rawBytes[5] &^= recordFlagGrouped
+	corruptPath := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(corruptPath, rawBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := ScanSegmentCompressionIDs(corruptPath, fileID, false, nil); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("seek scan on cleared grouped flag err=%v want ErrCorrupt", err)
+	}
+	if _, err := ScanSegmentCompressionIDs(corruptPath, fileID, true, lookup); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("full scan on cleared grouped flag err=%v want ErrCorrupt", err)
 	}
 }

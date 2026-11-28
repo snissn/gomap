@@ -304,3 +304,23 @@ func TestSystemMetadataAudit_ProtectsStagedAndLeafVlogDict(t *testing.T) {
 		t.Fatalf("expected 1 leaf_vlog segment scanned, got %d", rep.SegmentsScannedLeafLog)
 	}
 }
+
+func TestSystemMetadataAudit_RejectsOversizedGraceWindow(t *testing.T) {
+	dir := t.TempDir()
+	d, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if _, err := d.SystemMetadataAudit(context.Background(), db.SystemMetadataAuditOptions{
+		KeepRecentPublishedDicts: db.MaxKeepRecentPublishedSystemMetaIDs + 1,
+	}); err == nil {
+		t.Fatalf("expected error for oversized KeepRecentPublishedDicts")
+	}
+	if _, err := d.SystemMetadataAudit(context.Background(), db.SystemMetadataAuditOptions{
+		KeepRecentPublishedTemplates: db.MaxKeepRecentPublishedSystemMetaIDs + 1,
+	}); err == nil {
+		t.Fatalf("expected error for oversized KeepRecentPublishedTemplates")
+	}
+}

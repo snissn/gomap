@@ -16,7 +16,9 @@ import (
 const (
 	defaultKeepRecentPublishedDicts     = 2
 	defaultKeepRecentPublishedTemplates = 16
-	maxRecentPublishedSystemMetaIDs     = 64
+	// MaxKeepRecentPublishedSystemMetaIDs is the maximum session-recent grace
+	// window supported by SystemMetadataAuditOptions.
+	MaxKeepRecentPublishedSystemMetaIDs = 64
 	maxSystemMetaSegIDCacheEntries      = 4096
 )
 
@@ -55,10 +57,12 @@ type SystemMetadataAuditOptions struct {
 	// KeepRecentPublishedDicts retains the newest N dictionary IDs published
 	// during the current process session as an online-writer grace window.
 	// 0 uses the default (2); negative disables session-recent grace.
+	// Values above MaxKeepRecentPublishedSystemMetaIDs (64) are rejected.
 	KeepRecentPublishedDicts int
 	// KeepRecentPublishedTemplates retains the newest N template IDs published
 	// during the current process session as an online-writer grace window.
 	// 0 uses the default (16); negative disables session-recent grace.
+	// Values above MaxKeepRecentPublishedSystemMetaIDs (64) are rejected.
 	KeepRecentPublishedTemplates int
 	// ProtectedDictIDs are additional caller-pinned dictionary IDs (for example
 	// active writer generations held in memory by caching.DB).
@@ -171,10 +175,10 @@ func (db *DB) recordRecentSystemMetadataIDs(ops []SystemKVOp) {
 	}
 	db.recentSystemMetaMu.Lock()
 	for _, id := range dictIDs {
-		db.recentPublishedDictIDs = appendRecentUniqueID(db.recentPublishedDictIDs, id, maxRecentPublishedSystemMetaIDs)
+		db.recentPublishedDictIDs = appendRecentUniqueID(db.recentPublishedDictIDs, id, MaxKeepRecentPublishedSystemMetaIDs)
 	}
 	for _, id := range tplIDs {
-		db.recentPublishedTemplateIDs = appendRecentUniqueID(db.recentPublishedTemplateIDs, id, maxRecentPublishedSystemMetaIDs)
+		db.recentPublishedTemplateIDs = appendRecentUniqueID(db.recentPublishedTemplateIDs, id, MaxKeepRecentPublishedSystemMetaIDs)
 	}
 	db.recentSystemMetaMu.Unlock()
 }
@@ -534,6 +538,12 @@ type systemMetadataAuditPlan struct {
 func (db *DB) buildSystemMetadataAuditPlanWithMaintenanceLockHeld(ctx context.Context, opts SystemMetadataAuditOptions, requireMaintenanceReady bool) (*systemMetadataAuditPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if opts.KeepRecentPublishedDicts > MaxKeepRecentPublishedSystemMetaIDs {
+		return nil, fmt.Errorf("treedb: KeepRecentPublishedDicts=%d exceeds max supported history %d", opts.KeepRecentPublishedDicts, MaxKeepRecentPublishedSystemMetaIDs)
+	}
+	if opts.KeepRecentPublishedTemplates > MaxKeepRecentPublishedSystemMetaIDs {
+		return nil, fmt.Errorf("treedb: KeepRecentPublishedTemplates=%d exceeds max supported history %d", opts.KeepRecentPublishedTemplates, MaxKeepRecentPublishedSystemMetaIDs)
 	}
 	var (
 		recoverableRoots *RecoverableRootSet
