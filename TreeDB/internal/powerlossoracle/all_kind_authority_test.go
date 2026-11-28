@@ -23,7 +23,6 @@ var allKindProductionDependencies = []struct {
 	{"leaf.outer_raw_ref", ResourceOuterLeaf},
 	{"leaf.outer_packed_ref", ResourceOuterLeaf},
 	{"system.outer_leaf_generation_manifest", ResourceOuterLeaf},
-	{"frame.template_generation", ResourceAuxiliary},
 	{"column.manifest_asset_ref", ResourceAuxiliary},
 	{"column.typed_multipart_ref", ResourceAuxiliary},
 	{"column.typed_value_ref", ResourceAuxiliary},
@@ -60,8 +59,8 @@ func TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants(t *testing.T)
 
 	first, firstCoverage, firstRoot, firstPaths := allKindAuthorityVariantFixture(t)
 	second, secondCoverage, _, _ := allKindAuthorityVariantFixture(t)
-	if firstCoverage.Generated != 48 || secondCoverage.Generated != 48 {
-		t.Fatalf("generated variants first=%d second=%d want 48", firstCoverage.Generated, secondCoverage.Generated)
+	if firstCoverage.Generated != 45 || secondCoverage.Generated != 45 {
+		t.Fatalf("generated variants first=%d second=%d want 45", firstCoverage.Generated, secondCoverage.Generated)
 	}
 	if firstCoverage.ByFamily[VariantSyncedOnly] != 1 ||
 		firstCoverage.ByFamily[VariantTargetMetaOnly] != 1 ||

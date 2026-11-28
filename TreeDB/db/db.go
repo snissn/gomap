@@ -230,6 +230,7 @@ type DB struct {
 	valueLogDictPublishRewriteLeaf func(context.Context, []byte, string, bool) (uint64, error)
 	systemDictCache                sync.Map
 	systemTemplateCache            sync.Map
+	defaultTemplateDecodeOpts      template.DecodeOptions
 	systemVLogMu                   sync.Mutex
 	systemVLogWriter               *valuelog.Writer
 	systemVLogFileID               uint32
@@ -2922,18 +2923,10 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	}
 	vm.SetDictLookup(dictLookup)
 	templateLookup := opts.ValueLog.TemplateLookup
-	if templateLookup == nil {
+	if templateLookup == nil && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateLookup = db.LookupSystemTemplateDef
 	}
-	templateDecodeOpts := opts.ValueLog.TemplateDecodeOptions
-	if templateDecodeOpts == (template.DecodeOptions{}) {
-		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
-		templateDecodeOpts = template.DecodeOptions{
-			MaxGaps:         tcfg.MaxGaps,
-			MaxDecodedBytes: tcfg.MaxDecodedBytes,
-			DefCacheSize:    tcfg.DefCacheSize,
-		}
-	}
+	templateDecodeOpts := normalizeTemplateDecodeOptions(opts.ValueLog)
 	vm.SetTemplateLookup(templateLookup, templateDecodeOpts)
 
 	alloc := freelist.New(p, 0)
@@ -2972,6 +2965,7 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
 		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
 		valueLogDictPublishRewriteLeaf: opts.ValueLog.DictPublishRewriteLeaf,
+		defaultTemplateDecodeOpts:      templateDecodeOpts,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,
@@ -3205,6 +3199,9 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	// Reapply decode hooks without replacing that bounded inventory with a
 	// directory-wide discovery pass.
 	vm.SetDictLookup(dictLookup)
+	if templateLookup == nil && db.hasSystemTemplateDefs(p, vm) {
+		templateLookup = db.LookupSystemTemplateDef
+	}
 	vm.SetTemplateLookup(templateLookup, templateDecodeOpts)
 	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)

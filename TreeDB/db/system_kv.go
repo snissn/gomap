@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	templ "github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -448,6 +449,63 @@ func (db *DB) loadSystemDictBytesUncached(dictID uint64) ([]byte, error) {
 	reader := newValueReader(set)
 	tr := tree.New(idx.pager, reader, sysRoot)
 	return loadFromTree(tr, reader.Read)
+}
+
+var (
+	systemTemplateDefPrefix    = []byte("template/def/")
+	systemTemplateDefPrefixEnd = []byte("template/def0") // '/' + 1 == '0'
+)
+
+func normalizeTemplateDecodeOptions(opts ValueLogOptions) templ.DecodeOptions {
+	decodeOpts := opts.TemplateDecodeOptions
+	if decodeOpts == (templ.DecodeOptions{}) {
+		tcfg := templ.NormalizeConfig(opts.TemplateConfig)
+		decodeOpts = templ.DecodeOptions{
+			MaxGaps:         tcfg.MaxGaps,
+			MaxDecodedBytes: tcfg.MaxDecodedBytes,
+			DefCacheSize:    tcfg.DefCacheSize,
+		}
+	}
+	return decodeOpts
+}
+
+func (db *DB) hasSystemTemplateDefs(p *pager.Pager, vm *valuelog.Manager) bool {
+	if db == nil || p == nil {
+		return false
+	}
+	db.mu.RLock()
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if sysRoot == 0 {
+		return false
+	}
+	var set *valuelog.Set
+	if vm != nil {
+		set = vm.CurrentSetNoRefresh()
+		defer func() {
+			if set != nil {
+				_ = vm.Release(set)
+			}
+		}()
+	}
+	it := tree.New(p, newValueReader(set), sysRoot).Iterator(systemTemplateDefPrefix, systemTemplateDefPrefixEnd)
+	if it == nil {
+		return false
+	}
+	defer func() { _ = it.Close() }()
+	return it.Valid()
+}
+
+// EnsureSystemTemplateLookup wires SystemRootPageID template decoding onto the
+// value-log manager when no explicit TemplateLookup is installed yet.
+func (db *DB) EnsureSystemTemplateLookup() {
+	if db == nil || db.valueLogManager == nil {
+		return
+	}
+	if db.valueLogManager.PreparedReadProfile().HasTemplateLookup {
+		return
+	}
+	db.valueLogManager.SetTemplateLookup(db.LookupSystemTemplateDef, db.defaultTemplateDecodeOpts)
 }
 
 // LookupSystemTemplateDef resolves template definition bytes for templateID
@@ -947,6 +1005,12 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 	if hasPointer {
 		if err := db.RefreshValueLogSet(); err != nil {
 			return post.commitSeq, post.accepted, post.physicallyDurable, err
+		}
+	}
+	for _, op := range sortedOps {
+		if !op.Delete && bytes.HasPrefix(op.Key, systemTemplateDefPrefix) {
+			db.EnsureSystemTemplateLookup()
+			break
 		}
 	}
 	return post.commitSeq, post.accepted, post.physicallyDurable, nil
