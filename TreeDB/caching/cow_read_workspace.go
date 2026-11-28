@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1051,10 +1052,17 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 	}
 	if shape.Compressed && !localDictionary && !(localBlock && shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)) {
 		if native {
-			// Spill compressed outer-leaf misses across all bounded physical lanes
-			// (both dictionary and block codecs) so concurrent cold leaf reads reuse
-			// pre-admitted decoder workspaces instead of allocating temporary ones.
-			laneMu, slotReader, ok := c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1))
+			var laneMu *sync.Mutex
+			var slotReader **cowReadWorkspace
+			var ok bool
+			// Multi-lane spillover slots for outer leaves remain reserved for
+			// dictionary-compressed leaves so concurrent cold block-leaf scans
+			// (which populate LeafPageReadCache once) never retain extra leases.
+			if shape.DictID != 0 {
+				laneMu, slotReader, ok = c.tryLockPhysicalLane(c.physicalLaneSeed.Add(1))
+			} else if c.physicalMu.TryLock() {
+				laneMu, slotReader, ok = &c.physicalMu, &c.physicalReader, true
+			}
 			if ok {
 				// A preceding decoder may have admitted this exact inspected leaf
 				// while we raced. Preserve the original policy before copying a hit.

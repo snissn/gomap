@@ -451,6 +451,25 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 	f.scratchMu.Unlock()
 }
 
+// tryReleaseDecodeScratch is the strictly non-blocking counterpart used by
+// peer grouped-frame cache eviction so eviction never waits on a peer file's
+// scratchMu while holding the manager read lock.
+func (f *File) tryReleaseDecodeScratch(buf []byte) {
+	if cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		putDecodeScratch(buf)
+		return
+	}
+	buf = buf[:0]
+	if !f.scratchMu.TryLock() {
+		return
+	}
+	f.stashDecodeScratchLocked(buf)
+	f.scratchMu.Unlock()
+}
+
 func (f *File) resetGroupedFrameCacheLocked() {
 	if f == nil {
 		return

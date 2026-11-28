@@ -342,6 +342,14 @@ func groupedFrameOffsetsEqual(a, b *[MaxFrameK + 1]uint32, k int) bool {
 }
 
 func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
+	c.releaseRawWithMode(raw, pooled, false)
+}
+
+func (c *groupedFrameCache) releaseRawNonBlocking(raw []byte, pooled bool) {
+	c.releaseRawWithMode(raw, pooled, true)
+}
+
+func (c *groupedFrameCache) releaseRawWithMode(raw []byte, pooled, nonBlocking bool) {
 	if c == nil || len(raw) == 0 {
 		return
 	}
@@ -356,7 +364,11 @@ func (c *groupedFrameCache) releaseRaw(raw []byte, pooled bool) {
 			// them to the process pool can displace scratch used by live files.
 			return
 		}
-		c.owner.releaseDecodeScratch(raw)
+		if nonBlocking {
+			c.owner.tryReleaseDecodeScratch(raw)
+		} else {
+			c.owner.releaseDecodeScratch(raw)
+		}
 		return
 	}
 	putDecodeScratch(raw)
@@ -756,7 +768,7 @@ func (c *groupedFrameCache) tryEvictOldestFromShard(shardIdx int) int {
 	slot.cowLimits = COWReadLimits{}
 	slot.mu.Unlock()
 	s.mu.Unlock()
-	c.releaseRaw(raw, pooled)
+	c.releaseRawNonBlocking(raw, pooled)
 	c.evictions.Add(1)
 	return freed
 }
