@@ -2406,7 +2406,6 @@ func compactStorageCommandWALLeafPageLogOptions(dir string) Options {
 		Dir:                        dir,
 		CommandWAL:                 true,
 		Durability:                 DurabilityWALOnRelaxed,
-		DisableSideStores:          true,
 		IndexOuterLeavesInValueLog: true,
 	}
 }

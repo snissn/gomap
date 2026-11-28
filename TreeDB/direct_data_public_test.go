@@ -61,10 +61,10 @@ type directDATASlot struct {
 
 func directDATAReadSlots(t *testing.T, dir string) [2]directDATASlot {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join(dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "index.db.primary")); !os.IsNotExist(err) {
 		t.Fatalf("selected DATA route has PRIMARY file: %v", err)
 	}
-	f, err := os.Open(filepath.Join(dir, "maindb", "index.db"))
+	f, err := os.Open(filepath.Join(dir, "index.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func directDATAObserveCheckpoint(t *testing.T, database *tree.DB, dir string) []
 	var mu sync.Mutex
 	var events []durabilitycut.Event
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Root == filepath.Join(dir, "maindb") && event.Resource == durabilitycut.ResourceMeta &&
+		if event.Root == dir && event.Resource == durabilitycut.ResourceMeta &&
 			(event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.AfterMetaWrite || event.Point == durabilitycut.BeforeMetaSync || event.Point == durabilitycut.AfterMetaSync) {
 			mu.Lock()
 			events = append(events, event)
@@ -170,7 +170,7 @@ func directDATAWriteEpochs(t *testing.T, requireDATA bool) *directDATAEpochs {
 		t.Fatalf("fixture profile activation: %+v", stats)
 	}
 	if requireDATA {
-		if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(opts.Dir, "index.db.primary")); !os.IsNotExist(err) {
 			t.Fatalf("NoWAL public Open selected PRIMARY; DATA required: %v", err)
 		}
 	}
@@ -225,7 +225,7 @@ func TestNoWALActuallyUsesDATASealAndRecovery(t *testing.T) {
 			t.Fatalf("explicit checkpoint %d authority: %+v", epoch+1, events)
 		}
 		for i, event := range events {
-			if event.Point != want[i] || event.Path != filepath.Join(e.opts.Dir, "maindb", "index.db") {
+			if event.Point != want[i] || event.Path != filepath.Join(e.opts.Dir, "index.db") {
 				t.Fatalf("checkpoint %d not DATA authority: %+v", epoch+1, event)
 			}
 			if i < 2 && ((event.Offset != 0 && event.Offset != int64(page.PageSize)) || event.Length != int64(page.PageSize)) {
@@ -286,7 +286,7 @@ func TestDirectDATAOldViewSurvivesFallbackRecovery(t *testing.T) {
 	if err := ro.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(e.opts.Dir, "maindb", "index.db")
+	path := filepath.Join(e.opts.Dir, "index.db")
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +448,7 @@ func TestDATAFactoriesPreserveExplicitAndPersistedPRIMARY(t *testing.T) {
 				if err := database.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := os.Stat(filepath.Join(opts.Dir, "maindb", "index.db.primary")); err != nil {
+				if _, err := os.Stat(filepath.Join(opts.Dir, "index.db.primary")); err != nil {
 					t.Fatal("actual PRIMARY arena", err)
 				}
 				if err := close(); err != nil {

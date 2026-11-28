@@ -928,13 +928,12 @@ func bootstrapFixedPeerVectorTrustedGenesisV1(t testing.TB, config FixedPeerTCPC
 		t.Fatalf("node %s has no local data group", validated.NodeID)
 	}
 	cluster, err := raftcluster.Validate(raftcluster.Config{
-		Dir:               filepath.Join(validated.DataRoot, string(local.ID)),
-		ClusterDir:        validated.RaftRoot,
-		DisableSideStores: true,
-		NodeID:            validated.NodeID,
-		GroupID:           local.ID,
-		Peers:             local.Peers,
-		Features:          local.Features,
+		Dir:        filepath.Join(validated.DataRoot, string(local.ID)),
+		ClusterDir: validated.RaftRoot,
+		NodeID:     validated.NodeID,
+		GroupID:    local.ID,
+		Peers:      local.Peers,
+		Features:   local.Features,
 	})
 	if err != nil {
 		t.Fatalf("validate local data-group layout: %v", err)

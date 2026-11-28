@@ -22,7 +22,6 @@ func TestPrimaryDataParentCoverageV6ModeledCrashCuts(t *testing.T) {
 			dir := t.TempDir()
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 			opts.IndexPrimaryDirectory = true
-			opts.DisableSideStores = true
 			opts.DisableBackgroundPrune = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundIndexVacuumInterval = -1

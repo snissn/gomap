@@ -232,10 +232,10 @@ measure_tsv_row() {
 	local value_vlog
 	total="$(dir_bytes "$db_dir")"
 	total_gzip="$(gzip_dir_bytes "$db_dir")"
-	leaf="$(path_bytes "$db_dir/maindb/leaf_vlog")"
-	leaf_gzip="$(path_gzip_bytes "$db_dir/maindb/leaf_vlog")"
-	index_db="$(path_bytes "$db_dir/maindb/index.db")"
-	value_vlog="$(path_bytes "$db_dir/maindb/value_vlog")"
+	leaf="$(path_bytes "$db_dir/leaf_vlog")"
+	leaf_gzip="$(path_gzip_bytes "$db_dir/leaf_vlog")"
+	index_db="$(path_bytes "$db_dir/index.db")"
+	value_vlog="$(path_bytes "$db_dir/value_vlog")"
 	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$mode" "$indexes" "$phase" "$total" "$total_gzip" "$(ratio "$total" "$total_gzip")" \
 		"$leaf" "$(ratio "$leaf" "$leaf_gzip")" "$index_db" "$value_vlog"

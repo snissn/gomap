@@ -244,7 +244,7 @@ func (r *FixedPeerTCPRuntimeV1) replacementSeedStoreV1(state raftplacement.Repli
 	if err != nil {
 		return nil, "", err
 	}
-	cfg, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(group.ID)), ClusterDir: r.config.RaftRoot, DisableSideStores: true, NodeID: r.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
+	cfg, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(group.ID)), ClusterDir: r.config.RaftRoot, NodeID: r.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
 	if err != nil {
 		return nil, "", err
 	}

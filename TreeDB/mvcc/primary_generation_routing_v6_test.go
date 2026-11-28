@@ -19,7 +19,6 @@ import (
 func primaryReplacementOptions(dir string) treedb.Options {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 	opts.IndexPrimaryDirectory = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.MaxWALBytes = -1

@@ -56,7 +56,7 @@ func readOrdinaryLeafManifest(dir string, entry rootpublication.DependencyManife
 		return nil, fmt.Errorf("invalid immutable dependency for revision %d: %+v", entry.Generation, entry)
 	}
 
-	parentPath := filepath.Join(dir, "maindb", "leaf_vlog")
+	parentPath := filepath.Join(dir, "leaf_vlog")
 	parent, err := os.Open(parentPath)
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func inspectOrdinaryLeafSlots(t *testing.T, backend *backenddb.DB, dir, name str
 			t.Error(err)
 		}
 	}()
-	index, err := os.Open(filepath.Join(dir, "maindb", "index.db"))
+	index, err := os.Open(filepath.Join(dir, "index.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 		t.Fatalf("resumed owner did not publish its initial ordinary leaf: %+v", primed)
 	}
 	primeLane, primeSeq := valuelog.DecodeFileID(primed.pointer.ValueLogFileID())
-	leafDir := filepath.Join(opts.Dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(opts.Dir, "leaf_vlog")
 	priorFiles, err := os.ReadDir(leafDir)
 	if err != nil {
 		t.Fatal(err)

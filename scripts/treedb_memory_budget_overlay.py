@@ -13,16 +13,12 @@ COHORTS = (0, 16, 32, 48, 64)
 def amended(source, frame_mib):
     if frame_mib not in COHORTS or source.count(ANCHOR) != 1:
         raise ValueError("unsupported budget or nonunique manager setup anchor")
-    # Public Open assigns opts.Dir to the main layout before db.Open. Side
-    # stores keep their existing limits; this measures the main-cache split.
-    setup = (
-        '\tif filepath.Base(opts.Dir) == "maindb" {\n'
-        f"\t\tvm.SetGroupedFrameCacheMaxBytes({frame_mib} << 20)\n"
-    )
+    # TreeDB uses a flat single-directory layout with no side stores; apply
+    # the grouped-frame budget directly in db.Open.
+    setup = f"\tvm.SetGroupedFrameCacheMaxBytes({frame_mib} << 20)\n"
     if frame_mib == 0:
         # MaxBytes(0) alone removes the byte bound; Entries(0) disables cache.
-        setup += "\t\tvm.SetGroupedFrameCacheEntries(0)\n"
-    setup += "\t}\n"
+        setup += "\tvm.SetGroupedFrameCacheEntries(0)\n"
     return source.replace(ANCHOR, setup + ANCHOR)
 
 
@@ -54,7 +50,7 @@ def self_check():
     for budget in COHORTS:
         text = amended(source, budget)
         assert text.count(ANCHOR) == 1
-        assert ('filepath.Base(opts.Dir) == "maindb"') in text
+        assert f"SetGroupedFrameCacheMaxBytes({budget} << 20)" in text
         assert ("SetGroupedFrameCacheEntries(0)" in text) == (budget == 0)
     for bad_source, bad_budget in ((source, -1), (source, 1), ("", 64), (source * 2, 64)):
         try:

@@ -115,13 +115,13 @@ func buildRows() []Row {
 	}
 
 	add(active("commitlog.CommandJournal.Frame", "command WAL frame", "mutable command-WAL segment range", "commitlog.CommandJournal.Append", "pinned journal segment identity plus LSN", "complete encoded frame end and checksum", "wal segment (no rename)", "command journal publication adapter", "journal scan validates framing, checksum, and LSN order", "command WAL retention with segment pins"))
-	add(active("dictionary.GlobalID", "value-log dictionary dependency", "in-maindb SystemRootPageID dictionary entries", "value-log compression encoder", "pinned maindb index.db SystemRootPageID (inline chunks or maindb value_vlog raw dictID=0 pointers)", "dictionary definition sha256 plus maindb system-root frontier", "maindb index.db publication namespace", "SystemRootPageID ApplySystemOps (adjacent to maindb root publication)", "in-maindb SystemRootPageID dictionary lookup and decode", "downstream pin-aware dictionary GC inside SystemRootPageID"))
+	add(active("dictionary.GlobalID", "value-log dictionary dependency", "SystemRootPageID dictionary entries", "value-log compression encoder", "pinned index.db SystemRootPageID (inline chunks or value_vlog raw dictID=0 pointers)", "dictionary definition sha256 plus system-root frontier", "index.db publication namespace", "SystemRootPageID ApplySystemOps (adjacent to root publication)", "SystemRootPageID dictionary lookup and decode", "downstream pin-aware dictionary GC inside SystemRootPageID"))
 	add(Row{
-		Field: "template.EncodedPayload.TemplateID", Scope: "value-log template dependency", ResourceClass: "in-maindb SystemRootPageID template entries",
-		Producer: "template.Engine.Encode behind forced-off runtime mode", IdentitySource: "pinned maindb index.db SystemRootPageID (inline chunks or maindb value_vlog raw dictID=0 pointers) plus salt-aware template ID",
-		FrontierOrDigest: "template definition sha256 plus maindb system-root frontier", NamespaceSite: "maindb index.db publication namespace",
-		Registrar:         "SystemRootPageID ApplySystemOps (adjacent to maindb root publication)",
-		RecoveryValidator: "in-maindb SystemRootPageID template lookup, salt-aware definition identity, and definition decode", DeletionOwner: "downstream pin-aware template GC inside SystemRootPageID",
+		Field: "template.EncodedPayload.TemplateID", Scope: "value-log template dependency", ResourceClass: "SystemRootPageID template entries",
+		Producer: "template.Engine.Encode behind forced-off runtime mode", IdentitySource: "pinned index.db SystemRootPageID (inline chunks or value_vlog raw dictID=0 pointers) plus salt-aware template ID",
+		FrontierOrDigest: "template definition sha256 plus system-root frontier", NamespaceSite: "index.db publication namespace",
+		Registrar:         "SystemRootPageID ApplySystemOps (adjacent to root publication)",
+		RecoveryValidator: "SystemRootPageID template lookup, salt-aware definition identity, and definition decode", DeletionOwner: "downstream pin-aware template GC inside SystemRootPageID",
 		ActivationState: ActivationQuarantined, AdjacentIssue: "#3679",
 		ExclusionReason: "public and cached runtime template compression is forced off; offline rewrite cannot activate until rewritten-root publication consumes its complete dependency union",
 	})

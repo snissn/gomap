@@ -7,14 +7,14 @@ TreeDB exposes one primary public engine (`treedb.Open`) with a cached write-bac
 The runtime consists of:
 
 - B+Tree index in `index.db` (mmap pager, copy-on-write commits).
-- Value log (`maindb/value_vlog/value-l*.log`) for out-of-line large values.
-- Optional split leaf log (`maindb/leaf_vlog/value-l*.log`) for outer leaf
+- Value log (`value_vlog/value-l*.log`) for out-of-line large values.
+- Optional split leaf log (`leaf_vlog/value-l*.log`) for outer leaf
   generations.
-- Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay;
+- Commit log / journal (`wal/commit-l*.log`) for cached-mode replay;
   future user-command WAL frames extend this same segment family.
 - Value-log dictionaries and template definitions persisted inside
-  `maindb/index.db` `SystemRootPageID` (inline/2 KiB chunked entries by default,
-  or optional raw `dictID=0` `ValuePtr` records in `maindb/value_vlog/`).
+  `index.db` `SystemRootPageID` (inline/2 KiB chunked entries by default,
+  or optional raw `dictID=0` `ValuePtr` records in `value_vlog/`).
 
 TreeDB's value log is the only value storage path for values.
 
@@ -92,14 +92,14 @@ does not provide this capability.
 
 ## 3. Directory Layout
 
-Public `treedb.Open(opts)` treats `opts.Dir` as a root.
+Public `treedb.Open(opts)` uses a single flat directory at `opts.Dir`:
 
-Default root layout:
-
-- `<root>/maindb/`
+- `<dir>/`
   - `index.db`
   - `index.db.primary` (selected PRIMARY format)
   - `LOCK`
+  - `INIT.LOCK`
+  - `format.json`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
   - `value_vlog/`
@@ -107,14 +107,11 @@ Default root layout:
   - `leaf_vlog/`
     - `value-l<lane>-<seq>.log`
 
-If `DisableSideStores=true`, the main DB is opened directly at `<root>`.
-
 ## 4. Open and Locking Model
 
 ### 4.1 Read-write open
 
-- Backend DB acquires an exclusive lock file at `<maindb>/LOCK`.
-- Side stores (if enabled) acquire their own exclusive lock files.
+- Backend DB acquires an exclusive lock file at `<dir>/LOCK`.
 - Only one read-write process may open a given DB directory.
 
 ### 4.2 Read-only open

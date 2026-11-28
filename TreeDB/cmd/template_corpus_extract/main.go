@@ -241,7 +241,7 @@ func writeManifest(path string, manifest corpusManifest) error {
 }
 
 func main() {
-	appDir := flag.String("app-dir", "", "TreeDB app dir (root with maindb/dictdb/templatedb)")
+	appDir := flag.String("app-dir", "", "TreeDB database dir")
 	outDir := flag.String("out-dir", "", "output directory for extracted corpora")
 	pointerLimit := flag.Int("pointer-limit", 200000, "max pointer-value records to write (0=all)")
 	pointerStride := flag.Int("pointer-stride", 1, "pointer sampling stride")

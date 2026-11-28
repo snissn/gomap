@@ -453,7 +453,6 @@ func indexVacuumM4SetCompactStoragePersistentLogVerdicts(cell *indexVacuumM4Cell
 func indexVacuumM4Options(dir string) Options {
 	return Options{
 		Dir:                           dir,
-		DisableSideStores:             true,
 		ChunkSize:                     64 << 10,
 		KeepRecent:                    1,
 		PreferAppendAlloc:             true,

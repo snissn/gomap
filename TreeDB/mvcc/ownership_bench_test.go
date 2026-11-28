@@ -23,7 +23,6 @@ func ownershipInspector(it *VersionIterator) func() Version {
 func prepareOwnershipFixture(t testing.TB, width, depth int, pointers bool) (*treedb.DB, *Store) {
 	t.Helper()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.ForcePointers = pointers
 	if pointers {

@@ -22,7 +22,7 @@ import (
 )
 
 func mainIndexPath(rootDir string) string {
-	maindb := filepath.Join(rootDir, "maindb", "index.db")
+	maindb := filepath.Join(rootDir, "index.db")
 	if _, err := os.Stat(maindb); err == nil {
 		return maindb
 	}
@@ -564,7 +564,6 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 		valSize  = 100
 	)
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.IndexOuterLeavesInValueLog = true
 	// Disable compression/dict/template so the only value-log reachability
 	// comes from leaf-log child refs (mirrors the original data-loss report).

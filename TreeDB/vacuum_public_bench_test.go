@@ -303,7 +303,7 @@ func publicVacuumComparisonOptions(dir string) Options {
 
 func publicVacuumIndexBytes(tb testing.TB, dir string) int64 {
 	tb.Helper()
-	path := filepath.Join(dir, "maindb", "index.db")
+	path := filepath.Join(dir, "index.db")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		path = filepath.Join(dir, "index.db")
 	}

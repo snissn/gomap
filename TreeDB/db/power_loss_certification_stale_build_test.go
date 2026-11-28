@@ -65,7 +65,6 @@ func runStaleBuildBasePublicReopen(t *testing.T, capsule bool) {
 			IndexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
 		})
 	}
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	backend, closeBackend, err := treedb.OpenBackendWithCachedLeafLog(opts)

@@ -503,11 +503,11 @@ func checkNativeTypedOpsReopened(t *testing.T, database *DB, family string, rows
 
 func checkNativeTypedOpsFrame(t *testing.T, opts Options, lsn uint64, kind commitlog.CommandKind, format commitlog.PayloadFormat, family string, rows []nativeTypedOpsRow, deleted []string) {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

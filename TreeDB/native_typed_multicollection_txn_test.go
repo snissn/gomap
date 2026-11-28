@@ -360,11 +360,11 @@ func checkNativeTypedMultiReopened(t *testing.T, database *DB) {
 
 func checkNativeTypedMultiFrame(t *testing.T, opts Options, cases []nativeTypedMultiCase) {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

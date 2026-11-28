@@ -1049,14 +1049,8 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 func TestRaftSnapshotV1InstallPreservesInMainDBSystemDictAndTemplate(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
-	sourceRoot := filepath.Join(root, "source")
-	sourceDir := filepath.Join(sourceRoot, "maindb")
+	sourceDir := filepath.Join(root, "source")
 	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
-	cleanup, err := wireRaftSnapshotSideStoreLookupsV1(sourceRoot, &opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
 	sourceDB, err := backenddb.Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1110,11 +1104,10 @@ func TestRaftSnapshotV1InstallPreservesInMainDBSystemDictAndTemplate(t *testing.
 func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
-	sourceRoot := filepath.Join(root, "source")
-	sourceDir := filepath.Join(sourceRoot, "maindb")
+	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
 	defer func() { _ = sourceDB.Close() }()
-	sourceFSM := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceRoot, true)
+	sourceFSM := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceDir, true)
 	defer func() { _ = sourceFSM.Close() }()
 
 	sourceDoc := []byte(`{"_id":"u-large","name":"root-layout","payload":"` + stringsRepeatForSnapshotTest("x", 8192) + `"}`)
@@ -1125,11 +1118,10 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	}
 	defer snapshot.Release()
 
-	targetRoot := filepath.Join(root, "target")
-	targetDir := filepath.Join(targetRoot, "maindb")
+	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
 	defer func() { _ = targetDB.Close() }()
-	targetFSM := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetRoot, true)
+	targetFSM := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 
 	installRaftSnapshotForTest(t, targetFSM, snapshot)
@@ -1137,9 +1129,6 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
 	}
 	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
-	if _, err := os.Stat(filepath.Join(targetRoot, "index.db")); !os.IsNotExist(err) {
-		t.Fatalf("restore reopened TreeDB root as backend DB: index.db stat err=%v", err)
-	}
 	if _, err := os.Stat(filepath.Join(targetDir, "index.db")); err != nil {
 		t.Fatalf("restored main DB index missing: %v", err)
 	}
@@ -1261,11 +1250,6 @@ func TestRaftSnapshotV1RestoreResolvesInMainDBTemplateLookup(t *testing.T) {
 			TemplateMode: template.TemplateOff,
 		},
 	}
-	cleanup, err := wireRaftSnapshotSideStoreLookupsV1(snapshotSideStoreRootV1(mainDir), &opts)
-	if err != nil {
-		t.Fatalf("wireRaftSnapshotSideStoreLookupsV1: %v", err)
-	}
-	defer func() { _ = cleanup() }()
 
 	reopened, err := backenddb.Open(opts)
 	if err != nil {
@@ -1487,7 +1471,7 @@ func openRaftSnapshotFSMTestDB(t testing.TB, dir string, forceValuePointers bool
 	return openRaftSnapshotFSMTestDBWithOptions(t, dir, forceValuePointers, false)
 }
 
-func openRaftSnapshotFSMTestDBWithOptions(t testing.TB, dir string, forceValuePointers, disableSideStores bool) *backenddb.DB {
+func openRaftSnapshotFSMTestDBWithOptions(t testing.TB, dir string, forceValuePointers, _ bool) *backenddb.DB {
 	t.Helper()
 	opts := backenddb.Options{
 		Dir:                          dir,
@@ -1495,7 +1479,6 @@ func openRaftSnapshotFSMTestDBWithOptions(t testing.TB, dir string, forceValuePo
 		CommandWALStatsScan:          true,
 		CommandWALSegmentTargetBytes: 1 << 20,
 		DisableBackgroundPrune:       true,
-		DisableSideStores:            disableSideStores,
 	}
 	if forceValuePointers {
 		opts.ValueLog = backenddb.ValueLogOptions{
@@ -1520,14 +1503,13 @@ func openRaftSnapshotFSMForTestWithClusterDir(t testing.TB, db *backenddb.DB, cl
 	return openRaftSnapshotFSMForTestWithOptions(t, db, clusterDir, forceValuePointers, false)
 }
 
-func openRaftSnapshotFSMForTestWithOptions(t testing.TB, db *backenddb.DB, clusterDir string, forceValuePointers, disableSideStores bool) *FSM {
+func openRaftSnapshotFSMForTestWithOptions(t testing.TB, db *backenddb.DB, clusterDir string, forceValuePointers, _ bool) *FSM {
 	t.Helper()
 	restoreOpts := backenddb.Options{
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
 		CommandWALSegmentTargetBytes: 1 << 20,
 		DisableBackgroundPrune:       true,
-		DisableSideStores:            disableSideStores,
 	}
 	if forceValuePointers {
 		restoreOpts.ValueLog = backenddb.ValueLogOptions{
@@ -1536,7 +1518,6 @@ func openRaftSnapshotFSMForTestWithOptions(t testing.TB, db *backenddb.DB, clust
 		}
 	}
 	cluster := validFSMClusterConfig(clusterDir)
-	cluster.DisableSideStores = disableSideStores
 	fsm, err := Open(Options{
 		DB:                       db,
 		Cluster:                  cluster,

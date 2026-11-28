@@ -1186,7 +1186,7 @@ class DiagnosticsSampler:
 
     def sample(self, *, boundary: str | None = None, boundary_timestamp_ns: int | None = None) -> dict[str, Any]:
         with self._sample_lock:
-            wal_dir = self.data_dir / "maindb" / "wal"
+            wal_dir = self.data_dir / "wal"
             wal_files = []
             with contextlib.suppress(OSError):
                 wal_files = [path for path in wal_dir.iterdir() if path.is_file()]

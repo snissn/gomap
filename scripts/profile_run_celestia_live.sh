@@ -286,13 +286,12 @@ if latest_vars.exists():
 
 if run_home:
     app_db = run_home / "data" / "application.db"
-    maindb = app_db / "maindb"
     summary["storage"] = {
         "application_db_bytes": tree_bytes(app_db),
-        "maindb.index_db_bytes": tree_bytes(maindb / "index.db"),
-        "maindb.leaf_vlog_bytes": tree_bytes(maindb / "leaf_vlog"),
-        "maindb.value_vlog_bytes": tree_bytes(maindb / "value_vlog"),
-        "maindb.wal_bytes": tree_bytes(maindb / "wal"),
+        "maindb.index_db_bytes": tree_bytes(app_db / "index.db"),
+        "maindb.leaf_vlog_bytes": tree_bytes(app_db / "leaf_vlog"),
+        "maindb.value_vlog_bytes": tree_bytes(app_db / "value_vlog"),
+        "maindb.wal_bytes": tree_bytes(app_db / "wal"),
     }
 
 (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")

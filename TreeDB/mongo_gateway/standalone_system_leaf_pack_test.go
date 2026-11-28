@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -99,7 +98,7 @@ func TestStandaloneBSONSystemLeafPolicyThroughLeafGenerationPack(t *testing.T) {
 
 			checkPolicy := func() {
 				t.Helper()
-				format, present, err := backenddb.LoadFormatConfig(filepath.Join(opts.Dir, "maindb"))
+				format, present, err := backenddb.LoadFormatConfig(opts.Dir)
 				if err != nil || !present || !format.IndexOuterLeavesInValueLog ||
 					slices.Contains(format.RequiredFeatures, backenddb.RequiredFeatureSystemPagerLeaves) != tc.pager {
 					t.Fatalf("persisted format present=%t want pager catalog=%t: %+v %v", present, tc.pager, format, err)

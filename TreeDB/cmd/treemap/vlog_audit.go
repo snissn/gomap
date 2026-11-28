@@ -631,34 +631,17 @@ func printRecordModeBreakdown(label string, modes map[string]valueLogRecordModeA
 
 func resolveTreemapMainDir(dir string) (string, error) {
 	clean := filepath.Clean(dir)
-	candidates := []string{clean}
-	if filepath.Base(clean) != "maindb" {
-		candidates = append(candidates, filepath.Join(clean, "maindb"))
-	}
-	for _, candidate := range candidates {
-		info, err := os.Stat(candidate)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(candidate, "index.db")); err == nil {
-			return candidate, nil
+	info, err := os.Stat(clean)
+	if err == nil && info.IsDir() {
+		if _, err := os.Stat(filepath.Join(clean, "index.db")); err == nil {
+			return clean, nil
 		}
 	}
-	return "", fmt.Errorf("could not resolve maindb dir under %q", dir)
+	return "", fmt.Errorf("could not resolve database dir (missing index.db) under %q", dir)
 }
 
-func resolveTreemapRootDir(inputDir, mainDir string) string {
-	clean := filepath.Clean(inputDir)
-	if filepath.Base(clean) != "maindb" {
-		return clean
-	}
-	parent := filepath.Dir(mainDir)
-	for _, rootSibling := range []string{"dictdb", "templatedb", "ancient"} {
-		if info, err := os.Stat(filepath.Join(parent, rootSibling)); err == nil && info.IsDir() {
-			return parent
-		}
-	}
-	return clean
+func resolveTreemapRootDir(inputDir, _ string) string {
+	return filepath.Clean(inputDir)
 }
 
 func listValueLogSegments(dirs ...string) ([]valueLogSegmentAudit, int64, error) {

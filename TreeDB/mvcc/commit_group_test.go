@@ -214,7 +214,6 @@ func TestCommitGroupAtDurableSingletonCommandWALBoundary(t *testing.T) {
 		for _, shape := range []string{"inline", "tombstone", "pointer", "oversize"} {
 			t.Run(string(profile)+"/"+shape, func(t *testing.T) {
 				opts := treedb.OptionsFor(profile, t.TempDir())
-				opts.DisableSideStores = true
 				opts.BackgroundCheckpointInterval = -1
 				mutation := Mutation{Key: []byte("singleton"), Value: []byte("value")}
 				if shape == "tombstone" {
@@ -268,7 +267,6 @@ func TestCommitGroupAtDurableSingletonProcessCrashRecovery(t *testing.T) {
 	const childEnv = "TREEDB_MVCC_SINGLETON_CRASH_DIR"
 	options := func(profile treedb.Profile, dir, shape string) treedb.Options {
 		opts := treedb.OptionsFor(profile, dir)
-		opts.DisableSideStores = true
 		opts.BackgroundCheckpointInterval = -1
 		opts.ValueLog.PointerThreshold = 1 << 20
 		if shape != "inline" {
@@ -319,7 +317,6 @@ func TestCommitGroupAtDurableSingletonProcessCrashRecovery(t *testing.T) {
 
 func TestCommitGroupAtCommandWALSingletonUsesPointFrame(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := treedb.Open(opts)
 	if err != nil {

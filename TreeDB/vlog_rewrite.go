@@ -30,17 +30,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err := resolveOpenProfileOptions(&opts); err != nil {
 		return ValueLogRewriteStats{}, err
 	}
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	dir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}
-	opts.Dir = layout.mainDir
-	opts.DisableSideStores = layout.disableSideStores
+	opts.Dir = dir
 
 	// Preserve the persisted on-disk format knobs by default so offline rewrite
 	// doesn't accidentally rebuild the index/value-log into a different layout.
 	if opts.IgnoreFormatConfig {
-		requiresCommandWAL, err := treedbdb.CommandWALRequiredFeatureEnabled(layout.mainDir)
+		requiresCommandWAL, err := treedbdb.CommandWALRequiredFeatureEnabled(dir)
 		if err != nil {
 			return ValueLogRewriteStats{}, err
 		}
@@ -48,7 +47,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			return ValueLogRewriteStats{}, treedbdb.ErrCommandWALUnsupported
 		}
 	} else {
-		if cfg, ok, err := treedbdb.LoadFormatConfig(layout.mainDir); err != nil {
+		if cfg, ok, err := treedbdb.LoadFormatConfig(dir); err != nil {
 			return ValueLogRewriteStats{}, err
 		} else if ok {
 			if cfg.RequiresCommandWALV1() {
@@ -60,12 +59,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if opts.ValueLog.TemplateMode != template.TemplateOff {
 		return ValueLogRewriteStats{}, fmt.Errorf("%w: offline template rewrite requires dependency-closed rewritten-root publication (#3679)", rootpublication.ErrUnresolvedResource)
 	}
-
-	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
-	if err != nil {
-		return ValueLogRewriteStats{}, err
-	}
-	defer func() { _ = sideCleanup() }()
 
 	stats, err := treedbdb.ValueLogRewriteOffline(opts)
 	if err != nil {

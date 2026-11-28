@@ -38,7 +38,7 @@ func TestOpenRejectsStructurallyInvalidLeafGenerationManifestWithPublicSentinel(
 		t.Fatalf("close DB: %v", err)
 	}
 
-	leafDir := filepath.Join(dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(dir, "leaf_vlog")
 	manifestPath := filepath.Join(leafDir, "manifest.json")
 	if durable, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json")); err != nil {
 		t.Fatalf("glob durable manifests: %v", err)

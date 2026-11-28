@@ -135,7 +135,7 @@ func TestDATAParentRetentionAcrossCommitJump(t *testing.T) {
 	resume := func() { releaseOnce.Do(func() { close(release) }) }
 	var mu sync.Mutex
 	var events []durabilitycut.Event
-	root, path := filepath.Join(opts.Dir, "maindb"), filepath.Join(opts.Dir, "maindb", "index.db")
+	root, path := opts.Dir, filepath.Join(opts.Dir, "index.db")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Root != root || event.Path != path || event.Resource != durabilitycut.ResourceMeta {
 			return nil
@@ -296,7 +296,7 @@ func TestDATAParentRetentionAcrossCommitJump(t *testing.T) {
 	// Preserve the original newest META bytes, then damage that slot in place.
 	// Recovery binds dependencies to their original physical namespace; copying
 	// those files would create a different identity rather than a fallback image.
-	f, err := os.OpenFile(filepath.Join(opts.Dir, "maindb", "index.db"), os.O_RDWR, 0)
+	f, err := os.OpenFile(filepath.Join(opts.Dir, "index.db"), os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -145,7 +145,7 @@ func TestValueLogGC_OnlineMode_HealthStateNoUnsafeDeletes(t *testing.T) {
 		}
 	}
 
-	healthPath := filepath.Join(dir, "maindb", "vlog_health.json")
+	healthPath := filepath.Join(dir, "vlog_health.json")
 	data, err := os.ReadFile(healthPath)
 	if err != nil {
 		t.Fatalf("read health metadata: %v", err)

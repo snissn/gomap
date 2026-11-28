@@ -95,7 +95,6 @@ type FSM struct {
 
 	progress *raftapply.DurableApplyProgressStore
 	results  *raftapply.DurableApplyResultStore
-	sideDBs  func() error
 	ownsDB   bool
 	closed   bool
 }
@@ -140,7 +139,7 @@ func Open(opts Options) (*FSM, error) {
 		if err != nil {
 			return nil, err
 		}
-		if backend != opts.DB || !opts.Cluster.DisableSideStores || !opts.SnapshotRestoreDBOptions.DisableSideStores || opts.SnapshotRestoreDBOptions.MemtableMode != "cow_btree" {
+		if backend != opts.DB || opts.SnapshotRestoreDBOptions.MemtableMode != "cow_btree" {
 			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "native public owner/backend or flat group layout mismatch")
 		}
 	}
@@ -230,10 +229,6 @@ func (f *FSM) Close() error {
 		}
 		if !f.nativeCollections && f.ownsDB && f.db != nil {
 			errs = append(errs, f.db.Close())
-		}
-		if f.sideDBs != nil {
-			errs = append(errs, f.sideDBs())
-			f.sideDBs = nil
 		}
 	}
 	// A refused public-owner close remains retryable through this same FSM.

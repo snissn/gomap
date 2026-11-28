@@ -16,7 +16,6 @@ func TestCOWPrivateInlinePointPublicIngress(t *testing.T) {
 			t.Run(string(profile)+"/"+mode, func(t *testing.T) {
 				db, opts, _ := cowPublicContractOpen(t, profile, func(opts *Options) {
 					opts.MemtableMode = mode
-					opts.DisableSideStores = true
 					opts.BackgroundCheckpointInterval = -1
 					opts.ValueLog.PointerThreshold = 512
 					opts.ValueLog.ForcePointers = false

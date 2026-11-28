@@ -26,7 +26,6 @@ func openConformanceAdapter(dir string, class mvcctest.DurabilityClass) (mvcctes
 		return mvcctest.Adapter{}, fmt.Errorf("unsupported durability class %q", class)
 	}
 	opts := treedb.OptionsFor(profile, dir)
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	db, err := treedb.Open(opts)
 	if err != nil {

@@ -30,7 +30,6 @@ func TestLeafGenerationAdvisoryWriteDoesNotFailPublishedStore(t *testing.T) {
 			opts.BackgroundCheckpointIdleDuration = -1
 			opts.BackgroundIndexVacuumInterval = -1
 			opts.MaxWALBytes = -1
-			opts.DisableSideStores = true
 			opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 			opts.ValueLog.Generational.LeafSegmentTargetBytes = 32 << 10
 

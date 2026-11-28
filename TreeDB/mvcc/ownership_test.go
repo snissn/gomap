@@ -158,7 +158,6 @@ func TestMVCCOwnedOutputsSurviveMutationFlushAndClose(t *testing.T) {
 		for _, width := range []int{8, 16, 4096} {
 			t.Run(fmt.Sprintf("pointers=%t/width=%d", pointers, width), func(t *testing.T) {
 				opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-				opts.DisableSideStores = true
 				opts.BackgroundCheckpointInterval = -1
 				opts.ValueLog.ForcePointers = pointers
 				if pointers {

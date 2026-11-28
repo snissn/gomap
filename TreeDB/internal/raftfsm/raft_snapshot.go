@@ -64,8 +64,6 @@ var raftSnapshotMainDBEntriesV1 = []string{
 	"vector_partitions",
 }
 
-var raftSnapshotSideStoreEntriesV1 []string
-
 // ExportRaftSnapshotV1 exports a production snapshot archive for HashiCorp
 // Raft. The archive contains TreeDB main storage, including persistent
 // value-log segments, plus durable Raft apply metadata. It intentionally
@@ -236,10 +234,10 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 	if header.Manifest.GroupID != f.cluster.GroupID {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive group %q does not match FSM group %q", header.Manifest.GroupID, f.cluster.GroupID)
 	}
-	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, tmpMain, tmpSide, f.cluster.DisableSideStores); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, tmpMain); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "rebind extracted snapshot durable roots: %v", err)
 	}
-	if err := f.verifyExtractedRaftSnapshotV1(ctx, header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
+	if err := f.verifyExtractedRaftSnapshotV1(ctx, header.Manifest, tmpMain, tmpApply); err != nil {
 		return err
 	}
 	// Cancellation may refuse an install only while the original stores are
@@ -255,18 +253,13 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 	if err := replaceSnapshotMainDBV1(mainDir, tmpMain, f.cluster.Layout.RootDir); err != nil {
 		return err
 	}
-	if !f.cluster.DisableSideStores {
-		if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
-			return err
-		}
-	}
 	if hook := raftSnapshotAfterReplaceForTest; hook != nil {
 		hook()
 	}
 	// Entry-wise installs can change parent directory identities even though
 	// the dependency files themselves retain their handles across rename. Rebind
 	// once more in the final layout before any restored meta is reopened.
-	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(finishCtx, mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(finishCtx, mainDir); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "rebind installed snapshot durable roots: %v", err)
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
@@ -278,27 +271,11 @@ func (f *FSM) installRaftSnapshotV1Locked(ctx context.Context, reader io.Reader,
 	return f.verifyInstalledSnapshotManifestWithContextV1Locked(finishCtx, header.Manifest)
 }
 
-func rebindExtractedRaftSnapshotDurableRootsV1(mainDir, sideDir string, disableSideStores bool) error {
-	return rebindExtractedRaftSnapshotDurableRootsWithContextV1(context.Background(), mainDir, sideDir, disableSideStores)
+func rebindExtractedRaftSnapshotDurableRootsV1(mainDir string) error {
+	return rebindExtractedRaftSnapshotDurableRootsWithContextV1(context.Background(), mainDir)
 }
-func rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx context.Context, mainDir, sideDir string, disableSideStores bool) error {
-	if !disableSideStores {
-		// Rebinding a side store atomically replaces its index file. Do that
-		// first so the main manifest captures the side store's final identity.
-		for _, name := range raftSnapshotSideStoreEntriesV1 {
-			dir := filepath.Join(sideDir, name)
-			if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				return err
-			}
-			if err := backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, dir, ""); err != nil {
-				return fmt.Errorf("side store %s: %w", name, err)
-			}
-		}
-	}
-	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, mainDir, sideDir)
+func rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx context.Context, mainDir string) error {
+	return backenddb.RebindDurableRootSnapshotLayoutWithContextV1(ctx, mainDir, "")
 }
 
 func (f *FSM) requireRaftSnapshotOpenV1() error {
@@ -342,10 +319,6 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 		errs = append(errs, f.db.Close())
 		f.db = nil
 	}
-	if f.sideDBs != nil {
-		errs = append(errs, f.sideDBs())
-		f.sideDBs = nil
-	}
 	f.ownsDB = false
 	return errors.Join(errs...)
 }
@@ -353,12 +326,11 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	mainDir := raftcluster.MainDBDir(f.cluster.Dir)
 	opts := f.snapshotRestoreDBOptionsV1(mainDir)
-	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(snapshotSideStoreRootV1(mainDir), &opts)
-	if err != nil {
-		return err
-	}
-	var db *backenddb.DB
-	var nativeDatabase *treedb.DB
+	var (
+		db             *backenddb.DB
+		nativeDatabase *treedb.DB
+		err            error
+	)
 	if f.nativeCollections {
 		nativeDatabase, err = treedb.Open(opts)
 		if err == nil {
@@ -382,47 +354,41 @@ func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 		return nil
 	}
 	if err != nil {
-		return errors.Join(err, closeDB(), sideDBs())
+		return errors.Join(err, closeDB())
 	}
 	progress, err := raftapply.OpenDurableApplyProgressStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		return errors.Join(err, closeDB(), sideDBs())
+		return errors.Join(err, closeDB())
 	}
 	results, err := raftapply.OpenDurableApplyResultStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		return errors.Join(err, progress.Close(), closeDB(), sideDBs())
+		return errors.Join(err, progress.Close(), closeDB())
 	}
 	if err := validateProgressCoverage(db, progress, results); err != nil {
-		return errors.Join(err, progress.Close(), results.Close(), closeDB(), sideDBs())
+		return errors.Join(err, progress.Close(), results.Close(), closeDB())
 	}
 	f.db = db
 	f.nativeDatabase = nativeDatabase
 	f.progress = progress
 	f.results = results
-	f.sideDBs = sideDBs
 	f.ownsDB = true
 	return nil
 }
 
-func (f *FSM) verifyExtractedRaftSnapshotV1(ctx context.Context, manifest raftcluster.SnapshotManifestV1, mainDir, sideDir, applyDir string) error {
+func (f *FSM) verifyExtractedRaftSnapshotV1(ctx context.Context, manifest raftcluster.SnapshotManifestV1, mainDir, applyDir string) error {
 	opts := f.snapshotRestoreDBOptionsV1(mainDir)
-	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &opts)
-	if err != nil {
-		return err
-	}
 	db, err := backenddb.Open(opts)
 	if err != nil {
-		_ = sideDBs()
 		return err
 	}
 	progress, err := raftapply.OpenDurableApplyProgressStore(applyDir, f.storeOptions)
 	if err != nil {
-		_ = errors.Join(db.Close(), sideDBs())
+		_ = db.Close()
 		return err
 	}
 	results, err := raftapply.OpenDurableApplyResultStore(applyDir, f.storeOptions)
 	if err != nil {
-		_ = errors.Join(progress.Close(), db.Close(), sideDBs())
+		_ = errors.Join(progress.Close(), db.Close())
 		return err
 	}
 	verifyFSM := &FSM{
@@ -437,14 +403,12 @@ func (f *FSM) verifyExtractedRaftSnapshotV1(ctx context.Context, manifest raftcl
 		restoreDB:    f.restoreDB,
 	}
 	verifyErr := verifyFSM.verifyInstalledSnapshotManifestWithContextV1Locked(ctx, manifest)
-	closeErr := errors.Join(progress.Close(), results.Close(), db.Close(), sideDBs())
+	closeErr := errors.Join(progress.Close(), results.Close(), db.Close())
 	return errors.Join(verifyErr, closeErr)
 }
 
 func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
 	opts := f.restoreDB
-	// Restored side-store owners must register their own capture authority.
-	opts.PhysicalSnapshotSideStoreCapture = nil
 	opts.Dir = dir
 	opts.CommandWAL = true
 	opts.CommandWALStatsScan = true
@@ -452,9 +416,6 @@ func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
 		opts.CommandWALSegmentTargetBytes = 1 << 20
 	}
 	opts.DisableBackgroundPrune = true
-	if f.cluster.DisableSideStores {
-		opts.DisableSideStores = true
-	}
 	return opts
 }
 
@@ -651,20 +612,6 @@ func appendRaftSnapshotTreeDBStorageV1(tw *tar.Writer, prefix, mainDir string) e
 				return err
 			}
 		}
-		if err := appendRaftSnapshotStoragePathV1(tw, pathpkg.Join(prefix, name), src); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func appendRaftSnapshotTreeDBSideStoresV1(tw *tar.Writer, prefix, mainDir string) error {
-	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
-		return err
-	}
-	root := snapshotSideStoreRootV1(mainDir)
-	for _, name := range raftSnapshotSideStoreEntriesV1 {
-		src := filepath.Join(root, name)
 		if err := appendRaftSnapshotStoragePathV1(tw, pathpkg.Join(prefix, name), src); err != nil {
 			return err
 		}
@@ -1140,36 +1087,6 @@ func snapshotTopLevelPreserveNameV1(parent, preserveRoot string) (string, bool) 
 	return rel, true
 }
 
-func replaceSnapshotSideStoresV1(mainDir, srcSide string) error {
-	root := snapshotSideStoreRootV1(mainDir)
-	if root == "" || srcSide == "" {
-		return fmt.Errorf("raftfsm: empty snapshot restore side-store path")
-	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
-	}
-	for _, name := range raftSnapshotSideStoreEntriesV1 {
-		src := filepath.Join(srcSide, name)
-		dest := filepath.Join(root, name)
-		if err := os.RemoveAll(dest); err != nil {
-			return err
-		}
-		if _, err := os.Stat(src); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if err := os.Rename(src, dest); err != nil {
-			return err
-		}
-		if err := syncRaftSnapshotRenameParentsV1(src, dest); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func syncRaftSnapshotRenameParentsV1(src, dest string) error {
 	parents := []string{filepath.Dir(src)}
 	if destParent := filepath.Dir(dest); filepath.Clean(destParent) != filepath.Clean(parents[0]) {
@@ -1187,12 +1104,4 @@ func syncRaftSnapshotRenameParentsV1(src, dest string) error {
 		}
 	}
 	return nil
-}
-
-func snapshotSideStoreRootV1(mainDir string) string {
-	mainDir = filepath.Clean(mainDir)
-	if filepath.Base(mainDir) == "maindb" {
-		return filepath.Dir(mainDir)
-	}
-	return mainDir
 }

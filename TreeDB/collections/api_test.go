@@ -5243,7 +5243,6 @@ func TestCollectionCompactStorageFoldedRootsUseCurrentDescriptorScan(t *testing.
 func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

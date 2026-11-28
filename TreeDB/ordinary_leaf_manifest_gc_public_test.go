@@ -170,7 +170,7 @@ func TestOrdinaryLeafPublicationAfterUnreachableGenerationGC(t *testing.T) {
 	for i := 1; i < 5; i++ {
 		update(i, true)
 	}
-	leafDir := filepath.Join(opts.Dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(opts.Dir, "leaf_vlog")
 	operationalPackState := func() string {
 		t.Helper()
 		path := filepath.Join(leafDir, "manifest.json")
@@ -279,7 +279,7 @@ func TestOrdinaryLeafPublicationAfterUnreachableGenerationGC(t *testing.T) {
 
 func inspectSlotOuterLeafRawFiles(t *testing.T, dir string, record rootpublication.DurableRootRecordV1) []uint32 {
 	t.Helper()
-	index, err := os.Open(filepath.Join(dir, "maindb", "index.db"))
+	index, err := os.Open(filepath.Join(dir, "index.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestOrdinaryLeafPublicationAfterUnreachableRawGenerationGC(t *testing.T) {
 	for i := 2; i < 6; i++ {
 		update(i, false)
 	}
-	leafDir := filepath.Join(opts.Dir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(opts.Dir, "leaf_vlog")
 	operationalRawState := func() string {
 		t.Helper()
 		path := filepath.Join(leafDir, "manifest.json")

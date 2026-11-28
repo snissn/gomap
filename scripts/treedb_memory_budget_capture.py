@@ -232,7 +232,7 @@ def check_observations(packet, leaf, filter_bytes=0, extra_stats=()):
         if leaf == 64:
             require(int(stats["treedb.vlog.grouped_frame_cache.capacity"]) == 0, "zero bytes did not disable frames")
     for files in [packet["closed_files"]] + [phase["logical_file_bytes"] for phase in packet["phases"]]:
-        require(isinstance(files, dict) and type(files.get("maindb/index.db")) is int and files["maindb/index.db"] > 0, "missing/invalid main index storage inventory")
+        require(isinstance(files, dict) and type(files.get("index.db")) is int and files["index.db"] > 0, "missing/invalid main index storage inventory")
         for name, size in files.items():
             require(isinstance(name, str) and name and "\\" not in name and all(part not in ("", ".", "..") for part in name.split("/")), "invalid relative storage filename")
             require(type(size) is int and size >= 0, "invalid logical file byte count")
@@ -367,7 +367,7 @@ def self_check():
     stats.update({"treedb.vlog.read_integrity": "verify", "treedb.vlog.grouped_frame_cache.budget_bytes": str(64 << 20)})
     packet = {name: copy.deepcopy(stats) for name in ("initial_stats", "closure_stats", "reopen_stats")}
     packet.update(phases=[{"operations": 1, "stats": copy.deepcopy(stats), "before_stats": copy.deepcopy(stats),
-                           "logical_file_bytes": {"maindb/index.db": 4096}}], closed_files={"maindb/index.db": 4096})
+                           "logical_file_bytes": {"index.db": 4096}}], closed_files={"index.db": 4096})
     check_observations(packet, 0)
     for boundary, name in (("initial_stats", "treedb.process.read_path.outer_leaf.cache.bytes"),
                            ("closure_stats", "treedb.vlog.grouped_frame_cache.allocated_slots"),
@@ -382,8 +382,8 @@ def self_check():
             pass
         else:
             raise AssertionError("accepted missing observation at " + boundary)
-    for invalid in ({"anything": 1}, {"maindb/index.db": True}, {"maindb/index.db": 4096, "../escape": 1},
-                    {"maindb/index.db": 4096, "maindb/wal/segment": -1}):
+    for invalid in ({"anything": 1}, {"index.db": True}, {"index.db": 4096, "../escape": 1},
+                    {"index.db": 4096, "wal/segment": -1}):
         wrong = copy.deepcopy(packet)
         wrong["phases"][0]["logical_file_bytes"] = invalid
         try:

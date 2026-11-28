@@ -372,11 +372,11 @@ func checkOrderedRowsFinal(t *testing.T, database *DB, manager *collections.Coll
 }
 func checkOrderedRowsFrame(t *testing.T, opts Options) {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("canonical paths%q %v", paths, err)
 	}

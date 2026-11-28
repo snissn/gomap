@@ -20,8 +20,7 @@ import (
 func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing.T) {
 	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
-	sourceRoot := filepath.Join(root, "source")
-	sourceDir := filepath.Join(sourceRoot, "maindb")
+	sourceDir := filepath.Join(root, "source")
 	ctx := context.Background()
 
 	opts := backenddb.Options{Dir: sourceDir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true}
@@ -37,7 +36,7 @@ func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceRoot, false)
+	source := openRaftSnapshotFSMForTestWithClusterDir(t, sourceDB, sourceDir, false)
 	defer source.Close()
 	doc := []byte(`{"_id":"u-large","payload":"` + string(bytes.Repeat([]byte("d"), 8192)) + `"}`)
 	applySnapshotSourceEntries(t, source, doc)
@@ -53,11 +52,10 @@ func TestCapturedRaftSnapshotV1RebindsLargeDictionaryBeforeMainLookup(t *testing
 	}
 	defer ready.Release()
 
-	targetRoot := filepath.Join(root, "target")
-	targetDir := filepath.Join(targetRoot, "maindb")
+	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
 	defer targetDB.Close()
-	target := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetRoot, false)
+	target := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetDir, false)
 	defer target.Close()
 	installRaftSnapshotForTest(t, target, ready)
 	assertSnapshotDocument(t, target, "u-large", doc)

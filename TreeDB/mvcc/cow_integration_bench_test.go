@@ -28,7 +28,6 @@ func BenchmarkCOWIntegratedPublicMVCC(b *testing.B) {
 						b.Fatal("use fixed -benchtime=128x or 256x for this growing-history diagnostic")
 					}
 					opts := treedb.OptionsFor(profile, b.TempDir())
-					opts.DisableSideStores = true
 					opts.BackgroundCheckpointInterval = -1
 					opts.MemtableMode = mode
 					opts.MemtableShards = 8

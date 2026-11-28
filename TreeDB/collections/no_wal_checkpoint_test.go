@@ -21,7 +21,6 @@ func TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			dir := t.TempDir()
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-			opts.DisableSideStores = true
 			opts.DisableBackgroundPrune = true
 			opts.BackgroundCheckpointInterval = -1
 			d, closeDB, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -212,7 +211,6 @@ func TestNoWALCheckpointWaitsForIndexedAsyncPublisher(t *testing.T) {
 func TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -299,7 +297,6 @@ func TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix(t *testing.T
 func TestNoWALCheckpointCoversPriorCollectionWritesWithoutChasingRefill(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	d, closeDB, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -382,7 +379,6 @@ func TestNoWALCheckpointCoversPriorCollectionWritesWithoutChasingRefill(t *testi
 func TestNoWALCheckpointBoundsActiveIndexedAsyncFrontier(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)

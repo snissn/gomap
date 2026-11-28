@@ -790,7 +790,7 @@ PY
   if [[ -n "$run_home" && -d "$run_home" ]]; then
     app_db="$run_home/data/application.db"
     pre_app_bytes="$(du_bytes "$app_db")"
-    pre_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+    pre_wal_bytes="$(du_bytes "$app_db/wal")"
 
     if [[ "$maintenance_captured" != "1" || ! -s "$analyze_json" ]]; then
       rm -f "$analyze_json" "$maintenance_source_file"
@@ -851,7 +851,7 @@ PY
 
   if [[ -n "$app_db" ]]; then
     post_app_bytes="$(du_bytes "$app_db")"
-    post_wal_bytes="$(du_bytes "$app_db/maindb/wal")"
+    post_wal_bytes="$(du_bytes "$app_db/wal")"
     if capture_light_vlog_stats "$app_db" "$light_stats_post" "$light_stats_post_err" "$env_file" "$overlay_env_file"; then
       light_stats_post_rc=0
     else

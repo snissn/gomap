@@ -280,7 +280,7 @@ func validateFixedPeerConfigV1(c FixedPeerTCPConfigV1) (FixedPeerTCPConfigV1, st
 		if !bootstrap {
 			return invalid("bootstrap responsibility must name one voter")
 		}
-		resolved, e := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(c.DataRoot, string(g.ID)), ClusterDir: c.RaftRoot, NodeID: g.Peers[0].ID, GroupID: g.ID, Peers: g.Peers, Features: g.Features, DisableSideStores: true})
+		resolved, e := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(c.DataRoot, string(g.ID)), ClusterDir: c.RaftRoot, NodeID: g.Peers[0].ID, GroupID: g.ID, Peers: g.Peers, Features: g.Features})
 		if e != nil {
 			return c, "", e
 		}
@@ -562,7 +562,7 @@ func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string
 		} else {
 			r.transports = append(r.transports, transport)
 		}
-		cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(g.ID)), ClusterDir: r.config.RaftRoot, DisableSideStores: true, NodeID: r.config.NodeID, GroupID: g.ID, Peers: g.Peers, Features: g.Features}
+		cfg := raftcluster.Config{Dir: filepath.Join(r.config.DataRoot, string(g.ID)), ClusterDir: r.config.RaftRoot, NodeID: r.config.NodeID, GroupID: g.ID, Peers: g.Peers, Features: g.Features}
 		raftConfig := hraft.DefaultConfig()
 		raftConfig.HeartbeatTimeout = r.config.RaftTimeout
 		raftConfig.ElectionTimeout = r.config.RaftTimeout

@@ -313,7 +313,7 @@ The fixed consequences are:
   and falls back to the intact opposite slot on any torn write.
 - In fixed-container command-WAL mode when `durabilitycut` is inactive,
   captured durable-prefix syncs (`CommandWALCapturedPrefix.Sync`) may overlap
-  pending rotated-segment parent-directory syncs (`maindb/wal`) concurrently
+  pending rotated-segment parent-directory syncs (`wal`) concurrently
   with the active segment `fdatasync`, joining both barriers strictly before
   closing `commandWALDurableLSN` or acknowledging any caller; failure of either
   barrier poisons the handle (`ErrRecoveryRequired`) and retains retry debt.
@@ -322,9 +322,9 @@ The fixed consequences are:
   before consuming cached scan results at cleanup.
 - Value-log dictionary publication persists dictionary bytes (inline or 2 KiB
   inline chunks by default, or optional raw `dictID=0` `ValuePtr` records in
-  `maindb/value_vlog/` lane `SystemValueLogLaneID`), content hash, frame group
+  `value_vlog/` lane `SystemValueLogLaneID`), content hash, frame group
   size `K`, leaf payload mode, and class/global current markers inside
-  `maindb`'s `SystemRootPageID`. `SystemRootPageID` outer-leaf placement obeys
+  `index.db`'s `SystemRootPageID`. `SystemRootPageID` outer-leaf placement obeys
   `systemRootUsesOuterLeaves()` uniformly (pager leaves when
   `FreshSystemPagerLeaves=true`, or strictly non-dictionary `dictID=0` outer
   leaves in `leaf_vlog` when `FreshSystemPagerLeaves=false`). Direct/standalone
@@ -341,9 +341,9 @@ The fixed consequences are:
   defer while unsynced system ops are pending, dispatching older sync waiters
   in commit order), ensuring no durable command-WAL record can reference an
   unpersisted dictionary; under `no_wal_fast`, activation occurs immediately
-  upon piggybacked commit without an extra fsync. When a dictionary uses a `ValuePtr` in `maindb/value_vlog/`, the raw
+  upon piggybacked commit without an extra fsync. When a dictionary uses a `ValuePtr` in `value_vlog/`, the raw
   `dictID=0` record stays pending-GC pinned until publication or abandonment,
-  is flushed and synced before a synced `maindb/index.db` commit, and value-log
+  is flushed and synced before a synced `index.db` commit, and value-log
   rewrite preserves `dictID=0, templateID=0` raw encoding for all
   `SystemRootPageID` pointers.
 - A write or sync error after target-meta bytes may have been dirtied poisons

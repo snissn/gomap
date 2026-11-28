@@ -24,7 +24,6 @@ func TestEmptyShardPublicCommandWALStableImageAfterReuse(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "append_only"
 	opts.MemtableShards = 4
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1

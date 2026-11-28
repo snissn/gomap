@@ -211,7 +211,6 @@ func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentSupported(t
 		Dir:                        dir,
 		CommandWAL:                 true,
 		Durability:                 DurabilityWALOnRelaxed,
-		DisableSideStores:          true,
 		IndexOuterLeavesInValueLog: true,
 	})
 	if err != nil {

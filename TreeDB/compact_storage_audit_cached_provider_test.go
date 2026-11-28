@@ -17,7 +17,6 @@ func TestCompactStorageAudit_PublicCachedProviderForwardingRejectsDrift(t *testi
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 1
 	db, err := Open(opts)
 	if err != nil {

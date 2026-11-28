@@ -411,7 +411,7 @@ func valueLogSegmentPaths(t *testing.T, dir string) []string {
 	var paths []string
 	for _, candidate := range []string{
 		backenddb.ValueLogDirPath(dir),
-		backenddb.ValueLogDirPath(filepath.Join(dir, "maindb")),
+		backenddb.ValueLogDirPath(dir),
 	} {
 		matches, err := filepath.Glob(filepath.Join(candidate, "value-l*-*.log"))
 		if err != nil {

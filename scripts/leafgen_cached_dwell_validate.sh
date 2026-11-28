@@ -32,10 +32,10 @@ capture_sizes() {
   jq -n \
     --arg phase "$phase" \
     --argjson application_db_bytes "$(du_bytes "$DST")" \
-    --argjson maindb_bytes "$(du_bytes "$DST/maindb")" \
-    --argjson index_db_bytes "$(du_bytes "$DST/maindb/index.db")" \
-    --argjson leaf_vlog_bytes "$(du_bytes "$DST/maindb/leaf_vlog")" \
-    --argjson value_vlog_bytes "$(du_bytes "$DST/maindb/value_vlog")" \
+    --argjson maindb_bytes "$(du_bytes "$DST")" \
+    --argjson index_db_bytes "$(du_bytes "$DST/index.db")" \
+    --argjson leaf_vlog_bytes "$(du_bytes "$DST/leaf_vlog")" \
+    --argjson value_vlog_bytes "$(du_bytes "$DST/value_vlog")" \
     --argjson wal_bytes "$(du_bytes "$DST/wal")" \
     '{
       phase: $phase,
@@ -265,10 +265,10 @@ func main() {
 func captureSizes(root string) sizeSnapshot {
     return sizeSnapshot{
         ApplicationDBBytes: pathBytes(root),
-        MainDBBytes:        pathBytes(filepath.Join(root, "maindb")),
-        IndexDBBytes:       pathBytes(filepath.Join(root, "maindb", "index.db")),
-        LeafVLogBytes:      pathBytes(filepath.Join(root, "maindb", "leaf_vlog")),
-        ValueVLogBytes:     pathBytes(filepath.Join(root, "maindb", "value_vlog")),
+        MainDBBytes:        pathBytes(root),
+        IndexDBBytes:       pathBytes(filepath.Join(root, "index.db")),
+        LeafVLogBytes:      pathBytes(filepath.Join(root, "leaf_vlog")),
+        ValueVLogBytes:     pathBytes(filepath.Join(root, "value_vlog")),
         WALBytes:           pathBytes(filepath.Join(root, "wal")),
     }
 }
@@ -351,7 +351,7 @@ capture_sizes after_dwell > "$OUT/size-after-dwell.json"
 jq -s '.' "$OUT/dwell.jsonl" > "$OUT/dwell-array.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json > "$OUT/plan-after.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json -force > "$OUT/plan-after-force.json"
-ls -lh "$DST/maindb/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
+ls -lh "$DST/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
 
 jq -n \
   --arg source "$SRC" \

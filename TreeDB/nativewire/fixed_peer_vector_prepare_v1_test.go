@@ -698,7 +698,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	// Retain genuine durable metadata at the pre-prepare cut. The refusal case
 	// restores these exact earlier bytes to model result/progress tail loss after
 	// a root-visible prepare; it never manufactures an applied position.
-	resolved, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(configs[0].DataRoot, string(group.ID)), ClusterDir: configs[0].RaftRoot, DisableSideStores: true, NodeID: configs[0].NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
+	resolved, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(configs[0].DataRoot, string(group.ID)), ClusterDir: configs[0].RaftRoot, NodeID: configs[0].NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1352,7 +1352,7 @@ func TestFixedPeerVectorPreparedAllVotersRejectsMissingLocalCompletionV1(t *test
 	t.Cleanup(func() { _ = database.Close() })
 	fsm, err := raftfsm.Open(raftfsm.Options{
 		DB:           database,
-		Cluster:      raftcluster.Config{Dir: dir, ClusterDir: config.RaftRoot, DisableSideStores: true, NodeID: config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features},
+		Cluster:      raftcluster.Config{Dir: dir, ClusterDir: config.RaftRoot, NodeID: config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features},
 		StoreOptions: raftapply.DurableApplyStoreOptions{DisableSync: true, AllowInitialIndexGap: true},
 	})
 	if err != nil {

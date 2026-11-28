@@ -129,7 +129,6 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	*db = DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
-		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,
@@ -344,7 +343,6 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	*db = DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
-		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,

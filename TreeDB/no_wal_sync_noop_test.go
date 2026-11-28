@@ -14,7 +14,6 @@ func TestNoWALFastPublicNoopSyncSealsEarlierWrites(t *testing.T) {
 	for _, boundary := range []string{"update_noop", "empty_conditional", "read_only_conditional"} {
 		t.Run(boundary, func(t *testing.T) {
 			opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.DisableBackgroundPrune = true
 			database, err := treedb.Open(opts)

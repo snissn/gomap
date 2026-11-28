@@ -84,7 +84,6 @@ func TestPopulatedCapturedSuccessorAllocation(t *testing.T) {
 	for _, size := range []int{0, 8192} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			o := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
-			o.DisableSideStores = true
 			o.BackgroundCheckpointInterval = -1
 			o.MemtableMode = "cow_btree"
 			o.MemtableShards = 4

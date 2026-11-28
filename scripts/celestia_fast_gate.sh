@@ -297,7 +297,7 @@ run_variant() {
 
   local sync_app_bytes sync_wal_bytes sync_gzip_bytes
   sync_app_bytes="$(du_bytes "$keep_dir")"
-  sync_wal_bytes="$(du_bytes "$keep_dir/maindb/wal")"
+  sync_wal_bytes="$(du_bytes "$keep_dir/wal")"
   sync_gzip_bytes="$(gzip_dir_bytes "$keep_dir")"
 
   local rewrite_attempted=0
@@ -320,7 +320,7 @@ run_variant() {
 
   local post_app_bytes post_wal_bytes post_gzip_bytes
   post_app_bytes="$(du_bytes "$keep_dir")"
-  post_wal_bytes="$(du_bytes "$keep_dir/maindb/wal")"
+  post_wal_bytes="$(du_bytes "$keep_dir/wal")"
   post_gzip_bytes="$(gzip_dir_bytes "$keep_dir")"
 
   local run_json="$run_dir/run.json"

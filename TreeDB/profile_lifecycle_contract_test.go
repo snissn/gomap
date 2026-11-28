@@ -17,7 +17,6 @@ type profileLifecycleFrontiers struct {
 func profileLifecycleOptions(profile Profile, dir string) Options {
 	opts := OptionsFor(profile, dir)
 	opts.CommandWALStatsScan = true
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.MaxWALBytes = -1

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -570,7 +569,7 @@ func TestNativeTemplateApplyUnchangedFirstCanonicalReplay(t *testing.T) {
 		// Assignment precedes deferred singleton capture. Exit after the exact
 		// retained-file fence, without Close or a checkpoint; replay must still
 		// apply this canonical frame from basis 2 and its dictionary carrier.
-		mainRoot := filepath.Join(database.dir, "maindb")
+		mainRoot := database.dir
 		var assigned atomic.Bool
 		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 			if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != mainRoot || event.Point != durabilitycut.AfterDependencyFileSync || event.LSN != 3 {

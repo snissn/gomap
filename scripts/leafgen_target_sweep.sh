@@ -203,8 +203,8 @@ for target in "${TARGETS[@]}"; do
   GOWORK=off "${TREEMAP[@]}" leafgen-plan "$db_dir" -rw -json > "$run_dir/plan.json"
   GOWORK=off "${TREEMAP[@]}" leafgen-plan "$db_dir" -rw -json -force > "$run_dir/plan-force.json"
   du_bytes "$db_dir" > "$run_dir/application_db_bytes.txt"
-  du_bytes "$db_dir/maindb/leaf_vlog" > "$run_dir/leaf_vlog_bytes.txt"
-  cp "$db_dir/maindb/leaf_vlog/manifest.json" "$run_dir/manifest.json"
+  du_bytes "$db_dir/leaf_vlog" > "$run_dir/leaf_vlog_bytes.txt"
+  cp "$db_dir/leaf_vlog/manifest.json" "$run_dir/manifest.json"
   jq -n \
     --argjson leaf_target_bytes "$target" \
     --argjson leaf_target_mib "$label_mib" \

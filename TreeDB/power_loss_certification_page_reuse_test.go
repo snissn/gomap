@@ -24,7 +24,6 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ChunkSize = 64 * 1024

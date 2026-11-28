@@ -1006,11 +1006,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
-		mainDir := filepath.Join(dir, "maindb")
-		if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return result{}, err
 		}
-		if err := backenddb.SaveFormatConfig(mainDir, demoCommandWALFormatConfig(demoBackendOptions(cfg, dir))); err != nil {
+		if err := backenddb.SaveFormatConfig(dir, demoCommandWALFormatConfig(demoBackendOptions(cfg, dir))); err != nil {
 			return result{}, fmt.Errorf("enable command WAL format for column_graph: %w", err)
 		}
 	}
@@ -2449,11 +2448,7 @@ func storageDomain(rel string) string {
 }
 
 func loadFormatConfig(dir string) (backenddb.FormatConfig, bool, error) {
-	format, ok, err := backenddb.LoadFormatConfig(dir)
-	if err != nil || ok {
-		return format, ok, err
-	}
-	return backenddb.LoadFormatConfig(filepath.Join(dir, "maindb"))
+	return backenddb.LoadFormatConfig(dir)
 }
 
 func phaseSince(start time.Time) phaseResult {

@@ -305,7 +305,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                     "treedb.collections.write_domain.indexed_flush.docs_total": event_state["counters"]["indexed_flush_docs_total"],
                 },
             },
-            "wal_filesystem": {"path": str(data_dir / "maindb" / "wal"), "files": 1, "bytes": 100},
+            "wal_filesystem": {"path": str(data_dir / "wal"), "files": 1, "bytes": 100},
         })
     diagnostics_path = root / "diagnostics.jsonl"
     diagnostics_path.write_text(

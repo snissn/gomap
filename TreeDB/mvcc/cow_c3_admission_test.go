@@ -19,7 +19,6 @@ func c3ReadDB(t testing.TB, profile treedb.Profile, pointers bool) *treedb.DB {
 	opts := treedb.OptionsFor(profile, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 4
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.ForcePointers = pointers
 	opts.ValueLog.PointerThreshold = 1 << 30
@@ -49,7 +48,6 @@ func c3ReadHarness(t *testing.T, pointers bool) *c3COWHarness {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 4
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.ForcePointers = pointers
 	opts.ValueLog.PointerThreshold = 1 << 30
@@ -347,7 +345,6 @@ func TestC3GroupAdmissionCapabilityAndACK(t *testing.T) {
 func TestC3ReadCutCapacityRefusalHasNoFallback(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
 	opts.MemtableMode = "cow_btree"
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
 	opts.COWMemtableLimits.MaxViews = 4

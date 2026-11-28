@@ -25,7 +25,6 @@ func TestMVCCStoreNativeCompositeManagedHistory(t *testing.T) {
 			opts.MemtableMode = "cow_btree"
 			opts.MemtableShards = 4
 			opts.FlushThreshold = 1 << 30
-			opts.DisableSideStores = true
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundCheckpointIdleDuration = -1
 			opts.MaxWALBytes = -1

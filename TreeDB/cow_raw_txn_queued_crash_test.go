@@ -92,12 +92,12 @@ func TestPublicRawCOWTxnQueuedPairAbruptReopen(t *testing.T) {
 		t.Fatalf("incomplete ACK receipt: %+v", r.Revisions)
 	}
 	dir := filepath.Join(root, "db")
-	layout, err := resolveOpenDirLayout(dir, false)
+	layoutMainDir, err := resolveOpenDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Open would replay the suffix. Inspect the actual command WAL first.
-	verifyRawTxnQueuedCrashWAL(t, scanPublicCommandWALV2(t, layout.mainDir), r)
+	verifyRawTxnQueuedCrashWAL(t, scanPublicCommandWALV2(t, layoutMainDir), r)
 	opts := cowPublicCrashOptions(ProfileCommandWALDurable, dir)
 	configureRawTxnQueuedPair(&opts, 2<<30)
 	db, err := Open(opts)

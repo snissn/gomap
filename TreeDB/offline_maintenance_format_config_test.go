@@ -49,11 +49,7 @@ func leafFlagsInIndex(t *testing.T, indexPath string) uint16 {
 
 func TestOfflineMaintenanceCommandWALGate(t *testing.T) {
 	root := t.TempDir()
-	mainDir := filepath.Join(root, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatalf("mkdir maindb: %v", err)
-	}
-	if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := treedbdb.SaveFormatConfig(root, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 
@@ -67,7 +63,6 @@ func TestOfflineMaintenanceCommandWALGate(t *testing.T) {
 func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.LeafPrefixCompression = true
 	opts.IndexOuterLeavesInValueLog = false
 
@@ -128,7 +123,6 @@ func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
 func TestValueLogRewriteOffline_LoadsPersistedFormatConfig(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
-	opts.DisableSideStores = true
 	opts.LeafPrefixCompression = true
 	opts.IndexOuterLeavesInValueLog = false
 	opts.ValueLog.PointerThreshold = 1

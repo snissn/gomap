@@ -185,11 +185,11 @@ func resolveOpenProfileOptions(opts *Options) error {
 	source := Profile(opts.ResolvedProfile)
 	applyPreset := false
 	if source == "" {
-		layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+		dir, err := resolveOpenDir(opts.Dir)
 		if err != nil {
 			return err
 		}
-		persisted, ok, err := db.LoadPersistedDurabilityProfile(layout.mainDir)
+		persisted, ok, err := db.LoadPersistedDurabilityProfile(dir)
 		if err != nil {
 			return err
 		}

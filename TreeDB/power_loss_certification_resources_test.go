@@ -34,7 +34,6 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	dir := t.TempDir()
 	backgroundErrors := make(chan error, 16)
 	opts := treedb.OptionsFor(profile, dir)
-	opts.DisableSideStores = false
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
@@ -85,7 +84,7 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		t.Fatal(err)
 	}
 	cutErr := errors.New("power-loss-certification: stop after authoritative-resource checkpoint meta sync")
-	mainDir := filepath.Clean(filepath.Join(dir, "maindb"))
+	mainDir := filepath.Clean(dir)
 	metaSyncs := 0
 	observedEvents := 0
 	selectedOccurrence := -1

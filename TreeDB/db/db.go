@@ -164,8 +164,6 @@ type DB struct {
 	leafSegmentObserverIDs            []uint32
 	lock                              *lockfile.Lock
 
-	physicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
-
 	adaptive           *adaptive.Controller
 	pruner             pruneWorker
 	leafGenerationPins leafGenerationPinTracker
@@ -1260,10 +1258,6 @@ type Options struct {
 	// Zero disables it; valid enabled budgets are 8 bytes through 64 MiB.
 	NegativeLookupFilterBytes int
 	Dir                       string
-	// PhysicalSnapshotSideStoreCapture is registered by the owner of dictionary
-	// and template stores. A missing owner refuses deferred export of an existing
-	// side index. Only "dictdb" and "templatedb" names are admitted.
-	PhysicalSnapshotSideStoreCapture func(context.Context, string) (*PhysicalSnapshotCutV1, error)
 
 	// ResolvedProfile is the canonical public durability contract selected by
 	// the TreeDB profile resolver. Public constructors populate it before any
@@ -1312,22 +1306,9 @@ type Options struct {
 	// maintenance). Only read operations are supported. Under the collection WAL
 	// target contract, read-only open must fail with a recovery-required error if
 	// committed unapplied collection WAL needs mutating recovery.
-	ReadOnly  bool
-	ChunkSize int64 // Default 256KiB
-	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
-	// store when TreeDB is opened via the public `treedb.Open` wrapper.
-	//
-	// It is intentionally independent of ChunkSize so benchmarks and callers can
-	// tune the main index pager without inflating dictdb disk usage.
-	//
-	// Values <= 0 use a default of 64KiB.
-	DictDBChunkSize int64
-	// TemplateDBChunkSize controls the mmap chunk size used for the `templatedb/`
-	// side store when template compression is enabled.
-	//
-	// Values <= 0 use a default of 64KiB.
-	TemplateDBChunkSize int64
-	KeepRecent          uint64 // Default 1
+	ReadOnly   bool
+	ChunkSize  int64  // Default 256KiB
+	KeepRecent uint64 // Default 1
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
 	PagerSyncConcurrency int
@@ -1625,9 +1606,6 @@ type Options struct {
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
-	// DisableSideStores skips opening dictdb/templatedb side stores.
-	// This is intended for internal side-store usage (e.g. templatedb itself).
-	DisableSideStores bool
 
 	// testCommandWALRecoveryFailAfterLSN injects a one-shot recovery failure
 	// after the given LSN is published. It is package-private test plumbing so
@@ -2948,7 +2926,6 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 		ownedFinishGuardV6:                     db.ownedFinishGuardV6,
 		commandWALReplayNativeCollectionLayout: nativeSemanticOwner,
 		dependencyDirectoryRequiredFeature:     requiresDependencyDirectory,
-		physicalSnapshotSideStoreCapture:       opts.PhysicalSnapshotSideStoreCapture,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,

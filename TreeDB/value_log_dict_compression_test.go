@@ -8,15 +8,11 @@ import (
 
 func TestEnableValueLogDictCompression_SetsDefaults(t *testing.T) {
 	opts := Options{
-		DisableSideStores: true,
 		ValueLog: ValueLogOptions{
 			DictTrain: TrainConfig{TrainBytes: -1},
 		},
 	}
 	EnableValueLogDictCompression(&opts)
-	if !opts.DisableSideStores {
-		t.Fatalf("expected DisableSideStores preserved after enable (dictionaries live in maindb)")
-	}
 	if got := opts.ValueLog.DictTrain.TrainBytes; got != compression.DefaultTrainBytes {
 		t.Fatalf("unexpected TrainBytes after enable: got=%d want=%d", got, compression.DefaultTrainBytes)
 	}

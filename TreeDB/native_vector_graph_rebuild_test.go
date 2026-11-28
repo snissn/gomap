@@ -212,7 +212,7 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 	if err := os.CopyFS(replayDir, os.DirFS(dir)); err != nil {
 		t.Fatal(err)
 	}
-	replaySeedReady := rebindNativeGraphSeed(t, replayDir, opts.DisableSideStores)
+	replaySeedReady := rebindNativeGraphSeed(t, replayDir)
 	openDB(opts)
 	col, err = manager.OpenCollection("source")
 	if err != nil {
@@ -344,11 +344,11 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 	replayOpts := opts
 	if replaySeedReady {
 		replayOpts = indexedSliceOptions(ProfileCommandWALDurable, replayDir)
-		layout, err := resolveOpenDirLayout(replayDir, replayOpts.DisableSideStores)
+		layoutMainDir, err := resolveOpenDir(replayDir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		walDir := backenddb.WALDirPath(layout.mainDir)
+		walDir := backenddb.WALDirPath(layoutMainDir)
 		if err := os.MkdirAll(walDir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -489,15 +489,15 @@ func TestNativeVectorGraphRebuildLifecycleAndTransport(t *testing.T) {
 }
 
 // Match the maintained source-import fixture's original snapshot-restore path.
-func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) bool {
+func rebindNativeGraphSeed(t *testing.T, dir string) bool {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(dir, disableSideStores)
+	layoutMainDir, err := resolveOpenDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		before := nativeGraphAssetContents(t, dir)
-		err := backenddb.RebindDurableRootSnapshotLayoutV1(layout.mainDir, "")
+		err := backenddb.RebindDurableRootSnapshotLayoutV1(layoutMainDir, "")
 		if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 			t.Fatalf("snapshot rebind platform refusal: %v", err)
 		}
@@ -506,11 +506,7 @@ func rebindNativeGraphSeed(t *testing.T, dir string, disableSideStores bool) boo
 		}
 		return false
 	}
-	sideRoot := ""
-	if !layout.disableSideStores {
-		sideRoot = layout.rootDir
-	}
-	if err := backenddb.RebindDurableRootSnapshotLayoutV1(layout.mainDir, sideRoot); err != nil {
+	if err := backenddb.RebindDurableRootSnapshotLayoutV1(layoutMainDir, ""); err != nil {
 		t.Fatal(err)
 	}
 	return true
@@ -548,11 +544,11 @@ func nativeGraphAssetContents(t *testing.T, dir string) map[string][sha256.Size]
 
 func readNativeGraphRebuildFrame(t *testing.T, opts Options, assigned uint64) commitlog.CommandEnvelope {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

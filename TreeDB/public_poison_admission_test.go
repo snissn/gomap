@@ -13,7 +13,6 @@ import (
 
 func TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	database, err := treedb.Open(opts)
@@ -75,7 +74,6 @@ func TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison(t *tes
 
 func TestPublicCachedHandleRejectsMutationAfterPostMetaFailure(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	database, err := treedb.Open(opts)
@@ -116,7 +114,6 @@ func TestPublicCachedHandleRejectsMutationAfterPostMetaFailure(t *testing.T) {
 
 func TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	database, err := treedb.Open(opts)

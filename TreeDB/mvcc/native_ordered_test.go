@@ -171,7 +171,6 @@ func TestNativeOrderedUnsupportedCOWStoreRetainsQualifiedPhysicalWrites(t *testi
 				opts.MemtableMode = "cow_btree"
 				opts.MemtableShards = 4
 				opts.FlushThreshold = 1 << 30
-				opts.DisableSideStores = true
 				opts.DisableBackgroundPrune = true
 				opts.BackgroundCheckpointInterval = -1
 				database, err := treedb.Open(opts)

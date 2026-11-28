@@ -4842,9 +4842,8 @@ func runBenchmark(cfg BenchConfig) (result BenchRun, resultErr error) {
 
 					// Best-effort index.db size reporting (primarily for TreeDB).
 					var before uint64
-					// TreeDB stores its main index under "maindb/index.db" within the
-					// per-DB temp root directory.
-					indexPath := filepath.Join(inst.Dir, "maindb", "index.db")
+					// TreeDB stores its index at "index.db" directly within the per-DB dir.
+					indexPath := filepath.Join(inst.Dir, "index.db")
 					if st, err := os.Stat(indexPath); err == nil {
 						before = uint64(st.Size())
 					}
@@ -5499,38 +5498,23 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 		return out, fmt.Errorf("disk usage: empty root dir")
 	}
 
-	mainIndex := filepath.Join(rootDir, "maindb", "index.db")
+	mainIndex := filepath.Join(rootDir, "index.db")
 	if st, err := os.Stat(mainIndex); err == nil {
 		if sz := st.Size(); sz > 0 {
 			out.MainIndexBytes = uint64(sz)
 		}
 	}
-	mainWAL := filepath.Join(rootDir, "maindb", "wal")
+	mainWAL := filepath.Join(rootDir, "wal")
 	if u, err := computeWalDiskUsage(mainWAL); err == nil {
 		out.MainWAL = u
 	}
-	mainValueLog := filepath.Join(rootDir, "maindb", "value_vlog")
+	mainValueLog := filepath.Join(rootDir, "value_vlog")
 	if u, err := computeWalDiskUsage(mainValueLog); err == nil {
 		out.MainValueLog = u
 	}
-	mainLeafLog := filepath.Join(rootDir, "maindb", "leaf_vlog")
+	mainLeafLog := filepath.Join(rootDir, "leaf_vlog")
 	if u, err := computeWalDiskUsage(mainLeafLog); err == nil {
 		out.MainLeafLog = u
-	}
-
-	dictIndex := filepath.Join(rootDir, "dictdb", "index.db")
-	if st, err := os.Stat(dictIndex); err == nil {
-		if sz := st.Size(); sz > 0 {
-			out.DictIndexBytes = uint64(sz)
-		}
-	}
-	dictWAL := filepath.Join(rootDir, "dictdb", "wal")
-	if u, err := computeWalDiskUsage(dictWAL); err == nil {
-		out.DictWAL = u
-	}
-	dictValueLog := filepath.Join(rootDir, "dictdb", "value_vlog")
-	if u, err := computeWalDiskUsage(dictValueLog); err == nil {
-		out.DictValueLog = u
 	}
 
 	return out, nil
@@ -5634,7 +5618,7 @@ func scanTreeDBLeafVLogCodecStats(rootDir string, countAuto bool) (map[string]st
 	if strings.TrimSpace(rootDir) == "" {
 		return nil, nil
 	}
-	leafDir := filepath.Join(rootDir, "maindb", "leaf_vlog")
+	leafDir := filepath.Join(rootDir, "leaf_vlog")
 	paths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"))
 	if err != nil {
 		return nil, err

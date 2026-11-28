@@ -25,7 +25,6 @@ func TestDeleteRangeIssue2704BatchBoundsCoalescingValueLogPointersReopen(t *test
 		Durability:                   DurabilityWALOnRelaxed,
 		CommandWAL:                   true,
 		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	}
 	opts.ValueLog.PointerThreshold = 1
@@ -107,7 +106,7 @@ func TestDeleteRangeIssue2704BatchBoundsCoalescingValueLogPointersReopen(t *test
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1})
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}

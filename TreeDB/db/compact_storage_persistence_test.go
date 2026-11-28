@@ -107,7 +107,6 @@ func compactPersistenceProofOptions(dir string) Options {
 		CommandWAL:                 true,
 		Durability:                 DurabilityWALOnRelaxed,
 		DisableBackgroundPrune:     true,
-		DisableSideStores:          true,
 		IndexOuterLeavesInValueLog: true,
 		LeafPrefixCompression:      true,
 		IndexColumnarLeaves:        true,

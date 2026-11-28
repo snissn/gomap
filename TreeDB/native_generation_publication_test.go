@@ -236,8 +236,8 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	var armed atomic.Bool
 	var once sync.Once
 	resume := func() { once.Do(func() { close(release) }) }
-	path := filepath.Join(opts.Dir, "maindb", "index.db")
-	wal := filepath.Join(opts.Dir, "maindb", "wal")
+	path := filepath.Join(opts.Dir, "index.db")
+	wal := filepath.Join(opts.Dir, "wal")
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 		match := e.Point == durabilitycut.BeforeMetaWrite && e.Resource == durabilitycut.ResourceMeta && e.Path == path
 		if holdWAL {

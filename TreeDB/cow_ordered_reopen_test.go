@@ -25,7 +25,6 @@ func cowOrderedDurabilityOptions(profile treedb.Profile, dir string) treedb.Opti
 	opts.MemtableMode = "cow_ordered"
 	opts.MemtableShards = 2
 	opts.FlushThreshold = 1 << 30
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.ValueLog.PointerThreshold = 1

@@ -164,7 +164,6 @@ type observedPowerLossCommandFrame struct {
 func powerLossOptions(dir string) treedb.Options {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 	opts.ChunkSize = 64 * 1024
-	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 	return opts

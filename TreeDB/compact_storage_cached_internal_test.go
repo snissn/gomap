@@ -26,7 +26,6 @@ func TestCompactStorageCachedAdvancesWritersPastBackendSegments(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 1
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
@@ -686,7 +685,6 @@ func cachedRewriteReclaimTestOptions(dir string) Options {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
-	opts.DisableSideStores = true
 	opts.JournalLanes = 1
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -143,50 +142,6 @@ func (f *FSM) CaptureRaftSnapshotV1() (result raftcluster.RaftSnapshotV1, captur
 		if err != nil {
 			return err
 		}
-		if !f.cluster.DisableSideStores {
-			if err := files.add(snapshotCapturedFileV1{name: raftSnapshotSidePrefixV1, mode: os.ModeDir | 0700}); err != nil {
-				return err
-			}
-			sideRoot := snapshotSideStoreRootV1(raftcluster.MainDBDir(f.cluster.Dir))
-			for _, name := range raftSnapshotSideStoreEntriesV1 {
-				root := filepath.Join(sideRoot, name)
-				info, err := os.Lstat(root)
-				if errors.Is(err, os.ErrNotExist) {
-					continue
-				}
-				if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-					return fmt.Errorf("raftfsm: invalid snapshot side directory %q: %v", root, err)
-				}
-				if _, err := os.Lstat(filepath.Join(root, "index.db")); errors.Is(err, os.ErrNotExist) {
-					// No owner exists for a non-database directory. Preserve an
-					// empty namespace, but never silently drop unowned contents.
-					dir, err := rootpublication.OpenStableParent(root)
-					if err != nil {
-						return err
-					}
-					got, statErr := dir.Stat()
-					entries, readErr := dir.ReadDir(1)
-					closeErr := dir.Close()
-					if statErr != nil || !os.SameFile(info, got) || len(entries) != 0 || !errors.Is(readErr, io.EOF) || closeErr != nil {
-						return fmt.Errorf("raftfsm: nonempty or changed unowned side directory %q: %v", root, errors.Join(statErr, readErr, closeErr))
-					}
-					if err := files.add(snapshotCapturedFileV1{name: raftSnapshotSidePrefixV1 + "/" + name, mode: os.ModeDir | 0700}); err != nil {
-						return err
-					}
-					continue
-				} else if err != nil {
-					return err
-				}
-				side, err := f.db.CapturePhysicalSnapshotSideStoreV1(ctx, name)
-				if err != nil {
-					return err
-				}
-				if err := files.captureStorage(ctx, raftSnapshotSidePrefixV1+"/"+name, root, side); err != nil {
-					_ = side.Close()
-					return err
-				}
-			}
-		}
 		if err := files.add(snapshotCapturedFileV1{name: raftSnapshotApplyPrefixV1, mode: os.ModeDir | 0700}); err != nil {
 			return err
 		}
@@ -286,24 +241,18 @@ func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCaptu
 			return raftcluster.RaftSnapshotV1{}, err
 		}
 	}
-	mainDir, sideDir := filepath.Join(stage, raftSnapshotDBPrefixV1), filepath.Join(stage, raftSnapshotSidePrefixV1)
-	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, mainDir, sideDir, options.DisableSideStores); err != nil {
+	mainDir := filepath.Join(stage, raftSnapshotDBPrefixV1)
+	if err := rebindExtractedRaftSnapshotDurableRootsWithContextV1(ctx, mainDir); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	options.Dir = mainDir
 	options.ReadOnly = true
-	options.PhysicalSnapshotSideStoreCapture = nil
-	closeSides, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &options)
-	if err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
-	}
 	database, err := backenddb.Open(options)
 	if err != nil {
-		_ = closeSides()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	digest, digestErr := raftapply.LogicalDigestV1ForSnapshotDBContext(ctx, database, raftapply.LogicalDigestOptionsV1{ScopeRule: raftentry.ScopeRuleV1(manifest.Scope.ScopeRule), DatabaseScope: manifest.Scope.DatabaseScope, CatalogScope: manifest.Scope.CatalogScope})
-	closeErr := errors.Join(database.Close(), closeSides())
+	closeErr := database.Close()
 	if err := errors.Join(digestErr, closeErr, ctx.Err()); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}

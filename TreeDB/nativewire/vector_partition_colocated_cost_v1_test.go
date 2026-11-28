@@ -120,7 +120,7 @@ func TestFixedPeerColocatedMutationPublicCostV1(t *testing.T) {
 					v.RetainedOutcomeCount, v.RetainedOutcomeBytes = binary.LittleEndian.Uint64(logical[1][8:]), binary.LittleEndian.Uint64(logical[1][16:])
 					v.OutcomeChain = hex.EncodeToString(logical[1][24:])
 				}
-				resolved, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(replica.config.DataRoot, string(group.ID)), ClusterDir: replica.config.RaftRoot, DisableSideStores: true, NodeID: replica.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
+				resolved, err := raftcluster.Validate(raftcluster.Config{Dir: filepath.Join(replica.config.DataRoot, string(group.ID)), ClusterDir: replica.config.RaftRoot, NodeID: replica.config.NodeID, GroupID: group.ID, Peers: group.Peers, Features: group.Features})
 				if err != nil {
 					t.Fatal(err)
 				}

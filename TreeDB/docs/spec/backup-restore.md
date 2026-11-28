@@ -5,25 +5,25 @@ TreeDB directories once command WAL durable-at-ack is enabled.
 
 ## 1. Restorable Directory File Set
 
-A complete restorable root-layout backup includes:
+A complete restorable store backup includes:
 
-- `maindb/index.db`;
-- `maindb/format.json`, when present;
-- `maindb/wal/commit-l<lane>-<seq>.log` needed for cached replay and future
+- `index.db`;
+- `format.json`, when present;
+- `wal/commit-l<lane>-<seq>.log` needed for cached replay and future
   typed command-WAL replay;
 - command-WAL cleanup metadata or manifest proof for omitted commit-log ranges,
   once command WAL cleanup metadata lands;
-- `maindb/value_vlog/value-l<lane>-<seq>.log` referenced by roots, cached WAL,
+- `value_vlog/value-l<lane>-<seq>.log` referenced by roots, cached WAL,
   command WAL, snapshots/read views represented in the backup manifest, or
   external-ref protection metadata;
-- `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
+- `leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
 - future typed external-ref payload files referenced by non-cleaned command WAL
   frames, once a separate authority contract activates them, plus future column
   files referenced by roots;
 - value-log dictionaries and template compression definitions live inside
-  `maindb/index.db` `SystemRootPageID` and backup/restore automatically with
-  `maindb`;
+  `index.db` `SystemRootPageID` and backup/restore automatically with
+  the store;
 - future column-store directories: parts, manifests, filters, delete bitmaps,
   dictionaries, compression metadata, locator roots, and their cleanup
   manifests;
@@ -34,9 +34,7 @@ A complete restorable root-layout backup includes:
 present, restore must run existing index-swap recovery before command WAL
 recovery.
 
-Copying only `maindb/index.db` is not a backup. Copying only `maindb` is not a
-complete root-layout backup when command-WAL external refs or future column
-external-ref files are enabled.
+Copying only `index.db` is not a backup.
 
 The typed `CommandEnvelope.ExternalRefs` section is currently dormant: V1 and
 V2 reject every non-empty section before journal mutation. RawKV `SetRID`
@@ -46,8 +44,8 @@ describe a separate future activation, not authority accepted by current codecs.
 
 ### Document files or the WAL on a separate Linux mount
 
-A root-layout store can have its document segments at `maindb/value_vlog` or
-its command journal at `maindb/wal` on a separate filesystem. Keep both
+A flat store can have its document segments at `value_vlog` or
+its command journal at `wal` on a separate filesystem. Keep both
 filesystems mounted through checked Close, backup and verification of that
 closed store. A copy constrained to one filesystem skips the mounted files.
 Independent live snapshots require a TreeDB backup barrier spanning both.
@@ -64,7 +62,7 @@ set -eu
 : "${store:?}" "${mounted_role:?}" "${store_uuid:?}" "${mounted_uuid:?}"
 : "${store_dir_id:?}" "${mounted_dir_id:?}"  # decimal device:inode from stat
 case "$mounted_role" in
-    value_vlog|wal) mounted="$store/maindb/$mounted_role" ;;
+    value_vlog|wal) mounted="$store/$mounted_role" ;;
     *) exit 1 ;;
 esac
 check_value() {
@@ -110,9 +108,8 @@ For a restore onto new devices or inodes:
    and directory identities outside the copy.
 2. On the closed private copy, run `quicksilver_snapshot_restore "$store"`
    (from `cmd/quicksilver_snapshot_restore`). It calls
-   `RebindDurableRootSnapshotLayoutWithContextV1` on each present side-store
-   index first, then on the staged `maindb` with the store root as its
-   side-store root. A failure can leave the staging copy partially rebound.
+   `RebindDurableRootSnapshotLayoutWithContextV1` on the staged store directory.
+   A failure can leave the staging copy partially rebound.
    Keep the original backup and start again from a fresh verified extraction.
 3. Use the proposed destination identities for the pre-Open check. Compare
    typed readback against the expected backup cut and check Close. Install the

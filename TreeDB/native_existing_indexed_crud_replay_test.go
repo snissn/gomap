@@ -321,11 +321,11 @@ func checkIndexedCRUDSingletonFrames(t *testing.T, opts Options) {
 	t.Helper()
 	// Resolve the same public root/side-store mapping as Open, rather than
 	// treating its configured root as a backend database directory.
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("canonical WAL paths=%q: %v", paths, err)
 	}

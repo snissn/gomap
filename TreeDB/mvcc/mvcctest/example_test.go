@@ -18,7 +18,6 @@ func ExampleFromStore() {
 	db, err := treedb.Open(treedb.Options{
 		Dir:                          dir,
 		Durability:                   treedb.DurabilityWALOffRelaxed,
-		DisableSideStores:            true,
 		BackgroundCheckpointInterval: -1,
 	})
 	if err != nil {

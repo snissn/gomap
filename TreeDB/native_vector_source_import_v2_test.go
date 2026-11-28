@@ -114,7 +114,7 @@ func runNativeVectorSourceImportV2(t *testing.T, dir, replayDir string, replayed
 		}
 		// Restore copied physical identities through the maintained snapshot
 		// restore path; ordinary Open intentionally rejects stale source identities.
-		if !rebindNativeGraphSeed(t, replayDir, opts.DisableSideStores) {
+		if !rebindNativeGraphSeed(t, replayDir) {
 			// Continue the complete portable producer/checkpoint/reopen checks,
 			// but do not append transport frames onto an unrebound copied seed.
 			replayDir = ""
@@ -317,11 +317,11 @@ func runNativeVectorSourceImportV2(t *testing.T, dir, replayDir string, replayed
 		t.Fatal(err)
 	}
 	if replayDir != "" {
-		layout, err := resolveOpenDirLayout(replayDir, opts.DisableSideStores)
+		layoutMainDir, err := resolveOpenDir(replayDir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		walDir := backenddb.WALDirPath(layout.mainDir)
+		walDir := backenddb.WALDirPath(layoutMainDir)
 		if err := os.MkdirAll(walDir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -408,11 +408,11 @@ func runNativeVectorSourceImportV2(t *testing.T, dir, replayDir string, replayed
 
 func checkNativeVectorSourceFrameV2(t *testing.T, opts Options, assigned uint64) commitlog.CommandEnvelope {
 	t.Helper()
-	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	layoutMainDir, err := resolveOpenDir(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 	if err != nil {
 		t.Fatal(err)
 	}

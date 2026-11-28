@@ -88,12 +88,12 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 				cwd := t.TempDir()
 				t.Chdir(cwd)
 				cfg.Dir = "./db"
-				cfg.ClusterDir = filepath.Join(cwd, "db", "maindb", "wal", "raft")
+				cfg.ClusterDir = filepath.Join(cwd, "db", "wal", "raft")
 			},
 			want: ErrInvalidStoragePath,
 		},
 		{
-			name: "cluster dir inside command wal with maindb options dir",
+			name: "cluster dir inside command wal with maindb-named flat options dir",
 			mut: func(cfg *Config) {
 				root := t.TempDir()
 				mainDir := filepath.Join(root, "maindb")
@@ -103,39 +103,8 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
 					t.Fatalf("write index.db: %v", err)
 				}
-				if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
-					t.Fatalf("mkdir dictdb: %v", err)
-				}
 				cfg.Dir = mainDir
 				cfg.ClusterDir = filepath.Join(mainDir, "wal", "raft")
-			},
-			want: ErrInvalidStoragePath,
-		},
-		{
-			name: "cluster dir inside dict side store with root options dir",
-			mut: func(cfg *Config) {
-				root := t.TempDir()
-				cfg.Dir = root
-				cfg.ClusterDir = filepath.Join(root, "dictdb", "raft")
-			},
-			want: ErrInvalidStoragePath,
-		},
-		{
-			name: "cluster dir inside template side store with maindb options dir",
-			mut: func(cfg *Config) {
-				root := t.TempDir()
-				mainDir := filepath.Join(root, "maindb")
-				if err := os.MkdirAll(mainDir, 0o755); err != nil {
-					t.Fatalf("mkdir maindb: %v", err)
-				}
-				if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
-					t.Fatalf("write index.db: %v", err)
-				}
-				if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
-					t.Fatalf("mkdir dictdb: %v", err)
-				}
-				cfg.Dir = mainDir
-				cfg.ClusterDir = filepath.Join(root, "templatedb", "raft")
 			},
 			want: ErrInvalidStoragePath,
 		},
@@ -174,7 +143,6 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			mut: func(cfg *Config) {
 				root := t.TempDir()
 				cfg.Dir = root
-				cfg.DisableSideStores = true
 				cfg.ClusterDir = filepath.Join(root, "wal", "raft")
 			},
 			want: ErrInvalidStoragePath,
@@ -184,20 +152,7 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			mut: func(cfg *Config) {
 				root := t.TempDir()
 				cfg.Dir = root
-				cfg.DisableSideStores = true
 				cfg.ClusterDir = filepath.Join(root, "column_assets", "raft")
-			},
-			want: ErrInvalidStoragePath,
-		},
-		{
-			name: "disable side stores rejects root layout",
-			mut: func(cfg *Config) {
-				root := t.TempDir()
-				if err := os.MkdirAll(filepath.Join(root, "maindb"), 0o755); err != nil {
-					t.Fatalf("mkdir maindb: %v", err)
-				}
-				cfg.Dir = root
-				cfg.DisableSideStores = true
 			},
 			want: ErrInvalidStoragePath,
 		},
@@ -205,7 +160,7 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			name: "symlinked cluster dir into command wal",
 			mut: func(cfg *Config) {
 				root := t.TempDir()
-				walDir := filepath.Join(root, "maindb", "wal")
+				walDir := filepath.Join(root, "wal")
 				if err := os.MkdirAll(walDir, 0o755); err != nil {
 					t.Fatalf("mkdir wal: %v", err)
 				}
@@ -223,7 +178,7 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			mut: func(cfg *Config) {
 				root := t.TempDir()
 				link := filepath.Join(root, "raft-link")
-				if err := os.Symlink(filepath.Join(root, "maindb", "wal"), link); err != nil {
+				if err := os.Symlink(filepath.Join(root, "wal"), link); err != nil {
 					t.Skipf("symlink unsupported: %v", err)
 				}
 				cfg.Dir = root
@@ -407,7 +362,6 @@ func TestValidateDisableSideStoresAllowsDefaultClusterDir(t *testing.T) {
 	root := t.TempDir()
 	cfg := validConfig(t)
 	cfg.Dir = root
-	cfg.DisableSideStores = true
 	cfg.ClusterDir = ""
 
 	resolved, err := Validate(cfg)
@@ -431,10 +385,9 @@ func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
 		t.Fatalf("write index.db: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
-		t.Fatalf("mkdir dictdb: %v", err)
-	}
-	if got, want := DefaultClusterDir(mainDir), filepath.Join(root, "raftcluster"); got != want {
+	// Pure flat layout: even a directory named "maindb" resolves its default
+	// cluster directory inside itself.
+	if got, want := DefaultClusterDir(mainDir), filepath.Join(mainDir, "raftcluster"); got != want {
 		t.Fatalf("DefaultClusterDir(%q)=%q want %q", mainDir, got, want)
 	}
 	if got, want := CommandWALDir(mainDir), filepath.Join(mainDir, "wal"); got != want {

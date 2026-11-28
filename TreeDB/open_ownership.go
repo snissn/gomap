@@ -21,25 +21,13 @@ func acquireOrdinaryOpenOwnership(opts Options) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	root := openOwnershipRoot(dir)
-	// Both <root> and <root>/maindb are accepted public spellings. Check
-	// markers before layout validation, including an as-yet uninitialized
-	// maindb path, so refusal itself cannot create a second namespace.
-	refuse := func() error {
-		for _, candidate := range [...]string{dir, root, filepath.Join(root, "maindb")} {
-			if err := refuseExternalRecoveryDirectory(candidate); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := refuse(); err != nil {
+	if err := refuseExternalRecoveryDirectory(dir); err != nil {
 		return nil, err
 	}
-	if _, err := resolveOpenDirLayout(dir, opts.DisableSideStores); err != nil {
+	if _, err := resolveOpenDir(dir); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(root, "INIT.LOCK")
+	path := filepath.Join(dir, "INIT.LOCK")
 	var lock *lockfile.Lock
 	if opts.ReadOnly {
 		lock, err = lockfile.AcquireShared(path)
@@ -47,7 +35,7 @@ func acquireOrdinaryOpenOwnership(opts Options) (func(), error) {
 			err = nil
 		}
 	} else {
-		if err := backenddb.EnsureStorageLayoutDirsForOpen(0755, path, root); err != nil {
+		if err := backenddb.EnsureStorageLayoutDirsForOpen(0755, path, dir); err != nil {
 			return nil, err
 		}
 		lock, err = lockfile.Acquire(path)
@@ -60,26 +48,21 @@ func acquireOrdinaryOpenOwnership(opts Options) (func(), error) {
 			_ = lock.Close()
 		}
 	}
-	if err := refuse(); err != nil {
+	if err := refuseExternalRecoveryDirectory(dir); err != nil {
 		unlock()
 		return nil, err
 	}
 	return unlock, nil
 }
 
-// Initialization uses one namespace lock even before index.db or side stores
-// exist. Keep the maindb spelling canonical for flat/side-store-disabled opens
-// too: it must not race an external owner selecting the enclosing root.
+// openOwnershipRoot returns the canonical initialization lock directory.
 func openOwnershipRoot(absoluteDir string) string {
-	if filepath.Base(absoluteDir) == "maindb" {
-		return filepath.Dir(absoluteDir)
-	}
 	return absoluteDir
 }
 
-// Existing symlink aliases must select the same namespace before applying the
-// maindb spelling rule. Missing new directories retain their absolute spelling;
-// the OS still resolves any existing ancestor to the same lock inode.
+// Existing symlink aliases must select the same namespace before locking.
+// Missing new directories retain their absolute spelling; the OS still resolves
+// any existing ancestor to the same lock inode.
 func resolveOpenOwnershipDirectory(dir string) (string, error) {
 	absolute, err := filepath.Abs(dir)
 	if err != nil {
@@ -103,7 +86,7 @@ func refuseExternalRecoveryEnclosingLayout(dir, root string) error {
 		return err
 	}
 	if _, err := os.Lstat(filepath.Join(root, "index.db")); err == nil {
-		return fmt.Errorf("%w: enclosing directory already contains a flat database", ErrExternalRecovery)
+		return fmt.Errorf("%w: enclosing directory already contains a database", ErrExternalRecovery)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

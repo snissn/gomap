@@ -23,7 +23,6 @@ import (
 func TestPublicHistoryVacuumAndSubsequentFlush(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
 	opts.MemtableMode = "cow_btree"
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.MaxWALBytes = -1

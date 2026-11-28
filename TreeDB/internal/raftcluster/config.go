@@ -96,24 +96,22 @@ type Peer struct {
 // required so validation can reject layouts that overlap the resolved TreeDB
 // main DB, WAL, value_vlog, or leaf_vlog paths.
 type Config struct {
-	Dir               string
-	ClusterDir        string
-	DisableSideStores bool
-	NodeID            NodeID
-	GroupID           GroupID
-	Peers             []Peer
-	Features          FeatureSet
+	Dir        string
+	ClusterDir string
+	NodeID     NodeID
+	GroupID    GroupID
+	Peers      []Peer
+	Features   FeatureSet
 }
 
 type ResolvedConfig struct {
-	Dir               string
-	ClusterDir        string
-	DisableSideStores bool
-	NodeID            NodeID
-	GroupID           GroupID
-	Peers             []Peer
-	Features          FeatureSet
-	Layout            StorageLayout
+	Dir        string
+	ClusterDir string
+	NodeID     NodeID
+	GroupID    GroupID
+	Peers      []Peer
+	Features   FeatureSet
+	Layout     StorageLayout
 }
 
 type PeerStorageDir struct {
@@ -196,10 +194,7 @@ func Validate(cfg Config) (ResolvedConfig, error) {
 	if err != nil {
 		return ResolvedConfig{}, err
 	}
-	treeLayout, err := resolveConfigTreeDBStorageLayout(dir, cfg.DisableSideStores)
-	if err != nil {
-		return ResolvedConfig{}, err
-	}
+	treeLayout := resolveTreeDBStorageLayout(dir)
 	clusterDir := cfg.ClusterDir
 	if strings.TrimSpace(clusterDir) == "" {
 		clusterDir = defaultClusterDir(treeLayout)
@@ -210,14 +205,13 @@ func Validate(cfg Config) (ResolvedConfig, error) {
 	}
 	layout := storageLayout(clusterDir, cfg.NodeID, cfg.GroupID, peers)
 	return ResolvedConfig{
-		Dir:               dir,
-		ClusterDir:        clusterDir,
-		DisableSideStores: cfg.DisableSideStores,
-		NodeID:            cfg.NodeID,
-		GroupID:           cfg.GroupID,
-		Peers:             peers,
-		Features:          features,
-		Layout:            layout,
+		Dir:        dir,
+		ClusterDir: clusterDir,
+		NodeID:     cfg.NodeID,
+		GroupID:    cfg.GroupID,
+		Peers:      peers,
+		Features:   features,
+		Layout:     layout,
 	}, nil
 }
 
@@ -386,16 +380,7 @@ func cleanStorageRoot(layout treeDBStorageLayout, clusterDir string) (string, er
 		filepath.Join(layout.mainDir, "value_vlog"),
 		filepath.Join(layout.mainDir, "leaf_vlog"),
 		filepath.Join(layout.mainDir, "column_assets"),
-	}
-	if layout.flat {
-		reserved = append(reserved, filepath.Join(layout.mainDir, "index.db"))
-	} else {
-		reserved = append(
-			reserved,
-			layout.mainDir,
-			filepath.Join(layout.rootDir, "dictdb"),
-			filepath.Join(layout.rootDir, "templatedb"),
-		)
+		filepath.Join(layout.mainDir, "index.db"),
 	}
 	for _, path := range reserved {
 		reservedAbs, err := realCleanStoragePath("reserved TreeDB path", path)
@@ -416,60 +401,11 @@ func defaultClusterDir(layout treeDBStorageLayout) string {
 type treeDBStorageLayout struct {
 	rootDir string
 	mainDir string
-	flat    bool
 }
 
 func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
 	clean := filepath.Clean(dir)
-	if info, err := os.Stat(filepath.Join(clean, "maindb")); err == nil && info.IsDir() {
-		return treeDBStorageLayout{
-			rootDir: clean,
-			mainDir: filepath.Join(clean, "maindb"),
-		}
-	}
-	if info, err := os.Stat(filepath.Join(clean, "index.db")); err == nil && !info.IsDir() {
-		if filepath.Base(clean) == "maindb" {
-			parent := filepath.Dir(clean)
-			if treeDBSideStoreDirExists(parent) {
-				return treeDBStorageLayout{rootDir: parent, mainDir: clean}
-			}
-		}
-		return treeDBStorageLayout{rootDir: clean, mainDir: clean, flat: true}
-	}
-	if filepath.Base(clean) == "maindb" {
-		return treeDBStorageLayout{
-			rootDir: filepath.Dir(clean),
-			mainDir: clean,
-		}
-	}
-	return treeDBStorageLayout{
-		rootDir: clean,
-		mainDir: filepath.Join(clean, "maindb"),
-	}
-}
-
-func treeDBSideStoreDirExists(parent string) bool {
-	for _, name := range []string{"dictdb", "templatedb"} {
-		if info, err := os.Stat(filepath.Join(parent, name)); err == nil && info.IsDir() {
-			return true
-		}
-	}
-	return false
-}
-
-func resolveConfigTreeDBStorageLayout(dir string, disableSideStores bool) (treeDBStorageLayout, error) {
-	clean := filepath.Clean(dir)
-	if !disableSideStores {
-		return resolveTreeDBStorageLayout(clean), nil
-	}
-	if info, err := os.Stat(filepath.Join(clean, "maindb")); err == nil && info.IsDir() {
-		return treeDBStorageLayout{}, errors.Join(ErrInvalidConfig, ErrInvalidStoragePath, fmt.Errorf("DisableSideStores=true but dir looks like a TreeDB root containing maindb/: %s", clean))
-	}
-	return treeDBStorageLayout{
-		rootDir: clean,
-		mainDir: clean,
-		flat:    true,
-	}, nil
+	return treeDBStorageLayout{rootDir: clean, mainDir: clean}
 }
 
 func realCleanStoragePath(label, p string) (string, error) {

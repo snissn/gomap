@@ -343,9 +343,9 @@ canonical and quarantined pair with conflicting identities, or malformed
 quarantine contents, fails closed rather than guessing. Reconciliation runs
 before segment handles become visible to publication or maintenance.
 
-Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
-Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
-segments are discovered from `<maindb>/leaf_vlog`.
+Commit-log segments are discovered from `<dir>/wal` by filename parsing.
+Value-log segments are discovered from `<dir>/value_vlog`; split leaf-log
+segments are discovered from `<dir>/leaf_vlog`.
 
 The split-leaf generation manifest (`leaf_vlog/manifest.durable.<revision>.json`
 on stable relative-namespace platforms such as Linux/macOS, or

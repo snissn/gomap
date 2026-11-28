@@ -128,11 +128,11 @@ func TestNativeTypedStringIndexDropUnappliedReplay(t *testing.T) {
 		if indexedCRUDAppliedLSN(t, handle) != 2 || handle.CommandWALNextLSN() != 11 {
 			t.Fatalf("typed drop unapplied basis=%d next=%d", indexedCRUDAppliedLSN(t, handle), handle.CommandWALNextLSN())
 		}
-		layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+		layoutMainDir, err := resolveOpenDir(opts.Dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layout.mainDir), "commit-l0-*.log"))
+		paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(layoutMainDir), "commit-l0-*.log"))
 		if err != nil {
 			t.Fatal(err)
 		}

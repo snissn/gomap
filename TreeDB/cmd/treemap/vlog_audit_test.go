@@ -26,8 +26,8 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
-	if report.MainDir != filepath.Join(dir, "maindb") {
-		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, filepath.Join(dir, "maindb"))
+	if report.MainDir != dir {
+		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, dir)
 	}
 	if report.SegmentsOnDisk == 0 {
 		t.Fatalf("expected on-disk value-log segments")
@@ -53,31 +53,31 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
-		t.Fatalf("collectValueLogAudit(maindb): %v", err)
+		t.Fatalf("collectValueLogAudit(dir): %v", err)
 	}
-	if report.MainDir != filepath.Join(dir, "maindb") {
-		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, filepath.Join(dir, "maindb"))
+	if report.MainDir != dir {
+		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, dir)
 	}
 	if report.SegmentsOnDisk == 0 || report.BytesOnDisk == 0 {
 		t.Fatalf("expected segment inventory, got segments=%d bytes=%d", report.SegmentsOnDisk, report.BytesOnDisk)
 	}
 	if report.GCDryRun.SegmentsTotal == 0 {
-		t.Fatalf("expected GC dry-run to observe value-log segments from maindb path: %+v", report.GCDryRun)
+		t.Fatalf("expected GC dry-run to observe value-log segments from flat path: %+v", report.GCDryRun)
 	}
 	if report.RewritePlan.SegmentsTotal == 0 {
-		t.Fatalf("expected rewrite plan to observe value-log segments from maindb path: %+v", report.RewritePlan)
+		t.Fatalf("expected rewrite plan to observe value-log segments from flat path: %+v", report.RewritePlan)
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
-		t.Fatalf("unexpected stats db type from maindb path: %q", got)
+		t.Fatalf("unexpected stats db type from flat path: %q", got)
 	}
 }
 
 func TestCollectValueLogAuditDoesNotCreateEmptyValueLogLaneFiles(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
-	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	valueLogDir := filepath.Join(dir, "value_vlog")
 	beforeFiles, beforeZero := countValueLogFilesForTest(t, valueLogDir)
 
 	if _, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{}); err != nil {
@@ -94,7 +94,7 @@ func TestCollectValueLogAudit_IncludesLeafLogSegments(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	leafDir := treedbdb.LeafLogDirPath(filepath.Join(dir, "maindb"))
+	leafDir := treedbdb.LeafLogDirPath(dir)
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(leaf log): %v", err)
 	}

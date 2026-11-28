@@ -519,7 +519,7 @@ func startNativeJSONPausedCheckpoint(t *testing.T, database *DB, dir string) fun
 	t.Helper()
 	reached, release := make(chan struct{}), make(chan struct{})
 	var armed atomic.Bool
-	root := filepath.Join(dir, "maindb")
+	root := dir
 	path := filepath.Join(root, "index.db")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Point != durabilitycut.BeforeMetaWrite || event.Resource != durabilitycut.ResourceMeta || event.Root != root || event.Path != path || !armed.CompareAndSwap(false, true) {

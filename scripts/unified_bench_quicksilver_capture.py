@@ -177,7 +177,7 @@ def retained_settings(cell):
     assert cell['engine'] in ('treedb', 'lmdb', 'rocksdb'), 'unsupported retained engine'
     directory = pathlib.Path(path).resolve(strict=True)
     assert directory.is_dir(), 'retained directory must exist'
-    marker = directory / {'treedb': 'maindb/index.db', 'lmdb': 'data.mdb', 'rocksdb': 'CURRENT'}[cell['engine']]
+    marker = directory / {'treedb': 'index.db', 'lmdb': 'data.mdb', 'rocksdb': 'CURRENT'}[cell['engine']]
     assert marker.is_file() and marker.stat().st_size > 0, 'retained fixture requires nonempty engine marker'
     return directory
 

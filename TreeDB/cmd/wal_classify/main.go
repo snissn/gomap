@@ -41,9 +41,9 @@ type stats struct {
 }
 
 func main() {
-	walDir := flag.String("wal-dir", "", "Path to maindb/wal, maindb/value_vlog, or maindb/leaf_vlog directory")
+	walDir := flag.String("wal-dir", "", "Path to wal, value_vlog, or leaf_vlog directory")
 	filesArg := flag.String("files", "", "Comma-separated value-log filenames")
-	dictDir := flag.String("dict-dir", "", "Optional path to TreeDB backend directory containing dictionaries in SystemRootPageID (defaults to parent maindb directory of -wal-dir)")
+	dictDir := flag.String("dict-dir", "", "Optional path to TreeDB directory containing dictionaries in SystemRootPageID (defaults to parent directory of -wal-dir)")
 	frameMeta := flag.Bool("frame-meta", false, "Also print raw on-disk frame metadata (grouped records, k, dict/block codec)")
 	evalBand := flag.Bool("eval-band", false, "Evaluate codec ratios/encode throughput for selected value length band from decoded records")
 	evalBandMin := flag.Int("eval-band-min", 43000, "Minimum value length for -eval-band")

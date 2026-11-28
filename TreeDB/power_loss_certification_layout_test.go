@@ -17,22 +17,18 @@ import (
 )
 
 type freshLayoutNamespaceCase struct {
-	variantID         string
-	disableSideStores bool
-	partial           bool
-	symlinkParent     bool
-	point             durabilitycut.Point
-	path              func(parent, database string) string
-	wantOccurrence    int
-	wantStableDirs    []string
+	variantID      string
+	partial        bool
+	symlinkParent  bool
+	point          durabilitycut.Point
+	path           func(parent, database string) string
+	wantOccurrence int
+	wantStableDirs []string
 }
 
-// Ordinary open now persists the INIT.LOCK parent before constructing child
-// stores. Version these exact witness addresses rather than reusing the earlier
-// cut IDs for a different initialization sequence.
-func TestPowerLossCertificationFreshCompositeBeforeOuterParentSync(t *testing.T) {
+func TestPowerLossCertificationFreshFlatBeforeOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-before-outer-parent-sync",
+		variantID:      "fresh-layout-flat-before-outer-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
 		wantOccurrence: 0,
@@ -40,29 +36,9 @@ func TestPowerLossCertificationFreshCompositeBeforeOuterParentSync(t *testing.T)
 	})
 }
 
-func TestPowerLossCertificationFreshCompositeBeforeRootSync(t *testing.T) {
+func TestPowerLossCertificationFreshFlatAfterOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-before-root-sync",
-		point:          durabilitycut.BeforeNewFileDirectorySync,
-		path:           func(_, database string) string { return database },
-		wantOccurrence: 1,
-		wantStableDirs: []string{".", "db"},
-	})
-}
-
-func TestPowerLossCertificationFreshCompositeAfterRootSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-after-root-sync",
-		point:          durabilitycut.AfterNewFileDirectorySync,
-		path:           func(_, database string) string { return database },
-		wantOccurrence: 1,
-		wantStableDirs: []string{".", "db", "db/maindb"},
-	})
-}
-
-func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-after-outer-parent-sync",
+		variantID:      "fresh-layout-flat-after-outer-parent-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
 		wantOccurrence: 0,
@@ -70,29 +46,9 @@ func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) 
 	})
 }
 
-func TestPowerLossCertificationFreshCompositeBeforeMainDBParentSync(t *testing.T) {
+func TestPowerLossCertificationPartialFlatAfterOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-before-maindb-parent-sync",
-		point:          durabilitycut.BeforeNewFileDirectorySync,
-		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 3,
-		wantStableDirs: []string{".", "db", "db/maindb"},
-	})
-}
-
-func TestPowerLossCertificationFreshCompositeAfterMainDBParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "fresh-layout-composite-owned-init-v2-after-maindb-parent-sync",
-		point:          durabilitycut.AfterNewFileDirectorySync,
-		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
-		wantOccurrence: 3,
-		wantStableDirs: []string{".", "db", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
-	})
-}
-
-func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "partial-layout-composite-owned-init-v2-after-outer-parent-sync",
+		variantID:      "partial-layout-flat-after-outer-parent-sync",
 		partial:        true,
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
@@ -101,39 +57,15 @@ func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T
 	})
 }
 
-// Exercise the canonical witness spelling even when a caller supplied an
-// alias, as macOS temporary roots commonly do via /var -> /private/var.
-func TestPowerLossCertificationPartialCompositeAfterOuterParentSyncSymlinkParent(t *testing.T) {
+func TestPowerLossCertificationPartialFlatAfterOuterParentSyncSymlinkParent(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:      "partial-layout-composite-owned-init-v2-canonical-symlink-parent-after-outer-parent-sync",
+		variantID:      "partial-layout-flat-canonical-symlink-parent-after-outer-parent-sync",
 		partial:        true,
 		symlinkParent:  true,
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
 		wantOccurrence: 0,
 		wantStableDirs: []string{".", "db"},
-	})
-}
-
-func TestPowerLossCertificationFreshFlatBeforeOuterParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:         "fresh-layout-flat-before-outer-parent-sync",
-		disableSideStores: true,
-		point:             durabilitycut.BeforeNewFileDirectorySync,
-		path:              func(parent, _ string) string { return parent },
-		wantOccurrence:    0,
-		wantStableDirs:    []string{"."},
-	})
-}
-
-func TestPowerLossCertificationFreshFlatAfterOuterParentSync(t *testing.T) {
-	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID:         "fresh-layout-flat-after-outer-parent-sync",
-		disableSideStores: true,
-		point:             durabilitycut.AfterNewFileDirectorySync,
-		path:              func(parent, _ string) string { return parent },
-		wantOccurrence:    0,
-		wantStableDirs:    []string{".", "db"},
 	})
 }
 
@@ -170,12 +102,11 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 		t.Fatal(err)
 	}
 	if testCase.partial {
-		if err := os.MkdirAll(filepath.Join(databaseDir, "maindb"), 0o755); err != nil {
+		if err := os.MkdirAll(databaseDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, databaseDir)
-	opts.DisableSideStores = testCase.disableSideStores
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundCheckpointInterval = -1
 

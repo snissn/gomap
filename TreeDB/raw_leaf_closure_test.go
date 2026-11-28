@@ -9,7 +9,6 @@ import (
 func TestOrdinaryFirstCheckpointRotatedLeafDependenciesReopen(t *testing.T) {
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 	opts.MemtableMode = "cow_ordered"
-	opts.DisableSideStores = true
 	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 1, true
 	opts.ValueLog.Compression = ValueLogCompressionOff

@@ -34,9 +34,8 @@ func TestOpenFreshCompositeEnsuresPublicLayoutDependencies(t *testing.T) {
 
 	want := []string{
 		root,
-		filepath.Join(root, "maindb"),
 	}
-	wantProof := filepath.Join(root, "maindb", "index.db")
+	wantProof := filepath.Join(root, "index.db")
 	if gotMode != 0o755 || gotProof != wantProof || !reflect.DeepEqual(gotPaths, want) {
 		t.Fatalf("public layout mode=%#o proof=%q paths=%v, want mode=%#o proof=%q paths=%v", gotMode, gotProof, gotPaths, fs.FileMode(0o755), wantProof, want)
 	}
@@ -54,7 +53,7 @@ func TestOpenFreshFlatEnsuresOuterRootDependency(t *testing.T) {
 		ensureOpenStorageLayoutDirs = previous
 	})
 
-	database, err := Open(Options{Dir: root, DisableSideStores: true})
+	database, err := Open(Options{Dir: root})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

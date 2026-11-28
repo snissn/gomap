@@ -10,7 +10,6 @@ func TestOpenFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing.T) {
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 
 	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
-	opts.DisableSideStores = true
 	opts.FlushAdmissionPolicy = FlushAdmissionPolicyAuto
 	opts.FlushApplyConcurrency = 16
 	opts.BackgroundCheckpointInterval = -1
@@ -53,7 +52,6 @@ func TestOpenReadOnlyFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing
 
 	dir := t.TempDir()
 	writableOpts := OptionsFor(ProfileNoWALFast, dir)
-	writableOpts.DisableSideStores = true
 	writableOpts.BackgroundCheckpointInterval = -1
 	writableOpts.BackgroundIndexVacuumInterval = -1
 	writable, err := Open(writableOpts)
@@ -65,7 +63,6 @@ func TestOpenReadOnlyFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing
 	}
 
 	readOnlyOpts := OptionsFor(ProfileNoWALFast, dir)
-	readOnlyOpts.DisableSideStores = true
 	readOnlyOpts.ReadOnly = true
 	readOnlyOpts.FlushAdmissionPolicy = FlushAdmissionPolicyAuto
 	readOnlyOpts.FlushApplyConcurrency = 16

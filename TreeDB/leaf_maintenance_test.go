@@ -16,7 +16,6 @@ import (
 func leafMaintenanceOptions(dir string) Options {
 	opts := OptionsFor(ProfileNoWALFast, dir)
 	opts.MemtableMode = "cow_ordered"
-	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

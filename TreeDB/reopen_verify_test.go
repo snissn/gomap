@@ -172,7 +172,7 @@ func scanAndCheck(t *testing.T, db *treedb.DB, values map[string][]byte, allowMi
 
 func leafVLogFrameStats(t *testing.T, dir string) (frames int, maxK int) {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(dir, "maindb", "leaf_vlog", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "leaf_vlog", "value-l*.log"))
 	if err != nil {
 		t.Fatalf("glob leaf_vlog: %v", err)
 	}
@@ -228,7 +228,7 @@ func leafVLogFrameStats(t *testing.T, dir string) (frames int, maxK int) {
 
 func corruptFirstLeafVLogCRC(t *testing.T, dir string) {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(dir, "maindb", "leaf_vlog", "value-l*.log"))
+	paths, err := filepath.Glob(filepath.Join(dir, "leaf_vlog", "value-l*.log"))
 	if err != nil {
 		t.Fatalf("glob leaf_vlog: %v", err)
 	}
@@ -706,7 +706,7 @@ func TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn(t *test
 	}
 	readFormat := func() formatConfigView {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(dir, "maindb", "format.json"))
+		data, err := os.ReadFile(filepath.Join(dir, "format.json"))
 		if err != nil {
 			t.Fatalf("read format config: %v", err)
 		}
@@ -820,7 +820,7 @@ func TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn(t *test
 	if cfg := readFormat(); !cfg.IndexOuterLeavesInValueLog || cfg.IndexInternalBaseDelta {
 		t.Fatalf("unexpected persisted index format after close: %+v", cfg)
 	}
-	if size, err := dirSize(filepath.Join(dir, "maindb", "leaf_vlog")); err != nil || size == 0 {
+	if size, err := dirSize(filepath.Join(dir, "leaf_vlog")); err != nil || size == 0 {
 		t.Fatalf("expected outer leaf log bytes, size=%d err=%v", size, err)
 	}
 
@@ -1186,7 +1186,7 @@ func TestReopenVerify_CompactIndex_ReopenParity(t *testing.T) {
 		t.Fatalf("checkpoint before compact: %v", err)
 	}
 
-	beforeInfo, err := os.Stat(filepath.Join(dir, "maindb", "index.db"))
+	beforeInfo, err := os.Stat(filepath.Join(dir, "index.db"))
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("stat index before compact: %v", err)
@@ -1195,7 +1195,7 @@ func TestReopenVerify_CompactIndex_ReopenParity(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("CompactIndex: %v", err)
 	}
-	afterInfo, err := os.Stat(filepath.Join(dir, "maindb", "index.db"))
+	afterInfo, err := os.Stat(filepath.Join(dir, "index.db"))
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("stat index after compact: %v", err)
