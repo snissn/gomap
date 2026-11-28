@@ -191,11 +191,11 @@ def profile_valid(row):
 
 
 def file_component(path):
-    if '/wal/' in path: return 'redo_wal'
+    if path.startswith('wal/') or '/wal/' in path: return 'redo_wal'
     if path.startswith('dictdb/'): return 'dictionary_store'
     if path.startswith('templatedb/'): return 'template_store'
     if path.rsplit('/', 1)[-1].startswith('manifest.durable.'): return 'immutable_manifest_metadata'
-    if '/value_vlog/' in path: return 'persistent_vlog'
+    if path.startswith('value_vlog/') or '/value_vlog/' in path: return 'persistent_vlog'
     if 'leaf_vlog/' in path: return 'persistent_leaf_log'
     if 'column-assets/' in path or 'column_assets/' in path: return 'typed_assets'
     if path.endswith(('.db', 'index.db.bak', 'index.db.new')): return 'index'
@@ -215,7 +215,7 @@ def census_valid(row):
     require(counts == row['regular_files'] and sizes == row['logical_bytes']
             and integer(row['total_files']) and row['total_files'] == len(row['files'])
             and integer(row['total_bytes']) and row['total_bytes'] == sum(sizes.values()), 'component census omits or double-counts files')
-    require(any(path.startswith('maindb/') for path in row['files']), 'census is not profile root')
+    require('index.db' in row['files'] or any(path.startswith('maindb/') for path in row['files']), 'census is not profile root')
 
 
 def fallback_state_valid(row):

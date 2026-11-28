@@ -28,10 +28,10 @@ capture_sizes() {
   jq -n \
     --arg phase "$phase" \
     --argjson application_db_bytes "$(du_bytes "$DST")" \
-    --argjson maindb_bytes "$(du_bytes "$DST/maindb")" \
-    --argjson index_db_bytes "$(du_bytes "$DST/maindb/index.db")" \
-    --argjson leaf_vlog_bytes "$(du_bytes "$DST/maindb/leaf_vlog")" \
-    --argjson value_vlog_bytes "$(du_bytes "$DST/maindb/value_vlog")" \
+    --argjson maindb_bytes "$(du_bytes "$DST")" \
+    --argjson index_db_bytes "$(du_bytes "$DST/index.db")" \
+    --argjson leaf_vlog_bytes "$(du_bytes "$DST/leaf_vlog")" \
+    --argjson value_vlog_bytes "$(du_bytes "$DST/value_vlog")" \
     --argjson wal_bytes "$(du_bytes "$DST/wal")" \
     '{
       phase:$phase,
@@ -70,8 +70,8 @@ capture_sizes after_gc2 > "$OUT/size-after-gc2.json"
 
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json > "$OUT/plan-after.json"
 GOWORK=off "${TREEMAP[@]}" leafgen-plan "$DST" -rw -json -force > "$OUT/plan-after-force.json"
-ls -lh "$DST/maindb/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
-ls -lh "$DST/maindb/value_vlog" > "$OUT/value-vlog-ls.txt"
+ls -lh "$DST/leaf_vlog" > "$OUT/leaf-vlog-ls.txt"
+ls -lh "$DST/value_vlog" > "$OUT/value-vlog-ls.txt"
 
 jq -n \
   --arg source "$SRC" \
