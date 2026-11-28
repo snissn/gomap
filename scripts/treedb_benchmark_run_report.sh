@@ -14,7 +14,7 @@ COLLECTION_TREEDB_PROFILE="${COLLECTION_TREEDB_PROFILE:-}"
 SQLITE_JOURNAL_MODE="${SQLITE_JOURNAL_MODE:-}"
 SQLITE_SYNCHRONOUS="${SQLITE_SYNCHRONOUS:-}"
 INDEXES_LIST="${INDEXES_LIST:-0 1 2}"
-MONGO_LOAD_INDEXES_LIST="${MONGO_LOAD_INDEXES_LIST:-4 8 16 32}"
+MONGO_LOAD_INDEXES_LIST="${MONGO_LOAD_INDEXES_LIST-4 8 16 32}"
 PERSIST_HTML="${PERSIST_HTML:-}"
 RAW_KEYS="${RAW_KEYS:-}"
 COLLECTION_DOCS="${COLLECTION_DOCS:-}"
@@ -202,7 +202,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --mongo-load-indexes)
-      MONGO_LOAD_INDEXES_LIST="${2-}"
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      MONGO_LOAD_INDEXES_LIST="$2"
       shift 2
       ;;
     --persist-html)
@@ -839,7 +844,9 @@ render_report() {
     -title "$TITLE"
   if [[ -n "$PERSIST_HTML" && -f "$RUN_ROOT/deep_report.html" ]]; then
     mkdir -p "$(dirname "$PERSIST_HTML")"
-    cp "$RUN_ROOT/deep_report.html" "$PERSIST_HTML"
+    if [[ ! "$RUN_ROOT/deep_report.html" -ef "$PERSIST_HTML" ]]; then
+      cp "$RUN_ROOT/deep_report.html" "$PERSIST_HTML"
+    fi
     echo "persisted benchmark report: $PERSIST_HTML"
   fi
 }

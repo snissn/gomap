@@ -211,7 +211,12 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --load-only-indexes)
-      LOAD_ONLY_INDEXES_LIST="${2-}"
+      if [[ $# -lt 2 ]]; then
+        echo "missing value for $1" >&2
+        usage >&2
+        exit 2
+      fi
+      LOAD_ONLY_INDEXES_LIST="$2"
       shift 2
       ;;
     --doc-extra-index-fields)
@@ -815,7 +820,7 @@ if ! is_positive_int "$INSERT_PRODUCERS"; then
   echo "invalid INSERT_PRODUCERS=$INSERT_PRODUCERS (want positive integer)" >&2
   exit 2
 fi
-for value_name in DELETES CONCURRENT_READERS CONCURRENT_RANGE_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+for value_name in DOC_EXTRA_INDEX_FIELDS DELETES CONCURRENT_READERS CONCURRENT_RANGE_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
   value=${!value_name}
   if ! is_nonnegative_int "$value"; then
     echo "invalid $value_name=$value (want non-negative integer)" >&2
@@ -1211,14 +1216,16 @@ for docs in $DOCS_LIST; do
     CONCURRENT_READER_SWEEP=""
     CONCURRENT_RANGE_READER_SWEEP=""
     CONCURRENT_WRITER_SWEEP=""
-    for indexes in $LOAD_ONLY_INDEXES_LIST; do
+    seen_load_only=""
+    for indexes in ${LOAD_ONLY_INDEXES_LIST//,/ }; do
       if [[ ! "$indexes" =~ ^[0-9]+$ ]]; then
         echo "invalid load-only index count: $indexes" >&2
         exit 2
       fi
-      if [[ " $INDEXES_LIST " == *" $indexes "* ]]; then
+      if [[ " $INDEXES_LIST " == *" $indexes "* || " $seen_load_only " == *" $indexes "* ]]; then
         continue
       fi
+      seen_load_only="$seen_load_only $indexes"
       cell="docs_${docs}_idx_${indexes}"
       database="${DATABASE_PREFIX}_${cell}"
       mongo_data="$MONGO_DIR/$cell"
@@ -1262,7 +1269,7 @@ for docs in $DOCS_LIST; do
             -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
             -treedb-maintenance "$TREEDB_MAINTENANCE" \
             -treedb-read-state "$TREEDB_READ_STATE" \
-            "${tree_profile_args[@]:-}"
+            ${tree_profile_args[@]+"${tree_profile_args[@]}"}
           tree_physical=$(du_bytes "$tree_data")
           printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
         done

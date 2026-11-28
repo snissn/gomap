@@ -91,6 +91,9 @@ func TestRunBenchmarkTreeDB32SecondaryIndexesPrebuiltRaw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
+	if !shouldPrebuildRawInsertCommands(cfg) {
+		t.Fatalf("expected shouldPrebuildRawInsertCommands=true for driver-command-raw + prebuild-documents (RouteMode=%q)", cfg.RouteMode)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	target, err := openTarget(ctx, cfg)

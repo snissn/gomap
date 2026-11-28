@@ -3045,7 +3045,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		if !hasSweepCharts && len(mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_update_set_w")) > 0 {
 			hasSweepCharts = true
 		}
-		if !hasSweepCharts && len(throughputRows) <= 1 {
+		if !hasSweepCharts && len(throughputRows) == 0 {
 			continue
 		}
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": Mongo API Scaling</h3>")

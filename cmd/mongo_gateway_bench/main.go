@@ -2125,7 +2125,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	var prebuiltRawCommands []bson.Raw
 	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	if cfg.PrebuildDocuments {
-		if cfg.ClientMode == clientModeDriverCommandRaw && cfg.RouteMode == "" {
+		if shouldPrebuildRawInsertCommands(cfg) {
 			writeConcern := ""
 			if cfg.Target == "mongo" {
 				writeConcern = cfg.MongoWriteConcern
@@ -2393,6 +2393,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		MongoMinPoolSize:                       cfg.MongoMinPoolSize,
 		MongoMaxConnecting:                     cfg.MongoMaxConnecting,
 		SecondaryIndexes:                       cfg.SecondaryIndexes,
+		DocExtraIndexFields:                    effectiveDocExtraIndexFields(cfg),
 		ClientMode:                             cfg.ClientMode,
 		ConcurrentReadKinds:                    append([]string(nil), cfg.ConcurrentReadKinds...),
 		SkippedConcurrentReadKinds:             skippedConcurrentReadKindsForConfig(cfg),
@@ -2478,6 +2479,8 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	loadPhase, err := runTreeDBProfiledPhaseWithDrain(target, profiler, "load_insert_many", cfg.TreeDBReadState == treeDBReadStateSettled, func() (phaseResult, error) {
 		return runDirectTreeDBLoadPhase(ctx, cfg, collection, prebuiltIDs, prebuiltDocuments)
 	})
+	prebuiltIDs = nil
+	prebuiltDocuments = nil
 	if err != nil {
 		return nil, err
 	}
@@ -2846,11 +2849,12 @@ func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *colle
 		scratch[i].ids = make([][]byte, 0, cfg.BatchSize)
 		scratch[i].docs = make([][]byte, 0, cfg.BatchSize)
 	}
+	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		if err := batchCtx.Err(); err != nil {
 			return err
 		}
-		ids, docs, err := directTreeDBLoadBatch(producerScratch(scratch, producer), start, end, cfg.DocumentShape, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
+		ids, docs, err := directTreeDBLoadBatchWithExtra(producerScratch(scratch, producer), start, end, cfg.DocumentShape, cfg.TreeDBDocumentFormat, extraIndexFields, prebuiltIDs, prebuiltDocuments)
 		if err != nil {
 			return err
 		}
@@ -2876,6 +2880,10 @@ func producerScratch(scratch []directTreeDBLoadScratch, producer int) *directTre
 }
 
 func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, shape string, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
+	return directTreeDBLoadBatchWithExtra(scratch, start, end, shape, format, 0, prebuiltIDs, prebuiltDocuments)
+}
+
+func directTreeDBLoadBatchWithExtra(scratch *directTreeDBLoadScratch, start, end int, shape string, format collections.DocumentFormat, extraIndexFields int, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
 	if scratch == nil {
 		scratch = &directTreeDBLoadScratch{}
 	}
@@ -2887,7 +2895,7 @@ func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, sha
 			docs = append(docs, prebuiltDocuments[i])
 			continue
 		} else {
-			id, document, err := directTreeDBBenchmarkDocument(i, shape, format)
+			id, document, err := directTreeDBBenchmarkDocumentWithExtra(i, shape, format, extraIndexFields)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -4790,13 +4798,14 @@ func sumStringIntValues(values map[string]int) int {
 }
 
 func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, error) {
+	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make([]any, 0, end-start)
 		for i := start; i < end; i++ {
 			if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
+				docs = append(docs, benchmarkDocumentForShapeWithExtra(cfg.DocumentShape, i, extraIndexFields))
 			}
 		}
 		_, err := coll.InsertMany(batchCtx, docs)
@@ -4805,6 +4814,7 @@ func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection,
 }
 
 func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make(bson.A, 0, end-start)
 		for i := start; i < end; i++ {
@@ -4813,7 +4823,7 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 			} else if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
+				docs = append(docs, benchmarkDocumentForShapeWithExtra(cfg.DocumentShape, i, extraIndexFields))
 			}
 		}
 		command := bson.D{
@@ -4828,6 +4838,12 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 	})
 }
 
+func shouldPrebuildRawInsertCommands(cfg config) bool {
+	return cfg.PrebuildDocuments &&
+		cfg.ClientMode == clientModeDriverCommandRaw &&
+		(cfg.RouteMode == "" || cfg.RouteMode == routeModeOff)
+}
+
 func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltRawCommands []bson.Raw) (phaseResult, error) {
 	writeConcern := ""
 	if cfg.Target == "mongo" {
@@ -4835,9 +4851,9 @@ func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Dat
 	}
 	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		if prebuiltRawCommands != nil && cfg.BatchSize > 0 {
+		if prebuiltRawCommands != nil && cfg.BatchSize > 0 && start >= 0 && start%cfg.BatchSize == 0 {
 			batchIdx := start / cfg.BatchSize
-			if batchIdx >= 0 && batchIdx < len(prebuiltRawCommands) {
+			if batchIdx < len(prebuiltRawCommands) {
 				return db.RunCommand(batchCtx, prebuiltRawCommands[batchIdx]).Err()
 			}
 		}
@@ -4916,13 +4932,14 @@ func rawInsertCommandWithWriteConcernAndExtra(collection string, start, end int,
 func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D) (phaseResult, error) {
 	unackColl := db.Collection(cfg.Collection, options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
 	ackColl := db.Collection(cfg.Collection)
+	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make([]any, 0, end-start)
 		for i := start; i < end; i++ {
 			if prebuilt != nil {
 				docs = append(docs, prebuilt[i])
 			} else {
-				docs = append(docs, benchmarkDocumentForShape(cfg.DocumentShape, i))
+				docs = append(docs, benchmarkDocumentForShapeWithExtra(cfg.DocumentShape, i, extraIndexFields))
 			}
 		}
 		_, err := unackColl.InsertMany(batchCtx, docs)
@@ -6060,7 +6077,7 @@ func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTar
 			if prebuilt != nil {
 				doc = prebuilt[i]
 			} else {
-				doc = benchmarkDocumentForShape(cfg.DocumentShape, i)
+				doc = benchmarkDocumentForShapeWithExtra(cfg.DocumentShape, i, effectiveDocExtraIndexFields(cfg))
 			}
 			raw, err := bson.Marshal(doc)
 			if err != nil {
@@ -6095,8 +6112,9 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 			_ = client.Close()
 		}
 	}()
+	extraIndexFields := effectiveDocExtraIndexFields(cfg)
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		docs, err := rawBSONDocuments(start, end, cfg.DocumentShape, prebuilt, prebuiltRaw)
+		docs, err := rawBSONDocumentsWithExtra(start, end, cfg.DocumentShape, extraIndexFields, prebuilt, prebuiltRaw)
 		if err != nil {
 			return err
 		}
@@ -6594,6 +6612,10 @@ func rawWireDocuments(start, end int, shape string, prebuilt []bson.D, prebuiltR
 }
 
 func rawBSONDocuments(start, end int, shape string, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]bson.Raw, error) {
+	return rawBSONDocumentsWithExtra(start, end, shape, 0, prebuilt, prebuiltRaw)
+}
+
+func rawBSONDocumentsWithExtra(start, end int, shape string, extraIndexFields int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]bson.Raw, error) {
 	docs := make([]bson.Raw, end-start)
 	for i := start; i < end; i++ {
 		if prebuiltRaw != nil {
@@ -6604,7 +6626,7 @@ func rawBSONDocuments(start, end int, shape string, prebuilt []bson.D, prebuiltR
 		if prebuilt != nil {
 			doc = prebuilt[i]
 		} else {
-			doc = benchmarkDocumentForShape(shape, i)
+			doc = benchmarkDocumentForShapeWithExtra(shape, i, extraIndexFields)
 		}
 		raw, err := bson.Marshal(doc)
 		if err != nil {
