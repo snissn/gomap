@@ -56,6 +56,8 @@ func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtable
 // allocation charges; process RSS also includes memory outside the COW owner.
 func StandaloneCOWMemtableLimits() COWMemtableLimits {
 	limits := DefaultCOWMemtableLimits()
+	limits.MaxSources = 128
+	limits.MaxGenerations = 256
 	limits.MaxInFlightBytes = 512 << 20
 	limits.MaxGenerationBytes = 256 << 20
 	limits.MaxTotalBytes = 1 << 30

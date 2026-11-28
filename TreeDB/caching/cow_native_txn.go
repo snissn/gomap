@@ -78,12 +78,58 @@ func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
 	return total-fixed >= remaining-remaining/4
 }
 
+func (s cowNativePressureState) retiredUsed() (uint64, bool) {
+	used := s.stats.HistoryBytes + s.stats.ReservedBytes
+	if used < s.stats.HistoryBytes {
+		return 0, false
+	}
+	total := used + s.stats.DeferredBytes
+	if total < used {
+		return 0, false
+	}
+	return total, true
+}
+
+func (s cowNativePressureState) totalSoftPressure(limits memtable.COWLimits) bool {
+	if limits.MaxTotalBytes > 0 && s.stats.TotalBytes >= limits.MaxTotalBytes-limits.MaxTotalBytes/4 {
+		return true
+	}
+	if limits.MaxRetiredBytes > 0 {
+		used, ok := s.retiredUsed()
+		if !ok || used >= limits.MaxRetiredBytes-limits.MaxRetiredBytes/4 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s cowNativePressureState) totalHardPressure(limits memtable.COWLimits) bool {
+	if limits.MaxTotalBytes > 0 && s.stats.TotalBytes >= limits.MaxTotalBytes-limits.MaxTotalBytes/8 {
+		return true
+	}
+	if limits.MaxRetiredBytes > 0 {
+		used, ok := s.retiredUsed()
+		if !ok || used >= limits.MaxRetiredBytes-limits.MaxRetiredBytes/8 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s cowNativePressureState) reservationSoftPressure(limits memtable.COWLimits) bool {
 	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4
 }
 
 func (s cowNativePressureState) reservationHardPressure(limits memtable.COWLimits) bool {
 	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/8
+}
+
+func (s cowNativePressureState) softBytesPressure(limits memtable.COWLimits) bool {
+	return s.reservationSoftPressure(limits) || s.totalSoftPressure(limits)
+}
+
+func (s cowNativePressureState) hardBytesPressure(limits memtable.COWLimits) bool {
+	return s.reservationHardPressure(limits) || s.totalHardPressure(limits)
 }
 
 func (s cowNativePressureState) nonReservationPressure(limits memtable.COWLimits) bool {
@@ -97,7 +143,7 @@ func (s cowNativePressureState) nonReservationPressure(limits memtable.COWLimits
 }
 
 func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
-	return s.reservationSoftPressure(limits) || s.nonReservationPressure(limits)
+	return s.softBytesPressure(limits) || s.nonReservationPressure(limits)
 }
 
 func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, err error) {
@@ -131,8 +177,10 @@ func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, 
 func (s cowNativePressureState) observation(limits memtable.COWLimits) backenddb.NativeProducerObservation {
 	return backenddb.NativeProducerObservation{
 		LogicalSequence: s.logicalSeq, Basis: s.basis, Semantic: s.semantic,
-		ReservedBytes: s.stats.ReservedBytes, Sources: s.stats.Sources,
-		Generations: s.stats.Generations, UnderPressure: s.underPressure(limits),
+		TotalBytes: s.stats.TotalBytes, HistoryBytes: s.stats.HistoryBytes,
+		ReservedBytes: s.stats.ReservedBytes, DeferredBytes: s.stats.DeferredBytes,
+		Sources: s.stats.Sources, Generations: s.stats.Generations,
+		UnderPressure: s.underPressure(limits),
 	}
 }
 
@@ -214,14 +262,15 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		}
 		// When an asynchronous COW pressure drain worker is running (command-WAL
 		// size-maintenance worker or NoWAL COW pressure drain worker), soft
-		// reservation pressure (3/4..7/8 of MaxInFlightBytes) still leaves
-		// headroom for concurrent writers while the background worker seals and
-		// retires the captured prefix, gated by reservationDrainFloor hysteresis.
-		// Hard reservation pressure (>=7/8) and non-reservation pressure retain
-		// synchronous foreground reclamation.
+		// byte pressure (3/4..7/8 of MaxInFlightBytes, MaxTotalBytes, or
+		// MaxRetiredBytes) still leaves headroom for concurrent writers while
+		// the background worker seals and retires the captured prefix.
+		// Reservation-only soft pressure remains gated by reservationDrainFloor
+		// hysteresis. Hard byte pressure (>=7/8) and non-reservation pressure
+		// retain synchronous foreground reclamation.
 		if db.nativePressureDrainEnabled() &&
-			!observed.nonReservationPressure(limits) && !observed.reservationHardPressure(limits) {
-			if floor := c.reservationDrainFloor.Load(); floor == 0 || observed.stats.ReservedBytes >= floor {
+			!observed.nonReservationPressure(limits) && !observed.hardBytesPressure(limits) {
+			if observed.totalSoftPressure(limits) || c.reservationDrainFloor.Load() == 0 || observed.stats.ReservedBytes >= c.reservationDrainFloor.Load() {
 				select {
 				case db.nativeReservationFlushCh <- struct{}{}:
 				default:
@@ -267,7 +316,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		if (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
-			canDeferReservation := !remaining.nonReservationPressure(limits) && !remaining.reservationHardPressure(limits)
+			canDeferReservation := !remaining.nonReservationPressure(limits) && !remaining.hardBytesPressure(limits)
 			if !remaining.underPressure(limits) || canDeferReservation {
 				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
 				if rolloverErr == nil {
@@ -293,7 +342,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 						return backenddb.NativeProducerObservation{}, observeErr
 					}
 					if !after.underPressure(limits) ||
-						(!after.nonReservationPressure(limits) && !after.reservationHardPressure(limits)) {
+						(!after.nonReservationPressure(limits) && !after.hardBytesPressure(limits)) {
 						return after.observation(limits), nil
 					}
 				} else if rolloverErr != memtable.ErrCOWCapacity {
