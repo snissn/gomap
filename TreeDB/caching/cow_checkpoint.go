@@ -369,7 +369,6 @@ func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
-		db.maybeKickDeferredValueLogDictPublish()
 	}()
 	// A prior accepted physical publication must complete its handoff first.
 	// Refusal keeps the covered prefix and never replays backend work.

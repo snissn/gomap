@@ -4737,6 +4737,11 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 			if seq&(refreshEvery-1) != 0 {
 				return db.dictCurrentCachedByClass[classIdx].Load(), nil
 			}
+			if stager, ok := db.dictStore.(dictStoreStager); ok && stager.HasUnsyncedOps() {
+				// Defer refreshes while an unsynced piggybacked dictionary is
+				// awaiting durability sync in SystemRootPageID.
+				return db.dictCurrentCachedByClass[classIdx].Load(), nil
+			}
 			dictID, err := byClass.GetCurrentForClass(ctx, vlogDictClassSuffix(clampedClass))
 			if err != nil {
 				// Fall back to cached value on transient errors (best-effort).
@@ -4763,6 +4768,11 @@ func (db *DB) currentDictIDForClass(ctx context.Context, class vlogDictClass) (u
 	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
 	seq := db.dictCurrentOps.Add(1)
 	if seq&(refreshEvery-1) != 0 {
+		return db.dictCurrentCached.Load(), nil
+	}
+	if stager, ok := db.dictStore.(dictStoreStager); ok && stager.HasUnsyncedOps() {
+		// Defer refreshes while an unsynced piggybacked dictionary is awaiting
+		// durability sync in SystemRootPageID.
 		return db.dictCurrentCached.Load(), nil
 	}
 	dictID, err := db.dictStore.GetCurrent(ctx)
@@ -9633,17 +9643,18 @@ type DB struct {
 	valueLogDictMetricsMinRecords  int
 	valueLogDictMetricsPauseBytes  int
 
-	valueLogDictTrainerMu       sync.RWMutex
-	valueLogDictApplyMu         sync.Mutex
-	valueLogDictQuiesceMu       sync.Mutex
-	valueLogDictQuiesced        atomic.Bool
-	valueLogDictPublishDeferred atomic.Bool
-	valueLogDictDeferDepth      atomic.Int32
-	valueLogDictTrainer         *compression.Trainer
-	valueLogDictTrainerByClass  [vlogDictClassCount]*compression.Trainer
-	valueLogDictKickCh          chan struct{}
-	valueLogDictMetrics         compression.Metrics
-	valueLogDictFrames          struct {
+	valueLogDictTrainerMu         sync.RWMutex
+	valueLogDictApplyMu           sync.Mutex
+	valueLogDictQuiesceMu         sync.Mutex
+	valueLogDictQuiesced          atomic.Bool
+	valueLogDictStagedHashByClass [vlogDictClassCount]atomic.Uint64
+	valueLogDictStagedKByClass    [vlogDictClassCount]atomic.Uint32
+	valueLogDictStagedAtUnixNano  atomic.Int64
+	valueLogDictTrainer           *compression.Trainer
+	valueLogDictTrainerByClass    [vlogDictClassCount]*compression.Trainer
+	valueLogDictKickCh            chan struct{}
+	valueLogDictMetrics           compression.Metrics
+	valueLogDictFrames            struct {
 		total     atomic.Uint64
 		attempted atomic.Uint64
 		kept      atomic.Uint64
@@ -26453,7 +26464,6 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
-		db.maybeKickDeferredValueLogDictPublish()
 	}()
 	endWriteCutover := func() {
 		db.checkpointMu.Lock()

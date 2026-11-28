@@ -2778,8 +2778,6 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 	if db == nil || db.cached == nil {
 		return ErrClosed
 	}
-	db.cached.EnterCheckpointDictDeferral()
-	defer db.cached.LeaveCheckpointDictDeferral()
 	if db.commandWALCached && db.backend != nil {
 		if err := db.cached.CheckpointDeferringCommandWALCleanup(); err != nil {
 			return err

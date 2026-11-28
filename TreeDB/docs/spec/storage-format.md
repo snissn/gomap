@@ -109,7 +109,10 @@ A TreeDB deployment uses:
 - persistent value-log dictionary metadata and payloads stored directly inside
   `maindb/index.db` `SystemRootPageID` (`dict/bytes/<id>`, 2 KiB inline chunks
   under `dict/chunk/<id>/<idx>`, or raw `dictID=0` `ValuePtr` records in
-  `maindb/value_vlog/`),
+  `maindb/value_vlog/` lane `SystemValueLogLaneID`), committed either directly
+  via `ApplySystemOps` or piggybacked atomically onto user-root commits via
+  `StageSystemOps` (activating only after `index.db` sync whenever command-WAL
+  durability is enabled),
 - optional side-store DB (`templatedb`) using its own `index.db` file.
 
 ### Vector-partition manifests (`vector_partitions/`)

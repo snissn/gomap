@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -620,4 +622,304 @@ func TestSystemDict_PendingPointerProtectedAcrossValueLogGC(t *testing.T) {
 	if err != nil || !bytes.Equal(got, secondPayload) {
 		t.Fatalf("reopen LookupSystemDictBytes(second): len=%d want=%d err=%v", len(got), len(secondPayload), err)
 	}
+}
+
+func TestStageSystemOps_PiggybackDurableWaitsForSyncAndRelaxedActivatesImmediately(t *testing.T) {
+	t.Run("durable_waits_for_sync", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		payload := bytes.Repeat([]byte("staged-piggyback-durable-dict|"), 12)
+		sum := sha256.Sum256(payload)
+		dictID := binary.BigEndian.Uint64(sum[:8])
+		enc := append([]byte{SystemDictEncodingInline}, payload...)
+
+		var activated bool
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   SystemDictBytesKey(dictID),
+			Value: enc,
+		}}, func() { activated = true }); err != nil {
+			t.Fatalf("StageSystemOps: %v", err)
+		}
+		if !d.HasStagedSystemOps() {
+			t.Fatal("expected HasStagedSystemOps=true after staging")
+		}
+
+		// Unsynced user batch piggybacks the system ops into SystemRootPageID
+		// in a single commit, but must NOT invoke onDurable yet while WAL/durable
+		// mode has not synced index.db.
+		b := d.NewBatch()
+		if err := b.Set([]byte("user/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		_ = b.Close()
+
+		if activated {
+			t.Fatal("durable mode activated staged dict before sync barrier")
+		}
+		if !d.HasStagedSystemOps() {
+			t.Fatal("expected HasStagedSystemOps=true while sync waiter is pending")
+		}
+		got, err := d.LookupSystemDictBytes(dictID)
+		if err != nil || !bytes.Equal(got, payload) {
+			t.Fatalf("LookupSystemDictBytes after piggyback write: len=%d err=%v", len(got), err)
+		}
+
+		// Syncing via Checkpoint fires the pending sync waiter with zero extra
+		// SystemRootPageID commits.
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if !activated {
+			t.Fatal("expected onDurable callback to fire after Checkpoint sync")
+		}
+		if d.HasStagedSystemOps() {
+			t.Fatal("expected HasStagedSystemOps=false after Checkpoint sync")
+		}
+	})
+
+	t.Run("wal_off_relaxed_activates_on_unsynced_flush", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityWALOffRelaxed,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		payload := bytes.Repeat([]byte("staged-piggyback-relaxed-dict|"), 12)
+		sum := sha256.Sum256(payload)
+		dictID := binary.BigEndian.Uint64(sum[:8])
+		enc := append([]byte{SystemDictEncodingInline}, payload...)
+
+		var activated bool
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   SystemDictBytesKey(dictID),
+			Value: enc,
+		}}, func() { activated = true }); err != nil {
+			t.Fatalf("StageSystemOps: %v", err)
+		}
+
+		b := d.NewBatch()
+		if err := b.Set([]byte("user/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		_ = b.Close()
+
+		if !activated {
+			t.Fatal("expected WALOffRelaxed mode to activate staged dict on unsynced piggybacked write")
+		}
+		if d.HasStagedSystemOps() {
+			t.Fatal("expected HasStagedSystemOps=false after WALOffRelaxed piggyback")
+		}
+		got, err := d.LookupSystemDictBytes(dictID)
+		if err != nil || !bytes.Equal(got, payload) {
+			t.Fatalf("LookupSystemDictBytes after WALOffRelaxed piggyback: len=%d err=%v", len(got), err)
+		}
+	})
+
+	t.Run("root_publication_build_group_piggyback_and_pointer_pin", func(t *testing.T) {
+		dir := t.TempDir()
+		opts := Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+		}
+		d, err := Open(opts)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() {
+			if d != nil {
+				_ = d.Close()
+			}
+		}()
+
+		payload := bytes.Repeat([]byte("staged-group-pointer-system-dict|"), 320)
+		sum := sha256.Sum256(payload)
+		dictID := binary.BigEndian.Uint64(sum[:8])
+		ptr, err := d.AppendRawSystemValueLog(0, payload)
+		if err != nil {
+			t.Fatalf("AppendRawSystemValueLog: %v", err)
+		}
+
+		var activated bool
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:       SystemDictBytesKey(dictID),
+			ValuePtr:  ptr,
+			IsPointer: true,
+		}}, func() { activated = true }); err != nil {
+			t.Fatalf("StageSystemOps: %v", err)
+		}
+
+		group, err := d.BeginRootPublicationBuildGroup()
+		if err != nil {
+			t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+		}
+		b := d.NewPhysicalBatch().(*Batch)
+		b.rootPublicationBuildGroup = group
+		b.rootPublicationBuildGroupFinal = true
+		if err := b.Set([]byte("group/k1"), []byte("v1")); err != nil {
+			_ = b.Close()
+			_ = group.Close()
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			_ = b.Close()
+			_ = group.Close()
+			t.Fatalf("WriteSync(group): %v", err)
+		}
+		_ = b.Close()
+		if err := group.Close(); err != nil {
+			t.Fatalf("group.Close: %v", err)
+		}
+
+		if !activated {
+			t.Fatal("expected WriteSync RootPublicationBuildGroup to activate staged dict immediately")
+		}
+		if d.HasStagedSystemOps() {
+			t.Fatal("expected no remaining staged ops after WriteSync group")
+		}
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		d = nil
+
+		reopen, err := Open(opts)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		defer func() { _ = reopen.Close() }()
+		got, err := reopen.LookupSystemDictBytes(dictID)
+		if err != nil || !bytes.Equal(got, payload) {
+			t.Fatalf("reopen LookupSystemDictBytes: len=%d want=%d err=%v", len(got), len(payload), err)
+		}
+	})
+
+	t.Run("sync_waiters_dispatch_in_strict_commit_order", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		var order []string
+		// Batch A piggybacked onto an unsynced Write() enters sync waiters.
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-order"),
+			Value: []byte("A"),
+		}}, func() { order = append(order, "A") }); err != nil {
+			t.Fatalf("StageSystemOps(A): %v", err)
+		}
+		bA := d.NewBatch()
+		if err := bA.Set([]byte("order/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set(A): %v", err)
+		}
+		if err := bA.Write(); err != nil {
+			t.Fatalf("Write(A): %v", err)
+		}
+		_ = bA.Close()
+		if len(order) != 0 || !d.HasUnsyncedSystemOps() {
+			t.Fatalf("expected A to remain unsynced waiter, order=%v unsynced=%v", order, d.HasUnsyncedSystemOps())
+		}
+
+		// Batch B piggybacked onto WriteSync() must activate A before B.
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-order"),
+			Value: []byte("B"),
+		}}, func() { order = append(order, "B") }); err != nil {
+			t.Fatalf("StageSystemOps(B): %v", err)
+		}
+		bB := d.NewBatch()
+		if err := bB.Set([]byte("order/k2"), []byte("v2")); err != nil {
+			t.Fatalf("Set(B): %v", err)
+		}
+		if err := bB.WriteSync(); err != nil {
+			t.Fatalf("WriteSync(B): %v", err)
+		}
+		_ = bB.Close()
+
+		if len(order) != 2 || order[0] != "A" || order[1] != "B" {
+			t.Fatalf("expected strict commit-order activation [A B], got %v", order)
+		}
+		if d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=false after WriteSync")
+		}
+	})
+
+	t.Run("command_wal_write_sync_waits_for_physical_seal", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := Open(Options{
+			Dir:        dir,
+			ChunkSize:  64 << 10,
+			Durability: DurabilityDurable,
+			CommandWAL: true,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+
+		// Hold the async root-publication coordinator with a delay so
+		// Batch.WriteSync returns after admission but BEFORE physical sealing.
+		d.rootPublicationFixedDelay = 200 * time.Millisecond
+		var activated atomic.Bool
+		if err := d.StageSystemOps([]SystemKVOp{{
+			Key:   []byte("dict/test-cwal-seal"),
+			Value: []byte("sealed"),
+		}}, func() { activated.Store(true) }); err != nil {
+			t.Fatalf("StageSystemOps: %v", err)
+		}
+		b := d.NewBatch()
+		if err := b.Set([]byte("cwal/k1"), []byte("v1")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("WriteSync: %v", err)
+		}
+		_ = b.Close()
+
+		// CommandWAL WriteSync returns before physical root seal completes, so
+		// activation MUST NOT have fired yet.
+		if activated.Load() {
+			t.Fatal("CommandWAL WriteSync activated staged dict before physical root durability")
+		}
+		if !d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=true while physical seal is in flight")
+		}
+
+		// Once physical sealing completes (Checkpoint / WaitThrough), activation
+		// fires automatically.
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if !activated.Load() {
+			t.Fatal("expected staged dict activation after physical root seal")
+		}
+		if d.HasUnsyncedSystemOps() {
+			t.Fatal("expected HasUnsyncedSystemOps=false after physical root seal")
+		}
+	})
 }

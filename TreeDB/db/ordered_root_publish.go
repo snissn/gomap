@@ -1607,6 +1607,10 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 }
 
 func (db *DB) publishOrderedRootDeltaIteratorWithValueLogRefs(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions, baseSeq uint64, trackValueLogRefs, trackCollectionRootDescriptors bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, touchedValueLogSegments []uint32, vlogRefDelta *valueLogRefDelta, err error) {
+	return db.publishOrderedRootDeltaIteratorWithValueLogRefsAndAllocator(baseRoot, iter, opts, baseSeq, trackValueLogRefs, trackCollectionRootDescriptors, nil)
+}
+
+func (db *DB) publishOrderedRootDeltaIteratorWithValueLogRefsAndAllocator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions, baseSeq uint64, trackValueLogRefs, trackCollectionRootDescriptors bool, alloc zipper.PageAllocator) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, touchedValueLogSegments []uint32, vlogRefDelta *valueLogRefDelta, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -1669,7 +1673,12 @@ func (db *DB) publishOrderedRootDeltaIteratorWithValueLogRefs(baseRoot uint64, i
 		}
 		return baseRoot, nil, metrics, nil, vlogRefDelta, nil
 	}
-	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	var rootZipper *zipper.Zipper
+	if alloc != nil {
+		rootZipper, err = db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
+	} else {
+		rootZipper, err = db.orderedRootZipperForOptions(idx, opts)
+	}
 	if err != nil {
 		return 0, nil, metrics, nil, vlogRefDelta, err
 	}
