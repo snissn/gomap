@@ -1035,6 +1035,11 @@ func (c *leafRefRewriteCtx) initSystemZipper(base *zipper.Zipper, reader zipper.
 	z.SetIndexInternalBaseDelta(c.db.indexInternalBaseDelta && !outer)
 	if !outer {
 		log = nil
+	} else if writers := collectRewriteWriters(log); len(writers) > 0 {
+		// SystemRootPageID outer leaves written through a maintenance/compact
+		// rewriteWriter must stay non-dictionary-encoded (dictID=0) even when
+		// publishCtx.writer is nil and db.leafPageLog is a compact rewriteWriter.
+		log = &noDictRewriteLeafPageLog{base: log, writers: writers}
 	}
 	z.SetLeafPageLog(log)
 	z.SetLeafPageReader(reader)

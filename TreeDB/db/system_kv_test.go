@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestSystemDict_InlineChunkedAndPointer_GCAndRewritePreserveRaw(t *testing.T) {
@@ -404,5 +406,84 @@ func TestSystemDict_CompactRewriteWriter_SystemLeafNeverUsesSelfDict(t *testing.
 	}
 	if !bytes.Equal(entry.Value, enc) {
 		t.Fatalf("system dict mismatch after compact rewriteWriter system update")
+	}
+
+	// Also cover leaf_generation_pack_rewrite's final collection-descriptor
+	// publication path where publishCtx.writer == nil and db.leafPageLog is the
+	// compact rewriteWriter with an active leafDictID.
+	idx := d.idx.Load()
+	if idx == nil {
+		t.Fatal("nil index")
+	}
+	publishCtx := &leafRefRewriteCtx{
+		ctx:        context.Background(),
+		db:         d,
+		pager:      idx.pager,
+		leafReader: d.valueLogManager,
+		alloc:      idx.allocator,
+	}
+	publishCtx.initSystemZipper(idx.zipper, d.valueLogManager, d.leafPageLog)
+	newSysRoot, changed, err := publishCtx.applySystemRootCollectionRootReplacements(
+		snap.state.SystemRootPageID,
+		[]vacuumCollectionRootReplacement{{key: []byte("meta/pack-publish-collection"), value: []byte("root-v2")}},
+	)
+	if err != nil {
+		t.Fatalf("applySystemRootCollectionRootReplacements: %v", err)
+	}
+	if !changed || newSysRoot == 0 {
+		t.Fatalf("expected updated system root from collection descriptor publication, changed=%v root=%d", changed, newSysRoot)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("writer.Flush(after initSystemZipper): %v", err)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet(after initSystemZipper): %v", err)
+	}
+	if writer.leafDictID != dictID {
+		t.Fatalf("expected rewriteWriter leafDictID=%d to be restored, got %d", dictID, writer.leafDictID)
+	}
+	var leafCheckScratch [page.PageSize]byte
+	// Verify every leaf reachable from newSysRoot still decodes with DictID==0
+	// via fixed-scratch exact lookup on the updated system root.
+	vset := d.valueLogManager.CurrentSetNoRefresh()
+	if vset == nil {
+		t.Fatal("nil value log set after initSystemZipper")
+	}
+	defer func() { _ = d.valueLogManager.Release(vset) }()
+	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		vptr := ptr.ValuePtr()
+		f := vset.Files[vptr.FileID]
+		if f == nil {
+			return nil, valuelog.ErrFileNotFound
+		}
+		gotDictID, err := f.PreparedRecordDictionaryID(vptr)
+		if err != nil {
+			return nil, err
+		}
+		if gotDictID != 0 {
+			return nil, fmt.Errorf("system outer leaf unexpectedly uses dict %d", gotDictID)
+		}
+		raw, usedDst, err := d.valueLogManager.ReadUnsafeTo(vptr, dst[:0])
+		if err != nil {
+			return nil, err
+		}
+		if usedDst {
+			return raw, nil
+		}
+		out := dst[:len(raw)]
+		copy(out, raw)
+		return out, nil
+	}
+	entry2, err := tree.New(idx.pager, d.valueLogManager, newSysRoot).GetEntryWithFixedScratch(
+		SystemDictBytesKey(dictID),
+		keyScratch[:],
+		leafCheckScratch[:],
+		readLeaf,
+	)
+	if err != nil {
+		t.Fatalf("GetEntryWithFixedScratch(after initSystemZipper): %v", err)
+	}
+	if !bytes.Equal(entry2.Value, enc) {
+		t.Fatalf("system dict mismatch after initSystemZipper publication")
 	}
 }

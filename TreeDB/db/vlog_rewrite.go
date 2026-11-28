@@ -3614,15 +3614,15 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
+			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog, false)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
 			var system iteratorWithEntry = tree.New(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 			if len(replacements) != 0 {
 				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
 			}
 			systemRoot, e := buildTreeFromIterator(system, d.systemRootUsesOuterLeaves(), true)
-			if e != nil {
-				return rebuiltDurableRootV1{}, e
-			}
-			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog, false)
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
@@ -3676,6 +3676,12 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		return stats, err
 	}
 
+	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
+	if err != nil {
+		_ = closeReplacement()
+		return stats, err
+	}
+
 	var sysIter iteratorWithEntry = tree.New(d.Pager(), reader, state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if len(collectionRootReplacements) > 0 {
@@ -3685,12 +3691,6 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 		}
 	}
 	sysRoot, err := buildTreeFromIterator(sysIter, d.systemRootUsesOuterLeaves(), true)
-	if err != nil {
-		_ = closeReplacement()
-		return stats, err
-	}
-
-	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
 		_ = closeReplacement()
 		return stats, err
