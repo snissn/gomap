@@ -184,10 +184,41 @@ func DecodePayloadAppend(dst, payload []byte, lookup func(id uint64) (TemplateDe
 				return fail(ErrCorrupt)
 			}
 			idx := 0
-			for i := 0; i < decodedLen; i++ {
-				if mask[i/8]&(1<<uint(i%8)) != 0 {
-					out[i] = varBytes[idx]
+			// Word-at-a-time bit scan: skip 64 zero-diff bytes in 1 check and
+			// visit only differing positions via TrailingZeros64.
+			wordCount := len(mask) / 8
+			for wi := 0; wi < wordCount; wi++ {
+				w := binary.LittleEndian.Uint64(mask[wi*8 : wi*8+8])
+				if w == 0 {
+					continue
+				}
+				base := wi * 64
+				for w != 0 {
+					tz := bits.TrailingZeros64(w)
+					pos := base + tz
+					if pos >= decodedLen {
+						return fail(ErrCorrupt)
+					}
+					out[pos] = varBytes[idx]
 					idx++
+					w &= w - 1
+				}
+			}
+			for bi := wordCount * 8; bi < len(mask); bi++ {
+				b := mask[bi]
+				if b == 0 {
+					continue
+				}
+				base := bi * 8
+				for b != 0 {
+					tz := bits.TrailingZeros8(b)
+					pos := base + tz
+					if pos >= decodedLen {
+						return fail(ErrCorrupt)
+					}
+					out[pos] = varBytes[idx]
+					idx++
+					b &= b - 1
 				}
 			}
 			if idx != len(varBytes) {
@@ -209,6 +240,21 @@ func DecodePayloadAppend(dst, payload []byte, lookup func(id uint64) (TemplateDe
 			return fail(ErrCorrupt)
 		}
 		varBytes := payload[off:]
+		if len(def.maskVarSpans) > 0 {
+			srcOff := 0
+			for _, s := range def.maskVarSpans {
+				n := s.end - s.start
+				if s.end > len(out) || srcOff+n > len(varBytes) {
+					return fail(ErrCorrupt)
+				}
+				copy(out[s.start:s.end], varBytes[srcOff:srcOff+n])
+				srcOff += n
+			}
+			if srcOff != len(varBytes) {
+				return fail(ErrCorrupt)
+			}
+			return dst, nil
+		}
 		if len(def.VarPositions) > 0 {
 			if len(def.VarPositions) != len(varBytes) {
 				return fail(ErrCorrupt)
@@ -223,13 +269,20 @@ func DecodePayloadAppend(dst, payload []byte, lookup func(id uint64) (TemplateDe
 		}
 
 		idx := 0
-		for i := 0; i < decodedLen; i++ {
-			if def.Mask[i/8]&(1<<uint(i%8)) != 0 {
-				if idx >= len(varBytes) {
+		for bi, b := range def.Mask {
+			if b == 0 {
+				continue
+			}
+			base := bi * 8
+			for b != 0 {
+				tz := bits.TrailingZeros8(b)
+				pos := base + tz
+				if pos >= decodedLen || idx >= len(varBytes) {
 					return fail(ErrCorrupt)
 				}
-				out[i] = varBytes[idx]
+				out[pos] = varBytes[idx]
 				idx++
+				b &= b - 1
 			}
 		}
 		if idx != len(varBytes) {

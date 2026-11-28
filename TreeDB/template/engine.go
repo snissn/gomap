@@ -23,6 +23,7 @@ type Engine struct {
 	totalTemplates atomic.Uint64
 	recentMu       sync.Mutex
 	recent         []recentTemplate
+	recentSnap     atomic.Pointer[[]recentTemplate]
 }
 
 type bucket struct {
@@ -73,7 +74,6 @@ type defCache struct {
 var (
 	candScoreMapPool   sync.Pool // map[uint64]candScore
 	candScoreSlicePool sync.Pool // []candScore
-	recentSlicePool    sync.Pool // []recentTemplate
 )
 
 func getCandScoreMap() map[uint64]candScore {
@@ -120,31 +120,6 @@ func putCandScores(s []candScore) {
 		return
 	}
 	candScoreSlicePool.Put(s[:0])
-}
-
-func getRecentSnapshot(capacity int) []recentTemplate {
-	if capacity < 0 {
-		capacity = 0
-	}
-	if v := recentSlicePool.Get(); v != nil {
-		if s, ok := v.([]recentTemplate); ok {
-			if cap(s) >= capacity && cap(s) <= capacity*2+32 {
-				return s[:0]
-			}
-		}
-	}
-	return make([]recentTemplate, 0, capacity)
-}
-
-func putRecentSnapshot(s []recentTemplate) {
-	if s == nil {
-		return
-	}
-	if cap(s) > 1024 {
-		return
-	}
-	clear(s)
-	recentSlicePool.Put(s[:0])
 }
 
 func newDefCache(size int) *defCache {
@@ -320,35 +295,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		}
 	}
 	if len(candMap) == 0 {
-		legacy := RoutingFingerprintsLegacy(value, cfg)
-		if len(legacy) > 0 {
-			maxReads := cfg.MaxFPReads
-			if maxReads <= 0 || maxReads > len(legacy) {
-				maxReads = len(legacy)
-			}
-			for i := 0; i < maxReads; i++ {
-				fp := legacy[i]
-				e.stats.CandidateFPReads.Add(1)
-				cands, err := store.GetCandidates(ctx, fp, cfg.MaxCandidatesPerFP)
-				if err != nil {
-					e.stats.addReason(reasonFPLookupErr)
-					continue
-				}
-				for _, c := range cands {
-					cs, ok := candMap[c.ID]
-					if !ok {
-						cs = candScore{id: c.ID, size: c.Size}
-					}
-					cs.score++
-					if c.Size > 0 && (cs.size == 0 || c.Size < cs.size) {
-						cs.size = c.Size
-					}
-					candMap[c.ID] = cs
-				}
-			}
-		}
-	}
-	if len(candMap) == 0 {
 		e.stats.addReason(reasonNoCandidates)
 		e.observeTraining(value, store)
 		return value, false
@@ -500,34 +446,43 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	return value, false
 }
 
+func (e *Engine) publishRecentSnapshotLocked() {
+	cp := make([]recentTemplate, len(e.recent))
+	copy(cp, e.recent)
+	e.recentSnap.Store(&cp)
+}
+
 func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 	cfg := e.cfg
 	if cfg.RecentTemplates <= 0 {
 		return nil, false
 	}
-	e.recentMu.Lock()
-	n := len(e.recent)
-	if n == 0 {
-		e.recentMu.Unlock()
+	snapPtr := e.recentSnap.Load()
+	if snapPtr == nil || len(*snapPtr) == 0 {
 		return nil, false
 	}
-	snapshot := getRecentSnapshot(n)
-	snapshot = snapshot[:n]
-	copy(snapshot, e.recent)
-	e.recentMu.Unlock()
-	defer putRecentSnapshot(snapshot)
+	snapshot := *snapPtr
 	max := cfg.RecentTemplates
 	if max > len(snapshot) {
 		max = len(snapshot)
 	}
-	if len(snapshot) > 0 && snapshot[len(snapshot)-1].hits < uint32(cfg.FastPathMinHits) {
+	if snapshot[len(snapshot)-1].hits < uint32(cfg.FastPathMinHits) {
 		max = 1
 	}
 	for i := 0; i < max; i++ {
 		entry := snapshot[len(snapshot)-1-i]
 		def := entry.def
 		if def.Kind == TemplateMask {
-			encLen, sparse, _, matched := matchMaskTemplateLen(value, def, entry.id, cfg)
+			minSavings := cfg.FastPathMinSavings
+			if avg := entry.avgSavings; avg > 0 {
+				if threshold := avg - cfg.FastPathSavingsSlack; threshold > minSavings {
+					minSavings = threshold
+				}
+			}
+			if minSavings < cfg.MinSavingsBytes {
+				minSavings = cfg.MinSavingsBytes
+			}
+			payload, encLen, sparse, matched := matchAndEncodeMask(value, def, entry.id, cfg, minSavings)
 			if !matched {
 				continue
 			}
@@ -536,13 +491,8 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 				e.updateRecentMiss(entry.id)
 				continue
 			}
-			if !e.fastPathEligible(entry, savings) {
-				e.updateRecentHit(entry.id, savings)
-				continue
-			}
-			payload := encodeMaskTemplate(value, def, entry.id, sparse)
 			if len(payload) == 0 {
-				e.updateRecentMiss(entry.id)
+				e.updateRecentHit(entry.id, savings)
 				continue
 			}
 			e.stats.Matched.Add(1)
@@ -553,12 +503,27 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			} else {
 				e.stats.MaskFullUsed.Add(1)
 			}
-			e.updateRecentHit(entry.id, savings)
-			e.recordRecent(def, entry.id)
+			// Steady-state lock-free fast path: if already at top of recent
+			// list and warmed past FastPathMinHits, skip mutex lock/reorder.
+			if i != 0 || entry.hits < uint32(cfg.FastPathMinHits) {
+				e.updateRecentHit(entry.id, savings)
+				if i != 0 {
+					e.recordRecent(def, entry.id)
+				}
+			}
 			return payload, true
 		}
 		if def.Kind == 0 || def.Kind == TemplateAnchors {
-			encLen, _, matched := matchTemplateLen(value, def.Anchors, entry.id, cfg)
+			minSavings := cfg.FastPathMinSavings
+			if avg := entry.avgSavings; avg > 0 {
+				if threshold := avg - cfg.FastPathSavingsSlack; threshold > minSavings {
+					minSavings = threshold
+				}
+			}
+			if minSavings < cfg.MinSavingsBytes {
+				minSavings = cfg.MinSavingsBytes
+			}
+			payload, encLen, matched := matchAndEncodeAnchor(value, def, entry.id, cfg, minSavings)
 			if !matched {
 				continue
 			}
@@ -567,42 +532,23 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 				e.updateRecentMiss(entry.id)
 				continue
 			}
-			if !e.fastPathEligible(entry, savings) {
+			if len(payload) == 0 {
 				e.updateRecentHit(entry.id, savings)
-				continue
-			}
-			gaps, _, _, matched := matchTemplate(value, def.Anchors, entry.id, cfg)
-			if !matched {
-				e.updateRecentMiss(entry.id)
-				continue
-			}
-			payload, err := EncodePayload(entry.id, gaps)
-			if err != nil {
-				e.updateRecentMiss(entry.id)
 				continue
 			}
 			e.stats.Matched.Add(1)
 			e.stats.Kept.Add(1)
 			e.stats.BytesSaved.Add(uint64(savings))
-			e.updateRecentHit(entry.id, savings)
-			e.recordRecent(def, entry.id)
+			if i != 0 || entry.hits < uint32(cfg.FastPathMinHits) {
+				e.updateRecentHit(entry.id, savings)
+				if i != 0 {
+					e.recordRecent(def, entry.id)
+				}
+			}
 			return payload, true
 		}
 	}
 	return nil, false
-}
-
-func (e *Engine) fastPathEligible(entry recentTemplate, savings int) bool {
-	cfg := e.cfg
-	minSavings := cfg.FastPathMinSavings
-	avg := entry.avgSavings
-	if avg > 0 {
-		threshold := avg - cfg.FastPathSavingsSlack
-		if threshold > minSavings {
-			minSavings = threshold
-		}
-	}
-	return savings >= minSavings
 }
 
 func (e *Engine) updateRecentHit(id uint64, savings int) {
@@ -625,6 +571,7 @@ func (e *Engine) updateRecentHit(id uint64, savings int) {
 		if e.recent[i].misses > 0 {
 			e.recent[i].misses--
 		}
+		e.publishRecentSnapshotLocked()
 		return
 	}
 }
@@ -642,10 +589,12 @@ func (e *Engine) updateRecentMiss(id uint64) {
 		}
 		e.recent[i].misses++
 		if int(e.recent[i].misses) < cfg.FastPathMaxMisses {
+			e.publishRecentSnapshotLocked()
 			return
 		}
 		copy(e.recent[i:], e.recent[i+1:])
 		e.recent = e.recent[:len(e.recent)-1]
+		e.publishRecentSnapshotLocked()
 		return
 	}
 }
@@ -667,15 +616,18 @@ func (e *Engine) recordRecent(def TemplateDef, id uint64) {
 			copy(e.recent[i:], e.recent[i+1:])
 			e.recent = e.recent[:len(e.recent)-1]
 			e.recent = append(e.recent, entry)
-			break
+			e.publishRecentSnapshotLocked()
+			return
 		}
 	}
 	if len(e.recent) < cfg.RecentTemplates {
 		e.recent = append(e.recent, recentTemplate{id: id, def: def})
+		e.publishRecentSnapshotLocked()
 		return
 	}
 	copy(e.recent, e.recent[1:])
 	e.recent[len(e.recent)-1] = recentTemplate{id: id, def: def}
+	e.publishRecentSnapshotLocked()
 }
 
 func (e *Engine) observeTraining(value []byte, store Store) {
@@ -886,19 +838,16 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 	if bestCount < cfg.MinAnchorFreq {
 		return TemplateDef{}, nil, false, false
 	}
-	// Build per-position byte counts.
-	counts := make([][256]int, bestLen)
-	totalSamples := 0
+	// Collect samples of length bestLen and build per-position byte counts in
+	// L1-cache-resident 64-position stack tiles (32 KiB stack vs 8+ MiB heap).
+	var matchedStack [256][]byte
+	matched := matchedStack[:0]
 	for i := 0; i < sampleLimit; i++ {
-		val := samples[i].value
-		if len(val) != bestLen {
-			continue
+		if len(samples[i].value) == bestLen {
+			matched = append(matched, samples[i].value)
 		}
-		for pos := 0; pos < bestLen; pos++ {
-			counts[pos][val[pos]]++
-		}
-		totalSamples++
 	}
+	totalSamples := len(matched)
 	if totalSamples == 0 {
 		return TemplateDef{}, nil, false, false
 	}
@@ -906,21 +855,74 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 	maskLen := (bestLen + 7) / 8
 	mask := make([]byte, maskLen)
 	constCount := 0
-	for pos := 0; pos < bestLen; pos++ {
-		maxCount := 0
-		var maxByte byte
-		for b, c := range counts[pos] {
-			if c > maxCount {
-				maxCount = c
-				maxByte = byte(b)
+	const tilePositions = 64
+	if totalSamples <= 65535 {
+		var tile [tilePositions][256]uint16
+		for basePos := 0; basePos < bestLen; basePos += tilePositions {
+			nPos := tilePositions
+			if basePos+nPos > bestLen {
+				nPos = bestLen - basePos
+			}
+			clear(tile[:nPos])
+			for _, val := range matched {
+				chunk := val[basePos : basePos+nPos]
+				for j, b := range chunk {
+					tile[j][b]++
+				}
+			}
+			for j := 0; j < nPos; j++ {
+				pos := basePos + j
+				maxCount := uint16(0)
+				var maxByte byte
+				row := &tile[j]
+				for b, c := range row {
+					if c > maxCount {
+						maxCount = c
+						maxByte = byte(b)
+					}
+				}
+				base[pos] = maxByte
+				ratio := float64(maxCount) / float64(totalSamples)
+				if ratio >= cfg.MaskMinPresenceRatio {
+					constCount++
+				} else {
+					mask[pos/8] |= 1 << uint(pos%8)
+				}
 			}
 		}
-		base[pos] = maxByte
-		ratio := float64(maxCount) / float64(totalSamples)
-		if ratio >= cfg.MaskMinPresenceRatio {
-			constCount++
-		} else {
-			mask[pos/8] |= 1 << uint(pos%8)
+	} else {
+		var tile [tilePositions][256]uint32
+		for basePos := 0; basePos < bestLen; basePos += tilePositions {
+			nPos := tilePositions
+			if basePos+nPos > bestLen {
+				nPos = bestLen - basePos
+			}
+			clear(tile[:nPos])
+			for _, val := range matched {
+				chunk := val[basePos : basePos+nPos]
+				for j, b := range chunk {
+					tile[j][b]++
+				}
+			}
+			for j := 0; j < nPos; j++ {
+				pos := basePos + j
+				maxCount := uint32(0)
+				var maxByte byte
+				row := &tile[j]
+				for b, c := range row {
+					if c > maxCount {
+						maxCount = c
+						maxByte = byte(b)
+					}
+				}
+				base[pos] = maxByte
+				ratio := float64(maxCount) / float64(totalSamples)
+				if ratio >= cfg.MaskMinPresenceRatio {
+					constCount++
+				} else {
+					mask[pos/8] |= 1 << uint(pos%8)
+				}
+			}
 		}
 	}
 	minConst := cfg.MaskMinConstBytes
@@ -952,7 +954,17 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 		}
 	}
 	varPositions := buildVarPositions(mask, len(base))
-	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions}
+	constPositions := buildConstPositions(mask, len(base))
+	varSpans, constSpans := buildMaskSpans(mask, len(base))
+	def := TemplateDef{
+		Kind:           TemplateMask,
+		Base:           base,
+		Mask:           mask,
+		VarPositions:   varPositions,
+		ConstPositions: constPositions,
+		maskVarSpans:   varSpans,
+		maskConstSpans: constSpans,
+	}
 	return def, refValue, activated, true
 }
 

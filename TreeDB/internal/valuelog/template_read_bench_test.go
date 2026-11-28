@@ -266,3 +266,30 @@ func BenchmarkValueLogTemplateMixedReadWrite(b *testing.B) {
 		b.ReportMetric(float64(hits)/float64(hits+misses), "template_def_cache_hit_ratio")
 	}
 }
+
+func BenchmarkValueLogTemplateDefCacheGetParallel(b *testing.B) {
+	cache := newTemplateDefCache(64)
+	def := templ.TemplateDef{
+		Kind: templ.TemplateAnchors,
+		Anchors: [][]byte{
+			bytes.Repeat([]byte{'A'}, 16),
+			bytes.Repeat([]byte{'B'}, 16),
+		},
+	}
+	for id := uint64(1); id <= 16; id++ {
+		cache.Add(id, def)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		var i uint64
+		for pb.Next() {
+			id := (i & 15) + 1
+			i++
+			got, ok := cache.Get(id)
+			if !ok || len(got.Anchors) != 2 {
+				b.Fatalf("cache miss id=%d", id)
+			}
+		}
+	})
+}
