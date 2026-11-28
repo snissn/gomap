@@ -9,6 +9,8 @@ TMP_BASE="${TMP_BASE%/}"
 OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_compare_XXXXXX")}"
 DOCS_LIST="${DOCS_LIST:-1000 10000}"
 INDEXES_LIST="${INDEXES_LIST:-0 2}"
+LOAD_ONLY_INDEXES_LIST="${LOAD_ONLY_INDEXES_LIST:-}"
+DOC_EXTRA_INDEX_FIELDS="${DOC_EXTRA_INDEX_FIELDS:-0}"
 BATCH_SIZE="${BATCH_SIZE:-500}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-1}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
@@ -206,6 +208,15 @@ while [[ $# -gt 0 ]]; do
     --indexes)
       require_option_value "$1" "${2-}"
       INDEXES_LIST="$2"
+      shift 2
+      ;;
+    --load-only-indexes)
+      LOAD_ONLY_INDEXES_LIST="${2-}"
+      shift 2
+      ;;
+    --doc-extra-index-fields)
+      require_option_value "$1" "${2-}"
+      DOC_EXTRA_INDEX_FIELDS="$2"
       shift 2
       ;;
     --reads)
@@ -730,6 +741,11 @@ run_target() {
     range_index_arg="-range-index"
   fi
 
+  local extra_fields_args=()
+  if [[ "$DOC_EXTRA_INDEX_FIELDS" -gt 0 ]]; then
+    extra_fields_args=(-doc-extra-index-fields "$DOC_EXTRA_INDEX_FIELDS")
+  fi
+
   "$BENCH_BIN" \
     -target "$target" \
     -database "$database" \
@@ -755,6 +771,7 @@ run_target() {
     -concurrent-writer-sweep "$CONCURRENT_WRITER_SWEEP" \
     -concurrent-writes "$concurrent_writes" \
     -secondary-indexes "$indexes" \
+    ${extra_fields_args[@]+"${extra_fields_args[@]}"} \
     -timeout "$TIMEOUT" \
     -format json \
     ${prebuild_arg:+"$prebuild_arg"} \
@@ -1186,6 +1203,113 @@ for docs in $DOCS_LIST; do
       printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
     done
   done
+
+  if [[ -n "$LOAD_ONLY_INDEXES_LIST" ]]; then
+    saved_reader_sweep="$CONCURRENT_READER_SWEEP"
+    saved_range_reader_sweep="$CONCURRENT_RANGE_READER_SWEEP"
+    saved_writer_sweep="$CONCURRENT_WRITER_SWEEP"
+    CONCURRENT_READER_SWEEP=""
+    CONCURRENT_RANGE_READER_SWEEP=""
+    CONCURRENT_WRITER_SWEEP=""
+    for indexes in $LOAD_ONLY_INDEXES_LIST; do
+      if [[ ! "$indexes" =~ ^[0-9]+$ ]]; then
+        echo "invalid load-only index count: $indexes" >&2
+        exit 2
+      fi
+      if [[ " $INDEXES_LIST " == *" $indexes "* ]]; then
+        continue
+      fi
+      cell="docs_${docs}_idx_${indexes}"
+      database="${DATABASE_PREFIX}_${cell}"
+      mongo_data="$MONGO_DIR/$cell"
+
+      for tree_format in $TREEDB_DOCUMENT_FORMATS; do
+        for tree_client_mode in $TREEDB_CLIENT_MODES; do
+          format_label=$(normalized_label "$tree_format")
+          client_label=$(normalized_label "$tree_client_mode")
+          tree_config="treedb_${format_label}_${client_label}"
+          if [[ "$RANGE_INDEX" == "true" ]]; then
+            tree_config="${tree_config}_range_index"
+          fi
+          tree_raw_rel="raw/${tree_config}_${cell}.json"
+          tree_raw="$OUT_DIR/$tree_raw_rel"
+          tree_data="$TREE_DIR/${tree_config}_${cell}"
+          tree_profile_args=()
+          if [[ "$PROFILE_TREEDB" == "true" ]]; then
+            tree_profile_dir="$PROFILE_DIR/${tree_config}_${cell}"
+            rm -rf "$tree_profile_dir"
+            mkdir -p "$tree_profile_dir"
+            tree_profile_args=(-profile-dir "$tree_profile_dir")
+          fi
+
+          tree_open_args=(-treedb-open-mode "$TREEDB_OPEN_MODE")
+          if [[ -n "$TREEDB_MEMTABLE_MODE" ]]; then
+            tree_open_args+=(-treedb-memtable-mode "$TREEDB_MEMTABLE_MODE")
+          fi
+
+          echo
+          echo "==> $cell TreeDB load-only ($tree_format, client=$tree_client_mode, open_mode=$TREEDB_OPEN_MODE)"
+          run_target treedb "$docs" "$indexes" "$tree_raw" "$database" 0 0 0 0 \
+            0 0 0 0 0 0 \
+            -treedb-dir "$tree_data" \
+            -keep-treedb-dir \
+            -treedb-profile "$TREEDB_PROFILE" \
+            "${tree_open_args[@]}" \
+            -treedb-document-format "$tree_format" \
+            -client-mode "$tree_client_mode" \
+            -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
+            -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
+            -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
+            -treedb-maintenance "$TREEDB_MAINTENANCE" \
+            -treedb-read-state "$TREEDB_READ_STATE" \
+            "${tree_profile_args[@]:-}"
+          tree_physical=$(du_bytes "$tree_data")
+          printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
+        done
+      done
+
+      for mongo_client_mode in $MONGO_CLIENT_MODES; do
+        mongo_client_label=$(normalized_label "$mongo_client_mode")
+        mongo_config=$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")
+        mongo_raw_rel="raw/${mongo_config}_${cell}.json"
+        mongo_raw="$OUT_DIR/$mongo_raw_rel"
+        mongo_cell_data="$mongo_data/$mongo_client_label"
+
+        echo "==> $cell MongoDB load-only (client=$mongo_client_mode)"
+        mongo_uri="$MONGO_URI"
+        mongo_container=""
+        if [[ "$MONGO_MODE" == "docker" ]]; then
+          start_mongo_container "${cell}_${mongo_client_label}" "$mongo_cell_data"
+          mongo_uri="$STARTED_MONGO_URI"
+          mongo_container="$STARTED_MONGO_CONTAINER"
+          if ! wait_for_mongo "$mongo_uri" "$database"; then
+            echo "MongoDB container did not become ready for $cell client=$mongo_client_mode" >&2
+            exit 1
+          fi
+        fi
+        mongo_write_concern_args=()
+        if [[ -n "$MONGO_WRITE_CONCERN" ]]; then
+          mongo_write_concern_args=(-mongo-write-concern "$MONGO_WRITE_CONCERN")
+        fi
+        run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" 0 0 0 0 \
+          0 0 0 0 0 0 \
+          -mongo-uri "$mongo_uri" \
+          -mongo-compact="$MONGO_COMPACT" \
+          ${mongo_write_concern_args[@]+"${mongo_write_concern_args[@]}"} \
+          -client-mode "$mongo_client_mode"
+        if [[ "$MONGO_MODE" == "docker" ]]; then
+          stop_mongo_container "$mongo_container"
+          mongo_physical=$(docker_du_bytes "$mongo_cell_data")
+        else
+          mongo_physical=0
+        fi
+        printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+      done
+    done
+    CONCURRENT_READER_SWEEP="$saved_reader_sweep"
+    CONCURRENT_RANGE_READER_SWEEP="$saved_range_reader_sweep"
+    CONCURRENT_WRITER_SWEEP="$saved_writer_sweep"
+  fi
 done
 
 "$REPORT_BIN" \

@@ -3035,6 +3035,19 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	for _, idx := range indexes {
 		indexLabel := indexCountTitleLabel(idx)
 		throughputRows := mongoOperationThroughputRows(rows, idx, true)
+		hasSweepCharts := false
+		for _, spec := range mongoConcurrentReadSweepSpecs() {
+			if len(mongoSweepCountsInPrimaryScope(rows, idx, spec.Prefix)) > 0 {
+				hasSweepCharts = true
+				break
+			}
+		}
+		if !hasSweepCharts && len(mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_update_set_w")) > 0 {
+			hasSweepCharts = true
+		}
+		if !hasSweepCharts && len(throughputRows) <= 1 {
+			continue
+		}
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": Mongo API Scaling</h3>")
 		b.WriteString("<p class=\"subtle\">These are the actual concurrency sweeps. Single threaded client rows are one-client request/response probes; higher client counts show where each operation saturates.</p>")
 		if scope, ok := mongoPrimaryScope(rows, idx); ok {
