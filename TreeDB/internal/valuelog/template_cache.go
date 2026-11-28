@@ -122,3 +122,25 @@ func (c *templateDefCache) Add(id uint64, def templ.TemplateDef) {
 	}
 	c.publishSnapshotLocked()
 }
+
+func (c *templateDefCache) Delete(ids []uint64) {
+	if c == nil || len(ids) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	changed := false
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if elem := c.m[id]; elem != nil {
+			c.ll.Remove(elem)
+			delete(c.m, id)
+			changed = true
+		}
+	}
+	if changed {
+		c.publishSnapshotLocked()
+	}
+}

@@ -217,7 +217,7 @@ func TestSystemDict_OuterLeavesInValueLog_RebuildAndFixedScratchAcyclic(t *testi
 
 	// Rebuild SystemRootPageID including both the dictionary entry and another
 	// metadata key through PublishSystemRootIterator.
-	rebuildOps, _ := normalizeSystemKVOps([]SystemKVOp{
+	rebuildOps, _, _ := normalizeSystemKVOps([]SystemKVOp{
 		{Key: []byte("meta/a"), Value: []byte("1")},
 		{Key: []byte("meta/b"), Value: []byte("2")},
 		{Key: SystemDictBytesKey(dictID), Value: enc},

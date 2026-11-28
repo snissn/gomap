@@ -955,26 +955,40 @@ func (db *DB) applySystemOpsDirect(ops []SystemKVOp, sync bool) error {
 }
 
 func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (commitSeq uint64, accepted bool, physicallyDurable bool, retErr error) {
+	commitSeq, accepted, physicallyDurable, _, retErr = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, 0, nil)
+	return commitSeq, accepted, physicallyDurable, retErr
+}
+
+// applySystemOpsDirectIfCommitSeq applies ops to SystemRootPageID only if
+// db.meta.CommitSeq still equals wantSeq (and preCommitCheck, when non-nil,
+// returns true) while db.writeMu is held. If the guard fails, it returns
+// stale=true with zero mutations.
+func (db *DB) applySystemOpsDirectIfCommitSeq(ops []SystemKVOp, wantSeq uint64, sync bool, preCommitCheck func() bool) (stale bool, err error) {
+	_, _, _, stale, err = db.applySystemOpsDirectWithCommitSeqGuard(ops, sync, wantSeq, preCommitCheck)
+	return stale, err
+}
+
+func (db *DB) applySystemOpsDirectWithCommitSeqGuard(ops []SystemKVOp, sync bool, wantSeq uint64, preCommitCheck func() bool) (commitSeq uint64, accepted bool, physicallyDurable bool, stale bool, retErr error) {
 	if db == nil {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, ErrClosed
 	}
 	if db.closing.Load() {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, ErrClosed
 	}
 	if db.readOnly {
-		return 0, false, false, ErrReadOnly
+		return 0, false, false, false, ErrReadOnly
 	}
 	if len(ops) == 0 {
-		return 0, false, false, nil
+		return 0, false, false, false, nil
 	}
-	sortedOps, hasPointer := normalizeSystemKVOps(ops)
+	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(ops)
 	db.recordRecentSystemMetadataIDs(sortedOps)
 	if len(sortedOps) == 0 {
-		return 0, false, false, nil
+		return 0, false, false, false, nil
 	}
 	if sync && hasPointer {
 		if err := db.syncSystemValueLogWriterIfOpen(); err != nil {
-			return 0, false, false, err
+			return 0, false, false, false, err
 		}
 	}
 
@@ -986,13 +1000,13 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 		}
 	}()
 	if db.closing.Load() {
-		return 0, false, false, ErrClosed
+		return 0, false, false, false, ErrClosed
 	}
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return 0, false, false, err
+		return 0, false, false, false, err
 	}
 	if db.readOnly {
-		return 0, false, false, ErrReadOnly
+		return 0, false, false, false, ErrReadOnly
 	}
 
 	db.mu.RLock()
@@ -1001,15 +1015,22 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
+	if wantSeq != 0 && baseSeq != wantSeq {
+		return 0, false, false, true, nil
+	}
+	if preCommitCheck != nil && !preCommitCheck() {
+		return 0, false, false, true, nil
+	}
+
 	systemOpts := systemRootOrderedPublishOptions(db)
 
-	trackValueLogRefs := hasPointer && db.valueLogRefTracker != nil
+	trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
 	iter := newSystemKVOpIterator(sortedOps)
 	newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(
 		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false,
 	)
 	if err != nil {
-		return 0, false, false, err
+		return 0, false, false, false, err
 	}
 	defer func() {
 		if vlogRefDelta != nil {
@@ -1022,7 +1043,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		return 0, false, false, errors.New("treedb: concurrent modification detected during system KV publish")
+		return 0, false, false, false, errors.New("treedb: concurrent modification detected during system KV publish")
 	}
 
 	var finalizeOpts finalizeCommitOptions
@@ -1041,13 +1062,13 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 		nil,
 	)
 	if err != nil {
-		return post.commitSeq, post.accepted, post.physicallyDurable, err
+		return post.commitSeq, post.accepted, post.physicallyDurable, false, err
 	}
 	vlogRefDelta = nil
 	db.finalizeCommitPostWork(post)
 	if hasPointer {
 		if err := db.RefreshValueLogSet(); err != nil {
-			return post.commitSeq, post.accepted, post.physicallyDurable, err
+			return post.commitSeq, post.accepted, post.physicallyDurable, false, err
 		}
 	}
 	for _, op := range sortedOps {
@@ -1056,7 +1077,7 @@ func (db *DB) applySystemOpsDirectWithCommitSeq(ops []SystemKVOp, sync bool) (co
 			break
 		}
 	}
-	return post.commitSeq, post.accepted, post.physicallyDurable, nil
+	return post.commitSeq, post.accepted, post.physicallyDurable, false, nil
 }
 
 type stagedSystemOpBatch struct {
@@ -1368,7 +1389,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		return nil, nil
 	}
 	allOps := flattenStagedSystemOpBatches(drained)
-	sortedOps, hasPointer := normalizeSystemKVOps(allOps)
+	sortedOps, hasPointer, hasDelete := normalizeSystemKVOps(allOps)
 	if len(sortedOps) == 0 {
 		db.completeStagedSystemOpBatches(drained, baseSeq, sync)
 		return nil, nil
@@ -1380,7 +1401,7 @@ func (db *DB) preparePiggybackedSystemOpsLocked(baseSystemRoot, baseSeq uint64, 
 		}
 	}
 	systemOpts := systemRootOrderedPublishOptions(db)
-	trackValueLogRefs := hasPointer && db.valueLogRefTracker != nil
+	trackValueLogRefs := (hasPointer || hasDelete) && db.valueLogRefTracker != nil
 	iter := newSystemKVOpIterator(sortedOps)
 	newSystemRoot, retired, metrics, touchedValueLogSegments, vlogRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefsAndAllocator(
 		baseSystemRoot, iter, systemOpts, baseSeq, trackValueLogRefs, false, alloc,
@@ -1548,7 +1569,38 @@ func (db *DB) FlushStagedSystemOps(sync bool) error {
 	return nil
 }
 
-func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool) {
+// EvictSystemDictCache removes the given dictionary IDs from the DB's
+// in-memory dictionary byte cache and the global value-log zstd codec cache.
+func (db *DB) EvictSystemDictCache(dictIDs []uint64) {
+	if db == nil || len(dictIDs) == 0 {
+		return
+	}
+	for _, id := range dictIDs {
+		if id != 0 {
+			db.systemDictCache.Delete(id)
+		}
+	}
+	valuelog.EvictDictCodecs(dictIDs)
+}
+
+// EvictSystemTemplateCache removes the given template IDs from the DB's
+// in-memory template byte cache and the value-log manager's decoded template
+// definition cache.
+func (db *DB) EvictSystemTemplateCache(templateIDs []uint64) {
+	if db == nil || len(templateIDs) == 0 {
+		return
+	}
+	for _, id := range templateIDs {
+		if id != 0 {
+			db.systemTemplateCache.Delete(id)
+		}
+	}
+	if db.valueLogManager != nil {
+		db.valueLogManager.EvictTemplateDefs(templateIDs)
+	}
+}
+
+func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool, bool) {
 	type indexedOp struct {
 		op  SystemKVOp
 		idx int
@@ -1565,17 +1617,20 @@ func normalizeSystemKVOps(ops []SystemKVOp) ([]SystemKVOp, bool) {
 	})
 	out := make([]SystemKVOp, 0, len(list))
 	hasPointer := false
+	hasDelete := false
 	for i := 0; i < len(list); i++ {
 		if i+1 < len(list) && bytes.Equal(list[i].op.Key, list[i+1].op.Key) {
 			continue
 		}
 		op := list[i].op
-		if op.IsPointer && !op.Delete {
+		if op.Delete {
+			hasDelete = true
+		} else if op.IsPointer {
 			hasPointer = true
 		}
 		out = append(out, op)
 	}
-	return out, hasPointer
+	return out, hasPointer, hasDelete
 }
 
 type systemKVOpIterator struct {

@@ -137,3 +137,33 @@ func getDictCodecsWithOpts(dictID uint64, dict []byte, level zstd.EncoderLevel, 
 	}
 	return entry
 }
+
+// EvictDictCodecs removes cached zstd encoder/decoder entries for the given
+// dictionary IDs from the global dict codec cache and single-entry fast slot.
+func EvictDictCodecs(dictIDs []uint64) {
+	if len(dictIDs) == 0 || dictCodecs == nil {
+		return
+	}
+	idSet := make(map[uint64]struct{}, len(dictIDs))
+	for _, id := range dictIDs {
+		if id != 0 {
+			idSet[id] = struct{}{}
+		}
+	}
+	if len(idSet) == 0 {
+		return
+	}
+	dictCodecs.mu.Lock()
+	for k, elem := range dictCodecs.items {
+		if _, ok := idSet[k.dictID]; ok {
+			dictCodecs.ll.Remove(elem)
+			delete(dictCodecs.items, k)
+		}
+	}
+	if fast := dictCodecsFast.Load(); fast != nil {
+		if _, ok := idSet[fast.key.dictID]; ok {
+			dictCodecsFast.Store(nil)
+		}
+	}
+	dictCodecs.mu.Unlock()
+}

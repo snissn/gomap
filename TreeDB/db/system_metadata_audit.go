@@ -121,6 +121,8 @@ type systemDictInventoryEntry struct {
 	pointerSegID uint32
 	chunkCount   uint32
 	isChunked    bool
+	hasBytesKey  bool
+	chunkKeys    [][]byte
 	hashKeys     [][]byte
 	hasK         bool
 	hasLeafMode  bool
@@ -133,6 +135,8 @@ type systemTemplateInventoryEntry struct {
 	pointerSegID uint32
 	chunkCount   uint32
 	isChunked    bool
+	hasDefKey    bool
+	chunkKeys    [][]byte
 }
 
 type systemTemplateFPEntry struct {
@@ -200,6 +204,40 @@ func appendRecentUniqueID(dst []uint64, id uint64, limit int) []uint64 {
 		dst = dst[:limit]
 	}
 	return dst
+}
+
+func (db *DB) forgetRecentSystemMetadataIDs(dictIDs, tplIDs []uint64) {
+	if db == nil || (len(dictIDs) == 0 && len(tplIDs) == 0) {
+		return
+	}
+	db.recentSystemMetaMu.Lock()
+	defer db.recentSystemMetaMu.Unlock()
+	if len(dictIDs) > 0 && len(db.recentPublishedDictIDs) > 0 {
+		drop := make(map[uint64]struct{}, len(dictIDs))
+		for _, id := range dictIDs {
+			drop[id] = struct{}{}
+		}
+		kept := db.recentPublishedDictIDs[:0]
+		for _, id := range db.recentPublishedDictIDs {
+			if _, ok := drop[id]; !ok {
+				kept = append(kept, id)
+			}
+		}
+		db.recentPublishedDictIDs = kept
+	}
+	if len(tplIDs) > 0 && len(db.recentPublishedTemplateIDs) > 0 {
+		drop := make(map[uint64]struct{}, len(tplIDs))
+		for _, id := range tplIDs {
+			drop[id] = struct{}{}
+		}
+		kept := db.recentPublishedTemplateIDs[:0]
+		for _, id := range db.recentPublishedTemplateIDs {
+			if _, ok := drop[id]; !ok {
+				kept = append(kept, id)
+			}
+		}
+		db.recentPublishedTemplateIDs = kept
+	}
 }
 
 func (db *DB) snapshotRecentSystemMetadataIDs(keepDicts, keepTemplates int) (dictIDs []uint64, tplIDs []uint64) {
@@ -383,6 +421,7 @@ func inspectSystemMetadataInventory(snap *Snapshot) (*systemMetadataInventory, e
 					continue
 				}
 				e := ensureDict(id)
+				e.hasBytesKey = true
 				e.keyCount++
 				if flags&node.FlagPointer != 0 {
 					e.pointerSegID = ptr.FileID
@@ -402,6 +441,7 @@ func inspectSystemMetadataInventory(snap *Snapshot) (*systemMetadataInventory, e
 				}
 				e := ensureDict(id)
 				e.keyCount++
+				e.chunkKeys = append(e.chunkKeys, append([]byte(nil), key...))
 				e.inlineBytes += int64(len(key) + len(val))
 			case bytes.HasPrefix(key, systemDictKPrefix):
 				id, ok := parseSystemDictSuffixID(key, systemDictKPrefix)
@@ -461,6 +501,7 @@ func inspectSystemMetadataInventory(snap *Snapshot) (*systemMetadataInventory, e
 					continue
 				}
 				e := ensureTemplate(id)
+				e.hasDefKey = true
 				e.keyCount++
 				if flags&node.FlagPointer != 0 {
 					e.pointerSegID = ptr.FileID
@@ -480,6 +521,7 @@ func inspectSystemMetadataInventory(snap *Snapshot) (*systemMetadataInventory, e
 				}
 				e := ensureTemplate(id)
 				e.keyCount++
+				e.chunkKeys = append(e.chunkKeys, append([]byte(nil), key...))
 				e.inlineBytes += int64(len(key) + len(val))
 			case bytes.HasPrefix(key, systemTemplateFPPrefix):
 				if flags&node.FlagPointer != 0 {
