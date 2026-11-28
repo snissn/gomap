@@ -5564,7 +5564,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	preparedDocuments, templateRecords, learnedTemplates, _, err := prepareInsertDocuments(documents, plannerOptions)
 	prepareElapsed := time.Since(prepareStart)
 	if err != nil {
-		return nil, true, err
+		return nil, true, mutationNotAcceptedError(err)
 	}
 	if len(templateRecords) > 0 {
 		return nil, false, nil
@@ -13153,7 +13153,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			closePlanningSnapshot()
 			return resultIDs, err
 		} else if skipInitialNoIndexFlush {
-			catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
+			catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndexWithVectorAdmissionLocked)
 			if err != nil {
 				return nil, err
 			}
@@ -14143,6 +14143,9 @@ func (c *Collection) insertBatchNoIndex(
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
 			_ = snap.Close()
+			if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+				return nil, mutationNotAcceptedError(ErrDuplicateDocumentID)
+			}
 			return nil, ErrDuplicateDocumentID
 		}
 	}
@@ -14150,6 +14153,9 @@ func (c *Collection) insertBatchNoIndex(
 	rootName := collectionPrimaryRootName(c.meta.Name)
 	if err := rejectNoIndexBatchDocumentConflicts(snap, catalog, rootName, entries, presortedIDs); err != nil {
 		_ = snap.Close()
+		if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+			return nil, mutationNotAcceptedError(err)
+		}
 		return nil, err
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)

@@ -152,3 +152,83 @@ func TestBSONOrderedIndexStateSinglePass32Indexes(t *testing.T) {
 		}
 	}
 }
+
+func TestBSONOrderedIndexState64And65Indexes(t *testing.T) {
+	for _, numIdx := range []int{64, 65} {
+		t.Run(fmt.Sprintf("indexes_%d", numIdx), func(t *testing.T) {
+			docFields := make(bson.D, 0, numIdx)
+			runtimes := make([]indexRuntime, 0, numIdx)
+			for i := 0; i < numIdx; i++ {
+				field := fmt.Sprintf("f_%02d", i)
+				docFields = append(docFields, bson.E{Key: field, Value: fmt.Sprintf("v_%02d", i)})
+				runtimes = append(runtimes, indexRuntime{
+					def: indexDefinition{
+						name:      field + "_1",
+						valueType: IndexValueString,
+					},
+					path: []string{field},
+				})
+			}
+			raw, err := bson.Marshal(docFields)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var encoder indexEncodeArena
+			state, err := bsonOrderedIndexStateForDocumentWithArena(raw, runtimes, collectionOptions{documentFormat: DocumentFormatBSON}, &encoder)
+			if err != nil {
+				t.Fatalf("bsonOrderedIndexStateForDocumentWithArena(%d): %v", numIdx, err)
+			}
+			if len(state) != numIdx {
+				t.Fatalf("len(state)=%d want %d", len(state), numIdx)
+			}
+			for _, idx := range []int{0, 31, 63, numIdx - 1} {
+				want := fmt.Sprintf("v_%02d\x00\x00", idx)
+				if got := string(state[idx][0]); got != want {
+					t.Fatalf("index %d got %q want %q", idx, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareTemplateV1InsertDocumentsParallelHashAndStored(t *testing.T) {
+	const n = 2500
+	var enc TemplateV1Encoder
+	fields := []string{"name", "email", "city"}
+	hashDocs := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		raw, err := enc.EncodeDocument(fields, []any{
+			fmt.Sprintf("user-%05d", i),
+			fmt.Sprintf("u%05d@example.com", i),
+			fmt.Sprintf("city-%02d", i%16),
+		})
+		if err != nil {
+			t.Fatalf("EncodeDocument(%d): %v", i, err)
+		}
+		hashDocs[i] = raw
+	}
+
+	// Parallel allHash path (doc 0 is TD1I envelope, docs 1..n-1 are TD1H) with collectLearned=true.
+	var scratch insertBatchPlanScratch
+	prepared, publishRecords, learned, resolver, err := prepareTemplateV1InsertDocumentsWithScratch(hashDocs, nil, true, true, &scratch)
+	if err != nil {
+		t.Fatalf("prepareTemplateV1InsertDocumentsWithScratch(hash): %v", err)
+	}
+	if len(prepared) != n || len(publishRecords) != 1 || len(learned) != 1 {
+		t.Fatalf("unexpected counts: prepared=%d publish=%d learned=%d", len(prepared), len(publishRecords), len(learned))
+	}
+	for i, doc := range prepared {
+		if !bytes.HasPrefix(doc, []byte(templateV1StoredMagic)) {
+			t.Fatalf("prepared[%d] missing stored magic", i)
+		}
+	}
+
+	// Parallel allStored path on the resulting TD1D documents.
+	storedPrepared, publish2, _, _, err := prepareTemplateV1InsertDocumentsWithScratch(prepared, resolver, false, true, &scratch)
+	if err != nil {
+		t.Fatalf("prepareTemplateV1InsertDocumentsWithScratch(stored): %v", err)
+	}
+	if len(storedPrepared) != n || len(publish2) != 0 {
+		t.Fatalf("unexpected stored counts: prepared=%d publish=%d", len(storedPrepared), len(publish2))
+	}
+}
